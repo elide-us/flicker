@@ -337,9 +337,171 @@ impl QuadGrid {
     }
 }
 
+/// Vertical field of view of the perspective orbit view. Named because the pan needs it to
+/// convert pixels to world units — if the two disagreed, panning would drift against the cursor.
+pub const ORBIT_FOV_Y: f32 = 60.0 * std::f32::consts::PI / 180.0;
+
+/// Orbit camera state for an interactive body/asset view — THE camera component every
+/// paperdoll-style viewport shares (Aaron 2026-08-20: "you should not have to code a custom
+/// orbit view on every paperdoll — make a component"). A scene holds one per view, feeds the
+/// pointer through [`Orbit::apply_pointer`] each frame, and builds its camera with
+/// [`Orbit::camera`]. A view that renders a body and skips the pointer contract is a bug,
+/// not a style choice.
+#[derive(Clone, Copy)]
+pub struct Orbit {
+    pub yaw: f32,
+    pub pitch: f32,
+    /// Distance as a multiple of the model radius, so it frames any asset size.
+    pub dist_scale: f32,
+    /// Wheel zoom, multiplying the framing. `1.0` is the default framing; applied to the
+    /// perspective distance AND the orthographic height. PER VIEW — a holder of several
+    /// `Orbit`s zooms only the panel under the cursor.
+    pub zoom: f32,
+    /// This view's look-at point, slid across its plane by the right-drag pan. Zero frames the
+    /// asset's centre; panning is what lets the user work up close on a hand or a skull.
+    pub pan: Vec3,
+}
+
+impl Default for Orbit {
+    fn default() -> Self {
+        // Start FACE-ON-ish: the eye orbits the XY plane as `(cos yaw, sin yaw, sin pitch)`, and a
+        // character faces +Y, so yaw ≈ π/2 looks at its front. Backed off a little (1.25) for a
+        // three-quarter view, which reads the silhouette better than dead-on, and lifted slightly.
+        Self {
+            yaw: 1.25,
+            pitch: 0.22,
+            dist_scale: 2.4,
+            zoom: 1.0,
+            pan: Vec3::ZERO,
+        }
+    }
+}
+
+impl Orbit {
+    /// Eye distance for a model of `radius` — the ONE place the framing multipliers are applied,
+    /// so the camera and the pan's pixel scale cannot disagree.
+    pub fn dist(&self, radius: f32) -> f32 {
+        (radius * self.dist_scale * self.zoom).max(1.0)
+    }
+
+    /// The framing radius the ORTHOGRAPHIC views should be built with, so the wheel zooms all
+    /// panels together instead of only the perspective one.
+    pub fn ortho_radius(&self, radius: f32) -> f32 {
+        radius * self.zoom
+    }
+
+    /// Wheel zoom. MULTIPLICATIVE, so a notch is a constant proportion and zooming feels the same
+    /// whether you are framed on a whole body or already close on a hand — an additive step would
+    /// crawl when far out and jump when near. Clamped so the wheel can never invert or escape.
+    pub fn zoom_by(&mut self, wheel: f32) {
+        if wheel == 0.0 || !wheel.is_finite() {
+            return;
+        }
+        self.zoom = (self.zoom * (1.0 - wheel * 0.12)).clamp(0.05, 6.0);
+    }
+
+    /// The eye's offset from the look-at point. Z-up source content: orbit in the XY plane,
+    /// elevation on Z.
+    fn eye_offset(&self, radius: f32) -> Vec3 {
+        let (sy, cy) = self.yaw.sin_cos();
+        let cp = self.pitch.cos();
+        Vec3::new(cy * cp, sy * cp, self.pitch.sin()) * self.dist(radius)
+    }
+
+    pub fn camera(&self, radius: f32) -> Camera {
+        let r = self.dist(radius);
+        Camera {
+            position: self.pan + self.eye_offset(radius),
+            target: self.pan,
+            up: Vec3::Z,
+            fov_y_radians: ORBIT_FOV_Y,
+            near: 0.01,
+            // Measured from the look-at point, so a panned-away camera cannot clip the asset.
+            far: r * 12.0 + self.pan.length(),
+            ortho_height: None,
+        }
+    }
+
+    /// Slide THIS view's look-at point across its own plane — the right-drag pan. Each view owns
+    /// its `Orbit`, so a pan moves only the panel under the cursor; the others stay put.
+    ///
+    /// Takes the CAMERA rather than an angle so the basis comes from the view actually being
+    /// dragged: dragging in TOP pans across XY, in FRONT across XZ. Deriving it from the orbit
+    /// angles instead would pan along the PERSPECTIVE plane, which feels broken in an
+    /// orthographic panel.
+    ///
+    /// Scaled so the content tracks the cursor **1:1, at any zoom**: an orthographic camera
+    /// states its visible height outright, a perspective one's is `2·dist·tan(fov/2)` at the
+    /// look-at depth. A fixed per-pixel constant (as the orbit uses for angles) would crawl on a
+    /// large asset and bolt on a small one, since both heights scale with the model radius.
+    pub fn pan_by_view(&mut self, delta: Vec2, cam: &Camera, viewport_h: f32) {
+        if viewport_h <= 0.0 {
+            return;
+        }
+        let forward = (cam.target - cam.position).normalize_or_zero();
+        let right = forward.cross(cam.up).normalize_or_zero();
+        let up = right.cross(forward).normalize_or_zero();
+        let visible_h = match cam.ortho_height {
+            Some(h) => h,
+            None => 2.0 * (cam.position - cam.target).length() * (cam.fov_y_radians * 0.5).tan(),
+        };
+        let world_per_px = visible_h / viewport_h;
+        // The CONTENT follows the cursor, so the look-at point moves the OPPOSITE way; screen Y
+        // grows downward, so dragging down raises the target and the asset slides down with it.
+        self.pan += (-right * delta.x + up * delta.y) * world_per_px;
+    }
+
+    /// THE default pointer contract for a perspective body view — one call a frame from the
+    /// scene's input path: left-drag orbits, right-drag pans in the view's own plane, wheel
+    /// zooms. Bespoke multi-panel holders (ortho quads) may keep their own gating and call the
+    /// individual methods; a single-view paperdoll uses exactly this.
+    pub fn apply_pointer(
+        &mut self,
+        delta: Vec2,
+        left: bool,
+        right: bool,
+        wheel: f32,
+        radius: f32,
+        viewport_h: f32,
+    ) {
+        if left {
+            self.yaw -= delta.x * 0.006;
+            self.pitch = (self.pitch + delta.y * 0.006).clamp(-1.4, 1.4);
+        }
+        if right {
+            let cam = self.camera(radius);
+            self.pan_by_view(delta, &cam, viewport_h);
+        }
+        self.zoom_by(wheel);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// THE POINTER CONTRACT (Aaron 2026-08-20, after a preview page shipped with a dead
+    /// camera): one call moves the orbit — left-drag turns, right-drag pans, wheel zooms.
+    /// Any body view wired through `apply_pointer` gets the standard interaction for free.
+    #[test]
+    fn orbit_apply_pointer_turns_pans_and_zooms() {
+        let mut o = Orbit::default();
+        let base = o;
+        o.apply_pointer(Vec2::new(40.0, -25.0), true, false, 0.0, 100.0, 800.0);
+        assert!(o.yaw != base.yaw && o.pitch != base.pitch, "left-drag orbits");
+        assert_eq!(o.pan, base.pan, "left-drag does not pan");
+
+        let mut o = Orbit::default();
+        o.apply_pointer(Vec2::new(30.0, 10.0), false, true, 0.0, 100.0, 800.0);
+        assert!(o.pan != Vec3::ZERO, "right-drag pans the look-at point");
+        assert_eq!(o.yaw, base.yaw, "right-drag does not orbit");
+
+        let mut o = Orbit::default();
+        o.apply_pointer(Vec2::ZERO, false, false, 1.0, 100.0, 800.0);
+        assert!(o.zoom < 1.0, "a wheel notch zooms in");
+        o.apply_pointer(Vec2::ZERO, false, false, f32::NAN, 100.0, 800.0);
+        assert!(o.zoom.is_finite(), "a NaN wheel is ignored");
+    }
 
     /// A 4-view grid at 2 columns lays out TL, TR, BL, BR — the order `EDITOR_QUADS`
     /// documents, which the paperdoll's click routing depends on.

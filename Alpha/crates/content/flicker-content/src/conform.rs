@@ -6,7 +6,7 @@
 //!
 //! `reorient` rebuilds each bone's rest frame in two steps: (1) base frame = the REFERENCE's world
 //! orientation + THIS body's positions (fixes the Mixamo Y-down-bone vs UE X-down-bone convention);
-//! (2) LIMB-ALIGN each limb bone (arms/legs/feet) — rotate its frame by the minimal rotation taking
+//! (2) LIMB-ALIGN each limb bone (arms/hands/legs/feet) — rotate its frame by the minimal rotation taking
 //! the reference's limb direction onto THIS body's, so its axis points down this body's own limb and
 //! the shared clips' absolute rotations land where they should. Torso bones (pelvis/spine/clavicle/
 //! neck/head) are NEVER limb-aligned (the pelvis→child tilt trap) — they keep the reference frame.
@@ -69,13 +69,19 @@ fn fk(locals: &[Mat4], parents: &[i32]) -> Vec<Mat4> {
 }
 
 /// Limb bone → the child joint down the same chain that defines its direction. Torso bones are
-/// absent — deliberately NOT limb-aligned.
+/// absent — deliberately NOT limb-aligned. The HAND is a limb too (2026-08-21): left on the
+/// canon's world orientation, a hand whose flesh does not continue the canon's arm line played
+/// every clip's hand direction that far off — 37° on the golem's A-pose, "hands bent away from the
+/// default angle". Its finger root (`middle_01`) is the joint a human annotates to say where the
+/// hand points; see [`canonical_world_frames`] for a hand that has no fingers yet.
 fn limb_child(name: &str) -> Option<&'static str> {
     Some(match name {
         "upperarm_l" => "lowerarm_l",
         "lowerarm_l" => "hand_l",
+        "hand_l" => "middle_01_l",
         "upperarm_r" => "lowerarm_r",
         "lowerarm_r" => "hand_r",
+        "hand_r" => "middle_01_r",
         "thigh_l" => "calf_l",
         "calf_l" => "foot_l",
         "foot_l" => "ball_l",
@@ -428,12 +434,21 @@ fn canonical_world_frames(model: &RawModel, reference: &Path) -> Result<(Vec<Mat
         let Some(ch) = limb_child(&b.name) else {
             continue;
         };
-        let (Some(&this_ch), Some(&ref_bone), Some(&ref_ch)) =
-            (idx.get(ch), cidx.get(&b.name), cidx.get(ch))
-        else {
+        let (Some(&ref_bone), Some(&ref_ch)) = (cidx.get(&b.name), cidx.get(ch)) else {
             continue;
         };
-        let u = (pos_of(g0[this_ch]) - pos_of(g0[i])).normalize_or_zero();
+        // This body's limb direction: to its child joint — or, for a hand whose fingers are not
+        // inferred yet, onward along its own forearm. The canon's hand is collinear with its
+        // forearm, so that is the canon's own rule on this body; it also makes the fingers infer
+        // along THIS arm instead of the canon's world direction.
+        let u = match idx.get(ch) {
+            Some(&this_ch) => pos_of(g0[this_ch]) - pos_of(g0[i]),
+            None if matches!(b.name.as_str(), "hand_l" | "hand_r") && b.parent >= 0 => {
+                pos_of(g0[i]) - pos_of(g0[b.parent as usize])
+            }
+            None => continue,
+        }
+        .normalize_or_zero();
         let v = (pos_of(cg[ref_ch]) - pos_of(cg[ref_bone])).normalize_or_zero();
         if u.length_squared() < 1e-10 || v.length_squared() < 1e-10 {
             continue;
@@ -1724,6 +1739,76 @@ mod tests {
                     && b.inverse_bind.iter().all(|f| f.is_finite())
             }),
             "every reoriented bone has finite TRS + inverse_bind"
+        );
+    }
+
+    /// THE WRIST GUARD (2026-08-21): a hand is a limb — its frame turns to point down THIS body's
+    /// hand (to its `middle_01`) exactly as the forearm turns down the forearm. Left on the canon's
+    /// world orientation, the golem's hand played every clip's hand direction 37° off its flesh
+    /// ("hands bent away from the default angle"). Without fingers yet, the hand continues its own
+    /// forearm, so the fingers infer along this body's arm.
+    #[test]
+    fn a_hand_aligns_to_its_fingers_and_continues_its_forearm_without_them() {
+        let reference = default_reference();
+        if !crate::package::file_exists(&reference) {
+            eprintln!("skipping: no content tree");
+            return;
+        }
+        let refs = load_reference_skeleton(&reference).unwrap();
+        let cg = fk(
+            &refs.iter().map(|b| b.local).collect::<Vec<_>>(),
+            &refs.iter().map(|b| b.parent).collect::<Vec<_>>(),
+        );
+        let cpos = |n: &str| pos_of(cg[refs.iter().position(|b| b.name == n).unwrap()]);
+        let v_canon = (cpos("middle_01_l") - cpos("hand_l")).normalize();
+        let bone = |name: &str, parent: i32, t: [f32; 3]| RawBone {
+            name: name.to_string(),
+            parent,
+            translation: t,
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            scale: [1.0, 1.0, 1.0],
+            inverse_bind: [
+                1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+            ],
+        };
+        // A forearm running out-and-down, a hand on its end, and (optionally) a finger root
+        // straight below the wrist — a hand that does NOT continue its forearm.
+        let arm = |fingers: bool| {
+            let mut bones = vec![
+                bone("lowerarm_l", -1, [45.0, 0.0, 118.0]),
+                bone("hand_l", 0, [19.0, 0.0, -17.0]),
+            ];
+            if fingers {
+                bones.push(bone("middle_01_l", 1, [0.0, 0.0, -8.0]));
+            }
+            RawModel {
+                bones,
+                vertices: vec![],
+                indices: vec![],
+            }
+        };
+        // Where the hand's frame says the hand points: the canon's hand direction carried by it.
+        let hand_points = |m: &RawModel| -> Vec3 {
+            let g = model_world_frames(m);
+            let i = m.bones.iter().position(|b| b.name == "hand_l").unwrap();
+            (glam::Mat3::from_mat4(g[i]) * v_canon).normalize()
+        };
+
+        let mut with = arm(true);
+        reorient_to_canonical(&mut with, &reference).unwrap();
+        let d = hand_points(&with);
+        assert!(
+            (d - Vec3::new(0.0, 0.0, -1.0)).length() < 1e-3,
+            "with fingers the hand points down its own finger root, got {d:?}"
+        );
+
+        let mut without = arm(false);
+        reorient_to_canonical(&mut without, &reference).unwrap();
+        let d = hand_points(&without);
+        let forearm = Vec3::new(19.0, 0.0, -17.0).normalize();
+        assert!(
+            (d - forearm).length() < 1e-3,
+            "without fingers the hand continues its forearm, got {d:?} vs {forearm:?}"
         );
     }
 }

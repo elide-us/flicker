@@ -647,6 +647,21 @@
   "ap_as_provided": {
     "en-us": "Import rig as provided"
   },
+  "wf_step_preview": {
+    "en-us": "Preview"
+  },
+  "ap_preview_title": {
+    "en-us": "Bake Preview"
+  },
+  "ap_preview_hint": {
+    "en-us": "The baked body playing the shared idle — exactly what Export will write."
+  },
+  "ap_preview_blurb": {
+    "en-us": "This is the smoke test: the body below was baked exactly as Export writes it, and is playing the shared idle animation through the runtime's own skinning."
+  },
+  "ap_preview_back_hint": {
+    "en-us": "Wrong? Go Back and adjust the joints — the preview rebakes every time you return here."
+  },
   "ap_as_provided_hint": {
     "en-us": "Edit against the vendor's rig exactly as imported — Meshy's joints and skin untouched, only the bone set completed. Commit translates every joint's orientation onto our skeleton, so the exported body plays the shared animations correctly."
   },

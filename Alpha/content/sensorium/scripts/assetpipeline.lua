@@ -2,7 +2,7 @@
 -- of the pair; bench migration 2026-08-19).
 --
 -- The behaviour publishes RAW runtime variables into `Model` each frame:
---   wf_task_state / wf_conform_state / wf_attach_state / wf_review_state
+--   wf_task_state / wf_conform_state / wf_preview_state / wf_attach_state / wf_review_state
 --       -- each rail chip's step state: "active" | "visited" | "todo"
 --   pick_sel / pick_window, bone_sel / bone_window,
 --   sock_sel / sock_window, att_sel_idx
@@ -16,7 +16,7 @@
 
 local M = {}
 
-local CHIPS = { "task", "conform", "attach", "review" }
+local CHIPS = { "task", "conform", "preview", "attach", "review" }
 
 local ROWSEL = "assetpipeline.rowsel"
 local ROWSEL_OFF = "assetpipeline.rowsel_off"

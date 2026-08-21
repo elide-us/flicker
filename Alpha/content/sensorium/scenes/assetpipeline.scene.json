@@ -9,6 +9,7 @@
         "steps": [
           { "id": "task", "title": "$wf_step_task", "yields": ["source", "class"] },
           { "id": "conform", "title": "$wf_step_rig", "needs": ["source"], "yields": ["rig"] },
+          { "id": "preview", "title": "$wf_step_preview", "needs": ["rig"] },
           { "id": "attach", "title": "$wf_step_attach", "needs": ["rig"], "yields": ["attach"] },
           { "id": "review", "title": "$wf_step_review", "needs": ["rig", "attach"], "yields": ["committed"] }
         ]
@@ -229,6 +230,8 @@
               { "component": "button", "id": "ap_chip_task", "label_bind": "wf_task_title", "style_bind": "wf_task_style", "visible_bind": "wf_task_show", "size": 110, "size_class": "sm" },
               { "component": "cell", "style": "assetpipeline.seam", "visible_bind": "wf_conform_show", "size": 18, "height": 1 },
               { "component": "button", "id": "ap_chip_conform", "label_bind": "wf_conform_title", "style_bind": "wf_conform_style", "visible_bind": "wf_conform_show", "size": 110, "size_class": "sm" },
+              { "component": "cell", "style": "assetpipeline.seam", "visible_bind": "wf_preview_show", "size": 18, "height": 1 },
+              { "component": "button", "id": "ap_chip_preview", "label_bind": "wf_preview_title", "style_bind": "wf_preview_style", "visible_bind": "wf_preview_show", "size": 110, "size_class": "sm" },
               { "component": "cell", "style": "assetpipeline.seam", "visible_bind": "wf_attach_show", "size": 18, "height": 1 },
               { "component": "button", "id": "ap_chip_attach", "label_bind": "wf_attach_title", "style_bind": "wf_attach_style", "visible_bind": "wf_attach_show", "size": 110, "size_class": "sm" },
               { "component": "cell", "style": "assetpipeline.seam", "visible_bind": "wf_review_show", "size": 18, "height": 1 },
@@ -472,6 +475,17 @@
                       { "component": "text", "text": "$ap_clips", "text_size": 11, "font": "label", "color": "assetpipeline.col.rail", "size": 16 },
                       { "component": "checkbox", "id": "variant_rm", "bind": "variant_rm", "label": "$ap_root_motion", "box": 14, "size": 22, "style": "assetpipeline.checkbox", "tab_group": "ap_insp", "nav_ordinal": 70 },
                       { "component": "checkbox", "id": "variant_ip", "bind": "variant_ip", "label": "$ap_in_place", "box": 14, "size": 22, "style": "assetpipeline.checkbox", "tab_group": "ap_insp", "nav_ordinal": 71 }
+                    ]
+                  },
+                  {
+                    "component": "cell",
+                    "id": "ap_preview_page",
+                    "visible_bind": "wf_step_preview",
+                    "gap": 8,
+                    "children": [
+                      { "component": "text", "text": "$ap_preview_blurb", "text_size": 12, "font": "label", "color": "assetpipeline.col.dim", "wrap": true, "size": 48 },
+                      { "component": "text", "text_bind": "preview_status", "text_size": 11, "font": "label", "color": "assetpipeline.col.rail", "size": 16 },
+                      { "component": "text", "text": "$ap_preview_back_hint", "text_size": 10, "font": "label", "color": "assetpipeline.col.faint", "wrap": true, "size": 26 }
                     ]
                   },
                   {

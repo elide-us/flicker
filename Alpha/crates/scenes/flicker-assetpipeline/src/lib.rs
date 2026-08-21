@@ -42,8 +42,8 @@ use std::time::Duration;
 
 use flicker::render::{
     build_textured_verts, grid_segments_xy, Camera, Mat4, MeshDrawOptions, MeshHandle, MeshIndices,
-    MeshVertex, PbrMaps, QuadGrid, QuadView, Rect, Renderer, SceneLighting, TextureHandle,
-    TexturedMeshHandle, Vec2, Vec3,
+    MeshVertex, Orbit, PbrMaps, QuadGrid, QuadView, Rect, Renderer, SceneLighting,
+    SkinnedMeshHandle, SkinnedVertex, TextureHandle, TexturedMeshHandle, Vec2, Vec3,
 };
 use flicker::scene::{Scene, SceneInput, Transition};
 use flicker::script::{HudCommand, ScriptHost, UiNode, ValueMap};
@@ -55,10 +55,10 @@ use flicker_input_router::{Flow, InputEvent, InputHandler, RouteCtx, Router};
 use flicker_shell::{PauseScene, Theme};
 
 use flicker_content::{
-    attach_world, bake_skin, classify_asset, conform_to_canonical, default_reference, fitting_base,
-    garment_socket, parse_fbx, rename_to_canonical, reorient_to_canonical, scan_folder, source_maps,
-    write_garment, write_prop, write_rig, AssetClass, AssetReport, ConformMode, ConformOutput, Fit,
-    Kind, PropKind, RawModel, RenameReport, Scan, SourceMaps,
+    attach_world, bake_rig, bake_skin, classify_asset, conform_to_canonical, default_reference,
+    fitting_base, garment_socket, parse_fbx, rename_to_canonical, reorient_to_canonical,
+    scan_folder, source_maps, write_garment, write_prop, write_rig, AssetClass, AssetReport,
+    ConformMode, ConformOutput, Fit, Kind, PropKind, RawModel, RenameReport, Scan, SourceMaps,
 };
 use flicker_mechanics::{
     autofit_capsules_from, closest_point_ray_segment, debug, drag_plane, gizmo_segments, GizmoMode,
@@ -68,6 +68,7 @@ use flicker_mechanics::{
 // SAME resolve path `load_dirs` uses, then sampled per frame — no disk round-trip.
 use flicker_skeletal::format::{resolve_clips, rig_bones, Bone as SkelBone, ResolvedClip, RigFile};
 use flicker_skeletal::pose::{global_transforms, sample_local_poses};
+use flicker_skeletal::skin;
 
 /// ⛔ The engine-retired **Workflow runtime**, dissolved into its ONLY consumer at the
 /// bench's migration (5A4528AE) — compiled BEHAVIOUR, per the security law: progression
@@ -653,6 +654,17 @@ const CLIP_VIEWS: [QuadView; 2] = [
     },
 ];
 
+/// The bake-preview page's single full-rect view: the baked body playing the shared idle.
+const BAKE_VIEWS: [QuadView; 1] = [QuadView {
+    label: "BAKE · IDLE",
+    label_flipped: "BAKE · IDLE",
+    ortho: None,
+}];
+
+/// The shared idle the bake preview plays, under the package root — the same clip the
+/// Controller Tester's pack opens on, so the smoke test judges against the real thing.
+const BAKE_PREVIEW_CLIP: &str = "retarget/clips/locomotion/In-Place/idle_neutral.json";
+
 /// What the Conform stage IS for the loaded asset.
 ///
 /// Conform is ONE step in the rail carrying SEVERAL ROLES, because "rig this" means something
@@ -1031,6 +1043,24 @@ impl ClipPreview {
     }
 }
 
+/// The Rig stage's SMOKE TEST (Aaron 2026-08-20): the page right after joint editing plays
+/// the SHARED idle on the body EXACTLY as Commit writes it — same bake path
+/// ([`AssetPipeline::character_bake_model`]), same GPU skinning the runtime uses — so a bad
+/// placement is caught in-bench instead of after promote. Dropped on leaving the page and
+/// rebuilt on every entry, so it always reflects the latest joint work.
+struct BakePreview {
+    bones: Vec<SkelBone>,
+    /// Parent index per bone — the skeleton overlay's topology, cached once at build.
+    parents: Vec<i32>,
+    clip: ResolvedClip,
+    mesh: SkinnedMeshHandle,
+    bone_count: u32,
+    /// Rest framing: centre/half-extent/ground of the baked joints, source space (Z-up cm).
+    centre: Vec3,
+    radius: f32,
+    floor: f32,
+}
+
 struct Source {
     dir: PathBuf,
     scan: Scan,
@@ -1114,115 +1144,6 @@ impl Source {
     }
 }
 
-/// Orbit camera state for the interactive perspective view.
-#[derive(Clone, Copy)]
-struct Orbit {
-    yaw: f32,
-    pitch: f32,
-    /// Distance as a multiple of the model radius, so it frames any asset size.
-    dist_scale: f32,
-    /// Wheel zoom, multiplying the framing. `1.0` is the default framing; applied to the perspective
-    /// distance AND the orthographic height. PER VIEW — the editor holds one `Orbit` per quad, so a
-    /// notch zooms only the panel under the cursor.
-    zoom: f32,
-    /// This view's look-at point, slid across its plane by the right-drag pan. Zero frames the
-    /// asset's centre; panning is what lets the user work up close on a hand or a skull.
-    pan: Vec3,
-}
-
-/// Vertical field of view of the perspective view. Named because the pan needs it to convert
-/// pixels to world units — if the two disagreed, panning would drift against the cursor.
-const FOV_Y: f32 = 60.0 * std::f32::consts::PI / 180.0;
-
-impl Default for Orbit {
-    fn default() -> Self {
-        // Start FACE-ON-ish: the eye orbits the XY plane as `(cos yaw, sin yaw, sin pitch)`, and a
-        // character faces +Y, so yaw ≈ π/2 looks at its front. Backed off a little (1.25) for a
-        // three-quarter view, which reads the silhouette better than dead-on, and lifted slightly.
-        Self {
-            yaw: 1.25,
-            pitch: 0.22,
-            dist_scale: 2.4,
-            zoom: 1.0,
-            pan: Vec3::ZERO,
-        }
-    }
-}
-
-impl Orbit {
-    /// Eye distance for a model of `radius` — the ONE place the framing multipliers are applied,
-    /// so the camera and the pan's pixel scale cannot disagree.
-    fn dist(&self, radius: f32) -> f32 {
-        (radius * self.dist_scale * self.zoom).max(1.0)
-    }
-
-    /// The framing radius the ORTHOGRAPHIC views should be built with, so the wheel zooms all
-    /// four panels together instead of only the perspective one.
-    fn ortho_radius(&self, radius: f32) -> f32 {
-        radius * self.zoom
-    }
-
-    /// Wheel zoom. MULTIPLICATIVE, so a notch is a constant proportion and zooming feels the same
-    /// whether you are framed on a whole body or already close on a hand — an additive step would
-    /// crawl when far out and jump when near. Clamped so the wheel can never invert or escape.
-    fn zoom_by(&mut self, wheel: f32) {
-        if wheel == 0.0 || !wheel.is_finite() {
-            return;
-        }
-        self.zoom = (self.zoom * (1.0 - wheel * 0.12)).clamp(0.05, 6.0);
-    }
-
-    /// The eye's offset from the look-at point. Z-up source content: orbit in the XY plane,
-    /// elevation on Z.
-    fn eye_offset(&self, radius: f32) -> Vec3 {
-        let (sy, cy) = self.yaw.sin_cos();
-        let cp = self.pitch.cos();
-        Vec3::new(cy * cp, sy * cp, self.pitch.sin()) * self.dist(radius)
-    }
-
-    fn camera(&self, radius: f32) -> Camera {
-        let r = self.dist(radius);
-        Camera {
-            position: self.pan + self.eye_offset(radius),
-            target: self.pan,
-            up: Vec3::Z,
-            fov_y_radians: FOV_Y,
-            near: 0.01,
-            // Measured from the look-at point, so a panned-away camera cannot clip the asset.
-            far: r * 12.0 + self.pan.length(),
-            ortho_height: None,
-        }
-    }
-
-    /// Slide THIS view's look-at point across its own plane — the right-drag pan. Each quad owns its
-    /// `Orbit`, so a pan moves only the panel under the cursor; the others stay put.
-    ///
-    /// Takes the CAMERA rather than an angle so the basis comes from the view actually being dragged:
-    /// dragging in TOP pans across XY, in FRONT across XZ. Deriving it from the orbit angles instead
-    /// would pan along the PERSPECTIVE plane, which feels broken in an orthographic panel.
-    ///
-    /// Scaled so the content tracks the cursor **1:1, at any zoom**: an orthographic camera states
-    /// its visible height outright, a perspective one's is `2·dist·tan(fov/2)` at the look-at
-    /// depth. A fixed per-pixel constant (as the orbit uses for angles) would crawl on a large
-    /// asset and bolt on a small one, since both heights scale with the model radius.
-    fn pan_by_view(&mut self, delta: Vec2, cam: &Camera, viewport_h: f32) {
-        if viewport_h <= 0.0 {
-            return;
-        }
-        let forward = (cam.target - cam.position).normalize_or_zero();
-        let right = forward.cross(cam.up).normalize_or_zero();
-        let up = right.cross(forward).normalize_or_zero();
-        let visible_h = match cam.ortho_height {
-            Some(h) => h,
-            None => 2.0 * (cam.position - cam.target).length() * (cam.fov_y_radians * 0.5).tan(),
-        };
-        let world_per_px = visible_h / viewport_h;
-        // The CONTENT follows the cursor, so the look-at point moves the OPPOSITE way; screen Y
-        // grows downward, so dragging down raises the target and the asset slides down with it.
-        self.pan += (-right * delta.x + up * delta.y) * world_per_px;
-    }
-}
-
 /// The editor scene.
 pub struct AssetPipeline {
     /// The loaded workflow DEFINITIONS ([`UI_WORKFLOWS`]) — the dispatch table the Task
@@ -1273,6 +1194,14 @@ pub struct AssetPipeline {
     /// The shared playback clock, in CLIP TICKS (fractional between samples); both
     /// panels read it so the variants stay in lockstep. Wraps at the clip duration.
     clip_tick: f32,
+    /// The Preview page's single view (same exclusivity rule as `clip_grid`: exactly one
+    /// grid renders per frame).
+    bake_grid: Option<QuadGrid>,
+    bake_orbit: Orbit,
+    /// The bake preview's playback clock, in idle ticks (fractional between samples).
+    bake_tick: f32,
+    /// The Preview page's baked body — built on entry, dropped on leaving the page.
+    bake: Option<BakePreview>,
     /// The side-by-side pick — what Commit keeps (ruled: one, the other, or both).
     variant_ip: bool,
     variant_rm: bool,
@@ -1752,6 +1681,10 @@ impl AssetPipeline {
             clip_grid: None,
             clip_orbits: [Orbit::default(); 2],
             clip_tick: 0.0,
+            bake_grid: None,
+            bake_orbit: Orbit::default(),
+            bake_tick: 0.0,
+            bake: None,
             variant_ip: true,
             variant_rm: true,
             show_skeleton: true,
@@ -2149,6 +2082,189 @@ impl AssetPipeline {
     ///
     /// This writes the bench's OUTPUT; it does not publish. The asset reaches the tree the game
     /// loads from only when the Content Manager promotes it out of staging.
+    /// The character model EXACTLY as Commit bakes it: the working model cloned, the
+    /// authored offsets applied, and every joint's frame translated onto the canon.
+    ///
+    /// THE ONE BAKE PATH — `commit_to` writes it and the Preview page plays it, so the
+    /// preview can never drift from the export. The frame translation is the invariant's
+    /// output gate (shared clips play absolute rotations in canonical frames): positions
+    /// ship exactly as placed — Meshy's and the human's fitted joints alike — and only
+    /// each bone's frame is rewritten, which is what lets the as-provided editing view
+    /// stay vendor-faithful in the bench yet still produce a playable body. Idempotent on
+    /// an already-canonical rig with no authored offsets; when joints WERE dragged, the
+    /// limb frames re-align to the final joint layout.
+    fn character_bake_model(&self) -> Result<RawModel, String> {
+        let src = self.source.as_ref().ok_or("no source is open")?;
+        let parsed = src.parsed.as_ref().ok_or("nothing is parsed")?;
+        let mut model = parsed.model.clone();
+        if let Some(rig) = src.rig.as_ref() {
+            apply_offsets(&mut model, &rig.offsets);
+        }
+        reorient_to_canonical(&mut model, &default_reference())
+            .map_err(|e| format!("Canonical frame translation failed: {e}"))?;
+        Ok(model)
+    }
+
+    /// The headless half of the bake preview: bake the character exactly as Commit writes
+    /// it, and resolve the SHARED idle onto the baked bones. Split from the GPU upload so
+    /// tests judge the smoke test without a renderer.
+    fn bake_preview_parts(&self) -> Result<(RigFile, Vec<SkelBone>, ResolvedClip), String> {
+        let name = self
+            .source
+            .as_ref()
+            .map(|s| s.asset_name().to_string())
+            .ok_or("no source is open")?;
+        let model = self.character_bake_model()?;
+        let rig_file = bake_rig(&model, &name);
+        let bones = rig_bones(&rig_file);
+        if bones.is_empty() {
+            return Err("the bake produced no skeleton".into());
+        }
+        let idle = flicker_content::roots().package().join(BAKE_PREVIEW_CLIP);
+        let text = flicker_content::package::read_text(&idle)
+            .map_err(|e| format!("shared idle {}: {e}", idle.display()))?;
+        let file: RigFile =
+            serde_json::from_str(&text).map_err(|e| format!("shared idle: {e}"))?;
+        let clip = resolve_clips(&file, &bones, false)
+            .pop()
+            .ok_or("the shared idle resolved empty")?;
+        if clip.tracks.is_empty() {
+            return Err("the shared idle resolved onto NO bones — names diverged from canon".into());
+        }
+        Ok((rig_file, bones, clip))
+    }
+
+    /// Build the Preview page's playable body if it is not already built: bake, frame,
+    /// upload. A failure surfaces in the inspector like any stage failure — never silent.
+    fn ensure_bake_preview(&mut self, renderer: &mut Renderer) {
+        if self.bake.is_some() {
+            return;
+        }
+        match self.bake_preview_parts() {
+            Ok((rig_file, bones, clip)) => {
+                // Rest framing from the baked joints (source space, Z-up cm), exactly like
+                // the clip preview: centre for the orbit target, floor for the lattice.
+                let rest: Vec<Mat4> = bones.iter().map(|b| b.local).collect();
+                let globals = global_transforms(&bones, &rest);
+                let mut min = Vec3::splat(f32::MAX);
+                let mut max = Vec3::splat(f32::MIN);
+                for g in &globals {
+                    let p = g.w_axis.truncate();
+                    min = min.min(p);
+                    max = max.max(p);
+                }
+                let centre = (min + max) * 0.5;
+                let radius = ((max - min).length() * 0.5).max(1.0);
+                let floor = min.z;
+                let verts: Vec<SkinnedVertex> = rig_file
+                    .mesh
+                    .vertices
+                    .iter()
+                    .map(|v| SkinnedVertex {
+                        position: v.p,
+                        normal: v.n,
+                        uv: v.uv,
+                        joints: v.joints,
+                        weights: v.weights,
+                    })
+                    .collect();
+                let indices: Vec<u32> = if rig_file.mesh.indices.is_empty() {
+                    (0..verts.len() as u32).collect()
+                } else {
+                    rig_file.mesh.indices.clone()
+                };
+                let mesh = renderer.upload_skinned_mesh(&verts, MeshIndices::U32(&indices));
+                let bone_count = bones.len() as u32;
+                tracing::info!(
+                    bones = bones.len(),
+                    verts = verts.len(),
+                    clip = %clip.name,
+                    "bake preview built"
+                );
+                self.bake_tick = 0.0;
+                let parents: Vec<i32> = bones.iter().map(|b| b.parent).collect();
+                self.bake = Some(BakePreview {
+                    bones,
+                    parents,
+                    clip,
+                    mesh,
+                    bone_count,
+                    centre,
+                    radius,
+                    floor,
+                });
+            }
+            Err(e) => {
+                if let Some(s) = self.source.as_mut() {
+                    if s.error.as_deref() != Some(e.as_str()) {
+                        tracing::warn!("bake preview: {e}");
+                        s.error = Some(e);
+                    }
+                }
+            }
+        }
+    }
+
+    /// THE PREVIEW PAGE: one full-rect view of the baked body playing the shared idle,
+    /// GPU-skinned through the same palette path the runtime uses — the Rig stage's smoke
+    /// test. Judge it, then go Back to adjust joints or Next toward Export.
+    fn render_bake_preview(&mut self, renderer: &mut Renderer, base_layer: f32) {
+        self.ensure_bake_preview(renderer);
+        // The grid is built in `enter` and confined to the HUD's holder rect every frame
+        // in `update`, exactly like `clip_grid` — never created here, where it would run
+        // a frame unconfined and composite over the whole HUD.
+        let (Some(bp), Some(grid)) = (self.bake.as_ref(), self.bake_grid.as_ref()) else {
+            return;
+        };
+        let tick = (self.bake_tick as u32).min(bp.clip.duration_ticks.saturating_sub(1));
+        let locals = sample_local_poses(&bp.bones, &bp.clip, tick, true);
+        let globals = global_transforms(&bp.bones, &locals);
+        let palette = skin::palette(&bp.bones, &globals);
+        let recentre = Mat4::from_translation(-bp.centre);
+        let ground = grid_segments_xy(bp.radius * 0.25, bp.radius * 2.5, bp.floor - bp.centre.z);
+        // The Display panel's Skeleton toggle, honoured here exactly as in the rig view: violet
+        // diamond bones + cyan joint balls on the POSED frames, recentred with the mesh and drawn
+        // as an overlay so the lines read through the flesh — where the bones are versus where
+        // the mesh went.
+        let (bones, balls) = if self.show_skeleton {
+            let min_r = (bp.radius * BALL_MIN_FRAC).max(0.2);
+            let max_r = (bp.radius * BALL_MAX_FRAC).max(min_r);
+            let radii =
+                debug::joint_ball_radii(&bp.parents, &globals, BALL_LEN_FRAC, min_r, max_r);
+            let bones = debug::bone_diamonds(recentre, &bp.parents, &globals, BONE_WAIST_FRAC);
+            let mut balls = Segments::new();
+            for (i, g) in globals.iter().enumerate() {
+                let c = recentre.transform_point3(g.w_axis.truncate());
+                balls.extend(debug::wireframe(&Shape::Sphere {
+                    center: c,
+                    radius: radii[i],
+                }));
+            }
+            (bones, balls)
+        } else {
+            (Segments::new(), Segments::new())
+        };
+        let cameras = [grid.camera(
+            0,
+            self.bake_orbit.ortho_radius(bp.radius),
+            &self.bake_orbit.camera(bp.radius),
+        )];
+        let (mesh, bone_count) = (bp.mesh, bp.bone_count);
+        grid.render_with(renderer, base_layer + 2.0, &cameras, |r, _view| {
+            r.set_scene(SceneLighting::default());
+            if !ground.is_empty() {
+                r.draw_lines(&ground, GROUND);
+            }
+            r.draw_skinned_instanced(mesh, &[recentre], &palette, bone_count);
+            if !bones.is_empty() {
+                r.draw_lines_overlay(&bones, BONE);
+            }
+            if !balls.is_empty() {
+                r.draw_lines_overlay(&balls, JOINT);
+            }
+        });
+    }
+
     fn commit(&mut self) {
         let root = self.commit_root();
         self.commit_to(&root);
@@ -2199,20 +2315,23 @@ impl AssetPipeline {
         }
         // Read everything under a shared borrow, then drop it before the write + the mutable
         // outcome record (so the borrow checker stays happy across the class dispatch).
-        let (class, prop, name, mut model, has_rig, fit, fbx, mounts) = {
+        let (class, prop, name, model_result, has_rig, fit, fbx, mounts) = {
             let Some(src) = self.source.as_ref() else {
                 return;
             };
             let Some(parsed) = src.parsed.as_ref() else {
                 return;
             };
-            let mut model = parsed.model.clone();
-            // Only the character path has authored offsets to bake in; a prop/garment has none.
-            if matches!(src.class(), Some(AssetClass::Skin) | None) {
-                if let Some(rig) = src.rig.as_ref() {
-                    apply_offsets(&mut model, &rig.offsets);
-                }
-            }
+            // A CHARACTER bakes through the ONE shared path (`character_bake_model`) — the
+            // same model the Preview page plays, so the preview can never drift from the
+            // export. A prop/garment ships the parse as-is (no offsets, no frame gate).
+            let model_result = if matches!(src.class(), Some(AssetClass::Skin) | None)
+                && src.rig.is_some()
+            {
+                self.character_bake_model()
+            } else {
+                Ok(parsed.model.clone())
+            };
             // The human-authored placement the Attach stage tuned — what Commit bakes in.
             let fit = Fit {
                 socket: src.fit.socket_name().to_string(),
@@ -2239,30 +2358,22 @@ impl AssetPipeline {
                 src.class(),
                 src.prop,
                 src.asset_name().to_string(),
-                model,
+                model_result,
                 src.rig.is_some(),
                 fit,
                 src.fbx.clone(),
                 mounts,
             )
         };
-
-        // A committed CHARACTER always leaves with canonical joint ORIENTATIONS: the shared clips
-        // play absolute rotations in canonical frames, so this is the invariant's output gate —
-        // structural, not a user choice. Positions are never touched (Meshy's placements and the
-        // human's fitted joints ship exactly as placed; only each bone's frame is rewritten), which
-        // is what lets the as-provided editing view stay vendor-faithful in the bench yet still
-        // commit a playable body. Idempotent on an already-canonical rig with no authored offsets;
-        // when joints WERE dragged, the limb frames re-align to the final joint layout — the frames
-        // always describe the skeleton actually being committed.
-        if matches!(class, Some(AssetClass::Skin) | None) && has_rig {
-            if let Err(e) = reorient_to_canonical(&mut model, &default_reference()) {
-                if let Some(src) = self.source.as_mut() {
-                    src.error = Some(format!("Canonical frame translation failed: {e}"));
+        let model = match model_result {
+            Ok(m) => m,
+            Err(e) => {
+                if let Some(s) = self.source.as_mut() {
+                    s.error = Some(e);
                 }
                 return;
             }
-        }
+        };
 
         let dir = root.join(&name);
         let out = dir.join(format!("{name}.json"));
@@ -3037,6 +3148,7 @@ impl AssetPipeline {
         let role = self.conform_role();
         let (title, hint) = match step.as_str() {
             "conform" => (role.title(), role.hint()),
+            "preview" => ("$ap_preview_title", "$ap_preview_hint"),
             "attach" => (
                 "$ap_attach_points",
                 "$ap_position_hold_holster_and_belt_attach_po",
@@ -3061,6 +3173,20 @@ impl AssetPipeline {
         m.set("prefer_staged", self.prefer_staged);
         // The Task page's "import as provided" diagnostic — checkbox state, same as prefer_staged.
         m.set("as_provided", self.as_provided);
+        // The Preview page's readout — real, measured facts from the built bake (empty until built).
+        m.set(
+            "preview_status",
+            match self.bake.as_ref() {
+                Some(bp) => format!(
+                    "{} · tick {}/{} · {} bones",
+                    bp.clip.name,
+                    (self.bake_tick as u32).min(bp.clip.duration_ticks.saturating_sub(1)),
+                    bp.clip.duration_ticks,
+                    bp.bones.len()
+                ),
+                None => String::new(),
+            },
+        );
         // The Clip page's variant pick — checkbox state, mirrored like the toggles above.
         m.set("variant_rm", self.variant_rm);
         m.set("variant_ip", self.variant_ip);
@@ -3502,6 +3628,7 @@ impl AssetPipeline {
             // Conform dispatches by role, so the inspector title tracks the rail: a prop reads
             // "Mount", an animation "Clips" — never the character "Rig" label over a page that is neither.
             "conform" => self.conform_role().title(),
+            "preview" => "$ap_preview_title",
             "attach" => "$ap_attach_points",
             "review" => "$wf_step_review",
             _ => "$wf_step_task", // "task"
@@ -4419,6 +4546,7 @@ impl Scene for AssetPipeline {
         // the same grid the paperdoll uses, owned by flicker-render.
         self.grid = Some(QuadGrid::editor(renderer));
         self.clip_grid = Some(QuadGrid::new(renderer, &CLIP_VIEWS, 2));
+        self.bake_grid = Some(QuadGrid::new(renderer, &BAKE_VIEWS, 1));
         // Built once and handed to each PauseScene we push, so pausing never re-uploads.
         self.ui_theme = Some(Theme::build(renderer));
         // PRE-LOAD the fitting body (the clay Golem) WITH the scene — mesh and all — so turning
@@ -4481,9 +4609,14 @@ impl Scene for AssetPipeline {
         if let Some(g) = self.grid.as_mut() {
             g.set_viewport(viewport);
         }
-        // The clip pair tiles in the SAME holder rect — whichever grid renders
-        // this frame, the panels land inside the frame the HUD reserved.
+        // The clip pair and the bake preview tile in the SAME holder rect — whichever
+        // grid renders this frame, the panels land inside the frame the HUD reserved.
+        // (An unconfined grid tiles the WHOLE WINDOW and composites over the HUD —
+        // the dead-page bug the preview page shipped with.)
         if let Some(g) = self.clip_grid.as_mut() {
+            g.set_viewport(viewport);
+        }
+        if let Some(g) = self.bake_grid.as_mut() {
             g.set_viewport(viewport);
         }
         let hud_hit = frame.results.is_on("hud_hit");
@@ -4627,6 +4760,12 @@ impl Scene for AssetPipeline {
             let hz = cp.ip.tick_rate_hz.max(1) as f32;
             self.clip_tick = (self.clip_tick + dt.as_secs_f32() * hz) % cp.duration as f32;
         }
+        // The Preview page's playback clock — the baked body loops the shared idle.
+        if let Some(bp) = self.bake.as_ref() {
+            let hz = bp.clip.tick_rate_hz.max(1) as f32;
+            self.bake_tick =
+                (self.bake_tick + dt.as_secs_f32() * hz) % bp.clip.duration_ticks.max(1) as f32;
+        }
 
         // A left-click on an ORTHO panel's corner label flips that view to its opposite side
         // (LEFT↔RIGHT, TOP↔BOTTOM, FRONT↔BACK). The control now lives ON the panel, beside the label
@@ -4663,7 +4802,31 @@ impl Scene for AssetPipeline {
         // panning/zooming/orbiting one panel leaves the other three put.
         let delta = input.mouse_position - self.last_mouse;
         self.last_mouse = input.mouse_position;
-        if self.ui_state.drag().is_none() {
+        // THE PREVIEW PAGE takes the shared Orbit component's standard pointer contract on
+        // its single view — the same camera interaction every body view owes (rule: connect
+        // the ratified system, never route around it). The quad block below stays the quad's.
+        let on_preview = self.wf.step() == "preview";
+        if on_preview && self.ui_state.drag().is_none() {
+            if let Some(bp) = self.bake.as_ref() {
+                let inside = self
+                    .bake_grid
+                    .as_ref()
+                    .and_then(|g| g.cell_at(input.mouse_position, screen))
+                    .is_some();
+                if inside {
+                    let view_h = self.quad_rect.map(|r| r.size.y).unwrap_or(screen.y);
+                    self.bake_orbit.apply_pointer(
+                        delta,
+                        input.mouse_left,
+                        input.mouse_right,
+                        input.mouse_wheel_delta,
+                        bp.radius,
+                        view_h,
+                    );
+                }
+            }
+        }
+        if !on_preview && self.ui_state.drag().is_none() {
             if let Some(i) = self
                 .grid
                 .as_ref()
@@ -4704,15 +4867,22 @@ impl Scene for AssetPipeline {
                 signals.axis(ActionSignal::LookUp, input)
                     - signals.axis(ActionSignal::LookDown, input),
             );
-            if look != Vec2::ZERO {
-                self.orbits[0].yaw -= look.x * STICK_LOOK_RATE * dt_s;
-                self.orbits[0].pitch =
-                    (self.orbits[0].pitch + look.y * STICK_LOOK_RATE * dt_s).clamp(-1.4, 1.4);
-            }
             let zoom = signals.axis(ActionSignal::ZoomIn, input)
                 - signals.axis(ActionSignal::ZoomOut, input);
+            // The signals drive whichever perspective view the step shows: the preview
+            // page's single bake view, else the quad's PERSP panel — same contract, one
+            // component (controller is the floor on every body view).
+            let o = if on_preview {
+                &mut self.bake_orbit
+            } else {
+                &mut self.orbits[0]
+            };
+            if look != Vec2::ZERO {
+                o.yaw -= look.x * STICK_LOOK_RATE * dt_s;
+                o.pitch = (o.pitch + look.y * STICK_LOOK_RATE * dt_s).clamp(-1.4, 1.4);
+            }
             if zoom != 0.0 {
-                self.orbits[0].zoom_by(zoom * STICK_ZOOM_RATE * dt_s);
+                o.zoom_by(zoom * STICK_ZOOM_RATE * dt_s);
             }
         }
 
@@ -4735,6 +4905,25 @@ impl Scene for AssetPipeline {
         if clip_active {
             self.render_clip(renderer, base_layer);
         }
+        // THE PREVIEW PAGE swaps the rig grid for the baked-idle smoke test — the same
+        // one-grid-per-frame exclusivity rule as the clip pair above. If the bake FAILED,
+        // fall through to the normal rig grid (the inspector shows the error) — the page
+        // must never be a dead frame with nothing rendering.
+        let bake_active = if self.wf.step() == "preview" {
+            self.ensure_bake_preview(renderer);
+            if self.bake.is_some() {
+                self.render_bake_preview(renderer, base_layer);
+                true
+            } else {
+                false
+            }
+        } else {
+            if let Some(bp) = self.bake.take() {
+                // Leaving the page drops the bake, so re-entry rebuilds from the latest joints.
+                renderer.free_skinned_mesh(bp.mesh);
+            }
+            false
+        };
 
         // The four views FIRST. `QuadGrid::render` drives the shared `FrameGraph`, whose
         // offscreen passes RESET the per-frame draw queues (the centralized "render RTTs
@@ -4743,7 +4932,7 @@ impl Scene for AssetPipeline {
         // The skeleton is drawn as an overlay so it reads through anything in front of it.
         // Prop/garment fit preview (the base rig + the imported mesh at socket·fit). Built FIRST —
         // its mesh upload needs `&mut Renderer` before grid.render borrows it for the RTT passes.
-        let preview = if clip_active {
+        let preview = if clip_active || bake_active {
             None
         } else {
             self.ensure_preview(renderer)
@@ -4786,7 +4975,7 @@ impl Scene for AssetPipeline {
         // at the same rate the camera does. Set before the `grid` borrow below.
         self.view_radius = radius;
 
-        if let (false, Some(grid)) = (clip_active, self.grid.as_ref()) {
+        if let (false, Some(grid)) = (clip_active || bake_active, self.grid.as_ref()) {
             // The stage floor: a faint lattice on the XY ground plane at the asset's FEET, so the
             // perspective view reads as a stage instead of empty space. Everything is drawn
             // recentred, which puts the origin at the asset's WAIST — without this the eye has no
@@ -5011,6 +5200,7 @@ impl Scene for AssetPipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flicker::render::ORBIT_FOV_Y;
 
     /// The real source folder the whole pipeline is developed against. Every test that needs a
     /// genuine skeleton goes through this, and SKIPS when the content tree is absent — the same
@@ -5572,17 +5762,14 @@ mod tests {
                 .collect()
         };
         let before = world(&m);
-        // The fitted signature, not canon: the head was hand-placed ~4 cm behind the canonical
-        // plane and the hands drawn far inboard of the canonical 63.9 — if a conform pass had
-        // run over the reload, these would snap back toward canon.
-        let head = before["head"];
-        assert!(
-            head.y > 2.0,
-            "the promoted rig carries the FITTED head depth, got {head}"
-        );
+        // The AUTHORED signature, not canon: this body's hands sit far inboard of the
+        // canonical 63.9 (the golem's own proportions) — if a conform pass had run over the
+        // reload, they would snap back toward canon. The head is deliberately NOT pinned:
+        // it is the joint the human keeps re-authoring, so freezing one fit's value here
+        // made the guard fail on every legitimate re-promote.
         assert!(
             before["hand_l"].x < 50.0,
-            "the promoted rig carries the FITTED hand, got {}",
+            "the promoted rig carries the AUTHORED hand, got {}",
             before["hand_l"]
         );
         // The chain heal moves NO joint: world frames are preserved by construction.
@@ -6128,6 +6315,101 @@ mod tests {
         let _ = std::fs::remove_dir_all(&out_root);
     }
 
+    /// THE SMOKE-TEST PAGE (Aaron 2026-08-20): the character rail carries a Preview step
+    /// right after joint editing — conform → preview → attach → review — and its bake IS
+    /// the commit bake (one shared helper), so what the page plays can never drift from
+    /// what Export writes. The shared idle must resolve onto the baked bones and pose the
+    /// body upright.
+    #[test]
+    fn the_preview_page_plays_the_commit_bake_under_the_shared_idle() {
+        let Some(mut ed) = at_conform() else {
+            eprintln!("skipping: no content tree");
+            return;
+        };
+        // The rail: preview sits between the rig view and attach.
+        let ids: Vec<&str> = ed.wf_def.steps.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, ["task", "conform", "preview", "attach", "review"]);
+
+        // The page is NAVIGABLE: its surface is on and the footer's Next is live — the
+        // dead-page regression (an unconfined grid compositing over the HUD) left the
+        // user stranded here with no way forward or back.
+        park(&mut ed, "preview");
+        {
+            let m = ed.hud_model();
+            assert!(m.is_on("wf_step_preview"), "the preview surface gates on");
+            assert!(m.is_on("next_enabled"), "Next stays live on the preview page");
+        }
+        // …and Back returns to the rig view (park only walks forward).
+        ed.apply_workflow_results(&fired("wf_back"));
+        assert_eq!(ed.wf.step(), "conform", "Back returns to joint editing");
+
+        // Author a distinctive joint move so the preview must carry it.
+        {
+            let src = ed.source.as_mut().unwrap();
+            let i = src.parsed.as_ref().unwrap().bone_index("head").unwrap();
+            let rig = src.rig.as_mut().unwrap();
+            rig.offsets[i] = BoneOffset {
+                t: [0.0, 0.0, 3.5],
+                roll: 0.0,
+            };
+        }
+
+        let (_rig_file, bones, clip) = ed.bake_preview_parts().expect("the preview bakes");
+        assert!(
+            !clip.tracks.is_empty(),
+            "the shared idle resolves onto the baked bones"
+        );
+
+        // The preview IS the commit: the written file carries the same skeleton bone-for-bone.
+        let out_root = std::env::temp_dir().join("flicker_assetpipeline_bake_preview");
+        let _ = std::fs::remove_dir_all(&out_root);
+        park(&mut ed, "review");
+        ed.commit_to(&out_root);
+        let src = ed.source.as_ref().unwrap();
+        assert!(src.error.is_none(), "commit reported: {:?}", src.error);
+        let written = src
+            .committed
+            .as_ref()
+            .expect("commit recorded where it wrote");
+        let json: serde_json::Value =
+            serde_json::from_str(&flicker_content::package::read_text(written).unwrap()).unwrap();
+        let wb = json["skeleton"]["bones"].as_array().expect("skeleton.bones");
+        assert_eq!(wb.len(), bones.len(), "same skeleton size as the preview");
+        for (i, b) in bones.iter().enumerate() {
+            assert_eq!(wb[i]["name"], b.name, "bone {i} matches the preview");
+            let l = wb[i]["local"].as_array().expect("local");
+            let stored: Vec<f32> = l.iter().map(|v| v.as_f64().unwrap() as f32).collect();
+            let ours = b.local.to_cols_array();
+            for k in 0..16 {
+                assert!(
+                    (stored[k] - ours[k]).abs() < 1e-2,
+                    "bone {} local[{k}] drifted: {} vs {}",
+                    b.name,
+                    stored[k],
+                    ours[k]
+                );
+            }
+        }
+
+        // The smoke test's own smoke test: mid-idle the baked body poses UPRIGHT
+        // (Z-tallest in source space) — a Katanami-class contortion would fail this.
+        let locals = sample_local_poses(&bones, &clip, 100, true);
+        let globals = global_transforms(&bones, &locals);
+        let (mut min, mut max) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+        for g in &globals {
+            let p = g.w_axis.truncate();
+            min = min.min(p);
+            max = max.max(p);
+        }
+        let d = max - min;
+        assert!(
+            d.z > d.x && d.z > d.y,
+            "the animated preview stands tall along Z, got extents {d:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&out_root);
+    }
+
     /// The bone map's colours resolve to REAL rgba through the SCENE FILE's folded
     /// style blocks — a typo'd or deleted `assetpipeline.map.*` key would otherwise
     /// show as default ink and read as fine. The pair script's wash + chip paths ride
@@ -6222,7 +6504,7 @@ mod tests {
         // visible there, so the pan neither crawls on a large asset nor bolts on a small one.
         o.pan = Vec3::ZERO;
         o.pan_by_view(Vec2::new(0.0, vh), &persp, vh);
-        let visible_h = 2.0 * o.dist(radius) * (FOV_Y * 0.5).tan();
+        let visible_h = 2.0 * o.dist(radius) * (ORBIT_FOV_Y * 0.5).tan();
         assert!(
             (o.pan.length() - visible_h).abs() < 1e-2,
             "expected a 1:1 pan of {visible_h}, got {}",
@@ -6251,7 +6533,7 @@ mod tests {
             position: Vec3::new(0.0, 0.0, 400.0),
             target: Vec3::ZERO,
             up: Vec3::Y,
-            fov_y_radians: FOV_Y,
+            fov_y_radians: ORBIT_FOV_Y,
             near: 0.01,
             far: 1200.0,
             ortho_height: Some(220.0),
@@ -6483,11 +6765,11 @@ mod tests {
         assert_eq!(m.text("wf_conform_state"), Some("active"));
         assert_eq!(m.text("wf_task_state"), Some("visited"));
         assert_eq!(m.text("wf_attach_state"), Some("todo"));
-        // All four chips of the character definition are shown, and the footer counts them.
-        for id in ["task", "conform", "attach", "review"] {
+        // All five chips of the character definition are shown, and the footer counts them.
+        for id in ["task", "conform", "preview", "attach", "review"] {
             assert!(m.is_on(&format!("wf_{id}_show")), "{id} chip shown");
         }
-        assert_eq!(m.number("wf_step_n"), Some(4.0));
+        assert_eq!(m.number("wf_step_n"), Some(5.0));
         // The step SURFACES (namespaced `wf_step_<id>`) gate the content subtrees,
         // exclusively on the current step.
         assert!(
@@ -6543,7 +6825,7 @@ mod tests {
         );
         assert_eq!(
             ed.wf_def.steps.len(),
-            4,
+            5,
             "…and the default (character) definition is restored"
         );
     }
