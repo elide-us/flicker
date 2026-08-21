@@ -308,6 +308,16 @@
                             "size_class": "md",
                             "tab_group": "cat_nav",
                             "nav_ordinal": 26
+                          },
+                          {
+                            "component": "button",
+                            "id": "nav_26",
+                            "label": "$cat_nav_viewport",
+                            "style_bind": "nav_sty_26",
+                            "action": "nav_26",
+                            "size_class": "md",
+                            "tab_group": "cat_nav",
+                            "nav_ordinal": 27
                           }
                         ]
                       }
@@ -1273,6 +1283,36 @@
                               {
                                 "component": "text",
                                 "text": "$cat_ft_note",
+                                "text_size": 11,
+                                "font": "label",
+                                "color": "panel.stat_label"
+                              }
+                            ]
+                          },
+                          {
+                            "component": "panel",
+                            "id": "card_26",
+                            "style": "panel",
+                            "pad": 14,
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text": "$cat_nav_viewport",
+                                "text_size": 14,
+                                "font": "label",
+                                "color": "panel.stat_value"
+                              },
+                              {
+                                "component": "viewport",
+                                "id": "cat_viewport",
+                                "layout": "quad",
+                                "style": "panel",
+                                "height": 260
+                              },
+                              {
+                                "component": "text",
+                                "text": "$cat_viewport_note",
                                 "text_size": 11,
                                 "font": "label",
                                 "color": "panel.stat_label"

@@ -159,6 +159,12 @@ const RUST_COMPONENT_KINDS: &[&str] = &[
     // `[ BACK ]`/`[ NEXT ]` as relevant). Stateless — its buttons fire the same result
     // names the screen's declared Next/Prev/Menu intents fire, one activation channel.
     "nav_footer",
+    // The catalogued multi-view 3-D viewport (single|pair|quad). The kind RESERVES an
+    // rtt-family slot carrying its `layout` and draws its own backdrop well / claims its
+    // rect for focus; a shared behaviour-side `flicker_render::ViewportFiller` owns the
+    // QuadGrid + Orbits and FILLS it — the walker stays 2-D (it has no Renderer). Retires
+    // the per-bench `QuadGrid`/`Orbit` hand-rolling (Aaron 2026-08-21, campaign kind #1).
+    "viewport",
 ];
 
 /// Whether `kind` is an interactive Component — i.e. one the engine draws and hit-tests

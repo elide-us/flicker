@@ -19,7 +19,9 @@
 
 use std::time::Duration;
 
-use flicker::render::{Renderer, TextureHandle};
+use flicker::render::{
+    grid_segments_xy, Rect, Renderer, TextureHandle, Vec2, Vec3, ViewportFiller, ViewportLayout,
+};
 use flicker::scene::{Scene, SceneInput, Transition};
 use flicker::script::{HudCommand, ScriptHost, UiNode, ValueMap};
 use flicker::ui::{render_hud, run_ui, SceneDef, UiInput, UiIntents, UiState, WalkerHandler};
@@ -73,6 +75,41 @@ fn tree_binds(tree: &UiNode) -> Vec<String> {
     out
 }
 
+/// The viewport-card demo's framing radius and wireframe colours.
+const DEMO_RADIUS: f32 = 2.2;
+const DEMO_GROUND: [f32; 4] = [0.25, 0.28, 0.34, 1.0];
+const DEMO_CUBE: [f32; 4] = [0.55, 0.75, 0.95, 1.0];
+
+/// The viewport demo's content — a unit cube standing on the grid floor, as the 12
+/// wireframe edges `Renderer::draw_lines` takes. One card, so rebuilding it a frame is free.
+fn demo_cube() -> Vec<(Vec3, Vec3)> {
+    let c = |x: f32, y: f32, z: f32| Vec3::new(x, y, z);
+    let p = [
+        c(-1.0, -1.0, -1.0),
+        c(1.0, -1.0, -1.0),
+        c(1.0, 1.0, -1.0),
+        c(-1.0, 1.0, -1.0),
+        c(-1.0, -1.0, 1.0),
+        c(1.0, -1.0, 1.0),
+        c(1.0, 1.0, 1.0),
+        c(-1.0, 1.0, 1.0),
+    ];
+    vec![
+        (p[0], p[1]),
+        (p[1], p[2]),
+        (p[2], p[3]),
+        (p[3], p[0]),
+        (p[4], p[5]),
+        (p[5], p[6]),
+        (p[6], p[7]),
+        (p[7], p[4]),
+        (p[0], p[4]),
+        (p[1], p[5]),
+        (p[2], p[6]),
+        (p[3], p[7]),
+    ]
+}
+
 /// The UI test scene. Everything a frame needs lives here; the shell drives it through
 /// the [`Scene`] trait.
 pub struct ComponentCatalog {
@@ -105,6 +142,17 @@ pub struct ComponentCatalog {
     demo: ValueMap,
     /// The PAIR SCRIPT host (`componentcatalog.lua`).
     script: Option<ScriptHost>,
+    /// The viewport card's shared filler — built LAZILY on first render (it needs
+    /// `&mut Renderer`), then seated in the reserved rect each frame.
+    viewport: Option<ViewportFiller>,
+    /// The rect + layout the walker reserved for the `cat_viewport` node this frame
+    /// (captured in `update`; consumed in the input-less `render`). `None` when off screen.
+    viewport_seat: Option<(Rect, ViewportLayout)>,
+    /// This frame's pointer sample (cursor, delta, left-down) `render` replays to orbit the
+    /// viewport panel under the cursor — `render` gets no `InputState` of its own.
+    pointer: (Vec2, Vec2, bool),
+    /// Last frame's cursor, for the per-frame delta the orbit drag needs.
+    last_mouse: Vec2,
 }
 
 impl ComponentCatalog {
@@ -140,6 +188,10 @@ impl ComponentCatalog {
                     None
                 }
             },
+            viewport: None,
+            viewport_seat: None,
+            pointer: (Vec2::ZERO, Vec2::ZERO, false),
+            last_mouse: Vec2::ZERO,
         }
     }
 
@@ -240,6 +292,13 @@ impl Scene for ComponentCatalog {
             wheel: input.mouse_wheel_delta,
         };
         let frame = run_ui(tree, &model, &self.ui_styles, &snap, &mut self.ui_state);
+        // The viewport card: capture the rect+layout the walker reserved and this frame's
+        // pointer sample, for the input-less `render` to seat + orbit (a left-drag over a
+        // panel orbits it; the filler self-gates to the cursor-over-viewport).
+        self.viewport_seat = frame.viewport_slot("cat_viewport");
+        let mouse = input.mouse_position;
+        self.pointer = (mouse, mouse - self.last_mouse, input.mouse_left);
+        self.last_mouse = mouse;
         let hud_hit = frame.results.is_on("hud_hit");
         // Take the frame apart: the draw commands to blit, the result values to read, and
         // the per-card RECTS the scroll-to needs (each card box reports its resolved Y).
@@ -303,8 +362,33 @@ impl Scene for ComponentCatalog {
     }
 
     fn render(&mut self, renderer: &mut Renderer) {
+        let base_layer = renderer.layer();
+        // The viewport card FIRST. Its frame graph's offscreen passes RESET the per-frame
+        // draw queues (the "render RTTs before the main view" rule), so anything queued
+        // before it is discarded — the HUD MUST come after. Seat the shared filler in the
+        // rect the walker reserved, orbit the panel under the cursor on a left-drag, and
+        // render a wireframe stage (ground grid + a cube) into it — the kind's LIVE catalog
+        // exerciser. Wheel is left out so it never fights the tray scroll. Composites at
+        // `base+2`, ABOVE the HUD's `base+1`, so the views land inside the card's well.
+        if let Some((rect, layout)) = self.viewport_seat {
+            if self.viewport.is_none() {
+                self.viewport = Some(ViewportFiller::new(renderer, layout));
+            }
+            let vf = self.viewport.as_mut().unwrap();
+            vf.set_rect(rect);
+            let (mouse, delta, left) = self.pointer;
+            vf.apply_pointer(mouse, renderer.size(), delta, left, false, 0.0, DEMO_RADIUS);
+            let ground = grid_segments_xy(0.5, 2.5, -1.0);
+            let cube = demo_cube();
+            vf.render(renderer, base_layer + 2.0, DEMO_RADIUS, |r, _view| {
+                r.draw_lines(&ground, DEMO_GROUND);
+                r.draw_lines(&cube, DEMO_CUBE);
+            });
+        }
         if let Some(&white) = self.textures.first() {
+            renderer.set_layer(base_layer + 1.0);
             render_hud(renderer, &self.hud_commands, white, &self.textures);
+            renderer.set_layer(base_layer);
         }
     }
 }

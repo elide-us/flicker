@@ -476,9 +476,157 @@ impl Orbit {
     }
 }
 
+/// The catalogued `viewport` layouts — how many camera views the kind tiles and how.
+/// `Single` is one orbit view (a paperdoll/body view); `Pair` two independent orbit views
+/// (compare two subjects side by side); `Quad` the 2×2 editor grid ([`EDITOR_QUADS`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ViewportLayout {
+    Single,
+    Pair,
+    Quad,
+}
+
+/// One free-orbit perspective view — the single/pair layouts have no fixed orthographic
+/// sides, so each panel orbits (`ortho: None`).
+const SINGLE_VIEW: [QuadView; 1] = [QuadView {
+    label: "VIEW",
+    label_flipped: "VIEW",
+    ortho: None,
+}];
+const PAIR_VIEWS: [QuadView; 2] = [
+    QuadView {
+        label: "A",
+        label_flipped: "A",
+        ortho: None,
+    },
+    QuadView {
+        label: "B",
+        label_flipped: "B",
+        ortho: None,
+    },
+];
+
+impl ViewportLayout {
+    /// Parse the node's `layout` prop. An unknown name returns `None` so the caller fails
+    /// LOUD rather than this guessing a layout (4BB12A75).
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "single" => Some(Self::Single),
+            "pair" => Some(Self::Pair),
+            "quad" => Some(Self::Quad),
+            _ => None,
+        }
+    }
+
+    /// The view set + column count this layout tiles.
+    fn views(self) -> (&'static [QuadView], usize) {
+        match self {
+            Self::Single => (&SINGLE_VIEW, 1),
+            Self::Pair => (&PAIR_VIEWS, 2),
+            Self::Quad => (&EDITOR_QUADS, 2),
+        }
+    }
+
+    /// How many camera views this layout renders — a caller draws content for each.
+    pub fn view_count(self) -> usize {
+        self.views().0.len()
+    }
+}
+
+/// THE shared multi-view viewport a `viewport` scene node drives — a [`QuadGrid`] plus one
+/// [`Orbit`] per view, so a bench stops hand-rolling `grid: QuadGrid, orbits: [Orbit; N]`
+/// and the per-view pointer routing (Aaron 2026-08-20: *"you should not have to code a
+/// custom orbit view on every paperdoll — make a component"*).
+///
+/// The split that keeps flicker-widgets 2D: the WALKER reserves the rect (a `viewport`
+/// node emits an `rtt`-family slot), the BEHAVIOUR — which owns the [`Renderer`] and the
+/// frame graph — holds one of these keyed off the node id, seats it in the reserved rect
+/// each frame with [`Self::set_rect`], feeds it the pointer, and renders the model.
+pub struct ViewportFiller {
+    grid: QuadGrid,
+    /// One orbit per view — a per-panel pan/zoom, so dragging one leaves the others put.
+    orbits: Vec<Orbit>,
+}
+
+impl ViewportFiller {
+    /// Build the grid + one orbit per view for `layout`, creating the offscreen targets.
+    pub fn new(renderer: &mut Renderer, layout: ViewportLayout) -> Self {
+        let (views, cols) = layout.views();
+        Self {
+            grid: QuadGrid::new(renderer, views, cols),
+            orbits: vec![Orbit::default(); views.len()],
+        }
+    }
+
+    /// Seat the grid inside the rect the walker reserved for this node this frame
+    /// (`UiFrame::rtt_rect(id)`). One call a frame — the same seat the asset-pipeline editor
+    /// does by hand today.
+    pub fn set_rect(&mut self, rect: Rect) {
+        self.grid.set_viewport(Some(rect));
+    }
+
+    /// Route one pointer sample: drive the [`Orbit`] of the view under the cursor, and only
+    /// it, per the [`Orbit::apply_pointer`] contract (left-drag orbits, right-drag pans, wheel
+    /// zooms). A cursor over no panel is ignored — it does not saturate into view 0.
+    #[allow(clippy::too_many_arguments)]
+    pub fn apply_pointer(
+        &mut self,
+        cursor: Vec2,
+        screen: Vec2,
+        delta: Vec2,
+        left: bool,
+        right: bool,
+        wheel: f32,
+        radius: f32,
+    ) {
+        if let Some(i) = self.grid.cell_at(cursor, screen) {
+            let viewport_h = self.grid.cell(i, screen).size.y;
+            self.orbits[i].apply_pointer(delta, left, right, wheel, radius, viewport_h);
+        }
+    }
+
+    /// Render every view of `radius`-sized content into its target and composite into the
+    /// reserved rect at `layer`; `draw` draws view `i` with its camera already set. Each view
+    /// frames on its own orbit, so pan/zoom stay independent per panel — a perspective view
+    /// uses its orbit camera verbatim, an ortho view is framed around that orbit's look-at.
+    ///
+    /// **ORDER: call this BEFORE the scene's `render_hud`.** The offscreen passes RESET the
+    /// renderer's per-frame draw queues, so anything queued earlier in the frame is DISCARDED
+    /// — a HUD drawn first vanishes (the Component Catalog shipped blank this way, 2026-08-21).
+    /// Composite one layer above the HUD (`base + 2` over a HUD at `base + 1`) so the views
+    /// land inside the well the walker drew rather than under it.
+    pub fn render<F>(&self, r: &mut Renderer, layer: f32, radius: f32, draw: F)
+    where
+        F: Fn(&mut Renderer, usize) + Copy,
+    {
+        let cameras: Vec<Camera> = (0..self.orbits.len())
+            .map(|i| {
+                let base = self.orbits[i].camera(radius);
+                self.grid.camera(i, self.orbits[i].ortho_radius(radius), &base)
+            })
+            .collect();
+        self.grid.render_with(r, layer, &cameras, draw);
+    }
+
+    /// The layout's view count — for a caller that draws per-view content.
+    pub fn view_count(&self) -> usize {
+        self.orbits.len()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The three catalogued layouts map to 1 / 2 / 4 views, and an unknown name fails LOUD
+    /// (returns `None`) rather than resolving to a silent default.
+    #[test]
+    fn viewport_layouts_map_to_view_counts() {
+        assert_eq!(ViewportLayout::from_name("single").unwrap().view_count(), 1);
+        assert_eq!(ViewportLayout::from_name("pair").unwrap().view_count(), 2);
+        assert_eq!(ViewportLayout::from_name("quad").unwrap().view_count(), 4);
+        assert_eq!(ViewportLayout::from_name("nope"), None);
+    }
 
     /// THE POINTER CONTRACT (Aaron 2026-08-20, after a preview page shipped with a dead
     /// camera): one call moves the orbit — left-drag turns, right-drag pans, wheel zooms.

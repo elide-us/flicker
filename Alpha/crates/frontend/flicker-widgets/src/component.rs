@@ -503,6 +503,11 @@ pub struct RttSlot {
     /// Composite tint (default opaque white), from the node's `tint` dotted colour
     /// path or its style block.
     pub tint: [f32; 4],
+    /// `Some(layout)` when a `viewport` node reserved this slot — the multi-view layout
+    /// (single|pair|quad) its behaviour-side [`flicker_render::ViewportFiller`] tiles.
+    /// `None` for a plain `rtt` (one image). Lets the behaviour size the filler off the
+    /// reserved slot instead of re-reading the node.
+    pub layout: Option<flicker_render::ViewportLayout>,
 }
 
 /// The output of one [`run_ui`] pass: the draw commands (for
@@ -546,6 +551,24 @@ impl UiFrame {
                 pos: Vec2::new(s.x, s.y),
                 size: Vec2::new(s.w, s.h),
             })
+    }
+
+    /// The reserved rect AND layout for the `viewport` node with this `id` — the hand-off a
+    /// behaviour needs to build/seat its [`flicker_render::ViewportFiller`] (the walker
+    /// reserves, the behaviour fills). `None` when the id is absent, off screen, or is a
+    /// plain `rtt` (no layout) — use [`rtt_rect`](Self::rtt_rect) for those.
+    pub fn viewport_slot(&self, id: &str) -> Option<(flicker_render::Rect, flicker_render::ViewportLayout)> {
+        self.rtts.iter().find(|s| s.id == id).and_then(|s| {
+            s.layout.map(|layout| {
+                (
+                    flicker_render::Rect {
+                        pos: Vec2::new(s.x, s.y),
+                        size: Vec2::new(s.w, s.h),
+                    },
+                    layout,
+                )
+            })
+        })
     }
 
     /// The rect the layout RESOLVED for the id'd node this frame — any node,
@@ -886,15 +909,41 @@ pub fn run_ui(
     // travels here.
     let mut rtts = Vec::new();
     for p in &placed {
-        if p.node.component != "rtt" {
+        let is_viewport = p.node.component == "viewport";
+        if p.node.component != "rtt" && !is_viewport {
             continue;
         }
-        let Some(source) = ptext(p.node, "source") else {
-            tracing::warn!(
-                "rtt node {:?} has no `source` prop — slot skipped",
-                p.node.id
-            );
-            continue;
+        // A `viewport` reserves a multi-view slot: its `layout` (single|pair|quad, default
+        // single) tells the behaviour's ViewportFiller how many camera panes to tile. An
+        // unknown layout name fails LOUD (4BB12A75) rather than resolving to a default.
+        let layout = if is_viewport {
+            let name = ptext(p.node, "layout").unwrap_or("single");
+            match flicker_render::ViewportLayout::from_name(name) {
+                Some(l) => Some(l),
+                None => {
+                    tracing::warn!(
+                        "viewport node {:?} has unknown layout {:?} — slot skipped",
+                        p.node.id,
+                        name
+                    );
+                    continue;
+                }
+            }
+        } else {
+            None
+        };
+        // `rtt` names a `stages.<source>` sub-scene to render; a `viewport` is filled by the
+        // behaviour's own ViewportFiller, so its `source` is optional.
+        let source = match ptext(p.node, "source") {
+            Some(s) => s.to_string(),
+            None if is_viewport => String::new(),
+            None => {
+                tracing::warn!(
+                    "rtt node {:?} has no `source` prop — slot skipped",
+                    p.node.id
+                );
+                continue;
+            }
         };
         let st = style_of(p.node, styles);
         // `inset` may ride as a node prop or sit in the shared panel style, so a
@@ -916,7 +965,7 @@ pub fn run_ui(
         };
         rtts.push(RttSlot {
             id: p.node.id.clone(),
-            source: source.to_string(),
+            source,
             x: img.x,
             y: img.y,
             w: img.w,
@@ -924,6 +973,7 @@ pub fn run_ui(
             layer: p.layer,
             live,
             tint,
+            layout,
         });
     }
 
@@ -3423,6 +3473,9 @@ fn draw_node(
                 "popup_panel" => draw_popup_panel(r, node, &props, out),
                 "paged_menu" => draw_paged_menu(r, node, model, &props, out),
                 "nav_footer" => draw_nav_footer(r, node, model, &props, out),
+                // The viewport draws only its BACKDROP well here (like an `rtt`); the
+                // behaviour's ViewportFiller blits the composited views over it.
+                "viewport" => draw_panel(r, &props, out),
                 _ => draw_button(r, &props, out),
             }
             // CORNER RUNES are a DECORATION FLAG on any component, not a kind of
@@ -3677,7 +3730,12 @@ fn rust_hit_shape(kind: &str) -> Option<HitShape> {
         // A `popup_panel` is a full-rect claim like a `panel`: its slab must not pick
         // through to the scene behind the modal, and its items are their own child nodes
         // that answer their own clicks. It writes no bind and fires no action of its own.
-        "button" | "panel" | "tile" | "action_slot" | "popup_panel" => Some(HitShape::Rect),
+        // A `viewport` claims its whole rect like a `panel`: the click/drag drives its
+        // camera (pointer orbit) and must not pick through to a scene behind it, and it is
+        // a focus STOP on the flattened nav tier.
+        "button" | "panel" | "tile" | "action_slot" | "popup_panel" | "viewport" => {
+            Some(HitShape::Rect)
+        }
         // Pure decoration — never claims, never interacts. A tooltip that claimed would
         // eat every click beneath the cursor it follows. The gauges, the stat
         // dot and the portrait medallion are the READ-OUT half of that rule: they report

@@ -3224,6 +3224,12 @@
   "cat_nav_splash": {
     "en-us": "Splash"
   },
+  "cat_nav_viewport": {
+    "en-us": "Viewport"
+  },
+  "cat_viewport_note": {
+    "en-us": "3D viewport (quad layout) — left-drag a panel to orbit"
+  },
   "qm_menu_open": {
     "en-us": "Open"
   },
