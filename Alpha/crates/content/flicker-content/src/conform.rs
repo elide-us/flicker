@@ -374,6 +374,23 @@ pub struct ConformReport {
 /// Reorient `model`'s bones to conform to the reference skeleton (PrismHumanBaseA). Writes each
 /// bone's new local TRS + inverse_bind in place.
 pub fn reorient_to_canonical(model: &mut RawModel, reference: &Path) -> Result<ConformReport> {
+    let (t, report) = canonical_world_frames(model, reference)?;
+    // Derive local + inverse_bind from the final frames T (absolute retarget; no retarget_rot).
+    write_world_frames(&mut model.bones, &t);
+    Ok(report)
+}
+
+/// The canonical world frames this body's bones take under conform's reorient — the reference's
+/// world ORIENTATION carried on THIS body's own joint POSITIONS, with each limb frame turned to
+/// point down this body's own limb — computed WITHOUT writing them back into the model.
+///
+/// [`reorient_to_canonical`] writes these (the standard path). An AS-PROVIDED import keeps the
+/// vendor's core frames untouched, yet [`infer_canonical_bones`] still needs this canonical BASIS to
+/// hang the twists / fingers / face bones on: composing a canonical-basis offset directly onto a
+/// vendor frame (a differing bone-axis convention) throws the inferred bones off the mesh. Because
+/// reorient preserves POSITIONS, this basis shares the vendor rig's joint positions, so bones placed
+/// on it land exactly where the canonical path would.
+fn canonical_world_frames(model: &RawModel, reference: &Path) -> Result<(Vec<Mat4>, ConformReport)> {
     // This body's world frames (built from the parsed local TRS).
     let fg = model_world_frames(model);
     let idx: HashMap<String, usize> = model
@@ -426,9 +443,7 @@ pub fn reorient_to_canonical(model: &mut RawModel, reference: &Path) -> Result<C
         report.limbs_aligned += 1;
     }
 
-    // 3. derive local + inverse_bind from the final frames T (absolute retarget; no retarget_rot).
-    write_world_frames(&mut model.bones, &t);
-    Ok(report)
+    Ok((t, report))
 }
 
 /// This body's `limb` bone length ÷ the reference's — trusting Meshy's LENGTHS (memory 03BBF8F4).
@@ -472,17 +487,26 @@ pub struct InferReport {
 /// Add the canonical bones Meshy never produces — the in-app port of
 /// `rename_meshy_to_canonical.py::infer_canonical_bones`. Whatever the reference (PrismHumanBaseA)
 /// has and this body lacks (30 fingers + 8 twists + 2 weapon sockets + jaw/eyes) is inferred from the
-/// reference's own local offset, hung off THIS body's already-canonical parent frame and scaled by
-/// this body's limb-length ratio.
+/// reference's own local offset, hung off THIS body's canonical parent frame and scaled by this
+/// body's limb-length ratio.
 ///
-/// Runs AFTER [`reorient_to_canonical`], and that ordering is what makes it correct: every parent
-/// frame is already canonical, so a twist lands at the same FRACTION along this body's limb, and a
-/// finger chain off the (deliberately un-limb-aligned) hand reproduces the reference hand orientation.
+/// The parent frame it hangs off is the CANONICAL basis (reference orientation on this body's joint
+/// positions). In [`ConformMode::Canonical`] the model was already reoriented, so its own frames ARE
+/// that basis. In [`ConformMode::AsProvided`] the core keeps the vendor frames, so the canonical
+/// basis is computed separately ([`canonical_world_frames`]) — otherwise the reference-basis offsets
+/// would be rotated by the vendor's own bone-axis convention and land the inferred bones off the mesh
+/// (the "inferred bones translated off the mesh" symptom). Each bone's LOCAL is expressed against its
+/// ACTUAL parent frame, so FK reproduces the same world frame in both modes; a twist still lands at
+/// the same FRACTION along this body's limb.
 /// SCALE: Meshy gives no hand length, so fingers + sockets are sized by the FOREARM ratio ("a
 /// straight hand of standard proportion"). Inferred bones carry NO weights — they are appended after
 /// the mesh's joint indices are baked, so no vertex references them; they resolve and rotate but
 /// deform nothing until each body's hand mesh is weighted to them (the follow-on).
-pub fn infer_canonical_bones(model: &mut RawModel, reference: &Path) -> Result<InferReport> {
+pub fn infer_canonical_bones(
+    model: &mut RawModel,
+    reference: &Path,
+    mode: ConformMode,
+) -> Result<InferReport> {
     let refs = load_reference_skeleton(reference)?;
     let cg = fk(
         &refs.iter().map(|b| b.local).collect::<Vec<_>>(),
@@ -537,8 +561,16 @@ pub fn infer_canonical_bones(model: &mut RawModel, reference: &Path) -> Result<I
         scale.insert(b.name.clone(), s);
     }
 
-    // Append each inferred bone: parent frame is already canonical, so W = parent_global · scaled_local.
+    // Append each inferred bone on the CANONICAL basis, with its LOCAL taken against the ACTUAL
+    // parent frame so FK reproduces the same world frame whether the core was reoriented (canonical)
+    // or kept as provided (vendor frames): W = basis_parent · scaled_local, local = actual_parent⁻¹ · W.
     let mut g = g0;
+    let mut basis = match mode {
+        // Canonical: the model was already reoriented, so its own frames ARE the canonical basis.
+        ConformMode::Canonical => g.clone(),
+        // As provided: the core keeps the vendor frames — compute the canonical basis to hang on.
+        ConformMode::AsProvided => canonical_world_frames(model, reference)?.0,
+    };
     let mut idx = idx0;
     let mut report = InferReport {
         added: Vec::new(),
@@ -554,8 +586,9 @@ pub fn infer_canonical_bones(model: &mut RawModel, reference: &Path) -> Result<I
         // Reference local with its translation scaled onto this body's limb.
         let mut new_l = b.local;
         new_l.w_axis = (new_l.w_axis.truncate() * s).extend(1.0);
-        let w = g[pidx] * new_l;
-        let (sc, r, t) = new_l.to_scale_rotation_translation();
+        let w = basis[pidx] * new_l;
+        let local = g[pidx].inverse() * w;
+        let (sc, r, t) = local.to_scale_rotation_translation();
         model.bones.push(RawBone {
             name: b.name.clone(),
             parent: pidx as i32,
@@ -566,6 +599,7 @@ pub fn infer_canonical_bones(model: &mut RawModel, reference: &Path) -> Result<I
         });
         idx.insert(b.name.clone(), model.bones.len() - 1);
         g.push(w);
+        basis.push(w);
         report.added.push(b.name.clone());
     }
 
@@ -694,19 +728,49 @@ pub struct ConformOutput {
 }
 
 /// Run the full conform against `reference` (use [`default_reference`] for PrismHumanBaseA).
-pub fn conform_to_canonical(model: &mut RawModel, reference: &Path) -> Result<ConformOutput> {
-    let hip = derive_hip_placement(model);
-    let shoulder = derive_shoulder_placement(model);
-    let ankle = derive_ankle_placement(model);
-    let reorient = reorient_to_canonical(model, reference)?;
-    let infer = infer_canonical_bones(model, reference)?;
-    Ok(ConformOutput {
-        hip,
-        shoulder,
-        ankle,
-        reorient,
-        infer,
-    })
+/// How [`conform_to_canonical`] treats the vendor's rig.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ConformMode {
+    /// Derive the joint widths, reorient every bone onto the canonical reference frame, then
+    /// complete the bone set — the standard path that makes a vendor rig drive the shared clips.
+    #[default]
+    Canonical,
+    /// Keep the vendor rig EXACTLY as provided: skip the hip/shoulder/ankle width derivation AND
+    /// [`reorient_to_canonical`], so every vendor bone keeps its own position and rest frame. Only
+    /// the bone set is completed ([`infer_canonical_bones`]) so the shared clips have targets — and
+    /// the inferred fill-ins carry no weights, so the vendor's own bones alone drive the mesh. The
+    /// diagnostic path: stage a vendor rig untouched to see whether it already animates cleanly
+    /// against the shared clips, rather than assuming it needs the correction.
+    AsProvided,
+}
+
+pub fn conform_to_canonical(
+    model: &mut RawModel,
+    reference: &Path,
+    mode: ConformMode,
+) -> Result<ConformOutput> {
+    match mode {
+        ConformMode::Canonical => {
+            let hip = derive_hip_placement(model);
+            let shoulder = derive_shoulder_placement(model);
+            let ankle = derive_ankle_placement(model);
+            let reorient = reorient_to_canonical(model, reference)?;
+            let infer = infer_canonical_bones(model, reference, ConformMode::Canonical)?;
+            Ok(ConformOutput {
+                hip,
+                shoulder,
+                ankle,
+                reorient,
+                infer,
+            })
+        }
+        // As provided: no derive passes, no reorient — every vendor bone keeps its position and
+        // frame. Only the bone set is completed so the shared clips resolve their targets.
+        ConformMode::AsProvided => Ok(ConformOutput {
+            infer: infer_canonical_bones(model, reference, ConformMode::AsProvided)?,
+            ..Default::default()
+        }),
+    }
 }
 
 /// The canonical reference rig — **GolemBaseSkeleton**, the AUTHORED baseline
@@ -768,7 +832,8 @@ mod tests {
             }],
             indices: vec![0, 0, 0],
         };
-        let out = conform_to_canonical(&mut model, &reference).expect("conform runs");
+        let out =
+            conform_to_canonical(&mut model, &reference, ConformMode::Canonical).expect("conform runs");
         assert!(
             out.infer.spliced.iter().any(|n| n == "head"),
             "the head must be reported spliced, got {:?}",
@@ -803,6 +868,121 @@ mod tests {
             "the vertex follows the bone it was weighted to through the remap"
         );
         assert_eq!(v.weights[0], 1.0);
+    }
+
+    /// THE AS-PROVIDED GUARD (2026-08-20): `ConformMode::AsProvided` stages the vendor rig
+    /// UNTOUCHED — no hip/shoulder/ankle width derivation, no reorient — while still completing
+    /// the bone set so the shared clips have targets. It exists to test whether a raw Meshy rig
+    /// already drives our clips, so any pass that MOVES a vendor bone would defeat it.
+    #[test]
+    fn as_provided_skips_derive_and_reorient_but_completes_the_bone_set() {
+        let reference = default_reference();
+        if !crate::package::file_exists(&reference) {
+            eprintln!("skipping: no content tree");
+            return;
+        }
+        let bone = |name: &str, parent: i32, t: [f32; 3]| RawBone {
+            name: name.to_string(),
+            parent,
+            translation: t,
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            scale: [1.0, 1.0, 1.0],
+            inverse_bind: [
+                1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+            ],
+        };
+        let mut model = RawModel {
+            bones: vec![
+                bone("pelvis", -1, [0.0, 0.0, 95.0]),
+                bone("spine_01", 0, [0.0, 0.0, 10.0]),
+                bone("spine_02", 1, [0.0, 0.0, 10.0]),
+                bone("spine_03", 2, [0.0, 0.0, 10.0]),
+                bone("neck_01", 3, [0.0, 0.0, 19.0]),
+                bone("head", 4, [0.0, 0.0, 4.0]),
+            ],
+            vertices: vec![],
+            indices: vec![],
+        };
+        let out = conform_to_canonical(&mut model, &reference, ConformMode::AsProvided)
+            .expect("as-provided conform runs");
+        // No reorient and no derive passes ran.
+        assert_eq!(out.reorient.limbs_aligned, 0, "as-provided runs no reorient");
+        assert!(
+            out.hip.left.is_none() && out.hip.right.is_none(),
+            "as-provided derives no hip width"
+        );
+        // The bone set is still completed so the shared clips resolve (neck_02 among the added).
+        assert!(
+            out.infer.added.iter().any(|n| n == "neck_02"),
+            "the bone set is completed, got {:?}",
+            out.infer.added
+        );
+        // The vendor root keeps its position exactly (the pelvis is never reparented).
+        let pelvis = model
+            .bones
+            .iter()
+            .find(|b| b.name == "pelvis")
+            .expect("pelvis present");
+        assert_eq!(
+            pelvis.translation,
+            [0.0, 0.0, 95.0],
+            "the vendor pelvis is untouched"
+        );
+    }
+
+    /// THE AS-PROVIDED INFERENCE GUARD (2026-08-20): inferred bones (twists, fingers, eyes) must land
+    /// on the CANONICAL basis even when the vendor core keeps a non-canonical rest frame — the fix for
+    /// the "inferred bones translated off the mesh" symptom (eyes/shoulders/knees sticking out). A
+    /// vendor head carrying a 90° rest rotation must still get its eye inferred to the SAME world spot
+    /// the canonical path places it — not rotated by the vendor frame.
+    #[test]
+    fn as_provided_infers_on_the_canonical_basis_regardless_of_vendor_frame() {
+        use glam::{Mat4, Quat, Vec3};
+        let reference = default_reference();
+        if !crate::package::file_exists(&reference) {
+            eprintln!("skipping: no content tree");
+            return;
+        }
+        // A vendor-style head whose REST FRAME is rotated 90° about X — a differing bone-axis
+        // convention, the thing the bug composed the canonical offset onto.
+        let rot = Quat::from_rotation_x(std::f32::consts::FRAC_PI_2);
+        let head_pos = Vec3::new(0.0, 0.0, 148.0);
+        let head_world = Mat4::from_rotation_translation(rot, head_pos);
+        let make = || RawModel {
+            bones: vec![RawBone {
+                name: "head".to_string(),
+                parent: -1,
+                translation: head_pos.to_array(),
+                rotation: rot.to_array(),
+                scale: [1.0, 1.0, 1.0],
+                inverse_bind: head_world.inverse().to_cols_array(),
+            }],
+            vertices: vec![],
+            indices: vec![],
+        };
+        let eye_world = |m: &RawModel| -> Option<Vec3> {
+            let g = model_world_frames(m);
+            m.bones
+                .iter()
+                .position(|b| b.name == "eye_l")
+                .map(|i| pos_of(g[i]))
+        };
+
+        // Canonical path: reorient the vendor frame, then infer.
+        let mut canon = make();
+        reorient_to_canonical(&mut canon, &reference).unwrap();
+        infer_canonical_bones(&mut canon, &reference, ConformMode::Canonical).unwrap();
+        // As-provided: keep the vendor frame, infer on the canonical basis.
+        let mut raw = make();
+        infer_canonical_bones(&mut raw, &reference, ConformMode::AsProvided).unwrap();
+
+        let (Some(ce), Some(re)) = (eye_world(&canon), eye_world(&raw)) else {
+            panic!("eye_l must be inferred off the head in both modes");
+        };
+        assert!(
+            (ce - re).length() < 0.5,
+            "as-provided must infer the eye on the canonical basis (canonical {ce:?} vs as-provided {re:?})"
+        );
     }
 
     /// Worst world position (cm) + orientation (deg) delta of `model`'s bones vs the oracle at
@@ -1040,7 +1220,7 @@ mod tests {
         rename_to_canonical(&mut model);
         derive_hip_placement(&mut model);
         reorient_to_canonical(&mut model, &reference).unwrap();
-        let report = infer_canonical_bones(&mut model, &reference).unwrap();
+        let report = infer_canonical_bones(&mut model, &reference, ConformMode::Canonical).unwrap();
         eprintln!(
             "added {} bones, total {}; hand_scale l={:.3} r={:.3}",
             report.added.len(),
@@ -1130,7 +1310,7 @@ mod tests {
         }
         let mut model = parse_fbx(&fbx).unwrap();
         rename_to_canonical(&mut model);
-        conform_to_canonical(&mut model, &reference).unwrap();
+        conform_to_canonical(&mut model, &reference, ConformMode::Canonical).unwrap();
 
         // Every oracle bone except `root` must be present in my conform.
         let refs = load_reference_skeleton(&reference).unwrap();
@@ -1197,7 +1377,7 @@ mod tests {
         let rz = |n: &str| ridx.get(n).map(|&i| pos_of(raw[i]).z).unwrap_or(f32::NAN);
         eprintln!("low-res human RAW z: pelvis {:.1}, head {:.1}, foot_l {:.1}  (oracle 95.6 / 153.2 / 9.9)", rz("pelvis"), rz("head"), rz("foot_l"));
 
-        conform_to_canonical(&mut model, &reference).unwrap();
+        conform_to_canonical(&mut model, &reference, ConformMode::Canonical).unwrap();
 
         // Per-bone distance to the oracle — top few, to characterise the difference.
         let refs = load_reference_skeleton(&reference).unwrap();
@@ -1486,7 +1666,7 @@ mod tests {
             }
             derive_ankle_placement(&mut model);
             reorient_to_canonical(&mut model, &reference).unwrap();
-            infer_canonical_bones(&mut model, &reference).unwrap();
+            infer_canonical_bones(&mut model, &reference, ConformMode::Canonical).unwrap();
             let ua_rest = {
                 let w = model_world_frames(&model);
                 let i = model

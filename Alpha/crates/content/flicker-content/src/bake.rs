@@ -872,7 +872,7 @@ pub fn garment_socket(name: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conform::{conform_to_canonical, default_reference};
+    use crate::conform::{conform_to_canonical, default_reference, ConformMode};
     use crate::fbx::parse_fbx;
     use crate::rig::rename_to_canonical;
 
@@ -1606,7 +1606,7 @@ mod tests {
         }
         let mut model = parse_fbx(&fbx).unwrap();
         rename_to_canonical(&mut model);
-        conform_to_canonical(&mut model, &reference).unwrap();
+        conform_to_canonical(&mut model, &reference, ConformMode::Canonical).unwrap();
         let rig = bake_rig(&model, "PrismHumanBaseA");
 
         assert_eq!(
@@ -1667,7 +1667,7 @@ mod tests {
         }
         let mut model = parse_fbx(&fbx).unwrap();
         rename_to_canonical(&mut model);
-        conform_to_canonical(&mut model, &reference).unwrap();
+        conform_to_canonical(&mut model, &reference, ConformMode::Canonical).unwrap();
 
         let dir = std::env::temp_dir().join("flicker_content_bake_e2e");
         let _ = std::fs::create_dir_all(&dir);

@@ -38,8 +38,8 @@ pub use bake::{
 pub use conform::{
     conform_to_canonical, default_reference, derive_ankle_placement, derive_hip_placement,
     derive_shoulder_placement, infer_canonical_bones, reorient_to_canonical,
-    splice_canonical_chain, AnkleReport, ConformOutput, ConformReport, HipReport, InferReport,
-    ShoulderReport,
+    splice_canonical_chain, AnkleReport, ConformMode, ConformOutput, ConformReport, HipReport,
+    InferReport, ShoulderReport,
 };
 pub use fbx::{apply_orientation, parse_fbx, quarter_turn, RawBone, RawModel, RawVertex};
 pub use flicker_core::roots::{

@@ -56,9 +56,9 @@ use flicker_shell::{PauseScene, Theme};
 
 use flicker_content::{
     attach_world, bake_skin, classify_asset, conform_to_canonical, default_reference, fitting_base,
-    garment_socket, parse_fbx, rename_to_canonical, scan_folder, source_maps, write_garment,
-    write_prop, write_rig, AssetClass, AssetReport, ConformOutput, Fit, Kind, PropKind, RawModel,
-    RenameReport, Scan, SourceMaps,
+    garment_socket, parse_fbx, rename_to_canonical, reorient_to_canonical, scan_folder, source_maps,
+    write_garment, write_prop, write_rig, AssetClass, AssetReport, ConformMode, ConformOutput, Fit,
+    Kind, PropKind, RawModel, RenameReport, Scan, SourceMaps,
 };
 use flicker_mechanics::{
     autofit_capsules_from, closest_point_ray_segment, debug, drag_plane, gizmo_segments, GizmoMode,
@@ -1249,6 +1249,11 @@ pub struct AssetPipeline {
     /// THAT instead — the re-process loop, so an already-fitted body can be adjusted further
     /// and re-committed without redoing the joint work from the vendor source.
     prefer_staged: bool,
+    /// Import DIAGNOSTIC (Task page): stage this vendor rig EXACTLY as provided — skip the joint
+    /// derivation and the reorient in [`conform_to_canonical`] (`ConformMode::AsProvided`), keeping
+    /// Meshy's own skeleton and skin, and only completing the bone set. Off by default; the standard
+    /// canonical conform runs unless a human opts into this to test the raw rig against the clips.
+    as_provided: bool,
     source: Option<Source>,
     grid: Option<QuadGrid>,
     /// The framed holder rect the HUD reserves for the 2×2 (the `editor_quad` `stage` node). The
@@ -1739,6 +1744,7 @@ impl AssetPipeline {
             pending_class: None,
             pending_prop: None,
             prefer_staged: false,
+            as_provided: false,
             source: None,
             grid: None,
             quad_rect: None,
@@ -2048,6 +2054,13 @@ impl AssetPipeline {
     /// and read the per-bone provenance straight out of the reports. Runs once when the stage is
     /// reached; the sliders then author on top of its result.
     fn conform(&mut self) {
+        // Read the import mode BEFORE borrowing `source`: the canonical path corrects the vendor
+        // rig onto the reference; as-provided stages it untouched (Aaron's raw-rig diagnostic).
+        let mode = if self.as_provided {
+            ConformMode::AsProvided
+        } else {
+            ConformMode::Canonical
+        };
         let Some(src) = self.source.as_mut() else {
             return;
         };
@@ -2067,7 +2080,7 @@ impl AssetPipeline {
             return;
         };
         let rename = rename_to_canonical(&mut parsed.model);
-        match conform_to_canonical(&mut parsed.model, &default_reference()) {
+        match conform_to_canonical(&mut parsed.model, &default_reference(), mode) {
             Ok(out) => {
                 let map = bone_map_states(&parsed.model, &out);
                 let n = parsed.model.bones.len();
@@ -2186,7 +2199,7 @@ impl AssetPipeline {
         }
         // Read everything under a shared borrow, then drop it before the write + the mutable
         // outcome record (so the borrow checker stays happy across the class dispatch).
-        let (class, prop, name, model, has_rig, fit, fbx, mounts) = {
+        let (class, prop, name, mut model, has_rig, fit, fbx, mounts) = {
             let Some(src) = self.source.as_ref() else {
                 return;
             };
@@ -2233,6 +2246,23 @@ impl AssetPipeline {
                 mounts,
             )
         };
+
+        // A committed CHARACTER always leaves with canonical joint ORIENTATIONS: the shared clips
+        // play absolute rotations in canonical frames, so this is the invariant's output gate —
+        // structural, not a user choice. Positions are never touched (Meshy's placements and the
+        // human's fitted joints ship exactly as placed; only each bone's frame is rewritten), which
+        // is what lets the as-provided editing view stay vendor-faithful in the bench yet still
+        // commit a playable body. Idempotent on an already-canonical rig with no authored offsets;
+        // when joints WERE dragged, the limb frames re-align to the final joint layout — the frames
+        // always describe the skeleton actually being committed.
+        if matches!(class, Some(AssetClass::Skin) | None) && has_rig {
+            if let Err(e) = reorient_to_canonical(&mut model, &default_reference()) {
+                if let Some(src) = self.source.as_mut() {
+                    src.error = Some(format!("Canonical frame translation failed: {e}"));
+                }
+                return;
+            }
+        }
 
         let dir = root.join(&name);
         let out = dir.join(format!("{name}.json"));
@@ -3029,6 +3059,8 @@ impl AssetPipeline {
         m.set("mirror", self.mirror_joints);
         // The Task page's staged-reload preference — checkbox state, mirrored like the toggles.
         m.set("prefer_staged", self.prefer_staged);
+        // The Task page's "import as provided" diagnostic — checkbox state, same as prefer_staged.
+        m.set("as_provided", self.as_provided);
         // The Clip page's variant pick — checkbox state, mirrored like the toggles above.
         m.set("variant_rm", self.variant_rm);
         m.set("variant_ip", self.variant_ip);
@@ -4502,6 +4534,7 @@ impl Scene for AssetPipeline {
         // page-gating rule as `mirror`: off the stage `is_on` reads false and would clear it).
         if self.wf.step() == "task" {
             self.prefer_staged = results.is_on("prefer_staged");
+            self.as_provided = results.is_on("as_provided");
         }
         // The variant pick — read only on the Clip page, where its checkboxes live
         // (off the stage `is_on` reads false and would clear the choice).
@@ -6007,6 +6040,89 @@ mod tests {
             (tz - (baseline + 3.5)).abs() < 1e-3,
             "the authored +3.5 is baked in: {tz} vs {}",
             baseline + 3.5
+        );
+
+        let _ = std::fs::remove_dir_all(&out_root);
+    }
+
+    /// THE COMMIT TRANSLATION GUARD (2026-08-20): a character committed from the AS-PROVIDED
+    /// editing view (vendor frames live in the bench) must land in staging with CANONICAL joint
+    /// orientations — the shared clips play absolute rotations in canonical frames, and commit
+    /// is that invariant's output gate. Positions ship as placed; the bench's working model
+    /// keeps its vendor frames after commit (the translation belongs to the output, not the view).
+    #[test]
+    fn committing_an_as_provided_rig_translates_frames_to_canon() {
+        let Some(dir) = real_source() else {
+            eprintln!("skipping: no content tree");
+            return;
+        };
+        let mut ed = AssetPipeline::shipped();
+        ed.pending_class = Some(AssetClass::Skin);
+        ed.as_provided = true;
+        ed.open(dir);
+        assert_eq!(ed.wf.step(), "conform", "open lands on the rig view");
+
+        // A bone's LOCAL frame rotation out of a rig json.
+        let local_quat = |json: &serde_json::Value, name: &str| -> glam::Quat {
+            let b = json["skeleton"]["bones"]
+                .as_array()
+                .expect("skeleton.bones")
+                .iter()
+                .find(|b| b["name"] == name)
+                .unwrap_or_else(|| panic!("{name} present"));
+            let local = b["local"].as_array().expect("local matrix");
+            let mut m = [0.0f32; 16];
+            for (i, f) in local.iter().enumerate().take(16) {
+                m[i] = f.as_f64().unwrap_or(0.0) as f32;
+            }
+            let (_, q, _) = glam::Mat4::from_cols_array(&m).to_scale_rotation_translation();
+            q
+        };
+        let model_pelvis = |ed: &AssetPipeline| -> glam::Quat {
+            let m = &ed.source.as_ref().unwrap().parsed.as_ref().unwrap().model;
+            let i = m
+                .bones
+                .iter()
+                .position(|b| b.name == "pelvis")
+                .expect("pelvis present");
+            glam::Quat::from_array(m.bones[i].rotation)
+        };
+        let ref_json: serde_json::Value = serde_json::from_str(
+            &flicker_content::package::read_text(&default_reference()).unwrap(),
+        )
+        .unwrap();
+        let canon_pelvis = local_quat(&ref_json, "pelvis");
+
+        // The as-provided working model carries the vendor's pelvis frame, measurably off canon.
+        // If this ever reads near-zero the vendor changed conventions and the as-provided view
+        // stopped being a distinct state — worth failing loudly over.
+        let vendor_pelvis = model_pelvis(&ed);
+        assert!(
+            vendor_pelvis.angle_between(canon_pelvis).to_degrees() > 10.0,
+            "the vendor pelvis frame differs from canon (else as-provided is vacuous)"
+        );
+
+        let out_root = std::env::temp_dir().join("flicker_assetpipeline_as_provided_commit");
+        let _ = std::fs::remove_dir_all(&out_root);
+        park(&mut ed, "review");
+        ed.commit_to(&out_root);
+        let src = ed.source.as_ref().unwrap();
+        assert!(src.error.is_none(), "commit reported: {:?}", src.error);
+        let written = src
+            .committed
+            .as_ref()
+            .expect("commit recorded where it wrote");
+        let json: serde_json::Value =
+            serde_json::from_str(&flicker_content::package::read_text(written).unwrap()).unwrap();
+        let committed_pelvis = local_quat(&json, "pelvis");
+        assert!(
+            committed_pelvis.angle_between(canon_pelvis).to_degrees() < 1.0,
+            "the committed pelvis carries the canonical frame, got {:.2}° off",
+            committed_pelvis.angle_between(canon_pelvis).to_degrees()
+        );
+        assert!(
+            model_pelvis(&ed).angle_between(vendor_pelvis).to_degrees() < 0.01,
+            "the working model keeps the vendor frames after commit"
         );
 
         let _ = std::fs::remove_dir_all(&out_root);

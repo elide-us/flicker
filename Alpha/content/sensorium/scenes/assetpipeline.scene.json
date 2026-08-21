@@ -299,6 +299,8 @@
                       { "component": "cell", "size": 6 },
                       { "component": "checkbox", "id": "prefer_staged", "bind": "prefer_staged", "label": "$ap_prefer_staged", "box": 14, "size": 22, "style": "assetpipeline.checkbox", "tab_group": "ap_insp", "nav_ordinal": 5 },
                       { "component": "text", "text": "$ap_prefer_staged_hint", "text_size": 10, "font": "label", "color": "assetpipeline.col.faint", "wrap": true, "size": 26 },
+                      { "component": "checkbox", "id": "as_provided", "bind": "as_provided", "label": "$ap_as_provided", "box": 14, "size": 22, "style": "assetpipeline.checkbox", "tab_group": "ap_insp", "nav_ordinal": 6 },
+                      { "component": "text", "text": "$ap_as_provided_hint", "text_size": 10, "font": "label", "color": "assetpipeline.col.faint", "wrap": true, "size": 26 },
                       { "component": "text", "text": "$ap_select_a_workflow_to_begin", "text_size": 11, "font": "label", "color": "assetpipeline.col.faint", "size": 16 }
                     ]
                   },

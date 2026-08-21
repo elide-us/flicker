@@ -644,6 +644,12 @@
   "ap_prefer_staged_hint": {
     "en-us": "Re-open this asset's staged rig — or its promoted one if staging is empty — so you adjust the last committed fit instead of starting over from the source."
   },
+  "ap_as_provided": {
+    "en-us": "Import rig as provided"
+  },
+  "ap_as_provided_hint": {
+    "en-us": "Edit against the vendor's rig exactly as imported — Meshy's joints and skin untouched, only the bone set completed. Commit translates every joint's orientation onto our skeleton, so the exported body plays the shared animations correctly."
+  },
   "ap_reopened_from_staging": {
     "en-us": "RE-OPENED — staged rig, joints as last committed."
   },
