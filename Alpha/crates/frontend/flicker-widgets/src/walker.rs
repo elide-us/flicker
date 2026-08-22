@@ -864,7 +864,7 @@ mod tests {
         let mut ui = UiState::new();
         let mut rc = RouteCtx::new();
         let mut intents_tree = UiNode {
-            component: "screen".into(),
+            component: "surface".into(),
             id: "root".into(),
             ..Default::default()
         };
@@ -963,7 +963,7 @@ mod tests {
         col.width = Some(200.0);
         col.children = vec![vdial, hdial];
         let mut tree = UiNode {
-            component: "screen".into(),
+            component: "surface".into(),
             id: "root".into(),
             ..Default::default()
         };
@@ -977,10 +977,13 @@ mod tests {
             mouse: Vec2::ZERO,
             clicked: false,
             down: false,
+            right_down: false,
             screen: Vec2::new(800.0, 600.0),
             typed: String::new(),
             backspace: false,
             wheel: 0.0,
+            exclusive: false,
+            motion: Default::default(),
         };
         let mut ui = UiState::new();
         ui.request_focus("vdial");
@@ -1076,7 +1079,7 @@ mod tests {
     fn a_hidden_subtree_contributes_no_focusables() {
         // A visible screen, plus an overlay gated by `dialog_open`.
         let mut screen = UiNode {
-            component: "screen".into(),
+            component: "surface".into(),
             ..Default::default()
         };
         let mut bench = UiNode {
@@ -1484,10 +1487,18 @@ mod tests {
                 nav_ordinal: n,
                 ..Default::default()
             };
-            row.children
-                .push(button(&format!("v{n}_a"), &format!("voice_{n}"), 1, "act_a"));
-            row.children
-                .push(button(&format!("v{n}_b"), &format!("voice_{n}"), 2, "act_b"));
+            row.children.push(button(
+                &format!("v{n}_a"),
+                &format!("voice_{n}"),
+                1,
+                "act_a",
+            ));
+            row.children.push(button(
+                &format!("v{n}_b"),
+                &format!("voice_{n}"),
+                2,
+                "act_b",
+            ));
             rack.children.push(row);
         }
         let mut tree = UiNode {
@@ -1529,7 +1540,11 @@ mod tests {
 
         // Cancel pops ONE level per press, refocusing what it leaves (B never skips).
         h.handle(&press(ActionSignal::Cancel, &raw), &mut rc);
-        assert_eq!(h.ui.entered_group(), Some("rack"), "back to the subpanel ring");
+        assert_eq!(
+            h.ui.entered_group(),
+            Some("rack"),
+            "back to the subpanel ring"
+        );
         assert_eq!(
             h.ui.focused(),
             Some("voice_2"),
@@ -1770,7 +1785,7 @@ mod tests {
         col.width = Some(200.0);
         col.children = vec![btn];
         let mut tree = UiNode {
-            component: "screen".into(),
+            component: "surface".into(),
             id: "root".into(),
             ..Default::default()
         };
@@ -1782,10 +1797,13 @@ mod tests {
             mouse: Vec2::new(100.0, 20.0),
             clicked: true,
             down: true,
+            right_down: false,
             screen: Vec2::new(800.0, 600.0),
             typed: String::new(),
             backspace: false,
             wheel: 0.0,
+            exclusive: false,
+            motion: Default::default(),
         };
         let mut ui = UiState::new();
 

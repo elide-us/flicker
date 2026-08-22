@@ -266,8 +266,8 @@ impl LoomforgeBench {
     /// app, exercising the same authored tree the runtime gets.
     #[cfg(test)]
     pub fn shipped() -> Self {
-        let def =
-            SceneDef::parse("loomforge", LF_SCENE).expect("the shipped loomforge.scene.json parses");
+        let def = SceneDef::parse("loomforge", LF_SCENE)
+            .expect("the shipped loomforge.scene.json parses");
         Self::from_parts(def.tree, def.styles)
     }
 
@@ -492,7 +492,12 @@ impl LoomforgeBench {
             m.set(format!("packname_{i}"), e.name.clone());
             m.set(
                 format!("packmeta_{i}"),
-                format!("{} · {} {}", r(kind_token(e.kind)), e.states, r("$lf_states_lc")),
+                format!(
+                    "{} · {} {}",
+                    r(kind_token(e.kind)),
+                    e.states,
+                    r("$lf_states_lc")
+                ),
             );
             m.set(format!("packmeta_{i}_color"), e.kind.color_path());
         }
@@ -739,7 +744,8 @@ impl LoomforgeBench {
             format!(
                 "{}   {}",
                 r("$lf_attach_bone"),
-                c.and_then(|c| c.attach_bone.as_deref()).unwrap_or("\u{2014}")
+                c.and_then(|c| c.attach_bone.as_deref())
+                    .unwrap_or("\u{2014}")
             ),
         );
         // strings-gate-exempt: the metre suffix is a unit symbol, not copy.
@@ -1269,7 +1275,7 @@ impl LoomforgeBench {
         doc.clip_index(&state.clip)
     }
 
-    fn build_stage_reqs(&self, slots: Vec<flicker::ui::RttSlot>) -> Vec<StageReq> {
+    fn build_stage_reqs(&self, slots: Vec<flicker::ui::SurfaceSlot>) -> Vec<StageReq> {
         let Some(doc) = &self.doc else {
             return Vec::new();
         };
@@ -1534,7 +1540,11 @@ impl LoomforgeBench {
             self.status = match self.doc.as_mut() {
                 Some(doc) => match doc.save() {
                     Ok(()) => {
-                        format!("{} {}", strings::resolve("$lf_saved"), short_path(doc.path()))
+                        format!(
+                            "{} {}",
+                            strings::resolve("$lf_saved"),
+                            short_path(doc.path())
+                        )
                     }
                     Err(e) => format!("{} {e}", strings::resolve("$lf_save_failed")),
                 },
@@ -1614,10 +1624,13 @@ impl Scene for LoomforgeBench {
             mouse: input.mouse_position,
             clicked: input.mouse_left_pressed,
             down: input.mouse_left,
+            right_down: input.mouse_right,
             screen,
             typed: String::new(),
             backspace: false,
             wheel: input.mouse_wheel_delta,
+            exclusive: false,
+            motion: Default::default(),
         };
         let frame = run_ui(&tree, &model, &self.ui_styles, &snap, &mut self.ui_state);
         // Copy out what the canvas needs before `frame` is consumed / `self` mutated.
@@ -1629,9 +1642,9 @@ impl Scene for LoomforgeBench {
         // the scene draws + picks inside exactly these, so its geometry and the
         // walker's layout can never disagree (the old triple screen-size recompute
         // died with them). The side rail's resolved box routes the wheel below.
-        let canvas_rect = frame.rtt_rect("lf_canvas");
-        self.sm_strip_rect = frame.rtt_rect("lf_tae_strip");
-        self.page_strip_rect = frame.rtt_rect("lf_tae_page_strip");
+        let canvas_rect = frame.surface_rect("lf_canvas");
+        self.sm_strip_rect = frame.surface_rect("lf_tae_strip");
+        self.page_strip_rect = frame.surface_rect("lf_tae_page_strip");
         let rail_rect = frame
             .rects
             .iter()
@@ -1679,7 +1692,7 @@ impl Scene for LoomforgeBench {
         // both input channels reach the ONE dispatch identically, and queued for the
         // one-frame `sig_<name>` Model mirror.
         self.fired_sigs = walker.take_fired();
-        let slots = frame.rtts;
+        let slots = frame.surfaces;
         self.authored = Some(tree);
         for name in &self.fired_sigs {
             results.set(name.clone(), true);
@@ -1833,8 +1846,11 @@ impl Scene for LoomforgeBench {
                                 .map(|s| s.name.clone())
                                 .unwrap_or_default();
                             if self.doc.as_mut().is_some_and(|d| d.remove_state(i)) {
-                                self.status =
-                                    format!("{} {name} {}", r("$lf_removed"), r("$lf_and_its_edges"));
+                                self.status = format!(
+                                    "{} {name} {}",
+                                    r("$lf_removed"),
+                                    r("$lf_and_its_edges")
+                                );
                                 self.selected_edge = None;
                             }
                         }
@@ -2395,7 +2411,7 @@ fn clip_row(row_i: usize, name: &str) -> UiNode {
     row = prop(row, "drag_kind", text_val("clip"));
     row = prop(row, "drag_id", text_val(name));
 
-    let mut doll = node("rtt");
+    let mut doll = node("surface");
     doll.id = stage_id(name);
     doll.size = Some(CLIP_STAGE);
     doll = prop(doll, "style", text_val("loomforge.clip_stage"));
@@ -2427,7 +2443,7 @@ fn pack_card(idx: usize) -> UiNode {
     card.nav_ordinal = idx as u32 + 1;
     card = prop(card, "style_bind", text_val(format!("packcard_{idx}_sty")));
 
-    let mut thumb = node("rtt");
+    let mut thumb = node("surface");
     thumb.id = format!("{PACK_STAGE_PREFIX}{idx}");
     thumb.width = Some(PACK_STAGE);
     thumb.height = Some(PACK_STAGE);
@@ -2442,7 +2458,11 @@ fn pack_card(idx: usize) -> UiNode {
     let mut meta = node("text");
     meta = prop(meta, "text_bind", text_val(format!("packmeta_{idx}")));
     meta = prop(meta, "text_size", Value::Number(11.0));
-    meta = prop(meta, "color_bind", text_val(format!("packmeta_{idx}_color")));
+    meta = prop(
+        meta,
+        "color_bind",
+        text_val(format!("packmeta_{idx}_color")),
+    );
 
     card.children = vec![thumb, name, meta];
     card
@@ -2686,10 +2706,13 @@ mod tests {
             mouse: Vec2::new(-1.0, -1.0),
             clicked: false,
             down: false,
+            right_down: false,
             screen: Vec2::new(1920.0, 1080.0),
             typed: String::new(),
             backspace: false,
             wheel: 0.0,
+            exclusive: false,
+            motion: Default::default(),
         };
         let frame = run_ui(&tree, &m, &styles, &snap, &mut UiState::new());
         assert!(!frame.commands.is_empty(), "the chrome draws");
@@ -2866,7 +2889,7 @@ mod tests {
         let _ = std::fs::remove_file(flicker_core::compression::gz_sibling(&tmp));
     }
 
-    /// A refilled clip row is the drag handle AND carries the doll. The `rtt` node
+    /// A refilled clip row is the drag handle AND carries the doll. The `surface` node
     /// must name a source that actually exists in the shared `stages` block, and
     /// bind its liveness to the key the scene publishes — a typo in either silently
     /// costs a GPU submit per row, or a doll that never animates.
@@ -2880,7 +2903,7 @@ mod tests {
         let doll = row
             .children
             .iter()
-            .find(|c| c.component == "rtt")
+            .find(|c| c.component == "surface")
             .expect("the row carries a doll");
         assert_eq!(doll.props.get("source"), Some(&text_val(DOLL_SOURCE)));
         assert_eq!(
@@ -2957,7 +2980,11 @@ mod tests {
         let mut sorted = ids.clone();
         sorted.sort();
         sorted.dedup();
-        assert_eq!(sorted.len(), ids.len(), "duplicate node id after the refill");
+        assert_eq!(
+            sorted.len(),
+            ids.len(),
+            "duplicate node id after the refill"
+        );
 
         let vis = bench.visible_packs().len();
         assert_eq!(
@@ -3003,7 +3030,11 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         let first = count(&bench);
-        assert_eq!(first.len(), total.min(CLIP_ROWS), "one doll per visible row");
+        assert_eq!(
+            first.len(),
+            total.min(CLIP_ROWS),
+            "one doll per visible row"
+        );
 
         if total > CLIP_ROWS {
             bench.scroll_clips(-1.0);

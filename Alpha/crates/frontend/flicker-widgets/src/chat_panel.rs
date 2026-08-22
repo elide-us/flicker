@@ -481,10 +481,13 @@ mod tests {
             mouse: Vec2::new(0.0, 0.0),
             clicked: false,
             down: false,
+            right_down: false,
             screen: Vec2::new(1280.0, 720.0),
             typed: String::new(),
             backspace: false,
             wheel: 0.0,
+            exclusive: false,
+            motion: Default::default(),
         };
         let mut state = UiState::new();
         let frame = run_ui(&tree, &model, &styles, &input, &mut state);
@@ -521,10 +524,13 @@ mod tests {
             mouse: Vec2::new(500.0, 457.0),
             clicked: true,
             down: true,
+            right_down: false,
             screen: Vec2::new(1280.0, 720.0),
             typed: String::new(),
             backspace: false,
             wheel: 0.0,
+            exclusive: false,
+            motion: Default::default(),
         };
         let model = ValueMap::new().with("chat_tab", 0.0);
         let f = run_ui(

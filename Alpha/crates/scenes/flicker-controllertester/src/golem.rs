@@ -528,7 +528,11 @@ mod tests {
         {
             let model = stage.model.as_ref().unwrap();
             let machine = stage.machine.as_ref().unwrap();
-            assert_eq!(machine.current_state_name(), "Idle", "the pack opens on Idle");
+            assert_eq!(
+                machine.current_state_name(),
+                "Idle",
+                "the pack opens on Idle"
+            );
             let locals = pose::sample_local_poses(
                 &model.bones,
                 &model.clips[machine.current_clip()],

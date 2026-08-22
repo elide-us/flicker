@@ -22,7 +22,7 @@
     }
   },
   "tree": {
-    "component": "screen",
+    "component": "surface",
     "anchor": "top_left",
     "width_frac": 1.0,
     "height_frac": 1.0,

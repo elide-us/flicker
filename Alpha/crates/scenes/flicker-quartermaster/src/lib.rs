@@ -36,9 +36,9 @@ use flicker_content::{BatchFileOp, FileOp};
 const RENAME_ID: &str = "rename_field";
 const APPLY_REST_ID: &str = "conflict_apply_rest";
 
-/// How many toasts the `toast_stack` proto has slots for. The proto spells its
-/// rows out (the walker has no repeater), so this is the ONE place the capacity
-/// is stated on the Rust side and it must match the proto.
+/// How many toast rows `quartermaster.scene.json` authors (`toast_0..`; the walker
+/// has no repeater), so this is the ONE place the capacity is stated on the Rust
+/// side and it must match the scene.
 const TOAST_SLOTS: usize = 3;
 /// How long a toast stays up, in 60 Hz ticks (~8 s, the design's dwell).
 const TOAST_TICKS: u64 = 480;
@@ -1618,10 +1618,13 @@ impl Scene for Quartermaster {
             mouse: input.mouse_position,
             clicked: input.mouse_left_pressed,
             down: input.mouse_left,
+            right_down: input.mouse_right,
             screen,
             typed,
             backspace,
             wheel: 0.0,
+            exclusive: false,
+            motion: Default::default(),
         };
         let frame = run_ui(&tree, &model, &self.ui_styles, &snap, &mut self.ui_state);
         self.authored = Some(tree);
@@ -2135,10 +2138,13 @@ mod tests {
             mouse: Vec2::new(-9.0, -9.0),
             clicked: false,
             down: false,
+            right_down: false,
             screen,
             typed: String::new(),
             backspace: false,
             wheel: 0.0,
+            exclusive: false,
+            motion: Default::default(),
         };
         let frame = run_ui(&tree, &model, &styles, &idle, &mut state);
         let rect_of = |id: &str| {
@@ -2161,10 +2167,13 @@ mod tests {
                 mouse: Vec2::new(at.0, at.1),
                 clicked: true,
                 down: true,
+                right_down: false,
                 screen,
                 typed: String::new(),
                 backspace: false,
                 wheel: 0.0,
+                exclusive: false,
+                motion: Default::default(),
             };
             run_ui(&tree, &model, &styles, &snap, state)
         };
@@ -2208,10 +2217,13 @@ mod tests {
             mouse: Vec2::new(-1.0, -1.0),
             clicked: false,
             down: false,
+            right_down: false,
             screen,
             typed: String::new(),
             backspace: false,
             wheel: 0.0,
+            exclusive: false,
+            motion: Default::default(),
         };
         // The DERIVED model — the pair script's gates decide what is visible,
         // exactly as the runtime frame does.

@@ -14,7 +14,7 @@ use flicker::render::{Renderer, TextureHandle};
 use flicker::scene::{GotoMode, Scene, SceneInput, SceneManager, Transition};
 use flicker::script::{parse_ui_json, HudCommand, ScriptHost, UiAnchor, UiNode, Value, ValueMap};
 use flicker::ui::{
-    focusables_of, render_hud, run_ui, SceneDef, SceneManifest, Surface, Surfaces, UiInput,
+    focusables_of, render_hud, run_ui, SceneDef, SceneManifest, Section, Sections, UiInput,
     UiIntents, UiState, WalkerHandler,
 };
 use flicker_input_core::{
@@ -746,7 +746,7 @@ fn scene_rows_for(scenes: &[SceneEntry], realm: &str) -> Vec<SceneRow> {
 /// scene rows. `menu.lua`'s arrange() lights the page.
 fn main_menu_tree(scenes: &[SceneEntry], muse_id: Option<usize>) -> UiNode {
     let empty = || UiNode {
-        component: "screen".to_string(),
+        component: "surface".to_string(),
         ..Default::default()
     };
     let def: serde_json::Value = match serde_json::from_str(MAIN_SCENE_JSON) {
@@ -1156,7 +1156,7 @@ fn synthesized_splash_tree() -> UiNode {
     node.props
         .insert("height_frac".to_string(), Value::Number(1.0));
     let mut root = UiNode {
-        component: "screen".to_string(),
+        component: "surface".to_string(),
         anchor: UiAnchor::from_name("top_left"),
         children: vec![node],
         ..Default::default()
@@ -1282,10 +1282,13 @@ impl Scene for LogoScene {
                 mouse: input.mouse_position,
                 clicked: input.mouse_left_pressed,
                 down: input.mouse_left,
+                right_down: input.mouse_right,
                 screen: size,
                 typed: String::new(),
                 backspace: false,
                 wheel: 0.0,
+                exclusive: false,
+                motion: Default::default(),
             };
             let frame = run_ui(tree, &self.model(), &self.styles, &snap, &mut self.ui_state);
             self.hud_commands = frame.commands;
@@ -1459,7 +1462,7 @@ impl Scene for LoadingScene {
                 self.def.id
             );
             UiNode {
-                component: "screen".to_string(),
+                component: "surface".to_string(),
                 ..Default::default()
             }
         });
@@ -1517,10 +1520,13 @@ impl Scene for LoadingScene {
                 mouse: input.mouse_position,
                 clicked: input.mouse_left_pressed,
                 down: input.mouse_left,
+                right_down: input.mouse_right,
                 screen: size,
                 typed: String::new(),
                 backspace: false,
                 wheel: 0.0,
+                exclusive: false,
+                motion: Default::default(),
             };
             let frame = run_ui(
                 tree,
@@ -1744,8 +1750,8 @@ const CONFIRM_SCRIPT: &str =
 /// orchestration host — a normal embedded const now.
 const MENU_SCRIPT: &str = include_str!("../../../../content/sensorium/scripts/Main.lua");
 
-/// The authored Main Menu scene-def (`Main.scene.json`) — a `frame` > `multi_view` > nav
-/// Menu panel + selector `paged_menu` PTT, all Rust components now (201F4F51).
+/// The authored Main Menu scene-def (`Main.scene.json`) — a two-column `row` workbench: the
+/// nav Menu `popup_panel` + the selector `paged_menu` PTT, all Rust components (201F4F51).
 /// `main_menu_tree` parses + expands it and fills the per-realm scene lists; `MainMenuScene`
 /// orchestrates it with `menu.lua`. (The manifest also loads + expands it at boot.)
 const MAIN_SCENE_JSON: &str = include_str!("../../../../content/sensorium/scenes/Main.scene.json");
@@ -1839,7 +1845,7 @@ struct SceneRow {
 fn parse_shared_modal(json: &str, id: &str, on_cancel: Option<&str>) -> UiNode {
     let fallback = || {
         let mut n = UiNode {
-            component: "screen".to_string(),
+            component: "surface".to_string(),
             id: id.to_string(),
             ..Default::default()
         };
@@ -2025,7 +2031,7 @@ mod menu_tree_tests {
     #[test]
     fn pause_and_confirm_build_from_scene_json() {
         let pause = shared_tree(PAUSE_SCENE_JSON);
-        assert_eq!(pause.component, "screen", "pause → full-bleed popup page");
+        assert_eq!(pause.component, "surface", "pause → full-bleed popup page");
         assert!(
             !pause.children.is_empty(),
             "pause popup filled with real content"
@@ -2038,7 +2044,7 @@ mod menu_tree_tests {
 
         let confirm = shared_tree(CONFIRM_SCENE_JSON);
         assert_eq!(
-            confirm.component, "screen",
+            confirm.component, "surface",
             "confirm → full-bleed popup page"
         );
         assert!(
@@ -2425,10 +2431,13 @@ impl MenuView {
             mouse: input.mouse_position,
             clicked: input.mouse_left_pressed,
             down: input.mouse_left,
+            right_down: input.mouse_right,
             screen: size,
             typed: String::new(),
             backspace: false,
             wheel: input.mouse_wheel_delta,
+            exclusive: false,
+            motion: Default::default(),
         };
         let frame = run_ui(tree, &eff, &self.styles, &snap, &mut self.ui_state);
         self.commands = frame.commands;
@@ -2511,8 +2520,8 @@ struct UnifiedSettingsScene {
     /// The screen's declared surface set (S8): the section rail + input sub-tab
     /// radio groups, the rebind banner + applied flash, and the two overlay
     /// dialogs. Owns every `visible_bind` gate `settings.lua` reads; published
-    /// into the Model once per frame ([`Surfaces::publish`] in `model`).
-    surfaces: Surfaces,
+    /// into the Model once per frame ([`Sections::publish`] in `model`).
+    surfaces: Sections,
     /// Active input sub-tab: "keyboard" / "mouse" / "controller" (two-way via the
     /// `input_subtab` pill bind; the `sub_*` gates mirror it through `surfaces`).
     input_subtab: String,
@@ -2557,23 +2566,23 @@ struct UnifiedSettingsScene {
 /// overlay dialogs — modal (the scene's update ladder processes only their
 /// actions while shown), carrying their S9 input-context as data (surfaced in
 /// `visibility_diff`, routed by nothing yet).
-fn settings_surfaces() -> Surfaces {
+fn settings_sections() -> Sections {
     let mut decls = vec![
-        Surface::new("sec_video").group("section").on(),
-        Surface::new("sec_audio").group("section"),
-        Surface::new("sec_input").group("section"),
+        Section::new("sec_video").group("section").on(),
+        Section::new("sec_audio").group("section"),
+        Section::new("sec_input").group("section"),
     ];
     for (i, name) in INPUT_SUBTABS.iter().enumerate() {
-        let s = Surface::new(format!("sub_{name}")).group("subtab");
+        let s = Section::new(format!("sub_{name}")).group("subtab");
         decls.push(if i == 0 { s.on() } else { s });
     }
     decls.extend([
-        Surface::new("rebinding"),
-        Surface::new("applied"),
-        Surface::new("confirm_close").context("Menu"),
-        Surface::new("restore_note").context("Menu"),
+        Section::new("rebinding"),
+        Section::new("applied"),
+        Section::new("confirm_close").context("Menu"),
+        Section::new("restore_note").context("Menu"),
     ]);
-    Surfaces::new(decls)
+    Sections::new(decls)
 }
 
 /// The input sub-tabs in STRIP ORDER. The `input_subtab` pill's option values are
@@ -2786,9 +2795,9 @@ fn gamepad_glyph_name(b: &InputBinding) -> Option<&'static str> {
             GamepadAxis::RightTrigger => "trigger_r",
         }),
         // Keyboard / mouse / mouse-motion are not pad glyphs.
-        InputBinding::Key(_)
-        | InputBinding::MouseButton(_)
-        | InputBinding::MouseMotion { .. } => None,
+        InputBinding::Key(_) | InputBinding::MouseButton(_) | InputBinding::MouseMotion { .. } => {
+            None
+        }
     }
 }
 
@@ -2824,7 +2833,10 @@ pub fn publish_signal_bindings(
             .map(|b| binding_label(&b))
             .unwrap_or_default();
         model.set(format!("bind_{name}"), cap);
-        let glyph = binds.iter().find_map(gamepad_glyph_name).unwrap_or_default();
+        let glyph = binds
+            .iter()
+            .find_map(gamepad_glyph_name)
+            .unwrap_or_default();
         model.set(format!("glyph_{name}"), glyph);
     }
 }
@@ -3380,7 +3392,7 @@ fn settings_tree(resolutions: &[display::Resolution]) -> UiNode {
         // Even the degenerate no-scene root keeps its S9 input declaration so Esc → close
         // never depends on layout (the screen IS the declaration).
         let mut n = UiNode {
-            component: "screen".to_string(),
+            component: "surface".to_string(),
             id: "settings".to_string(),
             ..Default::default()
         };
@@ -3477,7 +3489,7 @@ impl UnifiedSettingsScene {
             settings,
             input_map: input_map.clone(),
             resolutions,
-            surfaces: settings_surfaces(),
+            surfaces: settings_sections(),
             input_subtab: "keyboard".to_string(),
             ctrl_profile: "xbox_souls".to_string(),
             scroll_off: 0.0,
@@ -3647,7 +3659,7 @@ impl UnifiedSettingsScene {
     /// bus-fired Esc/B `Cancel` intent — one name, one path) is INTERCEPTED by
     /// whichever dialog is up: it dismisses the restore ack, and it cancels the
     /// unsaved-changes confirm rather than closing the overlay underneath it.
-    fn modal_flow(surfaces: &mut Surfaces, results: &ValueMap) -> Option<ModalFlow> {
+    fn modal_flow(surfaces: &mut Sections, results: &ValueMap) -> Option<ModalFlow> {
         // Restore-defaults acknowledgement: OK / the close intent dismisses it.
         if surfaces.is_on("restore_note") {
             if results.is_on("restore_ok") || results.is_on("settings_close") {
@@ -3675,7 +3687,7 @@ impl UnifiedSettingsScene {
     /// declared `settings_close` result): confirm first when there are unsaved
     /// edits (the dialog surface goes up and the frame CONTINUES), else report
     /// `true` so `update` pops. Extracted for the same GPU-free tests.
-    fn close_requested(surfaces: &mut Surfaces, results: &ValueMap, dirty: bool) -> bool {
+    fn close_requested(surfaces: &mut Sections, results: &ValueMap, dirty: bool) -> bool {
         if results.is_on("settings_close") {
             if dirty {
                 surfaces.show("confirm_close");
@@ -3744,10 +3756,13 @@ impl Scene for UnifiedSettingsScene {
             mouse: input.mouse_position,
             clicked: input.mouse_left_pressed,
             down: input.mouse_left,
+            right_down: input.mouse_right,
             screen: size,
             typed: String::new(),
             backspace: false,
             wheel: input.mouse_wheel_delta,
+            exclusive: false,
+            motion: Default::default(),
         };
         // Fold the untrusted `settings.lua` `derive()` in BEFORE the walk (mirrors the
         // clicktrainer HUD fold): the engine publishes the RAW Model, then the Lua turns the
@@ -3793,11 +3808,11 @@ impl Scene for UnifiedSettingsScene {
             results.set(name.as_str(), true);
             self.fired_sigs.push(name);
         }
-        // Surface context wiring (S9): a dialog's show/hide edge (they carry context
+        // Section context wiring (S9): a dialog's show/hide edge (they carry context
         // "Menu") queues Push/PopContext into the pump's route, which the RUNNER reconciles
         // against the shared context stack after `update` — the scene no longer owns a
         // bindings stack. Focus stays the walker's, written directly during dispatch.
-        self.surfaces.apply_surface_contexts(signals.route);
+        self.surfaces.apply_section_contexts(signals.route);
 
         // ── Rebind capture (raw Esc or a click cancels; else grab the next input) ──
         // The walker still drew this frame (so the screen updates); its actions
@@ -4168,7 +4183,7 @@ mod script_smoke {
             serde_json::from_str(MAIN_SCENE_JSON).expect("Main.scene.json parses");
         let tree = parse_ui_json(&def["tree"]).expect("the menu tree parses");
 
-        assert_eq!(tree.component, "screen");
+        assert_eq!(tree.component, "surface");
         assert_eq!(tree.id, "main_menu");
         assert!(
             flicker::ui::unknown_kinds(&tree).is_empty(),
@@ -4303,10 +4318,13 @@ mod script_smoke {
             mouse: Vec2::new(-9.0, -9.0),
             clicked: false,
             down: false,
+            right_down: false,
             screen: Vec2::new(200.0, 60.0),
             typed: String::new(),
             backspace: false,
             wheel: 0.0,
+            exclusive: false,
+            motion: Default::default(),
         };
         let frame = run_ui(
             &tree,
@@ -4381,10 +4399,13 @@ mod script_smoke {
                 mouse,
                 clicked: false,
                 down: false,
+                right_down: false,
                 screen: Vec2::new(200.0, 60.0),
                 typed: String::new(),
                 backspace: false,
                 wheel: 0.0,
+                exclusive: false,
+                motion: Default::default(),
             };
             run_ui(&tree, &model, &styles, &input, &mut UiState::new())
                 .commands
@@ -4459,10 +4480,13 @@ mod script_smoke {
                 mouse: Vec2::new(-1.0, -1.0),
                 clicked: false,
                 down: false,
+                right_down: false,
                 screen: Vec2::new(1920.0, 1080.0),
                 typed: String::new(),
                 backspace: false,
                 wheel: 0.0,
+                exclusive: false,
+                motion: Default::default(),
             };
             let frame = run_ui(&tree, &model, &styles, &snap, &mut UiState::new());
             assert!(
@@ -4949,10 +4973,13 @@ mod script_smoke {
             mouse: Vec2::new(-1.0, -1.0),
             clicked: false,
             down: false,
+            right_down: false,
             screen: Vec2::new(1920.0, 1080.0),
             typed: String::new(),
             backspace: false,
             wheel: 0.0,
+            exclusive: false,
+            motion: Default::default(),
         };
         let has = |cmds: &[HudCommand], s: &str| {
             cmds.iter()
@@ -5158,10 +5185,13 @@ mod script_smoke {
             mouse: Vec2::new(x, y),
             clicked,
             down: clicked,
+            right_down: false,
             screen: Vec2::new(1920.0, 1080.0),
             typed: String::new(),
             backspace: false,
             wheel: 0.0,
+            exclusive: false,
+            motion: Default::default(),
         };
         let mut state = UiState::new();
 
@@ -5314,7 +5344,7 @@ mod script_smoke {
         use flicker_input_router::{apply_context_requests, RouteCtx};
 
         let close = ValueMap::new().with("settings_close", true);
-        let mut surfaces = settings_surfaces();
+        let mut surfaces = settings_sections();
 
         // Dirty close → the confirm dialog goes up, nothing pops.
         assert!(!UnifiedSettingsScene::close_requested(
@@ -5330,7 +5360,7 @@ mod script_smoke {
         // Its context flip routes through the S9 seam: Menu pushed while up.
         let mut route = RouteCtx::new();
         let mut bindings = ContextualBindings::new(InputMap::empty());
-        surfaces.apply_surface_contexts(&mut route);
+        surfaces.apply_section_contexts(&mut route);
         apply_context_requests(&mut bindings, &route.requests);
         route.requests.clear();
         assert_eq!(
@@ -5349,7 +5379,7 @@ mod script_smoke {
             !surfaces.is_on("confirm_close"),
             "the intent cancelled the dialog, not settings"
         );
-        surfaces.apply_surface_contexts(&mut route);
+        surfaces.apply_section_contexts(&mut route);
         apply_context_requests(&mut bindings, &route.requests);
         route.requests.clear();
         assert_eq!(

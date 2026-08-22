@@ -458,7 +458,14 @@ pub fn classify_package(path: &Path) -> PackageClass {
         return PackageClass::Doc;
     }
     // The promotion ledger (`package/manifest.json`, gz-at-rest in a live tree).
-    if logical.ends_with("/manifest.json") || logical == "manifest.json" {
+    // Match the file NAME on either separator: a Windows path uses `\`, so a
+    // nested `manifest.json` must not miss here and fall through to a content
+    // sniff — that classified it Unknown, the Windows-only failure this closes.
+    if logical
+        .rsplit(['/', '\\'])
+        .next()
+        .is_some_and(|name| name == "manifest.json")
+    {
         return PackageClass::Manifest;
     }
     if logical.ends_with(".flight") {
@@ -880,6 +887,22 @@ mod tests {
     fn an_entangled_bundle_classifies_by_its_geometry() {
         let entangled = br#"{"format": "flicker.rig", "mesh": {"indices": [0,1,2]}, "clips": []}"#;
         assert_eq!(classify_package_head(entangled), PackageClass::Rig);
+    }
+
+    /// A nested `manifest.json` classifies as the promotion ledger regardless of
+    /// the path separator. A `/`-only match let a Windows (`\`) path fall through
+    /// to a content sniff → Unknown — the x86_64/Windows-only failure of
+    /// `every_real_package_file_classifies`.
+    #[test]
+    fn a_nested_manifest_classifies_on_either_separator() {
+        assert_eq!(
+            classify_package(std::path::Path::new("package/GolemBase_Low/manifest.json")),
+            PackageClass::Manifest
+        );
+        assert_eq!(
+            classify_package(std::path::Path::new(r"package\GolemBase_Low\manifest.json")),
+            PackageClass::Manifest
+        );
     }
 
     /// Guarded real-data check: every processed file in the tree classifies to

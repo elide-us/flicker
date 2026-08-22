@@ -1,5 +1,5 @@
 {
-  "_comment": "Clayworks Bench SCENE DEFINITION (201F4F51 template-free). The asset-pipeline editor: a wizard over three LINEAR workflow definitions (params.workflows — branching lives BETWEEN definitions, chosen by the Task cards), a 2×2 editor viewport (the `editor_quad` rtt — the behaviour tiles its QuadGrid inside the reserved rect), a floating right inspector whose per-stage cells gate on the step surfaces (`wf_step_<id>`) and the conform ROLE flags (`on_conform_*`), a display-toggle panel over the viewport, and the Back/Next footer that drives the rail. The `assetpipeline` behaviour plays it (flicker-assetpipeline); assetpipeline.lua derives the rail-chip styles and the bank-row selection washes. Styles: the live blocks folded in from the crate's quarantined scene_styles.json (col/map/panel/well/seam/checkbox/rowsel/card); the dead template-era blocks (window/frame/option_grid/layout/header/tab_bar/footer dims) did not move.",
+  "_comment": "Clayworks Bench SCENE DEFINITION (201F4F51 template-free). The asset-pipeline editor: a wizard over three LINEAR workflow definitions (params.workflows — branching lives BETWEEN definitions, chosen by the Task cards), three page surfaces in one holder (`surface` kind: `ap_quad` 2×2 / `ap_clip_pair` / `ap_bake_view`, page-gated by `view_quad`/`view_clip`/`view_bake` — the behaviour fills each with the shared ViewportFiller), a floating right inspector whose per-stage cells gate on the step surfaces (`wf_step_<id>`) and the conform ROLE flags (`on_conform_*`), a display-toggle panel over the viewport, and the Back/Next footer that drives the rail. The `assetpipeline` behaviour plays it (flicker-assetpipeline); assetpipeline.lua derives the rail-chip styles and the bank-row selection washes. Styles: the live blocks folded in from the crate's quarantined scene_styles.json (col/map/panel/well/seam/checkbox/rowsel/card); the dead template-era blocks (window/frame/option_grid/layout/header/tab_bar/footer dims) did not move.",
   "behaviour": "assetpipeline",
   "params": {
     "_comment": "Workflow DEFINITIONS for the bench's vendored Workflow runtime: `workflows.<name>` is one LINEAR wizard — the ordered `steps` ({ id, title, needs, yields }). Branching is deliberately absent (Aaron, ratified 2026-08-01): a required branch is a SEPARATE definition, chosen up front by the Task cards — Character (and the unclassified default) walks import_character, Prop/Accessory import_prop, Animation import_animation, so the old in-spine 'skip Attach for a non-character' conditional is simply a definition without the step. `needs`/`yields` name keys of the bench's per-frame step DOCUMENT (a key is present exactly when the scene state it names exists — `wf_doc`): `source` = an open scanned folder, `class` = the declared AssetClass, `rig` = the character conform produced its Rig, `attach` = the authored attach-point set, `fit` = the prop/garment mount binding applies, `clip` = the active BVH retargeted onto the reference skeleton, `committed` = the baked rig / emitted clip path. `Next` into a step whose needs are unmet refuses, fail-loud. Step `title` is the rail-chip label, a `$token` resolved through the stringtable at publish.",
@@ -38,11 +38,7 @@
       "radius": 4,
       "fill_top": "$stone3",
       "fill_bot": "$stone1",
-      "border": "$edge2",
-      "shadow": "$shadow",
-      "shadow_dy": 18,
-      "shadow_feather": 46,
-      "shadow_grow": 4
+      "border": "$edge2"
     },
     "workflow": {
       "_comment": "The step-rail chip trio the vendored Workflow runtime's states resolve to: the pair script derives `wf_<id>_style` = workflow.chip.<state> from the published `wf_<id>_state` (active / visited / todo).",
@@ -185,7 +181,7 @@
     }
   },
   "tree": {
-    "component": "screen",
+    "component": "surface",
     "id": "assetpipeline",
     "on_menu": "pause_open",
     "on_mode_next": "gizmo_next",
@@ -253,7 +249,9 @@
                 "grow": 1.0,
                 "pad": 8,
                 "children": [
-                  { "component": "rtt", "id": "editor_quad", "source": "assetpipeline_editor", "style": "assetpipeline.holder", "grow": 1.0 },
+                  { "component": "surface", "id": "ap_quad", "layout": "quad", "style": "assetpipeline.holder", "grow": 1.0, "visible_bind": "view_quad" },
+                  { "component": "surface", "id": "ap_clip_pair", "layout": "pair", "style": "assetpipeline.holder", "grow": 1.0, "visible_bind": "view_clip" },
+                  { "component": "surface", "id": "ap_bake_view", "layout": "single", "style": "assetpipeline.holder", "grow": 1.0, "visible_bind": "view_bake" },
                   {
                     "component": "panel",
                     "id": "ap_display",

@@ -396,7 +396,10 @@ pub fn reorient_to_canonical(model: &mut RawModel, reference: &Path) -> Result<C
 /// vendor frame (a differing bone-axis convention) throws the inferred bones off the mesh. Because
 /// reorient preserves POSITIONS, this basis shares the vendor rig's joint positions, so bones placed
 /// on it land exactly where the canonical path would.
-fn canonical_world_frames(model: &RawModel, reference: &Path) -> Result<(Vec<Mat4>, ConformReport)> {
+fn canonical_world_frames(
+    model: &RawModel,
+    reference: &Path,
+) -> Result<(Vec<Mat4>, ConformReport)> {
     // This body's world frames (built from the parsed local TRS).
     let fg = model_world_frames(model);
     let idx: HashMap<String, usize> = model
@@ -847,8 +850,8 @@ mod tests {
             }],
             indices: vec![0, 0, 0],
         };
-        let out =
-            conform_to_canonical(&mut model, &reference, ConformMode::Canonical).expect("conform runs");
+        let out = conform_to_canonical(&mut model, &reference, ConformMode::Canonical)
+            .expect("conform runs");
         assert!(
             out.infer.spliced.iter().any(|n| n == "head"),
             "the head must be reported spliced, got {:?}",
@@ -921,7 +924,10 @@ mod tests {
         let out = conform_to_canonical(&mut model, &reference, ConformMode::AsProvided)
             .expect("as-provided conform runs");
         // No reorient and no derive passes ran.
-        assert_eq!(out.reorient.limbs_aligned, 0, "as-provided runs no reorient");
+        assert_eq!(
+            out.reorient.limbs_aligned, 0,
+            "as-provided runs no reorient"
+        );
         assert!(
             out.hip.left.is_none() && out.hip.right.is_none(),
             "as-provided derives no hip width"

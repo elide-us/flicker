@@ -25,7 +25,7 @@
 //! `on_tab_next|prev` = the wizard's forward/back / `on_mode_next|prev` = the gizmo
 //! cycle), and both input channels land in the ONE dispatch as result names. The
 //! viewport's per-panel orbit / pan / zoom / gizmo picking stays the bespoke tier:
-//! pointer edges polled inside the reserved `editor_quad` rect, plus the pump's
+//! pointer edges polled inside the reserved `ap_quad` rect, plus the pump's
 //! continuous `signals.axis` look while the viewport pane is ENTERED (the populous
 //! world-below-walker pattern — [`EditorLayer`] consumes the camera signals then).
 //!
@@ -41,16 +41,19 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use flicker::render::{
-    build_textured_verts, grid_segments_xy, Camera, Mat4, MeshDrawOptions, MeshHandle, MeshIndices,
-    MeshVertex, Orbit, PbrMaps, QuadGrid, QuadView, Rect, Renderer, SceneLighting,
-    SkinnedMeshHandle, SkinnedVertex, TextureHandle, TexturedMeshHandle, Vec2, Vec3,
+    build_textured_verts, grid_segments_xy, Mat4, MeshDrawOptions, MeshHandle, MeshIndices,
+    MeshVertex, PbrMaps, QuadView, Rect, Renderer, SceneLighting, SkinnedMeshHandle, SkinnedVertex,
+    TextureHandle, TexturedMeshHandle, Vec2, Vec3, ViewportFiller, ViewportLayout,
 };
 use flicker::scene::{Scene, SceneInput, Transition};
 use flicker::script::{HudCommand, ScriptHost, UiNode, ValueMap};
 use flicker::ui::{
-    render_hud, run_ui, strings, SceneDef, UiInput, UiIntents, UiState, WalkerHandler,
+    render_hud, run_ui, strings, SceneDef, SurfacePointer, UiInput, UiIntents, UiState,
+    WalkerHandler,
 };
-use flicker_input_core::{ActionSignal, AbstractControls, GamepadConfig, InputMap, InputState, Key};
+use flicker_input_core::{
+    AbstractControls, ActionSignal, GamepadConfig, InputMap, InputState, Key,
+};
 use flicker_input_router::{Flow, InputEvent, InputHandler, RouteCtx, Router};
 use flicker_shell::{PauseScene, Theme};
 
@@ -78,7 +81,7 @@ use flicker_skeletal::skin;
 ///
 /// The **Workflow** — an Orchestration with an ordinal (Aaron, ratified 2026-08-01): a
 /// LINEAR sequence of step surfaces + gates + the document contract, wrapping ONE
-/// `Surfaces` exclusive group. Branching is deliberately NOT here: a required branch is
+/// `Sections` exclusive group. Branching is deliberately NOT here: a required branch is
 /// a *different workflow definition*, chosen up front by the dispatch cards.
 ///
 /// **The document is the pipe.** Steps never talk to each other: each reads and writes
@@ -104,7 +107,7 @@ use flicker_skeletal::skin;
 /// (rail membership).
 mod workflow {
     use flicker::script::ValueMap;
-    use flicker::ui::{Surface, Surfaces};
+    use flicker::ui::{Section, Sections};
     use std::collections::HashMap;
 
     /// One declared step of a workflow: its stable `id`, its rail title (a
@@ -133,7 +136,7 @@ mod workflow {
         /// The Model key the step's subtree gates on: an explicit `surface`, else
         /// the NAMESPACED default `wf_step_<id>` — bare ids collided with sibling
         /// Model namespaces (and with document keys like `attach`).
-        fn surface_key(&self) -> String {
+        fn section_key(&self) -> String {
             self.surface
                 .clone()
                 .unwrap_or_else(|| format!("wf_step_{}", self.id))
@@ -171,7 +174,7 @@ mod workflow {
     /// The dedicated discard-confirmation surface every workflow carries.
     const DISCARD: &str = "wf_discard";
 
-    /// A running workflow: the ordinal over one [`Surfaces`] exclusive group.
+    /// A running workflow: the ordinal over one [`Sections`] exclusive group.
     /// Construct from a [`WorkflowDef`]'s step list, feed it the frame's results +
     /// document with [`handle`](Self::handle), and publish with
     /// [`publish`](Self::publish).
@@ -182,7 +185,7 @@ mod workflow {
         /// The current step has unsaved changes — armed by stage logic via
         /// [`set_dirty`](Self::set_dirty); makes `Back` destructive-guarded.
         dirty: bool,
-        surfaces: Surfaces,
+        surfaces: Sections,
     }
 
     impl Workflow {
@@ -208,25 +211,25 @@ mod workflow {
                     }
                 }
             }
-            let mut decls: Vec<Surface> = steps
+            let mut decls: Vec<Section> = steps
                 .iter()
                 .enumerate()
                 .map(|(i, s)| {
-                    let mut d = Surface::new(s.surface_key().as_str()).group("wf_steps");
+                    let mut d = Section::new(s.section_key().as_str()).group("wf_steps");
                     if i == 0 {
                         d = d.on();
                     }
                     d
                 })
                 .collect();
-            decls.push(Surface::new(DISCARD));
+            decls.push(Section::new(DISCARD));
             let visited = vec![false; steps.len()];
             Self {
                 steps,
                 current: 0,
                 visited,
                 dirty: false,
-                surfaces: Surfaces::new(decls),
+                surfaces: Sections::new(decls),
             }
         }
 
@@ -338,7 +341,7 @@ mod workflow {
         /// ride localized binds; `wf_<id>_state` as the step state the pair script
         /// styles), and the footer keys (`wf_step`, `wf_step_i`/`_n`, `wf_can_next`).
         pub fn publish(&mut self, doc: &ValueMap, m: &mut ValueMap) {
-            let key = self.steps[self.current].surface_key();
+            let key = self.steps[self.current].section_key();
             self.surfaces.set_exclusive(&key);
             self.surfaces.publish(m);
             m.set("wf_step", self.step().to_string());
@@ -485,16 +488,15 @@ mod workflow {
 
         #[test]
         fn definitions_load_from_scene_params_and_build() {
-            let params: serde_json::Map<String, serde_json::Value> =
-                serde_json::from_str(
-                    r#"{ "workflows": {
+            let params: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
+                r#"{ "workflows": {
                         "asset_import": { "title": "$wf_asset_import", "steps": [
                             { "id": "task", "title": "$wf_step_task", "yields": ["source"] },
                             { "id": "review", "title": "$wf_step_review", "needs": ["source"] }
                         ] }
                     } }"#,
-                )
-                .expect("test params parse");
+            )
+            .expect("test params parse");
             let defs = workflows_from_params(&params);
             let def = defs.get("asset_import").expect("definition loads");
             assert_eq!(def.steps.len(), 2);
@@ -1176,28 +1178,34 @@ pub struct AssetPipeline {
     /// canonical conform runs unless a human opts into this to test the raw rig against the clips.
     as_provided: bool,
     source: Option<Source>,
-    grid: Option<QuadGrid>,
-    /// The framed holder rect the HUD reserves for the 2×2 (the `editor_quad` `stage` node). The
-    /// scene tiles the `QuadGrid` inside exactly this rect, so the viewport, the composite and the
-    /// pointer-picking all agree; `None` until the HUD has laid out its first frame.
-    quad_rect: Option<Rect>,
-    /// One camera per quad, in `EDITOR_QUADS` order (PERSP, TOP, SIDE, FRONT). Each view pans and
-    /// zooms independently — a viewport control acts only on the panel under the cursor. Only view 0
-    /// (PERSP) uses yaw/pitch; the ortho views are fixed axes and read only `pan` + `zoom`.
-    orbits: [Orbit; 4],
-    /// The Clip page's side-by-side pair, tiled in the SAME holder rect as the 2×2 —
-    /// exactly one of the two grids renders per frame (the frame graph's offscreen
-    /// passes reset the draw queues, so they must never both run).
-    clip_grid: Option<QuadGrid>,
-    /// One camera per clip panel (`CLIP_VIEWS` order: ROOT MOTION, IN PLACE).
-    clip_orbits: [Orbit; 2],
+    /// The 2×2 editor viewport (the `ap_quad` node, layout quad): the shared `ViewportFiller`
+    /// the `viewport` kind is filled by — grid + one orbit per view (PERSP, TOP, SIDE, FRONT),
+    /// each panning/zooming independently — seated in the rect the walker reserves each frame
+    /// so the composite and the pointer-picking agree.
+    quad: Option<ViewportFiller>,
+    /// The Clip page's side-by-side pair (the `ap_clip_pair` node, layout pair). Exactly one of
+    /// the three page viewports is VISIBLE (page-gated in the tree from the same predicates
+    /// `render` draws by), so exactly one renders per frame — the frame graph's offscreen
+    /// passes reset the draw queues, so two would discard each other.
+    clip: Option<ViewportFiller>,
+    /// Where the walker seated each page viewport THIS frame (`None` = that node is not
+    /// visible). THE render gate: a viewport only draws into a rect it was seated in — an
+    /// unseated grid would tile the WHOLE WINDOW and composite over the HUD.
+    quad_seat: Option<Rect>,
+    clip_seat: Option<Rect>,
+    bake_seat: Option<Rect>,
+    /// The walker's pointer SAMPLE for each page surface this frame (the barrier,
+    /// A8C9F02B §4b): present only while the cursor is over that surface with no UI
+    /// over it, or while a press that began there is still held. The bench never reads
+    /// the device for its viewports.
+    quad_ptr: Option<SurfacePointer>,
+    clip_ptr: Option<SurfacePointer>,
+    bake_ptr: Option<SurfacePointer>,
     /// The shared playback clock, in CLIP TICKS (fractional between samples); both
     /// panels read it so the variants stay in lockstep. Wraps at the clip duration.
     clip_tick: f32,
-    /// The Preview page's single view (same exclusivity rule as `clip_grid`: exactly one
-    /// grid renders per frame).
-    bake_grid: Option<QuadGrid>,
-    bake_orbit: Orbit,
+    /// The Preview page's single view (the `ap_bake_view` node, layout single; same exclusivity).
+    bake_view: Option<ViewportFiller>,
     /// The bake preview's playback clock, in idle ticks (fractional between samples).
     bake_tick: f32,
     /// The Preview page's baked body — built on entry, dropped on leaving the page.
@@ -1207,7 +1215,6 @@ pub struct AssetPipeline {
     variant_rm: bool,
     show_skeleton: bool,
     /// Cached last cursor, for orbit dragging.
-    last_mouse: Vec2,
     // ── Pause plumbing, as the shell expects (built in `enter`, handed to PauseScene). ──
     /// Mouse-look tuning handed to the pause overlay. The PUMP owns the live action
     /// maps (input-P3) — the scene resolves nothing itself.
@@ -1675,20 +1682,21 @@ impl AssetPipeline {
             prefer_staged: false,
             as_provided: false,
             source: None,
-            grid: None,
-            quad_rect: None,
-            orbits: [Orbit::default(); 4],
-            clip_grid: None,
-            clip_orbits: [Orbit::default(); 2],
+            quad: None,
+            clip: None,
+            quad_seat: None,
+            clip_seat: None,
+            bake_seat: None,
+            quad_ptr: None,
+            clip_ptr: None,
+            bake_ptr: None,
             clip_tick: 0.0,
-            bake_grid: None,
-            bake_orbit: Orbit::default(),
+            bake_view: None,
             bake_tick: 0.0,
             bake: None,
             variant_ip: true,
             variant_rm: true,
             show_skeleton: true,
-            last_mouse: Vec2::ZERO,
             controls: AbstractControls::default(),
             gamepad_config: GamepadConfig::default(),
             ui_theme: None,
@@ -1745,28 +1753,11 @@ impl AssetPipeline {
 
     /// Ingest a folder that has already been chosen. Split from the dialog so the whole wizard
     /// downstream of it is exercisable without a GUI.
-    /// The camera of the quad under `cursor` — so a pan works in the plane of the view being
-    /// dragged. Falls back to the perspective camera when the cursor is outside the grid, or the
-    /// grid has not been built yet, so a drag always has a sane basis rather than doing nothing.
-    fn view_camera_at(&self, cursor: Vec2, screen: Vec2) -> Camera {
-        let radius = self.view_radius;
-        self.grid
-            .as_ref()
-            .and_then(|g| {
-                g.cell_at(cursor, screen).map(|i| {
-                    let o = &self.orbits[i];
-                    g.camera(i, o.ortho_radius(radius), &o.camera(radius))
-                })
-            })
-            .unwrap_or_else(|| self.orbits[0].camera(radius))
-    }
-
     fn open(&mut self, dir: PathBuf) {
         // A new asset reframes: drop EVERY view's pan/zoom, or a fresh piece opens off-screen or at
         // the last one's magnification because a camera is still parked where it was left.
-        for o in &mut self.orbits {
-            o.pan = Vec3::ZERO;
-            o.zoom = 1.0;
+        if let Some(q) = self.quad.as_mut() {
+            q.reset_framing();
         }
         match scan_folder(&dir) {
             Ok(scan) => {
@@ -1868,7 +1859,10 @@ impl AssetPipeline {
     /// normal (a first import) and falls through to the FBX path.
     fn adopt_staged(&mut self) {
         let package_characters = flicker_content::roots().package().join("characters");
-        for (root, origin) in [(characters_dir(), "staging"), (package_characters, "package")] {
+        for (root, origin) in [
+            (characters_dir(), "staging"),
+            (package_characters, "package"),
+        ] {
             if self.adopt_staged_from(&root, origin) {
                 return;
             }
@@ -2123,13 +2117,14 @@ impl AssetPipeline {
         let idle = flicker_content::roots().package().join(BAKE_PREVIEW_CLIP);
         let text = flicker_content::package::read_text(&idle)
             .map_err(|e| format!("shared idle {}: {e}", idle.display()))?;
-        let file: RigFile =
-            serde_json::from_str(&text).map_err(|e| format!("shared idle: {e}"))?;
+        let file: RigFile = serde_json::from_str(&text).map_err(|e| format!("shared idle: {e}"))?;
         let clip = resolve_clips(&file, &bones, false)
             .pop()
             .ok_or("the shared idle resolved empty")?;
         if clip.tracks.is_empty() {
-            return Err("the shared idle resolved onto NO bones — names diverged from canon".into());
+            return Err(
+                "the shared idle resolved onto NO bones — names diverged from canon".into(),
+            );
         }
         Ok((rig_file, bones, clip))
     }
@@ -2210,10 +2205,10 @@ impl AssetPipeline {
     /// test. Judge it, then go Back to adjust joints or Next toward Export.
     fn render_bake_preview(&mut self, renderer: &mut Renderer, base_layer: f32) {
         self.ensure_bake_preview(renderer);
-        // The grid is built in `enter` and confined to the HUD's holder rect every frame
-        // in `update`, exactly like `clip_grid` — never created here, where it would run
+        // The viewport is built in `enter` and seated in the walker's reserved rect every
+        // frame in `update`, exactly like `clip` — never created here, where it would run
         // a frame unconfined and composite over the whole HUD.
-        let (Some(bp), Some(grid)) = (self.bake.as_ref(), self.bake_grid.as_ref()) else {
+        let (Some(bp), Some(single)) = (self.bake.as_ref(), self.bake_view.as_ref()) else {
             return;
         };
         let tick = (self.bake_tick as u32).min(bp.clip.duration_ticks.saturating_sub(1));
@@ -2229,8 +2224,7 @@ impl AssetPipeline {
         let (bones, balls) = if self.show_skeleton {
             let min_r = (bp.radius * BALL_MIN_FRAC).max(0.2);
             let max_r = (bp.radius * BALL_MAX_FRAC).max(min_r);
-            let radii =
-                debug::joint_ball_radii(&bp.parents, &globals, BALL_LEN_FRAC, min_r, max_r);
+            let radii = debug::joint_ball_radii(&bp.parents, &globals, BALL_LEN_FRAC, min_r, max_r);
             let bones = debug::bone_diamonds(recentre, &bp.parents, &globals, BONE_WAIST_FRAC);
             let mut balls = Segments::new();
             for (i, g) in globals.iter().enumerate() {
@@ -2244,13 +2238,8 @@ impl AssetPipeline {
         } else {
             (Segments::new(), Segments::new())
         };
-        let cameras = [grid.camera(
-            0,
-            self.bake_orbit.ortho_radius(bp.radius),
-            &self.bake_orbit.camera(bp.radius),
-        )];
         let (mesh, bone_count) = (bp.mesh, bp.bone_count);
-        grid.render_with(renderer, base_layer + 2.0, &cameras, |r, _view| {
+        single.render(renderer, base_layer + 2.0, bp.radius, |r, _view| {
             r.set_scene(SceneLighting::default());
             if !ground.is_empty() {
                 r.draw_lines(&ground, GROUND);
@@ -2325,13 +2314,12 @@ impl AssetPipeline {
             // A CHARACTER bakes through the ONE shared path (`character_bake_model`) — the
             // same model the Preview page plays, so the preview can never drift from the
             // export. A prop/garment ships the parse as-is (no offsets, no frame gate).
-            let model_result = if matches!(src.class(), Some(AssetClass::Skin) | None)
-                && src.rig.is_some()
-            {
-                self.character_bake_model()
-            } else {
-                Ok(parsed.model.clone())
-            };
+            let model_result =
+                if matches!(src.class(), Some(AssetClass::Skin) | None) && src.rig.is_some() {
+                    self.character_bake_model()
+                } else {
+                    Ok(parsed.model.clone())
+                };
             // The human-authored placement the Attach stage tuned — what Commit bakes in.
             let fit = Fit {
                 socket: src.fit.socket_name().to_string(),
@@ -2454,12 +2442,25 @@ impl AssetPipeline {
         }
     }
 
+    /// The Clip page is showing — the side-by-side variant pair instead of the 2×2: the
+    /// conform step in its clip role with a clip loaded. ONE predicate for the tree's
+    /// `view_clip` gate and for `render`, so the visible node and the drawn grid agree.
+    fn clip_page(&self) -> bool {
+        self.wf.step() == "conform"
+            && self.conform_role() == ConformRole::Clip
+            && self
+                .source
+                .as_ref()
+                .map(|s| s.clip.is_some())
+                .unwrap_or(false)
+    }
+
     /// The Clip page's draw: both variants sampled at the SHARED tick, each into its
     /// own panel — ROOT MOTION through a frame widened to its planar travel, IN PLACE
     /// at rest framing. Same conventions as the 2×2 (recentre to origin, violet bones
     /// under cyan joint balls, depth-tested ground lattice).
     fn render_clip(&mut self, renderer: &mut Renderer, base_layer: f32) {
-        let Some(grid) = self.clip_grid.as_ref() else {
+        let Some(pair) = self.clip.as_ref() else {
             return;
         };
         let Some(cp) = self.source.as_ref().and_then(|s| s.clip.as_ref()) else {
@@ -2493,30 +2494,25 @@ impl AssetPipeline {
             panel(&pose(&cp.rm), cp.rm_center, cp.rm_radius),
             panel(&pose(&cp.ip), cp.ip_center, cp.radius),
         ];
-        let cameras: Vec<Camera> = [cp.rm_radius, cp.radius]
-            .into_iter()
-            .enumerate()
-            .map(|(i, r)| {
-                grid.camera(
-                    i,
-                    self.clip_orbits[i].ortho_radius(r),
-                    &self.clip_orbits[i].camera(r),
-                )
-            })
-            .collect();
-        grid.render_with(renderer, base_layer + 2.0, &cameras, |r, view| {
-            r.set_scene(SceneLighting::default());
-            let (bones, balls, ground) = &panels[view];
-            if !ground.is_empty() {
-                r.draw_lines(ground, GROUND);
-            }
-            if !bones.is_empty() {
-                r.draw_lines_overlay(bones, BONE);
-            }
-            if !balls.is_empty() {
-                r.draw_lines_overlay(balls, JOINT);
-            }
-        });
+        let radii = [cp.rm_radius, cp.radius];
+        pair.render_framed(
+            renderer,
+            base_layer + 2.0,
+            |i| radii[i],
+            |r, view| {
+                r.set_scene(SceneLighting::default());
+                let (bones, balls, ground) = &panels[view];
+                if !ground.is_empty() {
+                    r.draw_lines(ground, GROUND);
+                }
+                if !bones.is_empty() {
+                    r.draw_lines_overlay(bones, BONE);
+                }
+                if !balls.is_empty() {
+                    r.draw_lines_overlay(balls, JOINT);
+                }
+            },
+        );
     }
 
     /// The engine-requirement checks the Review stage reports — each computed from real state, so
@@ -2741,17 +2737,9 @@ impl AssetPipeline {
     /// [`Self::render`] frames it (view 0 has no ortho, so its camera is the perspective orbit
     /// verbatim). `None` when the cursor is outside the grid.
     fn pick_ray_at(&self, cursor: Vec2, screen: Vec2) -> Option<(usize, (Vec3, Vec3))> {
-        let grid = self.grid.as_ref()?;
-        let cell = grid.cell_at(cursor, screen)?;
-        let local = grid.local_cursor(cell, cursor, screen)?;
-        let vp = grid.cell(cell, screen).size;
-        let o = &self.orbits[cell];
-        let cam = grid.camera(
-            cell,
-            o.ortho_radius(self.view_radius),
-            &o.camera(self.view_radius),
-        );
-        cam.pick_ray(local, vp).map(|ray| (cell, ray))
+        self.quad
+            .as_ref()?
+            .pick_ray_at(cursor, screen, self.view_radius)
     }
 
     /// The gizmo mode as the radio group's bound NAME — the radio is the one
@@ -2792,9 +2780,17 @@ impl AssetPipeline {
             self.gizmo_drag = None;
             return false;
         }
-        let Some((cell, (o, d))) = self.pick_ray_at(input.mouse_position, screen) else {
+        // The pointer is the walker's sample for the quad surface (the barrier): a drag
+        // keeps it while captured even off the grid; no sample = nothing to do.
+        let Some(ptr) = self.quad_ptr.clone() else {
+            self.gizmo_drag = None;
+            return false;
+        };
+        let held = ptr.captured && ptr.left;
+        let pressed = ptr.pressed && ptr.left;
+        let Some((cell, (o, d))) = self.pick_ray_at(ptr.cursor, screen) else {
             // Cursor left the grid: drop a drag on release, otherwise hold it for next frame.
-            if !input.mouse_left {
+            if !held {
                 self.gizmo_drag = None;
             }
             return self.gizmo_drag.is_some();
@@ -2823,7 +2819,7 @@ impl AssetPipeline {
         // Continue an active drag. Perspective = a Deform TEST (springs back on release); ortho =
         // a Reposition (permanent). Both drag in the view plane.
         if let Some((mode, ray_prev)) = self.gizmo_drag {
-            if !input.mouse_left {
+            if !held {
                 // Release: a perspective deform test snaps the joint back to its pre-drag rest.
                 if let DragMode::Deform { restore, .. } = mode {
                     self.restore_offset(sel, restore);
@@ -2848,7 +2844,7 @@ impl AssetPipeline {
             return true;
         }
 
-        if !input.mouse_left_pressed {
+        if !pressed {
             return false;
         }
 
@@ -3279,6 +3275,14 @@ impl AssetPipeline {
         );
         m.set("on_conform_mount", at_conform && role == ConformRole::Mount);
         m.set("on_conform_clip", at_conform && role == ConformRole::Clip);
+        // Which page VIEWPORT shows — exactly one of the holder's three `viewport` nodes is
+        // visible, gated here from the SAME predicates `render` draws by (the bake view only
+        // once the bake exists, so the page never shows a dead frame: the 2×2 holds until).
+        let view_clip = self.clip_page();
+        let view_bake = step == "preview" && self.bake.is_some();
+        m.set("view_clip", view_clip);
+        m.set("view_bake", view_bake);
+        m.set("view_quad", !(view_clip || view_bake));
         self.conform_model(&mut m);
         self.attach_model(&mut m);
         self.fit_model(&mut m);
@@ -3973,8 +3977,7 @@ impl AssetPipeline {
             self.pending_class = None;
             self.pending_prop = None;
             self.source = None;
-            self.grid = None;
-            self.quad_rect = None;
+            self.quad = None;
             self.dispatch_workflow(None);
             return;
         }
@@ -4542,11 +4545,12 @@ impl Scene for AssetPipeline {
     fn enter(&mut self, renderer: &mut Renderer) {
         // 1×1 white pixel — `render_hud` tints it to build the HUD's solid quads.
         self.hud_white = Some(renderer.load_texture(&[0xff, 0xff, 0xff, 0xff], 1, 1));
-        // The shared 2×2 editor viewport (Perspective TL, Top TR, Side BL, Front BR) —
-        // the same grid the paperdoll uses, owned by flicker-render.
-        self.grid = Some(QuadGrid::editor(renderer));
-        self.clip_grid = Some(QuadGrid::new(renderer, &CLIP_VIEWS, 2));
-        self.bake_grid = Some(QuadGrid::new(renderer, &BAKE_VIEWS, 1));
+        // The three page viewports — the 2×2 (Perspective TL, Top TR, Side BL, Front BR),
+        // the clip pair, the bake single — each the shared `ViewportFiller` the `viewport`
+        // kind is filled by (flicker-render). Built once here, seated every frame in `update`.
+        self.quad = Some(ViewportFiller::new(renderer, ViewportLayout::Quad));
+        self.clip = Some(ViewportFiller::with_views(renderer, &CLIP_VIEWS, 2));
+        self.bake_view = Some(ViewportFiller::with_views(renderer, &BAKE_VIEWS, 1));
         // Built once and handed to each PauseScene we push, so pausing never re-uploads.
         self.ui_theme = Some(Theme::build(renderer));
         // PRE-LOAD the fitting body (the clay Golem) WITH the scene — mesh and all — so turning
@@ -4593,31 +4597,37 @@ impl Scene for AssetPipeline {
             mouse: input.mouse_position,
             clicked: input.mouse_left_pressed,
             down: input.mouse_left,
+            right_down: input.mouse_right,
             screen,
             typed: String::new(),
             backspace: false,
             wheel: input.mouse_wheel_delta,
+            exclusive: false,
+            motion: Default::default(),
         };
         let frame = run_ui(&tree, &model, &self.ui_styles, &snap, &mut self.ui_state);
-        // The framed holder the HUD reserved for the 2×2 (the `editor_quad` rtt): the grid
-        // tiles inside exactly this rect, so the four views land in the frame and the
-        // inspector sits beside them. Setting it on the grid keeps the composite and the
-        // pointer-picking in step. (Read before `commands` is moved out of the frame.)
-        let viewport = frame.rtt_rect("editor_quad");
+        // Seat each page viewport in the rect the walker reserved for its `viewport` node
+        // (exactly one of the three is visible this frame — page-gated in the tree), so the
+        // panels land inside the holder frame and the inspector sits beside them; seating
+        // keeps the composite and the pointer-picking in step. (Read before `commands` is
+        // moved out of the frame.) The seats are also the render gate: an unseated grid
+        // would tile the WHOLE WINDOW and composite over the HUD — the dead-page bug the
+        // preview page once shipped with.
+        self.quad_seat = frame.surface_slot("ap_quad").map(|(r, _)| r);
+        self.clip_seat = frame.surface_slot("ap_clip_pair").map(|(r, _)| r);
+        self.bake_seat = frame.surface_slot("ap_bake_view").map(|(r, _)| r);
+        self.quad_ptr = frame.surface_pointer("ap_quad").cloned();
+        self.clip_ptr = frame.surface_pointer("ap_clip_pair").cloned();
+        self.bake_ptr = frame.surface_pointer("ap_bake_view").cloned();
         self.hud_commands = frame.commands;
-        self.quad_rect = viewport;
-        if let Some(g) = self.grid.as_mut() {
-            g.set_viewport(viewport);
+        if let (Some(v), Some(r)) = (self.quad.as_mut(), self.quad_seat) {
+            v.set_rect(r);
         }
-        // The clip pair and the bake preview tile in the SAME holder rect — whichever
-        // grid renders this frame, the panels land inside the frame the HUD reserved.
-        // (An unconfined grid tiles the WHOLE WINDOW and composites over the HUD —
-        // the dead-page bug the preview page shipped with.)
-        if let Some(g) = self.clip_grid.as_mut() {
-            g.set_viewport(viewport);
+        if let (Some(v), Some(r)) = (self.clip.as_mut(), self.clip_seat) {
+            v.set_rect(r);
         }
-        if let Some(g) = self.bake_grid.as_mut() {
-            g.set_viewport(viewport);
+        if let (Some(v), Some(r)) = (self.bake_view.as_mut(), self.bake_seat) {
+            v.set_rect(r);
         }
         let hud_hit = frame.results.is_on("hud_hit");
 
@@ -4772,22 +4782,13 @@ impl Scene for AssetPipeline {
         // it toggles — which updates immediately — instead of as an inspector checkbox. PERSP has no
         // fixed side, so it is never a flip target. `QuadGrid::flipped` stays the single source of
         // truth: the click writes it and the composited label reads it, so text and view can't drift.
-        let flip_target = if input.mouse_left_pressed && self.ui_state.drag().is_none() {
-            self.grid.as_ref().and_then(|g| {
-                g.cell_at(input.mouse_position, screen).filter(|&i| {
-                    g.views()[i].ortho.is_some() && g.label_hit(i, input.mouse_position, screen)
-                })
-            })
-        } else {
-            None
+        let flip_target = match self.quad_ptr.as_ref() {
+            Some(p) if p.pressed && p.left => self
+                .quad
+                .as_mut()
+                .and_then(|q| q.toggle_flip_at(p.cursor, screen)),
+            _ => None,
         };
-        if let Some(i) = flip_target {
-            if let Some(g) = self.grid.as_mut() {
-                if let Some(f) = g.flipped.get_mut(i) {
-                    *f = !*f;
-                }
-            }
-        }
 
         // The in-scene transform gizmo picks/drags BEFORE the orbit, so a joint or handle grab wins
         // the gesture; `gizmo` is true while it is handling the pointer, and suppresses the orbit on
@@ -4799,57 +4800,65 @@ impl Scene for AssetPipeline {
         };
 
         // Viewport controls act on the quad UNDER THE CURSOR only, each on its OWN camera — so
-        // panning/zooming/orbiting one panel leaves the other three put.
-        let delta = input.mouse_position - self.last_mouse;
-        self.last_mouse = input.mouse_position;
-        // THE PREVIEW PAGE takes the shared Orbit component's standard pointer contract on
-        // its single view — the same camera interaction every body view owes (rule: connect
-        // the ratified system, never route around it). The quad block below stays the quad's.
+        // panning/zooming/orbiting one panel leaves the other three put. Every body view
+        // takes the walker's pointer SAMPLE for its own surface (the barrier): a drag
+        // orbits/pans only while the walker holds the capture for that surface, the wheel
+        // zooms while it is hot, and a surface that is not seated (its page is hidden, or
+        // a slider drag is live) has no sample at all.
         let on_preview = self.wf.step() == "preview";
-        if on_preview && self.ui_state.drag().is_none() {
-            if let Some(bp) = self.bake.as_ref() {
-                let inside = self
-                    .bake_grid
-                    .as_ref()
-                    .and_then(|g| g.cell_at(input.mouse_position, screen))
-                    .is_some();
-                if inside {
-                    let view_h = self.quad_rect.map(|r| r.size.y).unwrap_or(screen.y);
-                    self.bake_orbit.apply_pointer(
-                        delta,
-                        input.mouse_left,
-                        input.mouse_right,
-                        input.mouse_wheel_delta,
-                        bp.radius,
-                        view_h,
-                    );
-                }
+        if on_preview {
+            if let (Some(p), Some(bp), Some(single)) = (
+                self.bake_ptr.as_ref(),
+                self.bake.as_ref(),
+                self.bake_view.as_mut(),
+            ) {
+                single.apply_pointer(
+                    p.cursor,
+                    screen,
+                    p.delta,
+                    p.captured && p.left,
+                    p.captured && p.right,
+                    p.wheel,
+                    bp.radius,
+                );
             }
         }
-        if !on_preview && self.ui_state.drag().is_none() {
-            if let Some(i) = self
-                .grid
+        // The 2×2: a flip-label click is not an orbit, and neither is a gizmo pick/drag.
+        if !on_preview {
+            if let (Some(p), Some(quad)) = (self.quad_ptr.as_ref(), self.quad.as_mut()) {
+                let orbit = p.captured && p.left && flip_target.is_none() && !gizmo;
+                quad.apply_pointer(
+                    p.cursor,
+                    screen,
+                    p.delta,
+                    orbit,
+                    p.captured && p.right,
+                    p.wheel,
+                    self.view_radius,
+                );
+            }
+        }
+        // The clip pair: each panel framed to its own subject (ROOT MOTION wider than IN PLACE).
+        {
+            let radii = self
+                .source
                 .as_ref()
-                .and_then(|g| g.cell_at(input.mouse_position, screen))
+                .and_then(|s| s.clip.as_ref())
+                .map(|cp| [cp.rm_radius, cp.radius]);
+            if let (Some(p), Some(radii), Some(pair)) =
+                (self.clip_ptr.as_ref(), radii, self.clip.as_mut())
             {
-                // Orbit (left-drag) is a PERSPECTIVE notion — only the PERSP panel (view 0) rotates;
-                // the ortho views are fixed axes. A flip-label click is not an orbit, and neither is
-                // a gizmo pick/drag.
-                if input.mouse_left && flip_target.is_none() && i == 0 && !gizmo {
-                    self.orbits[0].yaw -= delta.x * 0.006;
-                    self.orbits[0].pitch =
-                        (self.orbits[0].pitch + delta.y * 0.006).clamp(-1.4, 1.4);
+                if let Some(i) = pair.grid().cell_at(p.cursor, screen) {
+                    pair.apply_pointer(
+                        p.cursor,
+                        screen,
+                        p.delta,
+                        p.captured && p.left,
+                        p.captured && p.right,
+                        p.wheel,
+                        radii[i],
+                    );
                 }
-                // PAN (right-drag; a two-finger trackpad drag arrives as one) slides THIS view's
-                // look-at in its own plane — TOP across XY, FRONT across XZ. Each quad is half the
-                // HOLDER's height now, so that is what a pixel is measured against.
-                if input.mouse_right {
-                    let cam = self.view_camera_at(input.mouse_position, screen);
-                    let quad_h = self.quad_rect.map(|r| r.size.y).unwrap_or(screen.y);
-                    self.orbits[i].pan_by_view(delta, &cam, quad_h * 0.5);
-                }
-                // Wheel zooms THIS view only.
-                self.orbits[i].zoom_by(input.mouse_wheel_delta);
             }
         }
 
@@ -4873,16 +4882,18 @@ impl Scene for AssetPipeline {
             // page's single bake view, else the quad's PERSP panel — same contract, one
             // component (controller is the floor on every body view).
             let o = if on_preview {
-                &mut self.bake_orbit
+                self.bake_view.as_mut().map(|v| v.orbit_mut(0))
             } else {
-                &mut self.orbits[0]
+                self.quad.as_mut().map(|q| q.orbit_mut(0))
             };
-            if look != Vec2::ZERO {
-                o.yaw -= look.x * STICK_LOOK_RATE * dt_s;
-                o.pitch = (o.pitch + look.y * STICK_LOOK_RATE * dt_s).clamp(-1.4, 1.4);
-            }
-            if zoom != 0.0 {
-                o.zoom_by(zoom * STICK_ZOOM_RATE * dt_s);
+            if let Some(o) = o {
+                if look != Vec2::ZERO {
+                    o.yaw -= look.x * STICK_LOOK_RATE * dt_s;
+                    o.pitch = (o.pitch + look.y * STICK_LOOK_RATE * dt_s).clamp(-1.4, 1.4);
+                }
+                if zoom != 0.0 {
+                    o.zoom_by(zoom * STICK_ZOOM_RATE * dt_s);
+                }
             }
         }
 
@@ -4895,13 +4906,7 @@ impl Scene for AssetPipeline {
         // THE CLIP PAGE swaps the 2×2 rig grid for the side-by-side variant pair.
         // Exactly ONE grid drives the frame graph per frame — its offscreen passes
         // reset the per-frame draw queues, so both running would discard each other.
-        let clip_active = self.wf.step() == "conform"
-            && self.conform_role() == ConformRole::Clip
-            && self
-                .source
-                .as_ref()
-                .map(|s| s.clip.is_some())
-                .unwrap_or(false);
+        let clip_active = self.clip_page() && self.clip_seat.is_some();
         if clip_active {
             self.render_clip(renderer, base_layer);
         }
@@ -4911,7 +4916,7 @@ impl Scene for AssetPipeline {
         // must never be a dead frame with nothing rendering.
         let bake_active = if self.wf.step() == "preview" {
             self.ensure_bake_preview(renderer);
-            if self.bake.is_some() {
+            if self.bake.is_some() && self.bake_seat.is_some() {
                 self.render_bake_preview(renderer, base_layer);
                 true
             } else {
@@ -4975,7 +4980,11 @@ impl Scene for AssetPipeline {
         // at the same rate the camera does. Set before the `grid` borrow below.
         self.view_radius = radius;
 
-        if let (false, Some(grid)) = (clip_active || bake_active, self.grid.as_ref()) {
+        if let (false, Some(quad), true) = (
+            clip_active || bake_active,
+            self.quad.as_ref(),
+            self.quad_seat.is_some(),
+        ) {
             // The stage floor: a faint lattice on the XY ground plane at the asset's FEET, so the
             // perspective view reads as a stage instead of empty space. Everything is drawn
             // recentred, which puts the origin at the asset's WAIST — without this the eye has no
@@ -4985,17 +4994,6 @@ impl Scene for AssetPipeline {
             // Everything is drawn about the asset's centre: the cameras target the origin, and in
             // Z-up ground reckoning the origin is the asset's FEET.
             let recentre = Mat4::from_translation(-centre);
-            // One camera PER VIEW, each from its own `Orbit` (independent pan + zoom); the ortho
-            // views frame at `radius · zoom`, the perspective view at `radius · dist_scale · zoom`.
-            let cameras: Vec<Camera> = (0..grid.views().len())
-                .map(|i| {
-                    grid.camera(
-                        i,
-                        self.orbits[i].ortho_radius(radius),
-                        &self.orbits[i].camera(radius),
-                    )
-                })
-                .collect();
             // Skeleton rig-view: octahedral "diamond" bones + per-joint scaled balls (replaces the old
             // flat joint lines + orange frame-axis lines). The SELECTED joint (Conform stage) draws
             // amber with the transform gizmo on it; every non-selected joint draws a cyan ball sized to
@@ -5105,7 +5103,10 @@ impl Scene for AssetPipeline {
                     .collect()
             };
             let (marks, sel_marks) = (shift(marks), shift(sel_marks));
-            grid.render_with(renderer, base_layer + 2.0, &cameras, |r, view| {
+            // One camera PER VIEW, each from its own orbit (independent pan + zoom) — the
+            // filler frames the ortho views at `radius · zoom`, the perspective one at
+            // `radius · dist_scale · zoom`.
+            quad.render(renderer, base_layer + 2.0, radius, |r, view| {
                 r.set_scene(SceneLighting::default());
                 // Ground in the PERSPECTIVE view only (index 0 of `EDITOR_QUADS`): the three
                 // ortho views look straight down an axis, where the lattice collapses to a
@@ -5201,6 +5202,7 @@ impl Scene for AssetPipeline {
 mod tests {
     use super::*;
     use flicker::render::ORBIT_FOV_Y;
+    use flicker::render::{Camera, Orbit};
 
     /// The real source folder the whole pipeline is developed against. Every test that needs a
     /// genuine skeleton goes through this, and SKIPS when the content tree is absent — the same
@@ -5678,7 +5680,10 @@ mod tests {
             s.parsed = None;
             s.rig = None;
         }
-        assert!(ed.adopt_staged_from(&scratch, "staging"), "the staged rig adopts");
+        assert!(
+            ed.adopt_staged_from(&scratch, "staging"),
+            "the staged rig adopts"
+        );
         let src = ed.source.as_ref().unwrap();
         assert_eq!(
             src.reopened,
@@ -5691,7 +5696,10 @@ mod tests {
             staged_bones,
             "the synthesized root strips back off on the way in"
         );
-        let rig = src.rig.as_ref().expect("the staged model loads already-conformed");
+        let rig = src
+            .rig
+            .as_ref()
+            .expect("the staged model loads already-conformed");
         assert!(
             rig.map.iter().all(|s| *s == MapState::Ok),
             "every staged bone carries Ok provenance"
@@ -5800,10 +5808,7 @@ mod tests {
         let rebaked = world(&m2);
         for (name, p) in &after {
             let q = rebaked[name];
-            assert!(
-                (q - *p).length() < 1e-2,
-                "re-bake moved {name}: {p} → {q}"
-            );
+            assert!((q - *p).length() < 1e-2, "re-bake moved {name}: {p} → {q}");
         }
     }
 
@@ -6337,7 +6342,10 @@ mod tests {
         {
             let m = ed.hud_model();
             assert!(m.is_on("wf_step_preview"), "the preview surface gates on");
-            assert!(m.is_on("next_enabled"), "Next stays live on the preview page");
+            assert!(
+                m.is_on("next_enabled"),
+                "Next stays live on the preview page"
+            );
         }
         // …and Back returns to the rig view (park only walks forward).
         ed.apply_workflow_results(&fired("wf_back"));
@@ -6373,7 +6381,9 @@ mod tests {
             .expect("commit recorded where it wrote");
         let json: serde_json::Value =
             serde_json::from_str(&flicker_content::package::read_text(written).unwrap()).unwrap();
-        let wb = json["skeleton"]["bones"].as_array().expect("skeleton.bones");
+        let wb = json["skeleton"]["bones"]
+            .as_array()
+            .expect("skeleton.bones");
         assert_eq!(wb.len(), bones.len(), "same skeleton size as the preview");
         for (i, b) in bones.iter().enumerate() {
             assert_eq!(wb[i]["name"], b.name, "bone {i} matches the preview");
@@ -7156,7 +7166,10 @@ mod tests {
     fn the_pair_script_derives_the_chip_styles_and_washes() {
         load_shipped_strings();
         let mut ed = AssetPipeline::shipped();
-        assert!(ed.script.is_some(), "assetpipeline.lua loads (the pair script)");
+        assert!(
+            ed.script.is_some(),
+            "assetpipeline.lua loads (the pair script)"
+        );
         let m = ed.model();
         assert_eq!(
             m.text("wf_task_style"),
@@ -7223,10 +7236,13 @@ mod tests {
             mouse: Vec2::new(-1.0, -1.0),
             clicked: false,
             down: false,
+            right_down: false,
             screen: Vec2::new(1920.0, 1080.0),
             typed: String::new(),
             backspace: false,
             wheel: 0.0,
+            exclusive: false,
+            motion: Default::default(),
         };
         let frame = run_ui(&tree, &m, &styles, &snap, &mut UiState::new());
         assert!(

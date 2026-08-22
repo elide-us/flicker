@@ -1,6 +1,6 @@
 //! flicker-componentcatalog: the UI TEST scene — a workbench that shows ONE demo copy
 //! of every Rust widget component ([`RUST_COMPONENT_KINDS`]) with all its features
-//! enabled. Every component sits in its own card box; all 26 flow top-to-bottom in a
+//! enabled. Every component sits in its own card box; all 27 flow top-to-bottom in a
 //! scrollable tray on the right. A left nav rail of bookmarks SCROLLS the tray to a
 //! card, and the bookmark of the card at the top of the view highlights.
 //!
@@ -20,11 +20,13 @@
 use std::time::Duration;
 
 use flicker::render::{
-    grid_segments_xy, Rect, Renderer, TextureHandle, Vec2, Vec3, ViewportFiller, ViewportLayout,
+    grid_segments_xy, Rect, Renderer, TextureHandle, Vec3, ViewportFiller, ViewportLayout,
 };
 use flicker::scene::{Scene, SceneInput, Transition};
 use flicker::script::{HudCommand, ScriptHost, UiNode, ValueMap};
-use flicker::ui::{render_hud, run_ui, SceneDef, UiInput, UiIntents, UiState, WalkerHandler};
+use flicker::ui::{
+    render_hud, run_ui, SceneDef, SurfacePointer, UiInput, UiIntents, UiState, WalkerHandler,
+};
 use flicker_input_core::{AbstractControls, GamepadConfig, InputMap, InputState};
 use flicker_input_router::{InputHandler, Router};
 use flicker_shell::{PauseScene, Theme};
@@ -145,14 +147,13 @@ pub struct ComponentCatalog {
     /// The viewport card's shared filler — built LAZILY on first render (it needs
     /// `&mut Renderer`), then seated in the reserved rect each frame.
     viewport: Option<ViewportFiller>,
-    /// The rect + layout the walker reserved for the `cat_viewport` node this frame
+    /// The rect + layout the walker reserved for the `cat_surface` node this frame
     /// (captured in `update`; consumed in the input-less `render`). `None` when off screen.
-    viewport_seat: Option<(Rect, ViewportLayout)>,
-    /// This frame's pointer sample (cursor, delta, left-down) `render` replays to orbit the
-    /// viewport panel under the cursor — `render` gets no `InputState` of its own.
-    pointer: (Vec2, Vec2, bool),
-    /// Last frame's cursor, for the per-frame delta the orbit drag needs.
-    last_mouse: Vec2,
+    surface_seat: Option<(Rect, ViewportLayout)>,
+    /// The walker's pointer SAMPLE for the card's surface this frame (the barrier) —
+    /// `render` replays it to orbit the panel under the cursor; `render` gets no input
+    /// of its own, and the bench never reads the device for it.
+    pointer: Option<SurfacePointer>,
 }
 
 impl ComponentCatalog {
@@ -189,9 +190,8 @@ impl ComponentCatalog {
                 }
             },
             viewport: None,
-            viewport_seat: None,
-            pointer: (Vec2::ZERO, Vec2::ZERO, false),
-            last_mouse: Vec2::ZERO,
+            surface_seat: None,
+            pointer: None,
         }
     }
 
@@ -286,19 +286,23 @@ impl Scene for ComponentCatalog {
             mouse: input.mouse_position,
             clicked: input.mouse_left_pressed,
             down: input.mouse_left,
+            right_down: input.mouse_right,
             screen,
             typed: String::new(),
             backspace: false,
             wheel: input.mouse_wheel_delta,
+            exclusive: false,
+            motion: Default::default(),
         };
         let frame = run_ui(tree, &model, &self.ui_styles, &snap, &mut self.ui_state);
         // The viewport card: capture the rect+layout the walker reserved and this frame's
         // pointer sample, for the input-less `render` to seat + orbit (a left-drag over a
         // panel orbits it; the filler self-gates to the cursor-over-viewport).
-        self.viewport_seat = frame.viewport_slot("cat_viewport");
-        let mouse = input.mouse_position;
-        self.pointer = (mouse, mouse - self.last_mouse, input.mouse_left);
-        self.last_mouse = mouse;
+        self.surface_seat = frame.surface_slot("cat_surface");
+        // …and the walker's pointer SAMPLE for the surface (the barrier, A8C9F02B §4b):
+        // present only while the cursor is over the card's well with no UI over it, or
+        // while a press that began there is still held — never a device read.
+        self.pointer = frame.surface_pointer("cat_surface").cloned();
         let hud_hit = frame.results.is_on("hud_hit");
         // Take the frame apart: the draw commands to blit, the result values to read, and
         // the per-card RECTS the scroll-to needs (each card box reports its resolved Y).
@@ -370,14 +374,24 @@ impl Scene for ComponentCatalog {
         // render a wireframe stage (ground grid + a cube) into it — the kind's LIVE catalog
         // exerciser. Wheel is left out so it never fights the tray scroll. Composites at
         // `base+2`, ABOVE the HUD's `base+1`, so the views land inside the card's well.
-        if let Some((rect, layout)) = self.viewport_seat {
+        if let Some((rect, layout)) = self.surface_seat {
             if self.viewport.is_none() {
                 self.viewport = Some(ViewportFiller::new(renderer, layout));
             }
             let vf = self.viewport.as_mut().unwrap();
             vf.set_rect(rect);
-            let (mouse, delta, left) = self.pointer;
-            vf.apply_pointer(mouse, renderer.size(), delta, left, false, 0.0, DEMO_RADIUS);
+            if let Some(p) = &self.pointer {
+                let orbit = p.captured && p.left;
+                vf.apply_pointer(
+                    p.cursor,
+                    renderer.size(),
+                    p.delta,
+                    orbit,
+                    false,
+                    0.0,
+                    DEMO_RADIUS,
+                );
+            }
             let ground = grid_segments_xy(0.5, 2.5, -1.0);
             let cube = demo_cube();
             vf.render(renderer, base_layer + 2.0, DEMO_RADIUS, |r, _view| {
@@ -682,10 +696,13 @@ mod tests {
             mouse: flicker::render::Vec2::new(-1.0, -1.0),
             clicked: false,
             down: false,
+            right_down: false,
             screen: flicker::render::Vec2::new(1920.0, 1080.0),
             typed: String::new(),
             backspace: false,
             wheel: 0.0,
+            exclusive: false,
+            motion: Default::default(),
         };
         let frame = run_ui(&tree, &model, &styles, &snap, &mut UiState::default());
         let want = [fill[0], fill[1], fill[2], fill[3]];
@@ -836,6 +853,46 @@ mod tests {
         assert!(
             missing.is_empty(),
             "engine kinds with no demo in the catalog: {missing:?}"
+        );
+    }
+
+    /// **PRESENCE GATE for the `surface` card.** `surface` is a STRUCTURAL kind (the one
+    /// kind at two depths — the root screen and every nested live surface), so the
+    /// roster-coverage gate above, which derives its demand from the Rust component
+    /// roster, no longer reaches it. The live-scene container's exerciser (card_26: a
+    /// quad-layout nested surface the `ViewportFiller` fills, orbit on left-drag) is
+    /// ratified catalog content (BDE5BFD0 / A8C9F02B), so its absence is a failure
+    /// here, by name — a drift gate must cover the channel the drift travels (8634C200).
+    #[test]
+    fn the_surface_kind_keeps_its_live_catalog_card() {
+        let json: serde_json::Value =
+            serde_json::from_str(CATALOG_SCENE).expect("the catalog scene is JSON");
+        fn find<'a>(v: &'a serde_json::Value, id: &str) -> Option<&'a serde_json::Value> {
+            match v {
+                serde_json::Value::Object(m) => {
+                    if m.get("id").and_then(|i| i.as_str()) == Some(id) {
+                        return Some(v);
+                    }
+                    m.values().find_map(|c| find(c, id))
+                }
+                serde_json::Value::Array(a) => a.iter().find_map(|c| find(c, id)),
+                _ => None,
+            }
+        }
+        let node =
+            find(&json, "cat_surface").expect("the catalog carries the `cat_surface` card node");
+        assert_eq!(
+            node.get("component").and_then(|c| c.as_str()),
+            Some("surface"),
+            "the card's node is a `surface`"
+        );
+        assert!(
+            node.get("layout").and_then(|l| l.as_str()).is_some(),
+            "the card authors a `layout` so the filler tiles more than one pane"
+        );
+        assert!(
+            CATALOG_SCENE.contains("\"nav_26\"") && CATALOG_SCENE.contains("\"card_26\""),
+            "the surface card keeps its bookmark and its card box"
         );
     }
 }

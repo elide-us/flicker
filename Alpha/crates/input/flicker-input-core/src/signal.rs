@@ -146,6 +146,12 @@ pub enum ActionSignal {
     ZoomIn,
     /// Back the focused viewport's camera away (left stick down).
     ZoomOut,
+    /// Toggle EXCLUSIVE, locked-cursor camera control on the active full-screen
+    /// surface — the mouse becomes the camera and the OS cursor is grabbed + hidden
+    /// (the live-scene container's barrier §4e). A first-class mode-switch signal
+    /// (Aaron 2026-08-21): a scene reads it to flip its exclusive flag; Cancel escapes.
+    /// Reserved (no default binding) until a scene consumes it — the consumer is deferred.
+    ToggleMouseCapture,
 
     // ── Editor verbs (the chord layer) ──
     // Reached by holding the chord modifier and pressing a NON-FACE control —
@@ -236,6 +242,7 @@ impl ActionSignal {
         ActionSignal::ModePrev,
         ActionSignal::ZoomIn,
         ActionSignal::ZoomOut,
+        ActionSignal::ToggleMouseCapture,
         ActionSignal::Undo,
         ActionSignal::Redo,
         ActionSignal::Cut,
@@ -324,6 +331,7 @@ impl ActionSignal {
             Self::No => "No",
             Self::SubmitText => "SubmitText",
             Self::CancelText => "CancelText",
+            Self::ToggleMouseCapture => "ToggleMouseCapture",
         }
     }
 
@@ -401,6 +409,7 @@ impl ActionSignal {
             Self::No => "No",
             Self::SubmitText => "Submit",
             Self::CancelText => "Cancel text",
+            Self::ToggleMouseCapture => "Mouse Cap",
         }
     }
 
@@ -465,6 +474,7 @@ impl ActionSignal {
             | Self::ContextMenu
             | Self::Yes
             | Self::No => SignalGroup::EditorVerbs,
+            Self::ToggleMouseCapture => SignalGroup::Camera,
             Self::SubmitText | Self::CancelText => SignalGroup::Text,
         }
     }
@@ -541,6 +551,7 @@ impl ActionSignal {
             | Self::ItemSelect
             | Self::ModeNext
             | Self::ModePrev
+            | Self::ToggleMouseCapture
             | Self::Yes
             | Self::No => RebindScope::Reserved,
         }
@@ -635,6 +646,7 @@ impl fmt::Display for ActionSignal {
             Self::No => "No",
             Self::SubmitText => "Submit Text",
             Self::CancelText => "Cancel Text",
+            Self::ToggleMouseCapture => "Toggle Mouse Capture",
         };
         write!(f, "{s}")
     }
@@ -877,7 +889,7 @@ mod tests {
                 RebindScope::Reserved => reserved += 1,
             }
         }
-        assert_eq!((player, locked, reserved), (29, 26, 6));
+        assert_eq!((player, locked, reserved), (29, 26, 7));
         assert_eq!(player + locked + reserved, ActionSignal::ALL.len());
     }
 

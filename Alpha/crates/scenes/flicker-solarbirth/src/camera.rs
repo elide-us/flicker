@@ -10,8 +10,8 @@
 //! functions; it now lives as authored data in `flights/intro.flight`, played by
 //! the `flicker-flight` service.)
 
-use flicker::render::{Camera, Rect, Vec2, Vec3};
-use flicker_input_core::{InputState, MouseButton};
+use flicker::render::{Camera, Vec3};
+use flicker::ui::SurfacePointer;
 
 /// Radians of yaw/pitch per pixel of mouse RIGHT-drag — the old raw-drag feel, kept
 /// now that the delta arrives as a resolved `LookRight/LookLeft` pointer signal.
@@ -35,8 +35,6 @@ pub struct OrbitCam {
     distance: f32,
     min_distance: f32,
     max_distance: f32,
-    prev_mouse: Vec2,
-    dragging: bool,
 }
 
 impl OrbitCam {
@@ -47,8 +45,6 @@ impl OrbitCam {
             distance: system_outer * 2.2,
             min_distance: system_outer * 0.15, // allow gliding right into the inner system
             max_distance: system_outer * 6.0,
-            prev_mouse: Vec2::ZERO,
-            dragging: false,
         }
     }
 
@@ -68,42 +64,23 @@ impl OrbitCam {
     /// move the camera on the rail).
     pub fn update(
         &mut self,
-        input: &InputState,
+        pointer: Option<&SurfacePointer>,
         look: LookDelta,
         zoom: f32,
-        viewport: Option<Rect>,
-        over_hud: bool,
         active: bool,
     ) {
-        let mouse = input.mouse_position;
-        self.prev_mouse = mouse;
-        let Some(rect) = viewport else {
-            self.dragging = false;
-            return;
-        };
         if !active {
-            self.dragging = false;
             return;
         }
-        let inside = |p: Vec2| {
-            p.x >= rect.pos.x
-                && p.x <= rect.pos.x + rect.size.x
-                && p.y >= rect.pos.y
-                && p.y <= rect.pos.y + rect.size.y
-        };
 
-        // Mouse look: RIGHT-drag, latched on the open sky. The MouseMotion binding
-        // already gates the delta on RMB held; the latch adds "the drag must have
-        // STARTED on the open sky", so a right-drag begun on a panel never spins us.
-        if input.mouse_right {
-            if self.dragging {
-                self.yaw -= look.mouse_dx * MOUSE_LOOK;
-                self.pitch = (self.pitch + look.mouse_dy * MOUSE_LOOK).clamp(-1.5, 1.5);
-            } else if !over_hud && input.mouse_pressed(MouseButton::Right) && inside(mouse) {
-                self.dragging = true;
-            }
-        } else {
-            self.dragging = false;
+        // Mouse look: RIGHT-drag, captured on the open sky. The MouseMotion binding
+        // already gates the delta on RMB held; the walker's surface capture adds "the
+        // drag must have STARTED on the open sky" (the press was unclaimed inside the
+        // surface), so a right-drag begun on a panel never spins us — and the scene reads
+        // no device or `hud_hit` for it (the barrier, A8C9F02B §4b).
+        if pointer.is_some_and(|p| p.captured && p.right) {
+            self.yaw -= look.mouse_dx * MOUSE_LOOK;
+            self.pitch = (self.pitch + look.mouse_dy * MOUSE_LOOK).clamp(-1.5, 1.5);
         }
 
         // Stick look: a rate, live whenever active (a stick isn't a pointer, so it is
@@ -118,14 +95,11 @@ impl OrbitCam {
                 (self.distance * (1.0 - zoom)).clamp(self.min_distance, self.max_distance);
         }
 
-        // Wheel zoom only over the open sky, so a tick meant for a scrolling readout
-        // never also pulls the camera in.
-        if !over_hud {
-            let wheel = input.mouse_wheel_delta;
-            if wheel != 0.0 && inside(mouse) {
-                self.distance = (self.distance * (1.0 - wheel * 0.1))
-                    .clamp(self.min_distance, self.max_distance);
-            }
+        // Wheel zoom only over the open sky (the surface is hot: no readout under the
+        // cursor), so a tick meant for a scrolling readout never also pulls the camera in.
+        if let Some(wheel) = pointer.map(|p| p.wheel).filter(|w| *w != 0.0) {
+            self.distance =
+                (self.distance * (1.0 - wheel * 0.1)).clamp(self.min_distance, self.max_distance);
         }
     }
 

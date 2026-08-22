@@ -32,10 +32,11 @@
 use flicker::render::{
     Camera, FrameGraph, MeshHandle, MeshIndices, MeshVertex, Rect, Renderer, Vec3,
 };
-use flicker_input_core::{AbstractControls, ActionSignal, InputState};
+use flicker::ui::{SurfacePointer, SurfaceSlot};
+use flicker_input_core::{AbstractControls, ActionSignal};
 use flicker_input_router::{Flow, InputEvent, InputHandler, RouteCtx};
 
-use crate::view::{Arrows, GlobeStage, GlobeView, StageLayer};
+use crate::view::{Arrows, GlobeStage, GlobeView, Seat, StageLayer};
 use crate::{build, graticule, OrbitCam, RADIUS};
 
 /// One shell of a world: what it is drawn over, how far out, how far its tiles
@@ -74,9 +75,10 @@ pub struct GlobeWorld {
     stage_arrows: Arrows,
     /// What is actually drawn: the stage's frame plus whatever the scene added.
     arrows: Arrows,
-    /// Where the walker put the viewport this frame; `None` while off screen,
-    /// which is also what stops the offscreen pass from costing anything.
-    rect: Option<Rect>,
+    /// Where — and how — the walker seated this globe's surface this frame; `None`
+    /// while off screen (or for a ROOT world), which is also what stops the offscreen
+    /// pass from costing anything.
+    seat: Option<Seat>,
     /// The scene's own "my data moved" flag, held here so a bench keeps no
     /// second copy of it.
     dirty: bool,
@@ -122,7 +124,7 @@ impl GlobeWorld {
             pending: None,
             arrows: stage_arrows.clone(),
             stage_arrows,
-            rect: None,
+            seat: None,
             dirty: false,
             panel: None,
             owns_camera: false,
@@ -224,15 +226,17 @@ impl GlobeWorld {
         self.dirty
     }
 
-    /// Where the walker reserved the viewport this frame — the ONE place a
-    /// bench tells the world where it is.
-    pub fn place(&mut self, rect: Option<Rect>) {
-        self.rect = rect;
+    /// Seat the world in the slot the walker reserved for its `surface` node this frame
+    /// (`UiFrame::surface(id)`) — the ONE place a bench tells the world where it is, and
+    /// the place the node's layer, tint and liveness reach the composite. `None` = not
+    /// on screen. A ROOT world (the planet IS the screen) never seats.
+    pub fn seat(&mut self, slot: Option<&SurfaceSlot>) {
+        self.seat = slot.map(Seat::from);
     }
 
-    /// The rect the world last placed itself at.
+    /// The rect the world was last seated at.
     pub fn rect(&self) -> Option<Rect> {
-        self.rect
+        self.seat.map(|s| s.rect)
     }
 
     /// The player's LOOK settings (sensitivity + the two invert flags) reach the
@@ -243,19 +247,25 @@ impl GlobeWorld {
         self.cam.set_controls(controls);
     }
 
-    /// One frame of camera motion. `look` is the (yaw, pitch, zoom) deflection the
-    /// SCENE resolved from its signal source this frame (see
-    /// [`look_from`](GlobeWorld::look_from)); the walker's focus decides whether it is
-    /// ours at all, and the pointer half latches inside the rect exactly as it always has.
+    /// One frame of camera motion. `pointer` is the walker's sample for this globe's
+    /// surface (`UiFrame::surface_pointer(id)`, or `root_pointer()` for a root world) —
+    /// the barrier: present only while the cursor is over the planet with no UI over it,
+    /// or while a press that began there is still held. `look` is the (yaw, pitch, zoom)
+    /// deflection the SCENE resolved from its signal source (see
+    /// [`look_from`](GlobeWorld::look_from)); the walker's ENTERED pane decides whether
+    /// it is ours: a world in a pane owns the camera while that pane is entered, a ROOT
+    /// world (no pane) owns it whenever NO pane is entered — the root is entered by
+    /// default (Aaron 2026-08-21).
     pub fn update(
         &mut self,
         dt: f32,
-        input: &InputState,
+        pointer: Option<&SurfacePointer>,
         look: (f32, f32, f32),
         focused: Option<&str>,
     ) {
         self.owns_camera = match (self.panel.as_deref(), focused) {
             (Some(panel), Some(f)) => panel == f,
+            (None, None) => true,
             _ => false,
         };
         self.look = if self.owns_camera {
@@ -270,7 +280,7 @@ impl GlobeWorld {
         if dz != 0.0 {
             self.cam.zoom(dz, dt);
         }
-        self.cam.update(input, self.rect);
+        self.cam.apply_pointer(pointer);
     }
 
     /// Resolve the three camera axes (yaw, pitch, zoom) from a signal SOURCE — the
@@ -310,19 +320,12 @@ impl GlobeWorld {
         Some(best.1)
     }
 
-    /// Draw the world into the rect the walker reserved. A no-op while the
-    /// viewport is off screen, which is what makes an unshown globe free.
-    pub fn render<'f>(&'f mut self, r: &mut Renderer, fg: &mut FrameGraph<'f>, layer: f32) {
-        if let Some(pending) = self.pending.take() {
-            for h in self.meshes.drain(..) {
-                r.free_mesh(h);
-            }
-            self.meshes = pending
-                .iter()
-                .map(|(v, i)| r.upload_mesh(v, MeshIndices::U32(i)))
-                .collect();
-        }
-        let Some(rect) = self.rect else { return };
+    /// Draw the world into the slot the walker seated it in. A no-op while the
+    /// surface is off screen, which is what makes an unshown globe free. `base_layer`
+    /// is the scene's band; the composite lands at `base + slot.layer`.
+    pub fn render<'f>(&'f mut self, r: &mut Renderer, fg: &mut FrameGraph<'f>, base_layer: f32) {
+        self.upload_pending(r);
+        let Some(seat) = self.seat else { return };
         // Split the borrow: the view is written while the stage, the meshes and
         // the arrows are read into the same graph.
         let Self {
@@ -333,7 +336,36 @@ impl GlobeWorld {
             arrows,
             ..
         } = self;
-        view.render(r, fg, rect, layer, cam.camera(), stage, meshes, arrows);
+        view.render(r, fg, seat, base_layer, cam.camera(), stage, meshes, arrows);
+    }
+
+    /// Draw the world as the ROOT surface's element — straight into the swapchain,
+    /// no target, no blit. For a bench whose planet IS the screen (Epoch
+    /// Simulation); a windowed globe uses [`render`](Self::render). Needs no seat —
+    /// the pointer comes from the walker's root sample.
+    pub fn render_root<'f>(&'f mut self, r: &mut Renderer, fg: &mut FrameGraph<'f>) {
+        self.upload_pending(r);
+        let Self {
+            cam,
+            stage,
+            meshes,
+            arrows,
+            ..
+        } = self;
+        GlobeView::render_root(fg, cam.camera(), stage, meshes, arrows);
+    }
+
+    /// Upload the newest shell list, freeing the one it replaces.
+    fn upload_pending(&mut self, r: &mut Renderer) {
+        if let Some(pending) = self.pending.take() {
+            for h in self.meshes.drain(..) {
+                r.free_mesh(h);
+            }
+            self.meshes = pending
+                .iter()
+                .map(|(v, i)| r.upload_mesh(v, MeshIndices::U32(i)))
+                .collect();
+        }
     }
 
     /// Give the GPU back: the shells and the offscreen target.
@@ -374,7 +406,7 @@ mod tests {
     // Test-only now: the scenes resolve the look tuple from these and hand the world the
     // result (input-P3) — the world itself no longer takes bindings/gamepad.
     use flicker_input_core::{
-        ContextualBindings, EventKind, GamepadConfig, InputContext, InputMap,
+        ContextualBindings, EventKind, GamepadConfig, InputContext, InputMap, InputState,
     };
 
     fn styles(stage: serde_json::Value) -> serde_json::Value {
@@ -521,7 +553,7 @@ mod tests {
         // The scene resolves the look tuple from its signal source (the pump does this in
         // the migrated scenes); the world takes the tuple and gates it on focus.
         let look_axes = GlobeWorld::look_from(|s| bindings.signal_axis(s, &input, &cfg));
-        world.update(0.5, &input, look_axes, Some("view"));
+        world.update(0.5, None, look_axes, Some("view"));
         assert!(
             (world.camera().position - before).length() > 1.0,
             "a bound look signal turned the planet"
@@ -556,7 +588,7 @@ mod tests {
         let look_axes = GlobeWorld::look_from(|s| bindings.signal_axis(s, &input, &cfg));
         for elsewhere in [None, Some("other_panel")] {
             let before = world.camera().position;
-            world.update(0.5, &input, look_axes, elsewhere);
+            world.update(0.5, None, look_axes, elsewhere);
             assert_eq!(
                 world.camera().position,
                 before,
@@ -570,7 +602,7 @@ mod tests {
         }
 
         let before = world.camera().position;
-        world.update(0.5, &input, look_axes, Some("view"));
+        world.update(0.5, None, look_axes, Some("view"));
         assert!(
             (world.camera().position - before).length() > 1.0,
             "the focused panel flies it"

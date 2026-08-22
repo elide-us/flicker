@@ -23,7 +23,7 @@
 
 use std::time::Duration;
 
-use flicker::render::{Renderer, TextureHandle, Vec2};
+use flicker::render::{FrameGraph, Renderer, TextureHandle, Vec2};
 use flicker::scene::{Scene, SceneInput, Transition};
 use flicker::script::{HudCommand, ScriptHost, UiNode, ValueMap};
 use flicker::ui::{render_hud, run_ui, SceneDef, UiInput, UiIntents, UiState, WalkerHandler};
@@ -302,10 +302,13 @@ impl Scene for ClickTrainer {
                 mouse: input.mouse_position,
                 clicked: input.mouse_left_pressed,
                 down: input.mouse_left,
+                right_down: input.mouse_right,
                 screen,
                 typed: String::new(),
                 backspace: false,
                 wheel: input.mouse_wheel_delta,
+                exclusive: false,
+                motion: Default::default(),
             };
             let frame = run_ui(tree, &model, &self.ui_styles, &snap, &mut self.ui_state);
             over_hud = frame.results.is_on("hud_hit");
@@ -386,7 +389,8 @@ impl Scene for ClickTrainer {
             return;
         };
 
-        // ── 2D game elements (sprite engine), drawn at the scene base layer ──
+        // ── The play field: the ROOT surface's 2D element (sprite engine), declared as
+        // the frame graph's root pass at the scene base layer ──
         // Target box, tinted calm → urgent as its lifetime drains.
         let urgency = 1.0 - (self.time_remaining / TARGET_LIFETIME).clamp(0.0, 1.0);
         let mix = |a: f32, b: f32| a + (b - a) * urgency;
@@ -396,19 +400,22 @@ impl Scene for ClickTrainer {
             mix(CALM[2], URGENT[2]),
             1.0,
         ];
-        renderer.draw_sprite(white, self.target_pos, Vec2::splat(self.target_size), color);
-
         // Thin lifetime bar beneath the target (width tracks time remaining).
         let frac = (self.time_remaining / TARGET_LIFETIME).clamp(0.0, 1.0);
-        renderer.draw_sprite(
-            white,
-            Vec2::new(
-                self.target_pos.x,
-                self.target_pos.y + self.target_size + 4.0,
-            ),
-            Vec2::new(self.target_size * frac, 4.0),
-            [0.85, 0.85, 0.90, 0.9],
-        );
+        let (target_pos, target_size) = (self.target_pos, self.target_size);
+        {
+            let mut fg = FrameGraph::new();
+            fg.root(move |r| {
+                r.draw_sprite(white, target_pos, Vec2::splat(target_size), color);
+                r.draw_sprite(
+                    white,
+                    Vec2::new(target_pos.x, target_pos.y + target_size + 4.0),
+                    Vec2::new(target_size * frac, 4.0),
+                    [0.85, 0.85, 0.90, 0.9],
+                );
+            });
+            fg.execute(renderer);
+        }
 
         // ── Vector UI (walker commands stashed by `update`), above the game ──
         render_hud(renderer, &self.hud_commands, white, &[]);
@@ -505,10 +512,13 @@ mod tests {
             mouse: Vec2::new(x, y),
             clicked,
             down: clicked,
+            right_down: false,
             screen: Vec2::new(1280.0, 720.0),
             typed: String::new(),
             backspace: false,
             wheel: 0.0,
+            exclusive: false,
+            motion: Default::default(),
         }
     }
 

@@ -233,7 +233,12 @@ mod tests {
         );
         assert_eq!(
             realm_ids(REALM_ADVENTURER),
-            ["solarbirth", "clicktrainer", "pocclusters", "controllertester"],
+            [
+                "solarbirth",
+                "clicktrainer",
+                "pocclusters",
+                "controllertester"
+            ],
             "Solar Birth + Click Trainer + the Prism Test Room + the Controller Tester \
              are the Adventurer benches"
         );

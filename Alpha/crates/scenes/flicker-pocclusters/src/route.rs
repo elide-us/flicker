@@ -351,7 +351,7 @@ mod tests {
         let events = [ev(ActionSignal::Menu, EventKind::Press, &raw)];
         // The screen declaration, exactly as hud_pocclusters.lua's root carries it.
         let mut tree = UiNode {
-            component: "screen".into(),
+            component: "surface".into(),
             ..Default::default()
         };
         tree.props

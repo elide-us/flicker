@@ -36,7 +36,7 @@ mod golem;
 
 use std::time::{Duration, Instant};
 
-use flicker::render::{Rect, Renderer, TextureHandle, Vec2};
+use flicker::render::{FrameGraph, Rect, Renderer, TextureHandle, Vec2};
 use flicker::scene::{Scene, SceneInput, Transition};
 use flicker::script::{HudCommand, ScriptHost, UiNode, ValueMap};
 use flicker::ui::{
@@ -82,8 +82,7 @@ const CONTEXTS: [InputContext; 4] = [
 ];
 
 /// The pair script — the scene's LOGIC half, by name (five-line architecture).
-const CT_SCRIPT: &str =
-    include_str!("../../../../content/sensorium/scripts/controllertester.lua");
+const CT_SCRIPT: &str = include_str!("../../../../content/sensorium/scripts/controllertester.lua");
 /// The shipped scene file — the tests' copy of the authored chrome (the runtime
 /// receives the same file through the manifest `SceneDef`).
 #[cfg(test)]
@@ -264,9 +263,8 @@ fn is_ui_signal(s: ActionSignal) -> bool {
         | Crouch | Interact | Reload | AttackLight | AttackHeavy | Defend | Special | Dodge
         | LockOn | UseItem | Kick | CounterPerilous | Grapple | Menu | Inventory | Map | Quit
         | ChordBegin | PageNext | PagePrev | PanelNext | PanelPrev | ModeNext | ModePrev
-        | ZoomIn | ZoomOut | Undo | Redo | Cut | Paste | Rename | CreateFolder | ContextMenu => {
-            false
-        }
+        | ZoomIn | ZoomOut | ToggleMouseCapture | Undo | Redo | Cut | Paste | Rename
+        | CreateFolder | ContextMenu => false,
     }
 }
 
@@ -569,7 +567,14 @@ impl ControllerTester {
         m.set("slots", snap.map_or(0, |s| s.gamepads().count()) as f64);
         m.set("tick", self.tick as f64);
         let (mpos, ml, mr, mm) = snap
-            .map(|s| (s.mouse_position, s.mouse_left, s.mouse_right, s.mouse_middle))
+            .map(|s| {
+                (
+                    s.mouse_position,
+                    s.mouse_left,
+                    s.mouse_right,
+                    s.mouse_middle,
+                )
+            })
             .unwrap_or((Vec2::ZERO, false, false, false));
         m.set("mouse_x", f64::from(mpos.x));
         m.set("mouse_y", f64::from(mpos.y));
@@ -817,10 +822,13 @@ impl Scene for ControllerTester {
                 mouse: input.mouse_position,
                 clicked: input.mouse_left_pressed,
                 down: input.mouse_left,
+                right_down: input.mouse_right,
                 screen: renderer.size(),
                 typed: String::new(),
                 backspace: false,
                 wheel: input.mouse_wheel_delta,
+                exclusive: false,
+                motion: Default::default(),
             };
             let frame = run_ui(&tree, &model, &self.ui_styles, &ui_snap, &mut self.ui_state);
             let over_hud = frame.results.is_on("hud_hit");
@@ -941,9 +949,15 @@ impl Scene for ControllerTester {
             size: Vec2::new((view_x1 - view_x0).max(80.0), content_h),
         };
 
-        // The 3D stage FIRST — meshes draw under the UI pass, so the chrome below
-        // frames the centre hole rather than covering the body.
-        self.stage.render(renderer, view);
+        // The golem is the ROOT surface's element: declared as the frame graph's root
+        // pass, straight into the swapchain (no target, no blit). Meshes draw under the
+        // 2D pass, so the chrome below frames the centre hole rather than covering the body.
+        {
+            let mut fg = FrameGraph::new();
+            let stage = &mut self.stage;
+            fg.root(move |r| stage.render(r, view));
+            fg.execute(renderer);
+        }
 
         // Hole-punch background: four opaque bands around the stage viewport (the
         // old full-screen backdrop would sit OVER the 3D and hide the golem).
@@ -1383,7 +1397,12 @@ impl Scene for ControllerTester {
 
         // ── keyboard pills (bottom strip, below both columns) ──
         let ky = size.y - 24.0;
-        renderer.draw_text(&strings::resolve("$ctt_keys"), Vec2::new(margin, ky), 11.0, DIM);
+        renderer.draw_text(
+            &strings::resolve("$ctt_keys"),
+            Vec2::new(margin, ky),
+            11.0,
+            DIM,
+        );
         let mut x = 84.0;
         for k in KEYS {
             let on = snap.is_some_and(|s| s.key_down(k));
@@ -1649,7 +1668,8 @@ mod tests {
         let m = scene.model();
         for key in ["status", "mouse_line"] {
             assert!(
-                m.text(key).is_some_and(|s| !s.is_empty() && !s.starts_with('$')),
+                m.text(key)
+                    .is_some_and(|s| !s.is_empty() && !s.starts_with('$')),
                 "derive() must yield display TEXT for '{key}': {:?}",
                 m.get(key)
             );
@@ -1668,7 +1688,10 @@ mod tests {
         // Selecting a context moves the wash with it.
         scene.select_context(InputContext::Radial);
         let m = scene.model();
-        assert_eq!(m.text("ctx_radial_style"), Some("controllertester.tab_active"));
+        assert_eq!(
+            m.text("ctx_radial_style"),
+            Some("controllertester.tab_active")
+        );
         assert_eq!(m.text("ctx_world_style"), Some("controllertester.tab_idle"));
     }
 }

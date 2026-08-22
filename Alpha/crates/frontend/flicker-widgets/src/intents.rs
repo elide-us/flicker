@@ -133,7 +133,7 @@ mod tests {
 
     fn screen_with(props: &[(&str, Value)]) -> UiNode {
         let mut n = UiNode {
-            component: "screen".into(),
+            component: "surface".into(),
             id: "root".into(),
             ..Default::default()
         };

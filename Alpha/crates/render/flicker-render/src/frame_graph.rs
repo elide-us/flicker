@@ -21,6 +21,15 @@
 //! centralized version of the old scattered "render RTTs before the main view" rule.)
 //! A target's draw closure must not request a volumetric disk (offscreen volumetrics
 //! sample the main depth buffer and are unsupported — same limit as `render_to_texture`).
+//!
+//! **The root surface.** The screen is a surface too: a scene whose live content fills
+//! the window (a world, a 2D game's play field, the boot widget) declares it with
+//! [`FrameGraph::root`] instead of an offscreen target — no extra render target, no blit.
+//! `execute` runs every offscreen pass first, then the root elements, then injects the
+//! screen composites, so a root element can never be destroyed by a later offscreen pass
+//! and nested surfaces always land over it. 3D drawn OUTSIDE a declared pass is counted
+//! and reported by the renderer at `end_frame` — the screen surface is declared, not
+//! assumed.
 
 use crate::{FontRole, RenderTargetHandle, Renderer, Vec2, Vec3};
 
@@ -33,7 +42,7 @@ pub enum CompositeTarget {
 }
 
 /// A rectangle in destination-target pixels (top-left origin).
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Rect {
     pub pos: Vec2,
     pub size: Vec2,
@@ -99,6 +108,10 @@ impl Composite<'_> {
     }
 }
 
+/// A root element's draw closure — the same `FnOnce(&mut Renderer)` body an offscreen
+/// pass takes, aimed at the swapchain instead (see [`FrameGraph::root`]).
+type RootDraw<'f> = Box<dyn FnOnce(&mut Renderer) + 'f>;
+
 /// One offscreen pass: a target + its clear colour + the sub-scene draw closure (the
 /// same `FnOnce(&mut Renderer)` body [`Renderer::render_to_texture`] takes).
 struct TargetPass<'f> {
@@ -112,6 +125,31 @@ struct TargetPass<'f> {
 pub struct FrameGraph<'f> {
     passes: Vec<TargetPass<'f>>,
     composites: Vec<Composite<'f>>,
+    /// The screen surface's own elements, drawn straight into the swapchain after every
+    /// offscreen pass and before the screen composites (see [`Self::root`]).
+    roots: Vec<RootDraw<'f>>,
+}
+
+/// One step of an executed graph, in the order [`FrameGraph::execute`] runs them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Step {
+    /// Offscreen pass `i` (an index into the declared passes, already dependency-ordered).
+    Target(usize),
+    /// Root element `i`, in declaration order.
+    Root(usize),
+    /// Screen-bound composite `i` (an index into the declared composites).
+    Screen(usize),
+}
+
+/// THE order of a frame: every offscreen pass (dependency-ordered), then every root
+/// element, then every screen composite. Pure, so the contract is testable without a GPU.
+fn schedule(pass_order: &[usize], roots: usize, screen_composites: &[usize]) -> Vec<Step> {
+    pass_order
+        .iter()
+        .map(|&i| Step::Target(i))
+        .chain((0..roots).map(Step::Root))
+        .chain(screen_composites.iter().map(|&i| Step::Screen(i)))
+        .collect()
 }
 
 impl<'f> FrameGraph<'f> {
@@ -132,6 +170,16 @@ impl<'f> FrameGraph<'f> {
             clear,
             draw: Box::new(draw),
         });
+    }
+
+    /// Declare an element of the ROOT surface — content drawn straight into the swapchain:
+    /// a full-window world, a 2D game's play field, the boot widget. `draw` sets its camera /
+    /// scene / geometry exactly as a [`Self::target`] closure would; there is no target and
+    /// no composite, so a root element costs no blit. It runs after every offscreen pass
+    /// (the shared draw queues are never reset under it) and before the screen composites
+    /// (nested surfaces land over it). A scene may declare several; they run in order.
+    pub fn root(&mut self, draw: impl FnOnce(&mut Renderer) + 'f) {
+        self.roots.push(Box::new(draw));
     }
 
     /// Composite `src`'s result into `into` as a 2D panel element at `rect`/`layer`,
@@ -182,11 +230,16 @@ impl<'f> FrameGraph<'f> {
     }
 
     /// Render every offscreen pass in dependency order — injecting the composites bound
-    /// INTO each target right after its sub-scene — then inject the screen-bound
-    /// composites into the main-frame queue (rendered last by `end_frame`). Layer state
-    /// is left as it was found, so the app's subsequent main-frame draws are unaffected.
+    /// INTO each target right after its sub-scene — then draw the root elements into the
+    /// main frame, then inject the screen-bound composites into the main-frame queue
+    /// (rendered last by `end_frame`). Layer state is left as it was found, so the app's
+    /// subsequent main-frame draws (the HUD) are unaffected.
     pub fn execute(self, r: &mut Renderer) {
-        let FrameGraph { passes, composites } = self;
+        let FrameGraph {
+            passes,
+            composites,
+            roots,
+        } = self;
         let base_layer = r.layer();
 
         // Order the offscreen passes: an edge (dst, src) means "target dst composites
@@ -208,33 +261,50 @@ impl<'f> FrameGraph<'f> {
             );
         }
 
-        // Run each offscreen pass; inject the composites landing IN this target right
-        // after its own draws (RTT samples another RTT).
+        let screen_composites: Vec<usize> = composites
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| matches!(c.destination(), CompositeTarget::Screen))
+            .map(|(i, _)| i)
+            .collect();
         let mut passes: Vec<Option<TargetPass>> = passes.into_iter().map(Some).collect();
-        for i in order {
-            let Some(TargetPass {
-                target,
-                clear,
-                draw,
-            }) = passes[i].take()
-            else {
-                continue;
-            };
-            let composites = &composites;
-            r.render_to_texture(target, clear, move |r| {
-                draw(r);
-                for c in composites {
-                    if matches!(c.destination(), CompositeTarget::Target(dst) if *dst == target) {
-                        emit_composite(r, c);
-                    }
+        let mut roots: Vec<Option<RootDraw<'f>>> = roots.into_iter().map(Some).collect();
+        for step in schedule(&order, roots.len(), &screen_composites) {
+            match step {
+                // An offscreen pass; inject the composites landing IN this target right
+                // after its own draws (RTT samples another RTT).
+                Step::Target(i) => {
+                    let Some(TargetPass {
+                        target,
+                        clear,
+                        draw,
+                    }) = passes[i].take()
+                    else {
+                        continue;
+                    };
+                    let composites = &composites;
+                    r.render_to_texture(target, clear, move |r| {
+                        draw(r);
+                        for c in composites {
+                            if matches!(c.destination(), CompositeTarget::Target(dst) if *dst == target)
+                            {
+                                emit_composite(r, c);
+                            }
+                        }
+                    });
                 }
-            });
-        }
-
-        // Screen-bound composites, injected into the main-frame queue.
-        for c in &composites {
-            if matches!(c.destination(), CompositeTarget::Screen) {
-                emit_composite(r, c);
+                // A root element: straight into the main-frame queues, inside a declared
+                // pass so the renderer's stray-3D gate knows it was meant.
+                Step::Root(i) => {
+                    let Some(draw) = roots[i].take() else {
+                        continue;
+                    };
+                    r.begin_pass();
+                    draw(r);
+                    r.end_pass();
+                }
+                // A screen-bound composite, injected into the main-frame queue.
+                Step::Screen(i) => emit_composite(r, &composites[i]),
             }
         }
 
@@ -385,7 +455,33 @@ fn topo_order(targets: &[u32], deps: &[(u32, u32)]) -> (Vec<usize>, bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::topo_order;
+    use super::{schedule, topo_order, Step};
+
+    #[test]
+    fn root_runs_after_every_offscreen_pass_and_before_screen_composites() {
+        // Three targets (already dependency-ordered 2,0,1), two root elements, two
+        // screen composites: the root can never be reset by a later offscreen pass, and
+        // nested surfaces composite over it.
+        let steps = schedule(&[2, 0, 1], 2, &[0, 3]);
+        assert_eq!(
+            steps,
+            vec![
+                Step::Target(2),
+                Step::Target(0),
+                Step::Target(1),
+                Step::Root(0),
+                Step::Root(1),
+                Step::Screen(0),
+                Step::Screen(3),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_graph_with_only_a_root_is_just_the_root() {
+        assert_eq!(schedule(&[], 1, &[]), vec![Step::Root(0)]);
+        assert!(schedule(&[], 0, &[]).is_empty());
+    }
 
     #[test]
     fn no_deps_keeps_declaration_order() {

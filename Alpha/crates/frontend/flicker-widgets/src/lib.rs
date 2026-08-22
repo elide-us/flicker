@@ -1,7 +1,7 @@
 //! flicker-widgets — the engine's **UI toolkit**: the Rust component walker
 //! (layout / draw / hit-test over a Lua-declared [`UiNode`] tree), the
 //! [`component`] tier that owns every control's draw + hit,
-//! Surfaces, intents, the stringtable, and the [`render_hud`] draw bridge.
+//! Sections, intents, the stringtable, and the [`render_hud`] draw bridge.
 //! (`flicker` re-exports this crate as `flicker::ui`.)
 //!
 //! The UI pattern: **Lua declares** (a screen's `tree()` returns component
@@ -28,9 +28,6 @@
 //! let frame = run_ui(&tree, &model, &styles, &input, &mut state);
 //! flicker_widgets::render_hud(renderer, &frame.commands, white, &textures);
 //! ```
-//!
-//! ([`WIDGETS_LUA`] / [`load_widgets`] are the legacy immediate-mode residue —
-//! one flagged consumer left; see their docs.)
 
 use std::path::{Path, PathBuf};
 
@@ -47,7 +44,7 @@ mod config;
 ///
 /// [`UiNode`]: flicker_script::UiNode
 pub mod component;
-pub use component::{run_ui, DragPayload, RttSlot, UiFrame, UiInput, UiState};
+pub use component::{run_ui, DragPayload, SurfacePointer, SurfaceSlot, UiFrame, UiInput, UiState};
 
 /// The **router adapter** — [`WalkerHandler`] makes the walker one layer of the
 /// `flicker-input-router` event bus (`hud_hit` → consume-pointer, focus writes
@@ -78,26 +75,20 @@ pub use scene_def::{
 pub mod chat_panel;
 pub use chat_panel::{chat_panel, ChatLineKind, ChatLineView, ChatView, RosterEntry};
 
-/// The **Screen declaration** (S8) — a scene declares its screen's surfaces as
-/// data and drives their `visible_bind` keys through one [`Surfaces`] helper
-/// instead of hand-rolled show/hide chains. See [`surfaces`].
-pub mod surfaces;
+/// The **Screen declaration** (S8) — a scene declares its screen's SECTIONS (the
+/// `visible_bind`-gated subtrees: settings sections, dialogs, inspector panes) as
+/// data and drives their keys through one [`Sections`] helper instead of hand-rolled
+/// show/hide chains. See [`sections`]. (Named `Surfaces` until 2026-08-21, when
+/// `surface` became the drawing-surface KIND — one word, one meaning.)
+pub mod sections;
 
 /// The spine's REVERSIBLE half — undo/redo over commands a bench can apply and
 /// take back. Domain-free: the commands live with the data they mutate.
 pub mod history;
 pub use history::{Command, CommandHistory, DEFAULT_DEPTH};
-pub use surfaces::{Surface, SurfaceChange, Surfaces};
+pub use sections::{Section, SectionChange, Sections};
 
 pub mod strings;
-
-/// The embedded LEGACY immediate-mode widget toolkit (slider / stepper /
-/// dropdown / button), exposed to a script as the `Widgets` global by
-/// [`load_widgets`]. S10 residue: its ONE remaining consumer is
-/// `flicker-world`'s `world_ui.lua` control HUD (flagged as the last
-/// immediate-mode control surface); every other screen is a declarative
-/// component tree. Deleted together with that conversion.
-pub const WIDGETS_LUA: &str = include_str!("widgets.lua");
 
 /// The **structural** component kinds — the ones the walker itself lays out and
 /// draws. Every other legal kind is an interactive Component, owned by the engine
@@ -108,9 +99,7 @@ pub const WIDGETS_LUA: &str = include_str!("widgets.lua");
 /// Together these are the complete vocabulary. A kind outside it is a typo: the walker
 /// would anchor-overlay its children and draw nothing, silently, so
 /// [`unknown_kinds`] exists to make that a test failure instead of a blank panel.
-const STRUCTURAL_KINDS: &[&str] = &[
-    "screen", "cell", "row", "stack", "grid", "rtt", "text", "option",
-];
+const STRUCTURAL_KINDS: &[&str] = &["surface", "cell", "row", "stack", "grid", "text", "option"];
 
 /// The **Rust component** kinds — interactive Components whose draw/hit/bind logic
 /// lives in the ENGINE (`component.rs`), which is where a Component's logic belongs:
@@ -159,12 +148,6 @@ const RUST_COMPONENT_KINDS: &[&str] = &[
     // `[ BACK ]`/`[ NEXT ]` as relevant). Stateless — its buttons fire the same result
     // names the screen's declared Next/Prev/Menu intents fire, one activation channel.
     "nav_footer",
-    // The catalogued multi-view 3-D viewport (single|pair|quad). The kind RESERVES an
-    // rtt-family slot carrying its `layout` and draws its own backdrop well / claims its
-    // rect for focus; a shared behaviour-side `flicker_render::ViewportFiller` owns the
-    // QuadGrid + Orbits and FILLS it — the walker stays 2-D (it has no Renderer). Retires
-    // the per-bench `QuadGrid`/`Orbit` hand-rolling (Aaron 2026-08-21, campaign kind #1).
-    "viewport",
 ];
 
 /// Whether `kind` is an interactive Component — i.e. one the engine draws and hit-tests
@@ -441,16 +424,6 @@ fn font_role(role: flicker_script::FontRole) -> flicker_render::FontRole {
         flicker_script::FontRole::Label => flicker_render::FontRole::Label,
         flicker_script::FontRole::Body => flicker_render::FontRole::Body,
         flicker_script::FontRole::Rune => flicker_render::FontRole::Rune,
-    }
-}
-
-/// Expose the embedded [`WIDGETS_LUA`] toolkit to `script` as the `Widgets`
-/// global — the LEGACY immediate-mode path (S10 residue; one flagged consumer:
-/// `flicker-world`'s `world_ui.lua`). Best-effort; logs on failure (scripts
-/// guard `if Widgets`). Deleted together with that last conversion.
-pub fn load_widgets(script: &ScriptHost) {
-    if let Err(e) = script.set_lua_module("Widgets", WIDGETS_LUA, "widgets.lua") {
-        tracing::error!("widgets module load failed: {e}");
     }
 }
 
@@ -735,7 +708,6 @@ fn resolve_tokens(root: &mut serde_json::Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flicker_script::ScriptHost;
 
     /// The canonical Prism palette (`theme.tokens` in `ui_theme.json`) as
     /// `(name, rgba)` — the one source of truth both fallback gates below check
@@ -936,7 +908,7 @@ mod tests {
             component: kind.to_string(),
             ..Default::default()
         };
-        let mut screen = leaf("screen");
+        let mut screen = leaf("surface");
         screen.children = vec![leaf("cell"), leaf("button"), leaf("text")];
         assert!(
             unknown_kinds(&screen).is_empty(),
@@ -968,7 +940,7 @@ mod tests {
     #[test]
     fn raw_display_literals_finds_copy_and_honours_exemptions() {
         let mut screen = UiNode {
-            component: "screen".into(),
+            component: "surface".into(),
             ..Default::default()
         };
         let node = |props: &[(&str, &str)]| {
@@ -1155,17 +1127,6 @@ mod tests {
             style.get("theme").is_none(),
             "ui_style.json must never carry a `theme` key"
         );
-    }
-
-    #[test]
-    fn widgets_lua_parses_and_evaluates() {
-        // set_lua_module loads + eval()s the toolkit; a syntax error would surface
-        // here. Success proves widgets.lua parses and returns the `W` table — the
-        // cargo-checkable guard for the runtime-loaded Lua.
-        let main = "return { update = function() return {} end, draw = function() return {} end }";
-        let host = ScriptHost::new(main, "test-main").expect("host builds");
-        host.set_lua_module("Widgets", WIDGETS_LUA, "widgets.lua")
-            .expect("widgets.lua parses and evaluates to a table");
     }
 
     /// **NO SCENE READS A DEVICE OR NAMES A PANE STYLE.** A source-level sweep of
@@ -1362,6 +1323,67 @@ mod tests {
             }
             checked += 1;
         }
+        assert!(
+            checked > 0,
+            "the gate found the shipped scene files in {}",
+            dir.display()
+        );
+    }
+
+    /// **ABSENCE GATE: no shipped scene authors a retired surface kind.** `screen`,
+    /// `rtt` and `viewport` all became ONE kind, `surface` (Aaron 2026-08-21: "surface
+    /// is the correct unified term"; the root screen is a surface too). The kind rosters
+    /// no longer know the old names, so a scene using one would fail its own roster gate
+    /// at load — this names the retirement directly and scans `shared/` as well.
+    #[test]
+    fn no_shipped_scene_authors_a_retired_surface_kind() {
+        use std::path::{Path, PathBuf};
+        let dir =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../content/sensorium/scenes");
+        let dir = dir
+            .canonicalize()
+            .expect("content/sensorium/scenes resolves");
+
+        fn kinds(v: &serde_json::Value, out: &mut Vec<String>) {
+            match v {
+                serde_json::Value::Object(m) => {
+                    if let Some(serde_json::Value::String(k)) = m.get("component") {
+                        out.push(k.clone());
+                    }
+                    m.values().for_each(|c| kinds(c, out));
+                }
+                serde_json::Value::Array(a) => a.iter().for_each(|c| kinds(c, out)),
+                _ => {}
+            }
+        }
+        fn walk(dir: &Path, checked: &mut usize) {
+            for entry in std::fs::read_dir(dir).expect("scenes dir reads").flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, checked);
+                    continue;
+                }
+                if !path.to_string_lossy().ends_with(".scene.json") {
+                    continue;
+                }
+                let text = std::fs::read_to_string(&path).expect("scene file reads");
+                let json: serde_json::Value = serde_json::from_str(&text)
+                    .unwrap_or_else(|e| panic!("{} is not JSON: {e}", path.display()));
+                let mut found = Vec::new();
+                kinds(&json, &mut found);
+                for retired in ["screen", "rtt", "viewport"] {
+                    assert!(
+                        !found.iter().any(|k| k == retired),
+                        "{} authors the retired kind `{retired}` — the one kind is `surface` \
+                         (root and nested alike; 2026-08-21)",
+                        path.display()
+                    );
+                }
+                *checked += 1;
+            }
+        }
+        let mut checked = 0;
+        walk(&dir, &mut checked);
         assert!(
             checked > 0,
             "the gate found the shipped scene files in {}",

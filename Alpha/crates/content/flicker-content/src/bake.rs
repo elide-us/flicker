@@ -353,7 +353,6 @@ fn closest_point_segment(p: Vec3, a: Vec3, b: Vec3) -> Vec3 {
     a + ab * t
 }
 
-
 pub fn bake_prop(model: &RawModel, source_name: &str) -> RigFile {
     let vertices: Vec<Vertex> = model
         .vertices
@@ -896,18 +895,18 @@ mod tests {
         };
         RawModel {
             bones: vec![
-                bone("root", -1, [0.0, 0.0, 0.0]),          // 0 — masked from flesh
-                bone("pelvis", 0, [0.0, 0.0, 95.0]),        // 1
-                bone("thigh_l", 1, [8.67, 0.0, -5.0]),      // 2
-                bone("thigh_r", 1, [-8.67, 0.0, -5.0]),     // 3
-                bone("spine_01", 1, [0.0, 0.0, 15.0]),      // 4
-                bone("calf_l", 2, [0.0, 0.0, -42.0]),       // 5
-                bone("calf_r", 3, [0.0, 0.0, -42.0]),       // 6
-                bone("neck_01", 4, [0.0, 0.0, 30.0]),       // 7
+                bone("root", -1, [0.0, 0.0, 0.0]),      // 0 — masked from flesh
+                bone("pelvis", 0, [0.0, 0.0, 95.0]),    // 1
+                bone("thigh_l", 1, [8.67, 0.0, -5.0]),  // 2
+                bone("thigh_r", 1, [-8.67, 0.0, -5.0]), // 3
+                bone("spine_01", 1, [0.0, 0.0, 15.0]),  // 4
+                bone("calf_l", 2, [0.0, 0.0, -42.0]),   // 5
+                bone("calf_r", 3, [0.0, 0.0, -42.0]),   // 6
+                bone("neck_01", 4, [0.0, 0.0, 30.0]),   // 7
             ],
             vertices: vec![
-                vert([0.0, -9.0, 100.0]),  // front belly — torso flesh
-                vert([0.0, -14.0, 2.0]),   // between the feet — nearest the root segment
+                vert([0.0, -9.0, 100.0]), // front belly — torso flesh
+                vert([0.0, -14.0, 2.0]),  // between the feet — nearest the root segment
             ],
             indices: vec![0, 1, 0],
         }
@@ -932,7 +931,10 @@ mod tests {
         for v in &m.vertices {
             assert_eq!(share(v, "root"), 0.0, "the root must never own flesh");
             let sum: f32 = v.weights.iter().sum();
-            assert!((sum - 1.0).abs() < 1e-4, "weights renormalise after pruning");
+            assert!(
+                (sum - 1.0).abs() < 1e-4,
+                "weights renormalise after pruning"
+            );
             for k in 0..4 {
                 assert!(
                     v.weights[k] == 0.0 || v.weights[k] >= 0.02,
@@ -953,7 +955,10 @@ mod tests {
             + share(belly, "thigh_r")
             + share(belly, "calf_l")
             + share(belly, "calf_r");
-        assert!(torso > legs, "belly flesh belongs to the torso chain, got torso={torso} legs={legs}");
+        assert!(
+            torso > legs,
+            "belly flesh belongs to the torso chain, got torso={torso} legs={legs}"
+        );
         // Mean tails are symmetric, so a midline vert weights both sides identically.
         assert!(
             (share(belly, "thigh_l") - share(belly, "thigh_r")).abs() < 1e-4,
@@ -982,7 +987,11 @@ mod tests {
         bake_skin(&mut original);
         let baked = bake_rig(&original, "Fixture");
         let reloaded = rig_to_raw(&baked);
-        assert_eq!(reloaded.bones.len(), original.bones.len(), "root strips back off");
+        assert_eq!(
+            reloaded.bones.len(),
+            original.bones.len(),
+            "root strips back off"
+        );
         for (a, b) in original.bones.iter().zip(&reloaded.bones) {
             assert_eq!(a.name, b.name);
             assert_eq!(a.parent, b.parent);

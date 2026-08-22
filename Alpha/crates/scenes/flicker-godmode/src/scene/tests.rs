@@ -691,7 +691,10 @@ fn the_shipped_scene_authors_the_bench() {
         n.children.iter().find_map(|c| find(c, id))
     }
     let globe = find(tree, GLOBE_SLOT).expect("the globe's rtt slot is authored");
-    assert_eq!(globe.component, "rtt", "the walker reserves the globe's rect");
+    assert_eq!(
+        globe.component, "surface",
+        "the walker reserves the globe's rect"
+    );
     let rows = find(tree, "gm_hab_rows").expect("the gauge-row refill container is authored");
     assert_eq!(
         rows.children.len(),
@@ -775,7 +778,8 @@ fn the_pair_script_derives_the_state_words() {
         "ledger_status",
     ] {
         assert!(
-            m.text(key).is_some_and(|s| !s.is_empty() && !s.starts_with('$')),
+            m.text(key)
+                .is_some_and(|s| !s.is_empty() && !s.starts_with('$')),
             "derive() must yield display TEXT for '{key}': {:?}",
             m.get(key)
         );

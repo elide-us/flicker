@@ -12,7 +12,7 @@ publish = false
 # standalone binary — the app MOVED into the unified `prism-alpha` launcher, which
 # builds the scene via `flicker_godmode::scene` (the same promotion
 # `flicker-pocepochs` took). The simulation itself stays GPU-free in
-# `crates/flicker-poc-chemistry`; this crate is only its window.
+# `Alpha/crates/world/flicker-poc-chemistry`; this crate is only its window.
 [lib]
 name = "flicker_godmode"
 path = "src/lib.rs"

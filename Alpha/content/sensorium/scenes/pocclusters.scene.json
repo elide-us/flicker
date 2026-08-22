@@ -179,7 +179,7 @@
     }
   },
   "tree": {
-    "component": "screen",
+    "component": "surface",
     "id": "pocclusters",
     "on_menu": "pause_open",
     "children": [

@@ -43,18 +43,16 @@ members = [
     # The Prism-Alpha client (the app that hosts the scenes).
     "Alpha/prism-alpha",
     # World-sim / standalone POC crates — root crates/.
-    "crates/flicker-worldstate",
-    "crates/flicker-worldgen",
-    "crates/flicker-worldengine",
-    "crates/flicker-worldgrid",
-    "crates/flicker-worldtile",
-    "crates/flicker-poc-chemistry",
+    "Alpha/crates/world/flicker-worldstate",
+    "Alpha/crates/world/flicker-worldgen",
+    "Alpha/crates/world/flicker-worldengine",
+    "Alpha/crates/world/flicker-worldgrid",
+    "Alpha/crates/world/flicker-worldtile",
+    "Alpha/crates/world/flicker-poc-chemistry",
     "crates/flicker-celestial",
     "crates/flicker-system",
-    "crates/flicker-world",
     "crates/flicker-greed",
-    "crates/flicker-orrery",
-    "crates/flicker-paperdoll",
+    "Alpha/crates/world/flicker-orrery",
 ]
 
 [workspace.package]
@@ -130,12 +128,12 @@ fastrand = "2.5.0"
 # Internal cross-crate deps
 clayengine = { version = "0.1.0", path = "Alpha/crates/core/clayengine" }
 flicker-materials = { version = "0.1.0", path = "Alpha/crates/content/flicker-materials" }
-flicker-worldstate = { version = "0.1.0", path = "crates/flicker-worldstate" }
-flicker-worldgen = { version = "0.1.0", path = "crates/flicker-worldgen" }
-flicker-worldengine = { version = "0.1.0", path = "crates/flicker-worldengine" }
-flicker-worldgrid = { version = "0.1.0", path = "crates/flicker-worldgrid" }
-flicker-poc-chemistry = { version = "0.1.0", path = "crates/flicker-poc-chemistry" }
-flicker-worldtile = { version = "0.1.0", path = "crates/flicker-worldtile" }
+flicker-worldstate = { version = "0.1.0", path = "Alpha/crates/world/flicker-worldstate" }
+flicker-worldgen = { version = "0.1.0", path = "Alpha/crates/world/flicker-worldgen" }
+flicker-worldengine = { version = "0.1.0", path = "Alpha/crates/world/flicker-worldengine" }
+flicker-worldgrid = { version = "0.1.0", path = "Alpha/crates/world/flicker-worldgrid" }
+flicker-poc-chemistry = { version = "0.1.0", path = "Alpha/crates/world/flicker-poc-chemistry" }
+flicker-worldtile = { version = "0.1.0", path = "Alpha/crates/world/flicker-worldtile" }
 flicker-celestial = { version = "0.1.0", path = "crates/flicker-celestial" }
 flicker-system = { version = "0.1.0", path = "crates/flicker-system" }
 flicker-primitive = { version = "0.1.0", path = "Alpha/crates/content/flicker-primitive" }
@@ -171,7 +169,7 @@ flicker-assetpipeline = { version = "0.1.0", path = "Alpha/crates/scenes/flicker
 rfd = "0.15.4"
 # Shared GPU-free planet-layout model (the orrery) — the roster + orbits both the
 # solar-birth cinematic and the heliocentric sky read (single source of truth).
-flicker-orrery = { version = "0.1.0", path = "crates/flicker-orrery" }
+flicker-orrery = { version = "0.1.0", path = "Alpha/crates/world/flicker-orrery" }
 
 [profile.dev]
 opt-level = 1

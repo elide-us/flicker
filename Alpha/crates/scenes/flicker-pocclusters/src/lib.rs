@@ -33,10 +33,10 @@
 //!     the contour's QEF placed each active cell's dual vertex.
 //!   * Navmesh wireframe — the LOD2 walkable surface drawn magenta as
 //!     floor-to-floor links between walkable-adjacent columns.
-//!   * Surface walk — switch to surface-walk locomotion: WASD walks in the
-//!     XZ plane under gravity with a ground-clamp against the nav surface
-//!     (consumed by `walk_step`/`ground_height_at`). Fly mode (the default)
-//!     is free 6-DOF and generates no nav.
+//!   * Surface walk — the DEFAULT locomotion: WASD walks in the XZ plane
+//!     under gravity with a ground-clamp against the nav surface (consumed
+//!     by `walk_step`/`ground_height_at`). Toggling it off gives fly mode —
+//!     free 6-DOF, generating no nav.
 //!   * Camera-driven LOD — each cluster's LOD follows its distance from
 //!     the camera (smoothed to the mesher's ±1 adjacency invariant),
 //!     re-meshing on a swap.
@@ -55,14 +55,14 @@ use std::time::Duration;
 
 use flicker::net::chat::{ChatClient, ChatCommand, ChatEvent};
 use flicker::render::{
-    Camera, Mat4, MeshDrawOptions, MeshHandle, MeshIndices, MeshVertex, Renderer, TextureHandle,
-    Vec2, Vec3,
+    Camera, FrameGraph, Mat4, MeshDrawOptions, MeshHandle, MeshIndices, MeshVertex, Renderer,
+    TextureHandle, Vec2, Vec3,
 };
 use flicker::scene::{Scene, SceneInput, Transition};
 use flicker::script::{HudCommand, ScriptHost, UiNode, ValueMap};
 use flicker::ui::{
     chat_panel, render_hud, run_ui, strings, ChatLineKind, ChatLineView, ChatView, RosterEntry,
-    SceneDef, Surface, Surfaces, UiInput, UiIntents, UiState, WalkerHandler,
+    SceneDef, Section, Sections, UiInput, UiIntents, UiState, WalkerHandler,
 };
 use flicker_input_core::ActionSignal;
 use flicker_input_core::{AbstractControls, GamepadConfig, InputContext, InputState};
@@ -203,7 +203,7 @@ struct GameScene {
     /// the `visible_bind` gates both walker passes read; published into each
     /// pass's Model. (`walk` is NOT here: it is the surface-walk checkbox's
     /// two-way control bind that some rows also gate on.)
-    surfaces: Surfaces,
+    surfaces: Sections,
     /// The Prism-token-resolved `ui_theme.json` the walker resolves node
     /// `style` paths against (colours/sizes; the palette stays single-sourced).
     ui_styles: serde_json::Value,
@@ -272,9 +272,10 @@ struct GameScene {
     /// Whether the walking camera is currently resting on the surface (vs
     /// airborne/falling). Drives the HUD readout; the clamp sets it.
     grounded: bool,
-    /// Set on a fly→walk toggle: the camera snaps down onto the surface
-    /// beneath it on the first frame the nav under it is available (nav is
-    /// generated asynchronously, so the snap waits for it).
+    /// Set at construction (walk is the default) and on a fly→walk toggle:
+    /// the camera snaps down onto the surface beneath it on the first frame
+    /// the nav under it is available (nav is generated asynchronously, so the
+    /// snap waits for it).
     walk_needs_snap: bool,
 
     /// The exclusive-TextEntry chat handler (owns the T hand-off + the key
@@ -357,21 +358,25 @@ impl Default for GameScene {
             // The Screen declaration (S8). `inspector`/`pick_none` publish under the
             // pre-existing tree keys (`has_pick`/`no_pick`); `chat` gates the floating
             // window's root and starts on (nothing hides it yet — S9 data).
-            surfaces: Surfaces::new(vec![
-                Surface::new("inspector").key("has_pick"),
-                Surface::new("pick_none").key("no_pick").on(),
-                Surface::new("chat").on(),
+            surfaces: Sections::new(vec![
+                Section::new("inspector").key("has_pick"),
+                Section::new("pick_none").key("no_pick").on(),
+                Section::new("chat").on(),
             ]),
             ui_styles: serde_json::Value::Null,
             hud_commands: Vec::new(),
             wireframe_on: false,
             corner_arrows_on: false,
-            navmesh_on: false,
+            navmesh_on: true,
             corner_arrows: Vec::new(),
             navmesh_segments: Vec::new(),
             camera_lod_on: false,
             lod_billboards_on: false,
-            locomotion_walk: false,
+            // Walk is the DEFAULT locomotion for the Prism Test Room (Aaron
+            // 2026-08-22): boot walkable with the navmesh shown, spawned at the
+            // field centre (`position` above) and snapped onto the surface on
+            // the first Active frame (`walk_needs_snap`).
+            locomotion_walk: true,
             lod_field: [[0u8; FIELD_DIM as usize]; FIELD_DIM as usize],
             digit_atlas: None,
             planet_disc: None,
@@ -381,7 +386,7 @@ impl Default for GameScene {
             selection: None,
             vy: 0.0,
             grounded: false,
-            walk_needs_snap: false,
+            walk_needs_snap: true,
             command: CommandHandler::default(),
             chat: None,
             chat_ui_state: UiState::new(),
@@ -1002,10 +1007,10 @@ fn build_cluster(
     let cm = flicker_voxel::mesh(&self_c, &neighbors, self_lod);
 
     // Nav (LOD2 walkable surface) for clusters in rings 0–2 — but only in
-    // surface-walk mode. In fly mode (the default and only locomotion today)
-    // no nav is generated and the engine produces no collisions; nav exists
-    // solely for walking/collision, which fly mode does not use. State is
-    // LOD-independent (derive copies it verbatim), so it matches the source.
+    // surface-walk mode (the default). In fly mode no nav is generated and the
+    // engine produces no collisions; nav exists solely for walking/collision,
+    // which fly mode does not use. State is LOD-independent (derive copies it
+    // verbatim), so it matches the source.
     let mut navmesh_segments = Vec::new();
     let nav = if walk && in_nav_rings(camera, cluster_center_world(id)) {
         let nav = ClusterNav::compute_nav(&self_c, &neighbors);
@@ -1603,7 +1608,10 @@ impl GameScene {
             .with("vy", f64::from(self.vy))
             // Resolved WORDS the pair script composes with (never raw English).
             .with("mode_tag", mode_tag.as_str())
-            .with("w_cluster_field", strings::resolve("$pc_cluster_field").as_ref())
+            .with(
+                "w_cluster_field",
+                strings::resolve("$pc_cluster_field").as_ref(),
+            )
             .with("w_yaw", strings::resolve("$pc_yaw").as_ref())
             .with("w_pitch", strings::resolve("$pc_pitch").as_ref())
             .with("w_clusters", strings::resolve("$pc_clusters").as_ref())
@@ -1967,10 +1975,13 @@ impl Scene for GameScene {
                 mouse: input.mouse_position,
                 clicked: input.mouse_left_pressed,
                 down: input.mouse_left,
+                right_down: input.mouse_right,
                 screen,
                 typed: String::new(),
                 backspace: false,
                 wheel: input.mouse_wheel_delta,
+                exclusive: false,
+                motion: Default::default(),
             };
             let frame = {
                 // Disjoint field borrows: `ui_tree` / `ui_styles` read, `ui_state`
@@ -2131,6 +2142,7 @@ impl Scene for GameScene {
                 // a drag never also toggles a tab or button under the cursor.
                 clicked: input.mouse_left_pressed && matches!(self.chat_drag, ChatDrag::None),
                 down: input.mouse_left,
+                right_down: input.mouse_right,
                 screen,
                 // Route typed text / backspace to the field only while it owns the
                 // keyboard (TextEntry) and the trigger-key guard is clear (4B15929B) —
@@ -2142,6 +2154,8 @@ impl Scene for GameScene {
                 },
                 backspace: focused && !guard && input.backspace(),
                 wheel: input.mouse_wheel_delta,
+                exclusive: false,
+                motion: Default::default(),
             };
             let cframe = run_ui(
                 &tree,
@@ -2209,7 +2223,7 @@ impl Scene for GameScene {
         // carries a context today — the seam is standard, the call a live no-op).
         // The RUNNER applies the queued requests to the pump after `update`; the
         // chat field's walker focus is re-asserted per-frame from `chat_focused`.
-        self.surfaces.apply_surface_contexts(signals.route);
+        self.surfaces.apply_section_contexts(signals.route);
         // The screen's fired intents (S9), drained once per frame: acted on below
         // and queued for the one-frame `sig_<name>` Model mirror.
         self.fired_sigs = walker.take_fired();
@@ -2342,15 +2356,48 @@ impl Scene for GameScene {
         // loading widget.
         self.drain_and_apply(renderer);
 
-        // Booting: draw the loading widget instead of the 3D clipmap.
-        if matches!(self.phase, GamePhase::Booting) {
-            if let Some(theme) = self.ui_theme {
-                let screen = renderer.size();
-                theme.draw_loading(renderer, screen, self.boot_progress());
+        // The ROOT surface's element — the world, or the loading widget while Booting —
+        // declared as the frame graph's root pass: straight into the swapchain, ordered
+        // after any offscreen pass so the shared draw queues are never reset under it.
+        let booting = matches!(self.phase, GamePhase::Booting);
+        {
+            let mut fg = FrameGraph::new();
+            if booting {
+                if let Some(theme) = self.ui_theme {
+                    let screen = renderer.size();
+                    let progress = self.boot_progress();
+                    fg.root(move |r| theme.draw_loading(r, screen, progress));
+                }
+            } else {
+                fg.root(|r| self.draw_world(r));
             }
+            fg.execute(renderer);
+        }
+        if booting {
             return;
         }
 
+        // The component-walker HUD: blit this frame's draw commands (built in
+        // `update` by `run_ui`). Rects + text only (no engine textures), so `white`
+        // — the 1×1 fill pixel — is the entire texture table.
+        if let Some(white) = self.white {
+            render_hud(renderer, &self.hud_commands, white, &[]);
+            // The floating chat window, layered on top of the HUD (its own walker pass
+            // in `update`). Empty while Booting, so nothing draws until the world is up.
+            render_hud(renderer, &self.chat_commands, white, &[]);
+        }
+    }
+
+    fn exit(&mut self, _renderer: &mut Renderer) {
+        // Drop the client → its background socket thread winds down (see `ChatClient`).
+        self.chat = None;
+    }
+}
+
+impl GameScene {
+    /// The world as drawn into its surface — camera, sky, clusters and the debug
+    /// overlays. Runs inside the frame graph's root pass (see `render`).
+    fn draw_world(&self, renderer: &mut Renderer) {
         renderer.set_camera(&Camera {
             position: self.position,
             target: self.position + self.forward(),
@@ -2464,21 +2511,6 @@ impl Scene for GameScene {
             }
             renderer.draw_lines(&segments, [0.7, 0.7, 0.75, 1.0]);
         }
-
-        // The component-walker HUD: blit this frame's draw commands (built in
-        // `update` by `run_ui`). Rects + text only (no engine textures), so `white`
-        // — the 1×1 fill pixel — is the entire texture table.
-        if let Some(white) = self.white {
-            render_hud(renderer, &self.hud_commands, white, &[]);
-            // The floating chat window, layered on top of the HUD (its own walker pass
-            // in `update`). Empty while Booting, so nothing draws until the world is up.
-            render_hud(renderer, &self.chat_commands, white, &[]);
-        }
-    }
-
-    fn exit(&mut self, _renderer: &mut Renderer) {
-        // Drop the client → its background socket thread winds down (see `ChatClient`).
-        self.chat = None;
     }
 }
 
@@ -2593,8 +2625,14 @@ mod script_smoke {
         let def = scene_def();
         assert_eq!(def.behaviour, "pocclusters");
         let scene = GameScene::new(&def);
-        assert!(scene.script.is_some(), "pocclusters.lua loads (the pair script)");
-        assert!(scene.ui_tree.is_some(), "the scene file carries the HUD tree");
+        assert!(
+            scene.script.is_some(),
+            "pocclusters.lua loads (the pair script)"
+        );
+        assert!(
+            scene.ui_tree.is_some(),
+            "the scene file carries the HUD tree"
+        );
         let m = scene.hud_model();
         for key in [
             "title_line",
@@ -2624,7 +2662,11 @@ mod script_smoke {
             Some(""),
             "no pick yet → the pick readout is empty (its row is gated)"
         );
-        assert_eq!(m.text("walk_val"), Some(""), "fly mode → no walk readout");
+        assert!(
+            m.text("walk_val").is_some_and(|s| !s.is_empty()),
+            "walk is the default → a derived walk readout is present: {:?}",
+            m.text("walk_val")
+        );
     }
 
     /// Walk the REAL tree with the REAL derived model (+ a pick fixture so the
@@ -2689,10 +2731,13 @@ mod script_smoke {
             mouse: Vec2::new(-1.0, -1.0),
             clicked: false,
             down: false,
+            right_down: false,
             screen: Vec2::new(1920.0, 1080.0),
             typed: String::new(),
             backspace: false,
             wheel: 0.0,
+            exclusive: false,
+            motion: Default::default(),
         };
         let frame = run_ui(&tree, &m, &styles, &snap, &mut UiState::new());
         assert!(

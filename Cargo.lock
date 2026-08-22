@@ -994,7 +994,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-clicktrainer"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "fastrand",
  "flicker",
@@ -1193,24 +1193,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "flicker-paperdoll"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "flicker",
- "flicker-core",
- "flicker-input-core",
- "flicker-input-router",
- "flicker-mechanics",
- "flicker-shell",
- "flicker-skeletal",
- "glam",
- "image",
- "serde_json",
- "tracing",
-]
-
-[[package]]
 name = "flicker-poc-chemistry"
 version = "0.1.0"
 dependencies = [
@@ -1260,7 +1242,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-populous"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "flicker",
  "flicker-globe",
@@ -1281,7 +1263,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-quartermaster"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "flicker",
  "flicker-content",
@@ -1328,7 +1310,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-scene"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "flicker-app",
  "flicker-input-core",
@@ -1339,7 +1321,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-script"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "flicker-input-core",
  "glam",
@@ -1367,7 +1349,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-skeletal"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "flicker-core",
@@ -1441,24 +1423,6 @@ dependencies = [
 [[package]]
 name = "flicker-worker"
 version = "0.1.0"
-
-[[package]]
-name = "flicker-world"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "flicker",
- "flicker-input-core",
- "flicker-input-router",
- "flicker-materials",
- "flicker-shell",
- "flicker-worldgen",
- "flicker-worldgrid",
- "glam",
- "serde_json",
- "tracing",
- "tracing-subscriber",
-]
 
 [[package]]
 name = "flicker-worldengine"

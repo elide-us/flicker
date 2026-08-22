@@ -299,7 +299,7 @@ mod tests {
     #[test]
     fn geometric_banded_beats_a_closer_unbanded_centre() {
         let s = vec![
-            fr("a", 0, [0.0, 100.0, 40.0, 40.0]), // centre (20,120)
+            fr("a", 0, [0.0, 100.0, 40.0, 40.0]),  // centre (20,120)
             fr("n", 1, [60.0, 100.0, 40.0, 40.0]), // banded (same y), gap 20
             fr("x", 2, [50.0, 0.0, 40.0, 40.0]),   // closer centre-x, but no y-overlap
         ];

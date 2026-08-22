@@ -1054,37 +1054,45 @@ mod tests {
         // The d-pad — never the stick — owns Nav*, so in-control components (sliders) that
         // answer only Nav* are never disturbed by the stick.
         assert!(
-            map.bindings_for(ActionSignal::PanelPrev).iter().any(|b| matches!(
-                b,
-                InputBinding::GamepadAxis {
-                    axis: GamepadAxis::LeftStickX,
-                    direction: AxisDirection::Negative
-                }
-            )),
+            map.bindings_for(ActionSignal::PanelPrev)
+                .iter()
+                .any(|b| matches!(
+                    b,
+                    InputBinding::GamepadAxis {
+                        axis: GamepadAxis::LeftStickX,
+                        direction: AxisDirection::Negative
+                    }
+                )),
             "left stick X- is the stick's OWN pane intent (PanelPrev), not Nav*"
         );
         assert!(
-            !map.bindings_for(ActionSignal::NavLeft).iter().any(|b| matches!(
-                b,
-                InputBinding::GamepadAxis { axis: GamepadAxis::LeftStickX, .. }
-            )),
+            !map.bindings_for(ActionSignal::NavLeft)
+                .iter()
+                .any(|b| matches!(
+                    b,
+                    InputBinding::GamepadAxis {
+                        axis: GamepadAxis::LeftStickX,
+                        ..
+                    }
+                )),
             "Nav* is the D-PAD's alone — the stick must not be tangled into it"
         );
         assert!(
-            map.bindings_for(ActionSignal::NavUp).iter().any(|b| matches!(
-                b,
-                InputBinding::GamepadButton(GamepadButton::DPadUp)
-            )),
+            map.bindings_for(ActionSignal::NavUp)
+                .iter()
+                .any(|b| matches!(b, InputBinding::GamepadButton(GamepadButton::DPadUp))),
             "the d-pad owns vertical pane moves (stick Y is the camera's)"
         );
         assert!(
-            map.bindings_for(ActionSignal::ZoomIn).iter().any(|b| matches!(
-                b,
-                InputBinding::GamepadAxis {
-                    axis: GamepadAxis::LeftStickY,
-                    direction: AxisDirection::Positive
-                }
-            )),
+            map.bindings_for(ActionSignal::ZoomIn)
+                .iter()
+                .any(|b| matches!(
+                    b,
+                    InputBinding::GamepadAxis {
+                        axis: GamepadAxis::LeftStickY,
+                        direction: AxisDirection::Positive
+                    }
+                )),
             "stick Y+ stays the entered viewport's zoom (Populous globe — not regressed)"
         );
     }

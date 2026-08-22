@@ -1,5 +1,5 @@
 {
-  "_comment": "Epoch Simulation SCENE DEFINITION (201F4F51 template-free). The forward-regenerative epoch sim viewer: the fullscreen planet is Rust-drawn under the HUD (the shared GlobeWorld — no rtt reservation, the scene hands it the whole window), a top-left readout block with the TRANSPORT row (play/reset/reseed · size − + · view cycle · the Layers slice toggle — the seven raw keyboard verbs became these controls + the declared on_mode_* view-cycle intents), and the LIFE-SUPPORTING CONDITIONS panel bottom-right, whose per-axis rows are REFILLED by the behaviour at construction (the observer's bands are runtime data — authoring them here would fork the observer's numbers). The `pocepochs` behaviour plays it (flicker-pocepochs); pocepochs.lua derives every display string from the RAW numbers + resolved words. Styles folded from the crate's quarantined scene_styles.json (the dead flicker-sol2 `readout` block did not move).",
+  "_comment": "Epoch Simulation SCENE DEFINITION (201F4F51 template-free). The forward-regenerative epoch sim viewer: the fullscreen planet is the ROOT surface's element (the shared GlobeWorld declared as a FrameGraph root pass — no nested rtt, no offscreen target), the HUD drawn over it, a top-left readout block with the TRANSPORT row (play/reset/reseed · size − + · view cycle · the Layers slice toggle — the seven raw keyboard verbs became these controls + the declared on_mode_* view-cycle intents), and the LIFE-SUPPORTING CONDITIONS panel bottom-right, whose per-axis rows are REFILLED by the behaviour at construction (the observer's bands are runtime data — authoring them here would fork the observer's numbers). The `pocepochs` behaviour plays it (flicker-pocepochs); pocepochs.lua derives every display string from the RAW numbers + resolved words. Styles folded from the crate's quarantined scene_styles.json (the dead flicker-sol2 `readout` block did not move).",
   "behaviour": "pocepochs",
   "params": {},
   "styles": {
@@ -77,7 +77,7 @@
     }
   },
   "tree": {
-    "component": "screen",
+    "component": "surface",
     "id": "pocepochs",
     "on_menu": "pause_open",
     "on_mode_next": "view_next",

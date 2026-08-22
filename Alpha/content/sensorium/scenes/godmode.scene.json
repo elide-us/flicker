@@ -8,11 +8,7 @@
       "radius": 4,
       "fill_top": "$stone3",
       "fill_bot": "$stone1",
-      "border": "$edge2",
-      "shadow": "$shadow",
-      "shadow_dy": 18,
-      "shadow_feather": 46,
-      "shadow_grow": 4
+      "border": "$edge2"
     },
     "chemistry": {
       "title": {
@@ -130,7 +126,7 @@
     }
   },
   "tree": {
-    "component": "screen",
+    "component": "surface",
     "id": "godmode",
     "on_menu": "pause_open",
     "on_tab_next": "field_next",
@@ -289,7 +285,7 @@
                 "pad": 8,
                 "gap": 6,
                 "children": [
-                  { "component": "rtt", "id": "gm_globe", "source": "godmode_globe", "grow": 1.0 },
+                  { "component": "surface", "id": "gm_globe", "source": "godmode_globe", "grow": 1.0 },
                   {
                     "component": "cell",
                     "id": "gm_legend",

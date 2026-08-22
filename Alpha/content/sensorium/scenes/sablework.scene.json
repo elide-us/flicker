@@ -8,11 +8,7 @@
       "radius": 4,
       "fill_top": "$stone3",
       "fill_bot": "$stone1",
-      "border": "$edge2",
-      "shadow": "$shadow",
-      "shadow_dy": 18,
-      "shadow_feather": 46,
-      "shadow_grow": 4
+      "border": "$edge2"
     },
     "sablework": {
       "col": {
@@ -149,7 +145,7 @@
     }
   },
   "tree": {
-    "component": "screen",
+    "component": "surface",
     "id": "sablework",
     "on_menu": "pause_open",
     "on_tab_next": "map_next",
@@ -619,7 +615,7 @@
                         "grow": 1.0,
                         "gap": 8,
                         "children": [
-                          { "component": "rtt", "id": "sw_lit", "source": "sablework_lit", "style": "sablework.frame", "grow": 1.0 },
+                          { "component": "surface", "id": "sw_lit", "source": "sablework_lit", "style": "sablework.frame", "grow": 1.0 },
                           {
                             "component": "row",
                             "size": 32,

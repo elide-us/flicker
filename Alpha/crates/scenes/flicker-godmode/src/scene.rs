@@ -76,7 +76,7 @@ const PROCESS_ROWS: usize = 24;
 
 /// Rows in the world-event bank. The sim keeps 8 plate events and 6 gate
 /// events; this is the window onto the merged, newest-first stream, and it
-/// matches `godmode_events`.
+/// matches the event rows authored in `godmode.scene.json`.
 const EVENT_ROWS: usize = 8;
 
 // ── The air shells (the classified exhale, task: sky tier) ──
@@ -733,8 +733,7 @@ impl GodModeScene {
         // before the world does. `in_panel` names the pane whose ENTERED group
         // hands the world the camera.
         let ui_styles = flicker::ui::load_shared_styles(scene_styles_json.as_ref());
-        let world =
-            GlobeWorld::new(globe_view::STAGE_SOURCE, &ui_styles, None).in_panel(VIEW_PANE);
+        let world = GlobeWorld::new(globe_view::STAGE_SOURCE, &ui_styles, None).in_panel(VIEW_PANE);
         let ui_intents = authored.as_ref().map(UiIntents::of).unwrap_or_default();
         let script = match ScriptHost::new(GM_SCRIPT, "godmode_pair.lua") {
             Ok(h) => Some(h),
@@ -811,11 +810,19 @@ impl GodModeScene {
 
                 let mut head = node("row");
                 head.size = Some(17.0);
-                let mut name =
-                    bind_text(&format!("a{n}_name"), 13.0, &format!("a{n}_name_color"), true);
+                let mut name = bind_text(
+                    &format!("a{n}_name"),
+                    13.0,
+                    &format!("a{n}_name_color"),
+                    true,
+                );
                 name.grow = Some(1.0);
-                let mut status =
-                    bind_text(&format!("a{n}_status"), 11.0, &format!("a{n}_status_color"), true);
+                let mut status = bind_text(
+                    &format!("a{n}_status"),
+                    11.0,
+                    &format!("a{n}_status_color"),
+                    true,
+                );
                 status.grow = Some(1.0);
                 status = prop(status, "align", text_val("right"));
                 head.children = vec![name, status];
@@ -832,11 +839,19 @@ impl GodModeScene {
 
                 let mut foot = node("row");
                 foot.size = Some(11.0);
-                let mut lolab =
-                    bind_text(&format!("a{n}_lolab"), 10.0, "chemistry.hab.caption.color", false);
+                let mut lolab = bind_text(
+                    &format!("a{n}_lolab"),
+                    10.0,
+                    "chemistry.hab.caption.color",
+                    false,
+                );
                 lolab.grow = Some(1.0);
-                let mut hilab =
-                    bind_text(&format!("a{n}_hilab"), 10.0, "chemistry.hab.caption.color", false);
+                let mut hilab = bind_text(
+                    &format!("a{n}_hilab"),
+                    10.0,
+                    "chemistry.hab.caption.color",
+                    false,
+                );
                 hilab.grow = Some(1.0);
                 hilab = prop(hilab, "align", text_val("right"));
                 foot.children = vec![lolab, hilab];
@@ -1626,17 +1641,23 @@ impl Scene for GodModeScene {
             mouse: input.mouse_position,
             clicked: input.mouse_left_pressed,
             down: input.mouse_left,
+            right_down: input.mouse_right,
             screen: renderer.size(),
             typed: String::new(),
             backspace: false,
             wheel: input.mouse_wheel_delta,
+            exclusive: false,
+            motion: Default::default(),
         };
         let frame = run_ui(&tree, &model, &self.ui_styles, &snap, &mut self.ui_state);
         let over_hud = frame.results.is_on("hud_hit");
         // Where the globe landed. The walker RESERVES this rect and never
         // fills it (it runs late; offscreen passes must run first), so the
         // hand-off is: read it here, draw into it at the top of `render`.
-        self.world.place(frame.rtt_rect(GLOBE_SLOT));
+        self.world.seat(frame.surface(GLOBE_SLOT));
+        // The pointer SAMPLE for the globe's surface — the walker's barrier (A8C9F02B
+        // §4b); the scene reads no device for the camera.
+        let pointer = frame.surface_pointer(GLOBE_SLOT).cloned();
         let mut results = frame.results.clone();
         self.hud_commands = frame.commands;
 
@@ -1735,10 +1756,14 @@ impl Scene for GodModeScene {
         // the globe answers them only while its own pane is ENTERED — the
         // LOCKED pane's group IS the gate the world matches (`in_panel`); the
         // walker owns it, the scene only reads it, never a second focus system.
-        // The pointer half latches inside the world's own rect, as it always has.
+        // The pointer half is the walker's surface sample (the barrier).
         let look = GlobeWorld::look_from(|s| signals.axis(s, input));
-        self.world
-            .update(dt.as_secs_f32(), input, look, self.ui_state.entered_group());
+        self.world.update(
+            dt.as_secs_f32(),
+            pointer.as_ref(),
+            look,
+            self.ui_state.entered_group(),
+        );
         Transition::None
     }
 
@@ -2339,7 +2364,7 @@ impl GodModeScene {
     /// hash fallback for elements nobody has picked a colour for, and the
     /// walker's colour channel is dotted style paths. The tectonic event log
     /// used to sit here too and no longer does — its colours were per-KIND, a
-    /// finite set, so it became `godmode_events` like everything else. An
+    /// finite set, so it became authored scene data (the event bank) like everything else. An
     /// exception that stops being true is just drift with a comment on it.
     ///
     /// The tile preview rides `render_hud`'s texture slice as slot 0, so the
@@ -2358,7 +2383,9 @@ impl GodModeScene {
         // ── Bulk-seed element distribution — the one immediate panel left. ──
         let Some(white) = self.white else { return };
         if self.seed_shown && !self.budget_dist.is_empty() {
-            renderer.set_layer(20.0);
+            // Above the HUD's popups (authored `layer: 2`) — RELATIVE to the scene's band,
+            // never an absolute layer (the band stride is 100).
+            renderer.set_layer(renderer.layer() + 3.0);
             let gold = [0.722, 0.592, 0.353, 1.0]; // Prism bronze (structural accent)
             let text = [0.85, 0.87, 0.92, 1.0];
             let (pad, sw, row_h, panel_w) = (12.0f32, 12.0f32, 18.0f32, 210.0f32);

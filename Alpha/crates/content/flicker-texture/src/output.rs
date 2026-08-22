@@ -366,12 +366,18 @@ mod tests {
 
         ramp.recolor(0.13, 0.8); // gold
         let (h, s) = ramp.tint();
-        assert!((h - 0.13).abs() < 1e-3, "hue reads back what recolor set: {h}");
+        assert!(
+            (h - 0.13).abs() < 1e-3,
+            "hue reads back what recolor set: {h}"
+        );
         assert!((s - 0.8).abs() < 1e-3, "saturation reads back: {s}");
 
         for (st, v0) in ramp.stops.iter().zip(&values) {
             // Only the chroma moved — the dark→light shape is untouched.
-            assert!((hsv_of(st.color).2 - v0).abs() < 1e-6, "brightness preserved");
+            assert!(
+                (hsv_of(st.color).2 - v0).abs() < 1e-6,
+                "brightness preserved"
+            );
             // Gold: red and green sit over blue at every stop.
             assert!(
                 st.color[0] > st.color[2] && st.color[1] > st.color[2],
@@ -398,7 +404,10 @@ mod tests {
             ],
         };
         let (h, s) = grey.tint();
-        assert!(h.abs() < 1e-6 && s.abs() < 1e-6, "grey has a tint: h{h} s{s}");
+        assert!(
+            h.abs() < 1e-6 && s.abs() < 1e-6,
+            "grey has a tint: h{h} s{s}"
+        );
     }
 }
 

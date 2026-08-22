@@ -832,7 +832,10 @@ Frame Time: 0.0333333
             "head",
         ] {
             let d = world_deg(&w, b);
-            assert!(d < 0.05, "{b} stands plumb under a rest-posed source, got {d:.2}°");
+            assert!(
+                d < 0.05,
+                "{b} stands plumb under a rest-posed source, got {d:.2}°"
+            );
         }
         let dir_arm = (w["lowerarm_l"].w_axis - w["upperarm_l"].w_axis)
             .truncate()
@@ -852,7 +855,10 @@ Frame Time: 0.0333333
         let dir = std::env::temp_dir().join("flicker_retarget_zigzag_undriven");
         let (bvh, skel) = zigzag_fixture(&dir, &[("Neck1", [0.0, 0.0, 20.0])]);
         let w = play_tick0(&build_variants(&bvh, &skel).unwrap());
-        assert!(world_deg(&w, "spine_03") < 0.05, "the chest below the neck is untouched");
+        assert!(
+            world_deg(&w, "spine_03") < 0.05,
+            "the chest below the neck is untouched"
+        );
         for b in ["neck_01", "neck_02", "head"] {
             let d = world_deg(&w, b);
             assert!(
@@ -860,11 +866,11 @@ Frame Time: 0.0333333
                 "{b} carries the neck's 20° exactly once, got {d:.2}°"
             );
         }
-        let (axis, _) = w["head"]
-            .to_scale_rotation_translation()
-            .1
-            .to_axis_angle();
-        assert!(axis.x > 0.99, "the nod is about the body's X axis, got {axis:?}");
+        let (axis, _) = w["head"].to_scale_rotation_translation().1.to_axis_angle();
+        assert!(
+            axis.x > 0.99,
+            "the nod is about the body's X axis, got {axis:?}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

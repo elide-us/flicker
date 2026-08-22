@@ -3224,11 +3224,11 @@
   "cat_nav_splash": {
     "en-us": "Splash"
   },
-  "cat_nav_viewport": {
-    "en-us": "Viewport"
+  "cat_nav_surface": {
+    "en-us": "Surface"
   },
-  "cat_viewport_note": {
-    "en-us": "3D viewport (quad layout) — left-drag a panel to orbit"
+  "cat_surface_note": {
+    "en-us": "3D surface (quad layout) — left-drag a panel to orbit"
   },
   "qm_menu_open": {
     "en-us": "Open"
@@ -3427,6 +3427,9 @@
   },
   "sig_zoom_out": {
     "en-us": "Zoom Out"
+  },
+  "sig_toggle_mouse_capture": {
+    "en-us": "Toggle Mouse Capture"
   },
   "sig_undo": {
     "en-us": "Undo"

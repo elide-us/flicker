@@ -343,10 +343,13 @@ impl Scene for PopulousBench {
             mouse: input.mouse_position,
             clicked: input.mouse_left_pressed,
             down: input.mouse_left,
+            right_down: input.mouse_right,
             screen,
             typed: String::new(),
             backspace: false,
             wheel: input.mouse_wheel_delta,
+            exclusive: false,
+            motion: Default::default(),
         };
         let frame = run_ui(
             &self.tree,
@@ -359,7 +362,11 @@ impl Scene for PopulousBench {
         // The walker RESERVES the viewport's rect and never fills it (it runs
         // late; offscreen passes must run first) — hand it to the world here,
         // which draws into it at the top of `render`.
-        self.world.place(frame.rtt_rect(ui::VIEW_SLOT));
+        self.world.seat(frame.surface(ui::VIEW_SLOT));
+        // The pointer SAMPLE for the globe's surface — the walker's barrier (A8C9F02B
+        // §4b): present while the cursor is over the planet with no UI over it, or while
+        // a press that began there is still held. The scene reads no device for it.
+        let pointer = frame.surface_pointer(ui::VIEW_SLOT).cloned();
         self.hud_commands = frame.commands;
 
         // ── The input seam (input-P3, 0569DA9B): the PUMP resolved this frame's
@@ -396,8 +403,9 @@ impl Scene for PopulousBench {
 
         // One camera line, and it is the WORLD's: the look and zoom come from the PUMP's
         // continuous queries (`signals.axis`, never a device), and the globe answers them
-        // only while its own panel holds the walker's cursor, latching the pointer drag
-        // inside its own rect. The six Look/Zoom signals stay the camera's (`look_from`).
+        // only while its own panel holds the walker's cursor, taking the pointer only
+        // through the walker's surface capture. The six Look/Zoom signals stay the camera's
+        // (`look_from`).
         let dtf = dt.as_secs_f32();
         let look = GlobeWorld::look_from(|s| signals.axis(s, input));
         // The globe answers look/zoom only while its pane is ENTERED (nav-tier contract
@@ -407,7 +415,7 @@ impl Scene for PopulousBench {
         // reads it, never a second focus system (F2). Entering a DIFFERENT pane yields that
         // pane's group, so the globe correctly stays quiet.
         let look_gate = self.ui_state.entered_group();
-        self.world.update(dtf, input, look, look_gate);
+        self.world.update(dtf, pointer.as_ref(), look, look_gate);
 
         // Menu opens the shell's pause overlay — quit, settings, back to the
         // menu. The screen DECLARED `on_menu`; the arm lives here rather than in
@@ -509,14 +517,15 @@ mod tests {
     /// than content (the window stack's corner runes ride its `runes` flag,
     /// decoration not a kind); `tabs` + `pill_toggle` + `button` are
     /// the PTT's two rails and its four glyph hints; `panel` is the UI Panel and
-    /// the RTT Panel (one component, two protos); `rtt` is the viewport;
+    /// the RTT Panel (one component, two protos); `surface` is the root screen
+    /// AND the hex world's nested viewport (one kind at two depths);
     /// `slider` is the size dial; `text` and `option` carry the localized
     /// strings.
     #[test]
     fn the_bench_is_exactly_the_catalog_and_nothing_else() {
         /// Aaron's catalog, expanded to the component kinds it is built from.
         const CATALOG: &[&str] = &[
-            "screen",
+            "surface", // the root screen AND the hex world's viewport — one kind
             "cell",
             "row",
             "stack",
@@ -526,7 +535,6 @@ mod tests {
             "tabs",
             "pill_toggle", // the PTT's authored page + tab rails
             "panel",       // UI Panel and RTT Panel
-            "rtt",         // the hex world's viewport
             "slider",      // the size dial
             "button",      // the seams action
             "text",
@@ -560,7 +568,11 @@ mod tests {
         assert_eq!(count("tabs"), 1, "the PTT's page rail");
         assert_eq!(count("pill_toggle"), 1, "the PTT's tab rail");
         assert_eq!(count("panel"), 3, "two UI Panels and one RTT Panel");
-        assert_eq!(count("rtt"), 1, "one viewport");
+        assert_eq!(
+            count("surface"),
+            2,
+            "the root surface + the hex world's nested surface"
+        );
         assert_eq!(count("slider"), 1, "the size dial");
         // The rail hints (lt/rt/lb/rb) and the rule are now drawn BY the `paged_menu`
         // Component, not authored tree nodes — so NOTHING on the surface wears a glyph.
@@ -583,7 +595,7 @@ mod tests {
             .iter()
             .find(|n| n.id == ui::VIEW_SLOT)
             .expect("the viewport is placed");
-        assert_eq!(view.component, "rtt", "the centre pane is the viewport");
+        assert_eq!(view.component, "surface", "the centre pane is the viewport");
         assert_eq!(
             view.props.get("source"),
             Some(&Value::Text(ui::STAGE_SOURCE.to_string())),
@@ -826,7 +838,7 @@ mod tests {
             .iter()
             .find(|n| n.id == ui::VIEW_SLOT)
             .expect("the viewport is placed");
-        assert_eq!(view.component, "rtt", "the centre pane is the viewport");
+        assert_eq!(view.component, "surface", "the centre pane is the viewport");
         assert_eq!(
             view.props.get("source"),
             Some(&Value::Text(ui::STAGE_SOURCE.to_string())),
@@ -998,10 +1010,13 @@ mod tests {
             mouse,
             clicked,
             down,
+            right_down: false,
             screen: Vec2::new(1600.0, 900.0),
             typed: String::new(),
             backspace: false,
             wheel: 0.0,
+            exclusive: false,
+            motion: Default::default(),
         };
 
         // Resolve the rail's rect, then click the centre of its SECOND pill.
@@ -1232,15 +1247,18 @@ mod tests {
             mouse: Vec2::ZERO,
             clicked: false,
             down: false,
+            right_down: false,
             screen: Vec2::new(1600.0, 900.0),
             typed: String::new(),
             backspace: false,
             wheel: 0.0,
+            exclusive: false,
+            motion: Default::default(),
         };
         let mut state = UiState::default();
         let frame = run_ui(&tree, &model, &styles, &snap, &mut state);
         let rect = frame
-            .rtt_rect(ui::VIEW_SLOT)
+            .surface_rect(ui::VIEW_SLOT)
             .expect("the viewport's rect is reserved by the walker");
         assert!(
             (rect.size.x - rect.size.y).abs() < 1.5,
@@ -1295,10 +1313,13 @@ mod tests {
             mouse,
             clicked,
             down,
+            right_down: false,
             screen: Vec2::new(1600.0, 900.0),
             typed: String::new(),
             backspace: false,
             wheel: 0.0,
+            exclusive: false,
+            motion: Default::default(),
         };
 
         // Find the dial, then press at the very BOTTOM of it — below-track
@@ -1483,10 +1504,13 @@ mod tests {
             mouse: Vec2::ZERO,
             clicked: false,
             down: false,
+            right_down: false,
             screen: Vec2::new(1600.0, 900.0),
             typed: String::new(),
             backspace: false,
             wheel: 0.0,
+            exclusive: false,
+            motion: Default::default(),
         };
         let frame = run_ui(&tree, &model, &styles, &snap, &mut ui);
         assert_eq!(
@@ -1510,11 +1534,10 @@ mod tests {
         // world applies it ONLY while the viewport pane holds the walker's focus — the gate
         // this asserts. (The motion itself is gated in flicker-globe:
         // `the_camera_moves_only_while_the_world_panel_holds_focus`.)
-        let turn = |b: &mut PopulousBench, input: &InputState| {
+        let turn = |b: &mut PopulousBench, _input: &InputState| {
             let before = b.world.camera().position;
             let focus = b.ui_state.focused().map(str::to_string);
-            b.world
-                .update(0.5, input, (1.0, 0.0, 0.0), focus.as_deref());
+            b.world.update(0.5, None, (1.0, 0.0, 0.0), focus.as_deref());
             (b.world.camera().position - before).length()
         };
         assert_eq!(
@@ -1641,7 +1664,7 @@ mod tests {
             .iter()
             .find(|n| n.id == ui::VIEW_SLOT)
             .expect("the viewport is placed");
-        assert_eq!(view.component, "rtt", "the centre pane is the viewport");
+        assert_eq!(view.component, "surface", "the centre pane is the viewport");
         assert!(
             all.iter().any(|n| n.bind.as_deref() == Some(ui::FREQ_BIND)),
             "the size dial (bound to pop_freq) is present"

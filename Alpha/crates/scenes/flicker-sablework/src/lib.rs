@@ -343,8 +343,10 @@ impl Sablework {
                     size: Some(28.0),
                     ..Default::default()
                 };
-                b.props
-                    .insert("label_bind".to_string(), Value::Text(format!("mat_row_{i}")));
+                b.props.insert(
+                    "label_bind".to_string(),
+                    Value::Text(format!("mat_row_{i}")),
+                );
                 b.props.insert(
                     "style".to_string(),
                     Value::Text("sablework.button".to_string()),
@@ -592,7 +594,9 @@ impl Sablework {
         m.set("glow_count", self.palette.len() as f64);
         m.set(
             "glow_sel",
-            self.palette.nearest(out.emissive).map_or(-1.0, |i| i as f64),
+            self.palette
+                .nearest(out.emissive)
+                .map_or(-1.0, |i| i as f64),
         );
         for (i, c) in self.palette.iter().enumerate() {
             m.set(format!("glow_sw{}_id", i + 1), c.id.clone());
@@ -941,17 +945,20 @@ impl Scene for Sablework {
             mouse: input.mouse_position,
             clicked: input.mouse_left_pressed,
             down: input.mouse_left,
+            right_down: input.mouse_right,
             screen,
             typed,
             backspace,
             wheel: input.mouse_wheel_delta,
+            exclusive: false,
+            motion: Default::default(),
         };
         let frame = run_ui(&tree, &model, &self.ui_styles, &snap, &mut self.ui_state);
         let over_hud = frame.results.is_on("hud_hit");
         // The `rtt` node reserved a rect for the lit sub-scene; `render` draws into
         // it. `None` when the Lit tab is not showing, which is also what stops the
         // offscreen pass from costing anything.
-        self.lit_rect = frame.rtt_rect("sw_lit");
+        self.lit_rect = frame.surface_rect("sw_lit");
         self.hud_commands = frame.commands;
         self.lit.tick(dt);
 

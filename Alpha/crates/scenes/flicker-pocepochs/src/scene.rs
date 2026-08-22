@@ -19,7 +19,7 @@
 use std::rc::Rc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use flicker::render::{FrameGraph, Rect, Renderer, TextureHandle, Vec2, Vec3};
+use flicker::render::{FrameGraph, Renderer, TextureHandle, Vec2, Vec3};
 use flicker::scene::{Scene, SceneInput, Transition};
 use flicker::script::{HudCommand, ScriptHost, UiNode, Value, ValueMap};
 use flicker::ui::{
@@ -39,8 +39,7 @@ const PE_SCRIPT: &str = include_str!("../../../../content/sensorium/scripts/poce
 /// The shipped scene file — the tests' copy of the authored tree (the runtime
 /// receives the same file through the manifest `SceneDef`).
 #[cfg(test)]
-const PE_SCENE: &str =
-    include_str!("../../../../content/sensorium/scenes/pocepochs.scene.json");
+const PE_SCENE: &str = include_str!("../../../../content/sensorium/scenes/pocepochs.scene.json");
 
 /// The globe's authored stage — `stages.pocepochs_globe`: the light the planet is
 /// seen by, the backdrop it sits on, and the fact that its shells come from the
@@ -73,7 +72,6 @@ fn clock_seed() -> u64 {
     z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
     z ^ (z >> 31)
 }
-
 
 /// The readout's cached census: the cooling clock and which layers have emerged
 /// from it across the planet, counted once per tick move.
@@ -275,10 +273,19 @@ impl WorldScene {
 
                 let mut head = node("row");
                 head.size = Some(17.0);
-                let mut name = bind_text(&format!("a{n}_name"), 13.0, &format!("a{n}_name_color"), true);
+                let mut name = bind_text(
+                    &format!("a{n}_name"),
+                    13.0,
+                    &format!("a{n}_name_color"),
+                    true,
+                );
                 name.grow = Some(1.0);
-                let mut status =
-                    bind_text(&format!("a{n}_status"), 11.0, &format!("a{n}_status_color"), true);
+                let mut status = bind_text(
+                    &format!("a{n}_status"),
+                    11.0,
+                    &format!("a{n}_status_color"),
+                    true,
+                );
                 status.grow = Some(1.0);
                 status = prop(status, "align", text_val("right"));
                 head.children = vec![name, status];
@@ -295,11 +302,19 @@ impl WorldScene {
 
                 let mut foot = node("row");
                 foot.size = Some(11.0);
-                let mut lolab =
-                    bind_text(&format!("a{n}_lolab"), 10.0, "pocepochs.hab.caption.color", false);
+                let mut lolab = bind_text(
+                    &format!("a{n}_lolab"),
+                    10.0,
+                    "pocepochs.hab.caption.color",
+                    false,
+                );
                 lolab.grow = Some(1.0);
-                let mut hilab =
-                    bind_text(&format!("a{n}_hilab"), 10.0, "pocepochs.hab.caption.color", false);
+                let mut hilab = bind_text(
+                    &format!("a{n}_hilab"),
+                    10.0,
+                    "pocepochs.hab.caption.color",
+                    false,
+                );
                 hilab.grow = Some(1.0);
                 hilab = prop(hilab, "align", text_val("right"));
                 foot.children = vec![lolab, hilab];
@@ -665,13 +680,20 @@ impl Scene for WorldScene {
             mouse: input.mouse_position,
             clicked: input.mouse_left_pressed,
             down: input.mouse_left,
+            right_down: input.mouse_right,
             screen: renderer.size(),
             typed: String::new(),
             backspace: false,
             wheel: input.mouse_wheel_delta,
+            exclusive: false,
+            motion: Default::default(),
         };
         let frame = run_ui(&tree, &model, &self.ui_styles, &snap, &mut self.ui_state);
         let over_hud = frame.results.is_on("hud_hit");
+        // The planet is the ROOT surface: its pointer sample is the walker's root pointer —
+        // present only when no UI claims the cursor, so a drag on the HUD never flies the
+        // planet (the barrier, A8C9F02B §4b).
+        let pointer = frame.root_pointer().cloned();
         let mut results = frame.results.clone();
         self.hud_commands = frame.commands;
 
@@ -714,8 +736,7 @@ impl Scene for WorldScene {
         if results.is_on("size_up") {
             self.resize(1);
         }
-        let cycled =
-            i32::from(results.is_on("view_next")) - i32::from(results.is_on("view_prev"));
+        let cycled = i32::from(results.is_on("view_next")) - i32::from(results.is_on("view_prev"));
         if cycled != 0 {
             self.mode = if cycled > 0 {
                 appearance::cycle_view(self.mode)
@@ -753,31 +774,31 @@ impl Scene for WorldScene {
             )));
         }
 
-        // The globe fills the window: this bench reserves no `rtt` viewport, so the SCENE
-        // gives the world the whole screen and the HUD composites over it. The camera stays
-        // the world's own pointer path (drag latch + wheel), exactly as before — a
-        // fullscreen world has no pane to gate a stick tuple on (FLAGGED: the pointer
-        // still flies the planet over the HUD panels, and stick look needs a
-        // fullscreen-pane answer in flicker-globe).
-        self.world.place(Some(Rect {
-            pos: Vec2::ZERO,
-            size: renderer.size(),
-        }));
-        self.world
-            .update(dt.as_secs_f32(), input, (0.0, 0.0, 0.0), None);
+        // The planet is the ROOT surface — the whole window — and the root is ENTERED by
+        // default (there is no pane to lock into): the stick look/zoom flow whenever no
+        // pane is entered, and the pointer reaches the camera only through the walker's
+        // root sample. Drawing goes through the frame graph's root pass, not a target.
+        let look = GlobeWorld::look_from(|s| signals.axis(s, input));
+        self.world.update(
+            dt.as_secs_f32(),
+            pointer.as_ref(),
+            look,
+            self.ui_state.entered_group(),
+        );
 
         self.advance_play(dt.as_secs_f32());
         Transition::None
     }
 
     fn render(&mut self, renderer: &mut Renderer) {
-        // The world goes down FIRST: `FrameGraph::execute` resets the shared per-frame draw
-        // queues, so an offscreen pass declared after a main-frame draw would throw that draw
-        // away. Everything the planet needs — camera, stage, meshes, target — is inside it.
+        let base = renderer.layer();
+        // The planet is the ROOT surface's element: declared as the frame graph's root
+        // pass, straight into the swapchain — no full-window target, no blit. `execute`
+        // orders it after any offscreen pass, so the shared draw queues are never reset
+        // under it. Everything the planet needs — camera, stage, meshes — is inside it.
         {
             let mut fg = FrameGraph::new();
-            let layer = renderer.layer();
-            self.world.render(renderer, &mut fg, layer);
+            self.world.render_root(renderer, &mut fg);
             fg.execute(renderer);
         }
 
@@ -786,8 +807,9 @@ impl Scene for WorldScene {
         // scene-drawn (FLAGGED, S10): the surface-view legend and the
         // element-distribution readout — their per-row swatch colours are DATA
         // (legend entries / element_rgb), and the walker's colour channel is
-        // dotted style paths by design. ──
-        renderer.set_layer(10.0);
+        // dotted style paths by design. One layer above the root element, RELATIVE to
+        // the scene's band — never an absolute layer. ──
+        renderer.set_layer(base + 1.0);
         if let Some(white) = self.white {
             render_hud(renderer, &self.hud_commands, white, &[]);
         }
@@ -966,7 +988,10 @@ mod tests {
         );
 
         let mut scene = WorldScene::shipped();
-        assert!(scene.script.is_some(), "pocepochs.lua loads (the pair script)");
+        assert!(
+            scene.script.is_some(),
+            "pocepochs.lua loads (the pair script)"
+        );
 
         // The refilled axis rows carry the observer's REAL bands, one row per axis.
         scene.sim.ensure(0);
@@ -979,7 +1004,11 @@ mod tests {
         {
             let rows = find_by_id_mut(scene.authored.as_mut().unwrap(), "pe_axis_rows")
                 .expect("refill container present");
-            assert_eq!(rows.children.len(), bands.len(), "one refilled row per axis");
+            assert_eq!(
+                rows.children.len(),
+                bands.len(),
+                "one refilled row per axis"
+            );
             for (row, (lo, hi)) in rows.children.iter().zip(&bands) {
                 let gauge = row
                     .children
@@ -997,7 +1026,14 @@ mod tests {
 
         // The pair script derives the display strings over the raw publish.
         let m = scene.model();
-        for key in ["stats_val", "play_state", "view_line", "verdict", "observed", "air"] {
+        for key in [
+            "stats_val",
+            "play_state",
+            "view_line",
+            "verdict",
+            "observed",
+            "air",
+        ] {
             assert!(
                 m.text(key).is_some(),
                 "derive() must yield display TEXT for '{key}'"
@@ -1011,10 +1047,13 @@ mod tests {
             mouse: Vec2::new(-9.0, -9.0),
             clicked: false,
             down: false,
+            right_down: false,
             screen: Vec2::new(1920.0, 1080.0),
             typed: String::new(),
             backspace: false,
             wheel: 0.0,
+            exclusive: false,
+            motion: Default::default(),
         };
         let frame = run_ui(&tree, &m, &scene.ui_styles, &snap, &mut UiState::new());
         let has = |s: &str| {

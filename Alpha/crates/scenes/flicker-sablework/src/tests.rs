@@ -52,10 +52,13 @@ fn draw() -> Vec<HudCommand> {
         mouse: Vec2::new(-1.0, -1.0),
         clicked: false,
         down: false,
+        right_down: false,
         screen: Vec2::new(1920.0, 1080.0),
         typed: String::new(),
         backspace: false,
         wheel: 0.0,
+        exclusive: false,
+        motion: Default::default(),
     };
     run_ui(&tree, &bench.model(), &styles, &snap, &mut UiState::new()).commands
 }
@@ -274,7 +277,7 @@ fn every_view_cell_exists_and_is_visibility_gated() {
     assert!(
         nodes
             .iter()
-            .any(|n| n.component == "rtt" && n.id == "sw_lit"),
+            .any(|n| n.component == "surface" && n.id == "sw_lit"),
         "the LIT cell holds no `sw_lit` rtt node"
     );
 }
@@ -794,7 +797,10 @@ fn the_tint_knobs_recolour_the_base_map_gold() {
     let mut bench = Sablework::shipped();
 
     // A colour knob is a recipe edit (unlike selecting a voice or switching a view).
-    assert!(fire(&mut bench, "tint_sat", 0.8_f64), "saturation is an edit");
+    assert!(
+        fire(&mut bench, "tint_sat", 0.8_f64),
+        "saturation is an edit"
+    );
     assert!(fire(&mut bench, "tint_hue", 0.13_f64), "hue is an edit");
 
     // The knob reads back the ramp it wrote: the ramp is the one source of colour,
@@ -872,7 +878,10 @@ fn the_flattened_nav_topology_is_the_authored_surface() {
     stops.sort_by_key(|n| n.nav_ordinal);
 
     // (a) The roster IS the flattened surface — the six channels as direct stops.
-    let roster: Vec<(u32, &str)> = stops.iter().map(|n| (n.nav_ordinal, n.id.as_str())).collect();
+    let roster: Vec<(u32, &str)> = stops
+        .iter()
+        .map(|n| (n.nav_ordinal, n.id.as_str()))
+        .collect();
     assert_eq!(
         roster,
         vec![
@@ -922,10 +931,13 @@ fn the_flattened_nav_topology_is_the_authored_surface() {
         mouse: Vec2::new(-1.0, -1.0),
         clicked: false,
         down: false,
+        right_down: false,
         screen: Vec2::new(1920.0, 1080.0),
         typed: String::new(),
         backspace: false,
         wheel: 0.0,
+        exclusive: false,
+        motion: Default::default(),
     };
     let frame = run_ui(&tree, &bench.model(), &styles, &snap, &mut UiState::new());
     let fo: Vec<Focusable> = stops
@@ -1005,7 +1017,10 @@ fn the_card_description_follows_source_and_enable() {
     fire(&mut bench, "ch1_source", true); // step the source pill
     let after = bench.model().text("ch1_fx").unwrap().to_string();
     assert_ne!(before, after, "the blurb tracks the source pill");
-    assert!(after.starts_with("$sw_fx_"), "still a localised fx token: {after}");
+    assert!(
+        after.starts_with("$sw_fx_"),
+        "still a localised fx token: {after}"
+    );
     fire(&mut bench, "ch1_on", false);
     assert_eq!(
         bench.model().text("ch1_fx"),
@@ -1025,10 +1040,13 @@ fn the_six_channel_cards_fit_the_rack() {
         mouse: Vec2::new(-1.0, -1.0),
         clicked: false,
         down: false,
+        right_down: false,
         screen: Vec2::new(1920.0, 1080.0),
         typed: String::new(),
         backspace: false,
         wheel: 0.0,
+        exclusive: false,
+        motion: Default::default(),
     };
     let frame = run_ui(&tree, &bench.model(), &styles, &snap, &mut UiState::new());
     let rack = frame.rect("sw_rack").expect("the rack resolves");
@@ -1040,9 +1058,7 @@ fn the_six_channel_cards_fit_the_rack() {
         rack.pos.y + rack.size.y
     );
     for n in 1..=6 {
-        let c = frame
-            .rect(&format!("sw_voice_{n}"))
-            .expect("card resolves");
+        let c = frame.rect(&format!("sw_voice_{n}")).expect("card resolves");
         assert!(c.size.y >= 100.0, "card {n} height {} collapsed", c.size.y);
     }
 }
@@ -1062,10 +1078,13 @@ fn the_card_contents_flow_inside_the_tile() {
         mouse: Vec2::new(-1.0, -1.0),
         clicked: false,
         down: false,
+        right_down: false,
         screen: Vec2::new(1920.0, 1080.0),
         typed: String::new(),
         backspace: false,
         wheel: 0.0,
+        exclusive: false,
+        motion: Default::default(),
     };
     let frame = run_ui(&tree, &bench.model(), &styles, &snap, &mut UiState::new());
     let card = frame.rect("sw_voice_1").expect("card resolves");
@@ -1073,7 +1092,11 @@ fn the_card_contents_flow_inside_the_tile() {
     // The description got a real, card-bounded width (so wrap has something to wrap to) and
     // does NOT spill past the card's right edge into the neighbouring tile.
     let desc = frame.rect("ch1_desc").expect("description resolves");
-    assert!(desc.size.x > 100.0, "description width {} collapsed", desc.size.x);
+    assert!(
+        desc.size.x > 100.0,
+        "description width {} collapsed",
+        desc.size.x
+    );
     assert!(
         desc.pos.x + desc.size.x <= card.pos.x + card.size.x + 0.5,
         "description (right {}) overflows the card (right {})",
@@ -1086,7 +1109,10 @@ fn the_card_contents_flow_inside_the_tile() {
     for id in ["ch1_scale", "ch1_octaves", "ch1_warp", "ch1_amount"] {
         let s = frame.rect(id).unwrap_or_else(|| panic!("{id} resolves"));
         assert!(s.size.y >= 12.0, "{id} height {} collapsed", s.size.y);
-        assert!(s.pos.y >= prev_y - 0.5, "{id} is not below the previous control");
+        assert!(
+            s.pos.y >= prev_y - 0.5,
+            "{id} is not below the previous control"
+        );
         assert!(
             s.pos.y + s.size.y <= card.pos.y + card.size.y + 0.5,
             "{id} overflows the card bottom"
@@ -1118,7 +1144,12 @@ fn the_glow_palette_loads_the_shipped_set() {
             c.id,
             c.rgb
         );
-        assert_ne!(c.rgb, [0.0, 0.0, 0.0], "{}: black is excluded from emissive", c.id);
+        assert_ne!(
+            c.rgb,
+            [0.0, 0.0, 0.0],
+            "{}: black is excluded from emissive",
+            c.id
+        );
     }
 }
 
@@ -1128,8 +1159,16 @@ fn glow_nearest_picks_the_closest_entry() {
     let bench = Sablework::shipped();
     let pal = &bench.palette;
     let orange = pal.iter().position(|c| c.id == "orange").expect("orange");
-    assert_eq!(pal.nearest(pal.get(orange).unwrap().rgb), Some(orange), "exact member");
-    assert_eq!(pal.nearest([0.95, 0.60, 0.10]), Some(orange), "near-orange snaps to orange");
+    assert_eq!(
+        pal.nearest(pal.get(orange).unwrap().rgb),
+        Some(orange),
+        "exact member"
+    );
+    assert_eq!(
+        pal.nearest([0.95, 0.60, 0.10]),
+        Some(orange),
+        "near-orange snaps to orange"
+    );
 }
 
 /// A swatch pick writes the EXACT palette colour into the glow and IS an image edit;
@@ -1142,7 +1181,11 @@ fn a_glow_pick_writes_the_exact_colour_and_re_bakes_once() {
         fire(&mut bench, "glow_pick_3", true),
         "a colour pick is an image edit"
     );
-    assert_eq!(bench.recipe().out.emissive, want, "the exact palette colour is written");
+    assert_eq!(
+        bench.recipe().out.emissive,
+        want,
+        "the exact palette colour is written"
+    );
     assert!(
         !fire(&mut bench, "glow_pick_3", true),
         "re-picking the same colour must not re-bake"
@@ -1169,7 +1212,11 @@ fn roll_snaps_the_glow_onto_the_palette() {
 fn the_model_echoes_the_selected_swatch() {
     let mut bench = Sablework::shipped();
     fire(&mut bench, "glow_pick_5", true);
-    assert_eq!(bench.model().number("glow_sel"), Some(5.0), "the picked swatch echoes");
+    assert_eq!(
+        bench.model().number("glow_sel"),
+        Some(5.0),
+        "the picked swatch echoes"
+    );
     assert_eq!(bench.model().number("glow_count"), Some(8.0));
     let want_id = bench.palette.get(5).unwrap().id.clone();
     assert_eq!(
@@ -1231,8 +1278,16 @@ fn the_selected_swatch_wears_the_wash() {
     let id0 = bench.palette.get(0).unwrap().id.clone();
     let sel = format!("sablework.glowsw.{id2}_sel");
     let base = format!("sablework.glowsw.{id0}");
-    assert_eq!(model.text("glow_sw3_sty"), Some(sel.as_str()), "the picked swatch wears _sel");
-    assert_eq!(model.text("glow_sw1_sty"), Some(base.as_str()), "the rest wear the base");
+    assert_eq!(
+        model.text("glow_sw3_sty"),
+        Some(sel.as_str()),
+        "the picked swatch wears _sel"
+    );
+    assert_eq!(
+        model.text("glow_sw1_sty"),
+        Some(base.as_str()),
+        "the rest wear the base"
+    );
 }
 
 /// The swatch strip is Rust-filled from the palette: one `button` per entry, each firing
@@ -1270,7 +1325,11 @@ fn the_swatch_strip_is_filled_from_the_palette() {
 fn the_page_switch_shows_exactly_one_page() {
     let mut bench = Sablework::shipped();
     let m = bench.model();
-    assert_eq!(m.get("page_bench_shown"), Some(&Value::Bool(true)), "opens on the bench");
+    assert_eq!(
+        m.get("page_bench_shown"),
+        Some(&Value::Bool(true)),
+        "opens on the bench"
+    );
     assert_eq!(m.get("page_materials_shown"), Some(&Value::Bool(false)));
 
     assert!(
@@ -1283,7 +1342,11 @@ fn the_page_switch_shows_exactly_one_page() {
     assert_eq!(bench.model().number("sel_page"), Some(1.0));
 
     fire(&mut bench, "page_bench", true);
-    assert_eq!(bench.model().number("sel_page"), Some(0.0), "and back again");
+    assert_eq!(
+        bench.model().number("sel_page"),
+        Some(0.0),
+        "and back again"
+    );
 }
 
 /// The materials LIST is Rust-filled — one `button` row per defined material, in the
@@ -1298,7 +1361,11 @@ fn the_materials_list_is_filled_from_the_index() {
         .iter()
         .find(|n| n.id == "sw_mat_list")
         .expect("the materials list is authored");
-    assert_eq!(list.children.len(), bench.materials.len(), "one row per material");
+    assert_eq!(
+        list.children.len(),
+        bench.materials.len(),
+        "one row per material"
+    );
     for (i, row) in list.children.iter().enumerate() {
         assert_eq!(row.component, "button");
         assert_eq!(row.id, format!("mat_pick_{i}"));
@@ -1319,7 +1386,11 @@ fn the_materials_list_binds_by_row() {
             !fire(&mut bench, &format!("mat_pick_{i}"), true),
             "binding a material is not an image edit"
         );
-        assert_eq!(bench.recipe().material, Some(want), "row {i} binds its material");
+        assert_eq!(
+            bench.recipe().material,
+            Some(want),
+            "row {i} binds its material"
+        );
     }
 }
 
@@ -1336,10 +1407,13 @@ fn the_materials_page_tokens_resolve() {
         mouse: Vec2::new(-1.0, -1.0),
         clicked: false,
         down: false,
+        right_down: false,
         screen: Vec2::new(1920.0, 1080.0),
         typed: String::new(),
         backspace: false,
         wheel: 0.0,
+        exclusive: false,
+        motion: Default::default(),
     };
     let cmds = run_ui(&tree, &bench.model(), &styles, &snap, &mut UiState::new()).commands;
     let unresolved: Vec<String> = cmds
@@ -1349,5 +1423,8 @@ fn the_materials_page_tokens_resolve() {
             _ => None,
         })
         .collect();
-    assert!(unresolved.is_empty(), "materials page tokens: {unresolved:?}");
+    assert!(
+        unresolved.is_empty(),
+        "materials page tokens: {unresolved:?}"
+    );
 }

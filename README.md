@@ -49,8 +49,8 @@ cargo run   -p prism-alpha       # the Prism Alpha client (the launcher)
 ```
 
 Use `--release` for any voxel or performance work; debug contour + mesh is slow. The
-world-sim POCs under `crates/` are standalone (e.g. `cargo run -p flicker-world` for the
-ISEA hex-sphere planet viewer).
+world-sim crates under `crates/` are standalone libraries exercised by their own tests
+(e.g. `cargo test -p flicker-worldgen`).
 
 ## The Prism Alpha client
 
@@ -95,8 +95,8 @@ Crates are organized as `Alpha/crates/<cluster>/<crate>` (the application) plus 
   `flicker-clicktrainer`, and the developer/bench scenes folding in for v0.2.0).
 - **prism-alpha** — the launcher application.
 - **root `crates/`** — world-sim / standalone POCs (`flicker-worldgrid`, `flicker-worldstate`,
-  `flicker-worldgen`, `flicker-worldengine`, `flicker-world`, `flicker-poc-chemistry`,
-  `flicker-celestial`, `flicker-orrery`, `flicker-paperdoll`, and more).
+  `flicker-worldgen`, `flicker-worldengine`, `flicker-poc-chemistry`, `flicker-celestial`,
+  `flicker-orrery`, and more).
 
 ## Status
 

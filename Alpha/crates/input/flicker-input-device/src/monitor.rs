@@ -127,7 +127,10 @@ pub fn note_frame(input: &InputState, vendor: PadVendor) {
 /// walker's hints to branch on. [`InputDeviceKind::Kbm`] until the first input (or
 /// if the lock is poisoned — the display then simply shows keycaps).
 pub fn last_input_context() -> InputDeviceKind {
-    LAST_INPUT.lock().map(|g| *g).unwrap_or(InputDeviceKind::Kbm)
+    LAST_INPUT
+        .lock()
+        .map(|g| *g)
+        .unwrap_or(InputDeviceKind::Kbm)
 }
 
 /// The device family THIS frame's snapshot shows activity for, or `None` when the
@@ -166,7 +169,9 @@ fn pad_active(input: &InputState) -> bool {
         return false;
     };
     GamepadButton::ALL.iter().any(|&b| gp.button_down(b))
-        || STICKS.iter().any(|&a| gp.axis_value(a).abs() > PAD_STICK_ACTIVITY)
+        || STICKS
+            .iter()
+            .any(|&a| gp.axis_value(a).abs() > PAD_STICK_ACTIVITY)
 }
 
 #[cfg(test)]
@@ -255,7 +260,10 @@ mod tests {
             PadVendor::PlayStation
         );
         // … and an unrecognised pad is Generic, the default.
-        assert_eq!(PadVendor::from_metadata("8BitDo Pro 2", None), PadVendor::Generic);
+        assert_eq!(
+            PadVendor::from_metadata("8BitDo Pro 2", None),
+            PadVendor::Generic
+        );
         assert_eq!(PadVendor::default(), PadVendor::Generic);
     }
 

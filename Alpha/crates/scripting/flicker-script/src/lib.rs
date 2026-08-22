@@ -1405,7 +1405,7 @@ mod tests {
 
         // apply_props: the overrides land on the id-matched node of a STATIC tree.
         let mut tree = UiNode {
-            component: "screen".into(),
+            component: "surface".into(),
             children: vec![UiNode {
                 id: "splash".into(),
                 component: "splash".into(),
@@ -1612,7 +1612,7 @@ mod tests {
 
     #[test]
     fn sprite_layer_and_align_parse() {
-        let host = ScriptHost::new(SCREEN_SCRIPT, "screen").unwrap();
+        let host = ScriptHost::new(SCREEN_SCRIPT, "surface").unwrap();
         host.set_texture_ids(&[("panel", 1), ("button", 2), ("white", 0)])
             .unwrap();
         let cmds = host.draw(800.0, 600.0).unwrap();
@@ -1794,7 +1794,7 @@ mod tests {
         local M = {}
         function M.tree()
           return {
-            id = "root", component = "screen", children = {
+            id = "root", component = "surface", children = {
               { component = "cell", anchor = "top_left", offset = { 16, 20 },
                 gap = 6, pad = 4, children = {
                   { component = "checkbox", id = "mesh", label = "Mesh", bind = "show_mesh" },
@@ -1815,7 +1815,7 @@ mod tests {
             .expect("ui_tree runs")
             .expect("module exposes a tree");
 
-        assert_eq!(root.component, "screen");
+        assert_eq!(root.component, "surface");
         assert_eq!(root.id, "root");
         assert_eq!(root.children.len(), 1);
 
@@ -1969,7 +1969,7 @@ mod tests {
     #[test]
     fn tree_only_module_satisfies_contract() {
         // update+draw absent but tree present → still a valid module.
-        let src = r#"local M = {} function M.tree() return { component = "screen" } end return M"#;
+        let src = r#"local M = {} function M.tree() return { component = "surface" } end return M"#;
         assert!(ScriptHost::new(src, "tree-only").is_ok());
     }
 

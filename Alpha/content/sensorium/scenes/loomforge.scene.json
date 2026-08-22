@@ -145,7 +145,7 @@
     }
   },
   "tree": {
-    "component": "screen",
+    "component": "surface",
     "id": "loomforge",
     "on_menu": "pause_open",
     "on_tab_next": "tab_next",
@@ -224,7 +224,7 @@
                     "nav_ordinal": 2,
                     "grow": 1.0,
                     "children": [
-                      { "component": "rtt", "id": "lf_canvas", "source": "loomforge_canvas", "grow": 1.0 }
+                      { "component": "surface", "id": "lf_canvas", "grow": 1.0 }
                     ]
                   },
                   {
@@ -295,7 +295,7 @@
                   }
                 ]
               },
-              { "component": "rtt", "id": "lf_tae_strip", "source": "loomforge_tae", "style": "loomforge.tae", "size": 150 }
+              { "component": "surface", "id": "lf_tae_strip", "style": "loomforge.tae", "size": 150 }
             ]
           },
           {
@@ -542,7 +542,7 @@
                     "nav_ordinal": 2,
                     "children": [
                       { "component": "text", "text_bind": "tae_frame_line", "text_size": 12, "font": "label", "color": "loomforge.pack_kind.locomotion.color", "size": 18 },
-                      { "component": "rtt", "id": "taedoll", "source": "portrait", "style": "loomforge.clip_stage", "width": 300, "height": 300 },
+                      { "component": "surface", "id": "taedoll", "source": "portrait", "style": "loomforge.clip_stage", "width": 300, "height": 300 },
                       {
                         "component": "row",
                         "id": "tae_transport",
@@ -639,7 +639,7 @@
                   }
                 ]
               },
-              { "component": "rtt", "id": "lf_tae_page_strip", "source": "loomforge_tae", "style": "loomforge.tae", "size": 260 }
+              { "component": "surface", "id": "lf_tae_page_strip", "style": "loomforge.tae", "size": 260 }
             ]
           }
         ]

@@ -40,6 +40,7 @@ serde_json.workspace = true
 serde.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
-# Decodes the source PNG maps for the TEXTURED fit preview — the same decoder the
-# paperdoll uses, so the editor and the viewer read a vendor's maps identically.
+# Decodes the source PNG maps for the TEXTURED fit preview — the same `image` decoder
+# `flicker-texture` and the renderer use, so the editor and the runtime read a vendor's
+# maps identically.
 image.workspace = true

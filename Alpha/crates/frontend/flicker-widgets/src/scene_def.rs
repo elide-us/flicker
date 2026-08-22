@@ -6,7 +6,7 @@
 //!   "boot":      true,
 //!   "behaviour": "splash",
 //!   "params":    { "image": "package/sensorium/assets/elideus_productions_yellow.png" },
-//!   "tree":      { "component": "screen", "children": [ … ] },
+//!   "tree":      { "component": "surface", "children": [ … ] },
 //!   "exits":     { "next": { "to": "CeLogo", "mode": "replace" } }
 //! }
 //! ```
@@ -561,14 +561,14 @@ mod tests {
     fn an_authored_tree_parses_and_vocabulary_checks() {
         let def = SceneDef::parse(
             "S",
-            r#"{ "behaviour": "menu", "tree": { "component": "screen", "children": [
+            r#"{ "behaviour": "menu", "tree": { "component": "surface", "children": [
                    { "component": "row", "children": [
                        { "component": "text", "text": "$menu_settings" },
                        { "component": "text", "text_bind": "v" } ] } ] } }"#,
         )
         .expect("scene file loads");
         let tree = def.tree.expect("tree authored");
-        assert_eq!(tree.component, "screen");
+        assert_eq!(tree.component, "surface");
         assert!(
             crate::unknown_kinds(&tree).is_empty(),
             "the built tree names known kinds only"
