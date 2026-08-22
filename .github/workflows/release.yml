@@ -378,4 +378,4 @@ jobs:
       - name: Publish the draft release (assets attached → publish seals it)
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release edit "v${{ needs.gate.outputs.version }}" --draft=false
+        run: gh release edit "v${{ needs.gate.outputs.version }}" --repo "${{ github.repository }}" --draft=false
