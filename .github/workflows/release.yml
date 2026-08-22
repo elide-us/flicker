@@ -369,3 +369,13 @@ jobs:
           body_path: notes.md
           generate_release_notes: true
           prerelease: ${{ needs.gate.outputs.prerelease == 'true' }}
+          # Immutable-release repos REJECT asset uploads once a release is
+          # published — and a published prerelease counts, so uploading assets
+          # inline (the default) fails on the last asset and burns the tag.
+          # Create the release as a DRAFT so every asset attaches first; the
+          # next step publishes it, sealing it immutable WITH the assets present.
+          draft: true
+      - name: Publish the draft release (assets attached → publish seals it)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "v${{ needs.gate.outputs.version }}" --draft=false
