@@ -4,6 +4,11 @@
 //! different bind (e.g. HumanBaseA's flat foot instead of PrismHumanBaseA's heeled one) is just a
 //! change of target skeleton. Emits both the root-motion and in-place variants at the 60 Hz canon.
 //!
+//! Two transfer semantics, chosen per bone by [`dir_child`]: LIMBS transfer by the direction they
+//! point (`Sm_b` reconciles the source rest direction onto ours), the TORSO chain transfers its
+//! rotation DELTA from the source rest (`Sm_b = identity`) — a spine segment's absolute direction
+//! is an artefact of where the vendor placed its joints, not a pose.
+//!
 //! The quaternion algebra mirrors `flicker_rebase.py` (memory 614E5958): glam `a * b` == the Python
 //! `qmul(a,b)` ("apply b then a"); `Quat::from_rotation_arc(u,v)` == `q_between(u,v)`; the Y-up→Z-up
 //! convert is the similarity `C · q · inv(C)` with `C = Rx(+90°)`.
@@ -76,16 +81,19 @@ fn name_map() -> HashMap<String, String> {
     m
 }
 
-/// Target bone → the child bone whose rest offset defines this bone's forward DIRECTION (spec §C.2).
-/// Leaves (no entry) inherit their parent's reconciliation.
+/// LIMB bone → the child bone whose rest offset defines this bone's forward DIRECTION (spec §C.2):
+/// a limb transfers by where it POINTS, so the source's rest direction is reconciled onto ours.
+///
+/// The torso chain (pelvis / spine / clavicles / neck / head) is deliberately ABSENT, so it
+/// transfers ROTATION DELTAS from the source rest instead (`Sm = identity`). Both rests stand
+/// straight, but the Motifect spine joints zig-zag through the body (Chest leans back, Neck2 and
+/// Head lean 17° forward) while the canon stacks them plumb — direction-matching those segments
+/// transcribed the vendor's joint LAYOUT as a permanent bend on every clip (spine_02 −15°,
+/// spine_03 +18°, neck +19° with the actor standing straight; the 2026-08-21 slouch). Leaves and
+/// the torso (no entry) inherit their parent's reconciliation, which for the torso is identity.
 fn dir_child() -> HashMap<String, String> {
     let mut m: HashMap<String, String> = HashMap::new();
     let base = [
-        ("pelvis", "spine_01"),
-        ("spine_01", "spine_02"),
-        ("spine_02", "spine_03"),
-        ("spine_03", "neck_01"),
-        ("neck_01", "head"),
         ("thigh_l", "calf_l"),
         ("calf_l", "foot_l"),
         ("foot_l", "ball_l"),
@@ -97,7 +105,6 @@ fn dir_child() -> HashMap<String, String> {
         m.insert(a.into(), b.into());
     }
     for s in ["l", "r"] {
-        m.insert(format!("clavicle_{s}"), format!("upperarm_{s}"));
         m.insert(format!("upperarm_{s}"), format!("lowerarm_{s}"));
         m.insert(format!("lowerarm_{s}"), format!("hand_{s}"));
         m.insert(format!("hand_{s}"), format!("middle_01_{s}"));
@@ -117,6 +124,8 @@ struct Target {
     idx: HashMap<String, usize>,
     parent: Vec<i32>,
     rest_transl: Vec<Vec3>,
+    /// Each bone's LOCAL rest rotation — what an undriven bone plays at runtime.
+    rest_rot: Vec<Quat>,
     bind_global: Vec<Quat>,
     bind_dir: HashMap<String, Vec3>,
 }
@@ -182,6 +191,7 @@ fn load_target(skeleton: &Path) -> Result<Target> {
         idx,
         parent,
         rest_transl,
+        rest_rot: loc_r,
         bind_global,
         bind_dir,
     })
@@ -230,24 +240,36 @@ fn source_base_pose(bvh: &Bvh, target: &Target) -> HashMap<String, Quat> {
 }
 
 /// One frame's rest-rebase → target bone → LOCAL rotation quat. `Ta_b = Sa_map(b) · inv(Sm_b) · A_b`
-/// for mapped bones (else `A_b`, left at bind); `local_b = inv(Ta_parent) · Ta_b`. Mapped bones only.
+/// for a bone the source drives; `local_b = inv(Ta_parent) · Ta_b`. Driven bones only get a track.
+///
+/// A bone the source does NOT drive keeps its REST local at playback, so the global it actually
+/// plays in is its parent's POSED global × that local — never its bind global. Rebasing a driven
+/// child against the bind instead applies the parent's rotation to the child twice: the canon's
+/// `neck_02` sits undriven between `neck_01` and `head`, and the head took the neck's rotation
+/// twice (10.7° → 29.4° forward on the idle; the measured 2026-08-21 head jut).
 fn rebase_frame(
     sa_zup: &HashMap<String, Quat>,
     sm: &HashMap<String, Quat>,
     target: &Target,
     nmap: &HashMap<String, String>,
 ) -> HashMap<String, Quat> {
-    let mut ta = vec![Quat::IDENTITY; target.names.len()];
+    let n = target.names.len();
+    let mut ta = vec![Quat::IDENTITY; n];
+    let mut driven = vec![false; n];
     for (i, nm) in target.names.iter().enumerate() {
-        let a_b = target.bind_global[i];
+        let p = target.parent[i];
         ta[i] = match nmap.get(nm).and_then(|s| sa_zup.get(s)) {
-            Some(&sa) => sa * sm.get(nm).copied().unwrap_or(Quat::IDENTITY).inverse() * a_b,
-            None => a_b,
+            Some(&sa) => {
+                driven[i] = true;
+                sa * sm.get(nm).copied().unwrap_or(Quat::IDENTITY).inverse() * target.bind_global[i]
+            }
+            None if p >= 0 => ta[p as usize] * target.rest_rot[i],
+            None => target.rest_rot[i],
         };
     }
     let mut out = HashMap::new();
     for (i, nm) in target.names.iter().enumerate() {
-        if !nmap.contains_key(nm) {
+        if !driven[i] {
             continue;
         }
         let p = target.parent[i];
@@ -543,7 +565,9 @@ mod tests {
     /// Rust port matches the Blender/Python tool per-key, re-baking onto HumanBaseA is trustworthy.
     /// `#[ignore]`d (reads source + oracle). HISTORICAL since the 2026-08-04 content sweep: the
     /// PrismHumanBaseA skeleton fixture was retired with the example content, so this skips — the
-    /// port-parity validation it existed for passed (0.08° vs the Python oracle) and is banked. Run:
+    /// port-parity validation it existed for passed (0.08° vs the Python oracle) and is banked.
+    /// Since 2026-08-21 the torso chain rebases by rotation DELTA (see [`dir_child`]), so parity
+    /// with that oracle now holds for the limbs only. Run:
     ///   `cargo test -p flicker-content -- --ignored retarget_reproduces_python --nocapture`
     #[test]
     #[ignore]
@@ -617,5 +641,236 @@ mod tests {
         let _ = std::fs::remove_dir_all(&out);
         assert!(compared > 100, "compared a real number of keys");
         assert!(worst_deg < 1.0, "Rust retarget reproduces the Python clip within ~1° (worst {worst_deg:.4}° at {worst_bone})");
+    }
+
+    /// The source MOTION channel order (DFS) of [`ZIGZAG_BVH`].
+    const ZIGZAG_JOINTS: [&str; 11] = [
+        "Hips",
+        "Spine1",
+        "Spine2",
+        "Chest",
+        "Neck1",
+        "Neck2",
+        "Head",
+        "LeftShoulder",
+        "LeftArm",
+        "LeftForeArm",
+        "LeftHand",
+    ];
+
+    /// A Motifect-SHAPED source: T-posed, Y-up, with the spine joints ZIG-ZAGGING through the
+    /// body (Chest leans back, Neck2 and Head lean forward) and one horizontal arm.
+    const ZIGZAG_BVH: &str = "HIERARCHY
+ROOT Hips
+{
+  OFFSET 0 0 0
+  CHANNELS 6 Xposition Yposition Zposition Zrotation Yrotation Xrotation
+  JOINT Spine1
+  {
+    OFFSET 0 5 0
+    CHANNELS 3 Zrotation Yrotation Xrotation
+    JOINT Spine2
+    {
+      OFFSET 0 7 0
+      CHANNELS 3 Zrotation Yrotation Xrotation
+      JOINT Chest
+      {
+        OFFSET 0 7.6 -0.8
+        CHANNELS 3 Zrotation Yrotation Xrotation
+        JOINT Neck1
+        {
+          OFFSET 0 26 0
+          CHANNELS 3 Zrotation Yrotation Xrotation
+          JOINT Neck2
+          {
+            OFFSET 0 7.7 2.3
+            CHANNELS 3 Zrotation Yrotation Xrotation
+            JOINT Head
+            {
+              OFFSET 0 6.1 2.0
+              CHANNELS 3 Zrotation Yrotation Xrotation
+              End Site
+              {
+                OFFSET 0 16 0
+              }
+            }
+          }
+        }
+        JOINT LeftShoulder
+        {
+          OFFSET 1.6 23 5
+          CHANNELS 3 Zrotation Yrotation Xrotation
+          JOINT LeftArm
+          {
+            OFFSET 15 0 -5.5
+            CHANNELS 3 Zrotation Yrotation Xrotation
+            JOINT LeftForeArm
+            {
+              OFFSET 28.7 0 0
+              CHANNELS 3 Zrotation Yrotation Xrotation
+              JOINT LeftHand
+              {
+                OFFSET 27 0 0
+                CHANNELS 3 Zrotation Yrotation Xrotation
+                End Site
+                {
+                  OFFSET 10 0 0
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+MOTION
+Frames: 1
+Frame Time: 0.0333333
+";
+
+    /// Write the zig-zag source (one frame; `rotations` = per-joint `(Z, Y, X)` degrees, unlisted
+    /// joints zero) and a canon-SHAPED target — plumb spine with an UNDRIVEN `neck_02` between
+    /// `neck_01` and `head`, identity rest frames, one A-posed arm — under `dir`.
+    fn zigzag_fixture(
+        dir: &Path,
+        rotations: &[(&str, [f32; 3])],
+    ) -> (std::path::PathBuf, std::path::PathBuf) {
+        std::fs::create_dir_all(dir).unwrap();
+        let mut frame = vec!["0".to_string(), "100".to_string(), "0".to_string()];
+        for j in ZIGZAG_JOINTS {
+            let r = rotations
+                .iter()
+                .find(|(n, _)| *n == j)
+                .map_or([0.0; 3], |(_, r)| *r);
+            frame.extend(r.iter().map(|v| format!("{v}")));
+        }
+        let bvh = dir.join("zigzag.bvh");
+        std::fs::write(&bvh, format!("{ZIGZAG_BVH}{}\n", frame.join(" "))).unwrap();
+
+        const TARGET: [(&str, i32, [f32; 3]); 12] = [
+            ("root", -1, [0.0, 0.0, 0.0]),
+            ("pelvis", 0, [0.0, 0.0, 95.0]),
+            ("spine_01", 1, [0.0, 0.0, 104.0]),
+            ("spine_02", 2, [0.0, 0.0, 114.0]),
+            ("spine_03", 3, [0.0, 0.0, 124.0]),
+            ("neck_01", 4, [0.0, 0.0, 143.0]),
+            ("neck_02", 5, [0.0, 0.0, 146.0]),
+            ("head", 6, [0.0, 0.0, 148.0]),
+            ("clavicle_l", 4, [2.5, 0.0, 139.0]),
+            ("upperarm_l", 8, [22.0, 0.0, 139.0]),
+            ("lowerarm_l", 9, [45.0, 0.0, 118.0]),
+            ("hand_l", 10, [64.0, 0.0, 101.0]),
+        ];
+        let bones: Vec<Value> = TARGET
+            .iter()
+            .map(|(name, parent, pos)| {
+                let pp = usize::try_from(*parent).map_or([0.0; 3], |p| TARGET[p].2);
+                let local = Mat4::from_translation(Vec3::from(*pos) - Vec3::from(pp));
+                json!({
+                    "name": name,
+                    "parent": parent,
+                    "local": local.to_cols_array(),
+                    "inverse_bind": Mat4::IDENTITY.to_cols_array(),
+                })
+            })
+            .collect();
+        let skel = dir.join("target.json");
+        let rig = json!({
+            "format": "flicker.rig", "version": 1, "retarget": true,
+            "skeleton": { "bones": bones },
+            "mesh": { "vertices": [], "indices": [], "submeshes": [], "materials": [] },
+            "clips": [],
+        });
+        std::fs::write(&skel, serde_json::to_string(&rig).unwrap()).unwrap();
+        (bvh, skel)
+    }
+
+    /// Play tick 0 of the in-place variant through the REAL runtime path (`rig_bones` →
+    /// `resolve_clips` → `sample_local_poses` → `global_transforms`): posed world frames by name.
+    fn play_tick0(v: &ClipVariants) -> HashMap<String, Mat4> {
+        let file: flicker_skeletal::format::RigFile =
+            serde_json::from_value(v.in_place.clone()).unwrap();
+        let bones = flicker_skeletal::format::rig_bones(&file);
+        let clip = flicker_skeletal::format::resolve_clips(&file, &bones, false)
+            .pop()
+            .unwrap();
+        let locals = flicker_skeletal::pose::sample_local_poses(&bones, &clip, 0, true);
+        let g = flicker_skeletal::pose::global_transforms(&bones, &locals);
+        bones
+            .iter()
+            .zip(g)
+            .map(|(b, m)| (b.name.clone(), m))
+            .collect()
+    }
+
+    fn world_deg(w: &HashMap<String, Mat4>, name: &str) -> f32 {
+        w[name]
+            .to_scale_rotation_translation()
+            .1
+            .angle_between(Quat::IDENTITY)
+            .to_degrees()
+    }
+
+    /// THE SLOUCH GUARD (2026-08-21): an actor standing in the source rest must stand plumb on
+    /// the canon even though the source's spine joints zig-zag — the torso transfers rotation
+    /// DELTAS, not segment directions. The arm, a limb, still transfers by direction: the
+    /// source's horizontal T-pose arm raises the canon's A-posed arm to horizontal.
+    #[test]
+    fn the_torso_rebases_by_rotation_delta_not_segment_direction() {
+        let dir = std::env::temp_dir().join("flicker_retarget_zigzag_delta");
+        let (bvh, skel) = zigzag_fixture(&dir, &[]);
+        let w = play_tick0(&build_variants(&bvh, &skel).unwrap());
+        for b in [
+            "pelvis",
+            "spine_01",
+            "spine_02",
+            "spine_03",
+            "clavicle_l",
+            "neck_01",
+            "neck_02",
+            "head",
+        ] {
+            let d = world_deg(&w, b);
+            assert!(
+                d < 0.05,
+                "{b} stands plumb under a rest-posed source, got {d:.2}°"
+            );
+        }
+        let dir_arm = (w["lowerarm_l"].w_axis - w["upperarm_l"].w_axis)
+            .truncate()
+            .normalize();
+        assert!(
+            (dir_arm - Vec3::X).length() < 1e-3,
+            "the T-posed source arm raises the A-posed canon arm to horizontal, got {dir_arm:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// THE HEAD-JUT GUARD (2026-08-21): `neck_02` has no source joint, so it plays its rest local
+    /// under `neck_01`'s posed rotation — the head, rebased against that frame, must carry the
+    /// neck's 20° exactly once (rebasing it against `neck_02`'s BIND frame applied it twice).
+    #[test]
+    fn an_undriven_link_between_driven_bones_plays_the_parent_rotation_once() {
+        let dir = std::env::temp_dir().join("flicker_retarget_zigzag_undriven");
+        let (bvh, skel) = zigzag_fixture(&dir, &[("Neck1", [0.0, 0.0, 20.0])]);
+        let w = play_tick0(&build_variants(&bvh, &skel).unwrap());
+        assert!(
+            world_deg(&w, "spine_03") < 0.05,
+            "the chest below the neck is untouched"
+        );
+        for b in ["neck_01", "neck_02", "head"] {
+            let d = world_deg(&w, b);
+            assert!(
+                (d - 20.0).abs() < 0.05,
+                "{b} carries the neck's 20° exactly once, got {d:.2}°"
+            );
+        }
+        let (axis, _) = w["head"].to_scale_rotation_translation().1.to_axis_angle();
+        assert!(
+            axis.x > 0.99,
+            "the nod is about the body's X axis, got {axis:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

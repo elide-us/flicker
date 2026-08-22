@@ -1,6 +1,6 @@
 [package]
 name = "flicker-controllertester"
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 license.workspace = true
 publish = false
@@ -27,4 +27,5 @@ flicker-input-router.workspace = true
 # The golem stage: the reference body playing locomotion off the dispatched signals
 # (rig/clip loading, the state machine, pose sampling and CPU skinning).
 flicker-skeletal.workspace = true
+serde_json.workspace = true
 tracing.workspace = true

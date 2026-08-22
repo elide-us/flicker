@@ -155,8 +155,8 @@ heuristically by mesh-vertex count.
 These live **intact** under `package/characters/<name>/` — the **authored source of truth**.
 Splitting one into clean `rigs/` + `clips/` + `textures/` + `meshes/` by-type assets
 is a job for the content-processing pipeline (above), not a plain file move. Until
-then a client loads the raw bundle directly (e.g. `flicker-paperdoll` and
-`flicker-packeditor` both load `characters/katanami/`). Think of `characters/` as
+then a client loads the raw bundle directly (e.g. the Clayworks editor opens a
+`characters/<name>/` folder as-is). Think of `characters/` as
 *source*, the by-type folders as *processed / canonical* assets.
 
 ## Baked voxel clusters (`package/bakes/`)

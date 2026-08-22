@@ -38,11 +38,12 @@ pub fn in_wedge(dir: Vec3) -> bool {
     dir.x > 0.0 && dir.z > 0.0
 }
 
-/// The shader's direct-RGB material word (`mesh.wgsl`: primary `0xFFF` escape,
-/// RGB666) — lets us colour a cell without a material-table entry.
+/// The shader's direct-RGB material word (`mesh.wgsl`: bit-31 escape, RGB888
+/// in bits 0-23; u8-catalog layout 2026-08-19) — lets us colour a cell without
+/// a material-catalog id.
 fn direct(rgb: [f32; 3]) -> u32 {
-    let q = |v: f32| ((v.clamp(0.0, 1.0) * 63.0).round() as u32) & 0x3F;
-    0xFFF | (q(rgb[0]) << 12) | (q(rgb[1]) << 18) | (q(rgb[2]) << 24)
+    let q = |v: f32| ((v.clamp(0.0, 1.0) * 255.0).round() as u32) & 0xFF;
+    0x8000_0000 | q(rgb[0]) | (q(rgb[1]) << 8) | (q(rgb[2]) << 16)
 }
 
 /// Build one shell mesh from cell centres (`dirs`) + boundary outlines,

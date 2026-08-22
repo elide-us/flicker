@@ -43,7 +43,7 @@ fn the_air_veil_never_closes_into_a_lid() {
 /// and says nothing (the second-run silence Aaron hit in-window).
 #[test]
 fn a_rebirth_clears_the_gate_acknowledgement() {
-    let mut scene = GodModeScene::new();
+    let mut scene = GodModeScene::shipped();
     scene.snap = Some(fixture_snapshot());
 
     // The maintainer read a gate at 500 My, then pressed RESET.
@@ -89,10 +89,10 @@ fn fixture_snapshot() -> Snapshot {
         plate_count: 0,
         recent_events: Vec::new(),
         // Every console row backed, so `hold_<n>` is answerable for all of
-        // them. The proto carries PROCESS_ROWS rows against 17 real stages
-        // — the spare rows ride `proc_<n>_shown = false` in the app, but a
-        // row that IS backed must always hold, and that is the contract
-        // under test.
+        // them. The authored console carries PROCESS_ROWS rows against the 22
+        // shipped stages — the spare rows ride `proc_<n>_shown = false` in the
+        // app, but a row that IS backed must always hold, and that is the
+        // contract under test.
         processes: (0..PROCESS_ROWS)
             .map(|_| flicker_poc_chemistry::ProcessState {
                 name: "Outgassing",
@@ -137,7 +137,7 @@ fn fixture_snapshot() -> Snapshot {
 fn each_lever_moves_exactly_its_own_field() {
     let base = Levers::default();
     for &(key, get, _) in LEVERS {
-        let mut scene = GodModeScene::new();
+        let mut scene = GodModeScene::shipped();
         scene.snap = Some(fixture_snapshot());
 
         let cmds = scene.apply_results(&ValueMap::new().with(key, 2.0));
@@ -170,7 +170,7 @@ fn each_lever_moves_exactly_its_own_field() {
 /// the world sixty times a second.
 #[test]
 fn a_lever_at_its_echo_sends_nothing() {
-    let mut scene = GodModeScene::new();
+    let mut scene = GodModeScene::shipped();
     scene.snap = Some(fixture_snapshot());
     // The fixture's levers ARE the defaults, so 1.0 is exactly the echo.
     let echo = LEVERS
@@ -182,7 +182,7 @@ fn a_lever_at_its_echo_sends_nothing() {
     );
 
     // And the rate dial, the same way.
-    let mut scene = GodModeScene::new();
+    let mut scene = GodModeScene::shipped();
     scene.snap = Some(fixture_snapshot());
     let at_rest = scene.snap.as_ref().expect("primed").rate_hz as f64;
     assert!(
@@ -218,7 +218,7 @@ fn the_verdict_lamp_lights_without_eating_the_life_line() {
     .expect("stringtable reads");
     flicker::ui::strings::load_str(&strings, "en-us");
 
-    let mut scene = GodModeScene::new();
+    let mut scene = GodModeScene::shipped();
     scene.snap = Some(Snapshot {
         gen: 1,
         tick: 7,
@@ -270,7 +270,7 @@ fn the_verdict_lamp_lights_without_eating_the_life_line() {
 /// that slides back out of band can still have its rain shut off.
 #[test]
 fn rain_waits_for_the_life_light() {
-    let mut scene = GodModeScene::new();
+    let mut scene = GodModeScene::shipped();
     let mut snap = fixture_snapshot();
     snap.habitability.life_supporting = false;
     snap.habitability.axes_in_band = 0;
@@ -559,7 +559,7 @@ fn every_view_explains_its_colours() {
     .expect("stringtable reads");
     flicker::ui::strings::load_str(&strings, "en-us");
 
-    let mut scene = GodModeScene::new();
+    let mut scene = GodModeScene::shipped();
     scene.snap = Some(fixture_snapshot());
     scene.inject_legend_styles();
 
@@ -656,5 +656,144 @@ fn every_view_explains_its_colours() {
         chip("legend.seam_conv"),
         seam_color(2),
         "convergent chip = seam paint"
+    );
+}
+
+// ── The scene pair (five-line split) ─────────────────────────────────────────
+
+/// **The shipped scene file authors this bench.** The tree parses, the screen
+/// declares the pause + view-cycle intents, the globe has its `rtt` slot, the
+/// gauge rows refilled from the observer's bands, and every component kind and
+/// display literal in the file is legal — the same def the manifest hands the
+/// runtime, exercised without an app.
+#[test]
+fn the_shipped_scene_authors_the_bench() {
+    let scene = GodModeScene::shipped();
+    let tree = scene.authored.as_ref().expect("the def declares a tree");
+
+    // The declared intents (S9): pause + the pad's view cycle.
+    for (intent, name) in [
+        ("on_menu", "pause_open"),
+        ("on_tab_next", "field_next"),
+        ("on_tab_prev", "field_prev"),
+    ] {
+        assert_eq!(
+            tree.props.get(intent),
+            Some(&Value::Text(name.into())),
+            "the screen declares {intent} = {name}"
+        );
+    }
+
+    fn find<'a>(n: &'a UiNode, id: &str) -> Option<&'a UiNode> {
+        if n.id == id {
+            return Some(n);
+        }
+        n.children.iter().find_map(|c| find(c, id))
+    }
+    let globe = find(tree, GLOBE_SLOT).expect("the globe's rtt slot is authored");
+    assert_eq!(
+        globe.component, "surface",
+        "the walker reserves the globe's rect"
+    );
+    let rows = find(tree, "gm_hab_rows").expect("the gauge-row refill container is authored");
+    assert_eq!(
+        rows.children.len(),
+        flicker_poc_chemistry::habitability::BANDS.len(),
+        "one refilled row per condition axis, bands from the observer"
+    );
+
+    // The component vocabulary + the display-literal law, over the whole tree.
+    assert!(
+        flicker::ui::unknown_kinds(tree).is_empty(),
+        "unknown component kinds: {:?}",
+        flicker::ui::unknown_kinds(tree)
+    );
+    assert!(
+        flicker::ui::raw_display_literals(tree).is_empty(),
+        "raw display literals (labels must ride $tokens): {:?}",
+        flicker::ui::raw_display_literals(tree)
+    );
+
+    // …and the same law at the Rust publish seam: no raw display copy enters
+    // the Model from scene.rs (state words and dotted paths are wiring).
+    let flags = strings::raw_model_publish_literals(include_str!("../scene.rs"));
+    assert!(flags.is_empty(), "raw Model-publish copy: {flags:?}");
+}
+
+/// **The declared pause intent fires through the AUTHORED tree** — the walker
+/// layer consumes the Menu press and fires the screen's `on_menu` name; the
+/// scene maps it onto the pause push. (Replaces the dead route.rs chain test:
+/// the pump owns the chain now, and the walker is its only scene layer.)
+#[test]
+fn dispatch_fires_the_declared_pause_intent() {
+    use flicker::ui::WalkerHandler;
+    use flicker_input_core::{ActionSignal, EventKind, InputContext, InputState};
+    use flicker_input_router::{InputEvent, InputHandler, RouteCtx, Router};
+
+    let scene = GodModeScene::shipped();
+    let raw = InputState::new();
+    let events = [InputEvent::new(
+        ActionSignal::Menu,
+        EventKind::Press,
+        InputContext::World,
+        &raw,
+    )];
+    let mut ui = UiState::new();
+    let mut walker = WalkerHandler::hud(&mut ui, false).with_intents(&scene.ui_intents);
+    let mut rc = RouteCtx::new();
+    {
+        let mut chain: [&mut dyn InputHandler; 1] = [&mut walker];
+        Router::dispatch(&events, &mut chain, &mut rc);
+    }
+    assert_eq!(
+        walker.take_fired(),
+        vec!["pause_open".to_string()],
+        "the screen's declared on_menu fires as a result name"
+    );
+}
+
+/// **The pair script derives the state words over the raw publish.** The raw
+/// Model carries state (`playing`, `proc_<n>_state`, `a<n>_live`…); godmode.lua
+/// turns it into the words, glyphs and style paths the tree binds — so the
+/// walked surface only works if the pair actually met.
+#[test]
+fn the_pair_script_derives_the_state_words() {
+    let strings = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../content/data/stringtable.json"
+    ))
+    .expect("stringtable reads");
+    flicker::ui::strings::load_str(&strings, "en-us");
+
+    let mut scene = GodModeScene::shipped();
+    scene.snap = Some(fixture_snapshot());
+    let m = scene.model();
+
+    for key in [
+        "play_state",
+        "play_label",
+        "proc_1",
+        "proc_summary",
+        "verdict",
+        "ledger_status",
+    ] {
+        assert!(
+            m.text(key)
+                .is_some_and(|s| !s.is_empty() && !s.starts_with('$')),
+            "derive() must yield display TEXT for '{key}': {:?}",
+            m.get(key)
+        );
+    }
+    // The fixture opens on Temperature: its tab is the ACTIVE variant, and a
+    // fixture with every stage running marks the console rows with the run glyph.
+    assert_eq!(
+        m.text("field_temperature_style"),
+        Some("modal.buttons.variants.primary"),
+        "the active view's tab is primary"
+    );
+    assert!(
+        m.text("proc_1").is_some_and(|s| s.contains('\u{25cf}')),
+        "a running stage carries the run glyph: {:?}",
+        m.get("proc_1")
     );
 }

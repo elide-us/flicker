@@ -21,16 +21,27 @@
 //! resolve to a different signal — and get consumed by a different layer — per
 //! context. Cycle with Tab (keyboard) or Back/View (pad).
 //!
-//! A STANDALONE diagnostic (`34BE2610`) built on the click-trainer scene toolkit
-//! (`draw_ui_panel` + `draw_text`, no Lua, no `ui_theme.json`); `prism-alpha`
-//! hosts it. Esc / Start open the pause menu.
+//! A diagnostic on the SCENE PAIR (ruling DC217431): the CHROME — the header
+//! block, the mouse readout and the context TAB BAR — is the authored
+//! `controllertester.scene.json` walked with `controllertester.lua`, fed by the
+//! PUMP (`on_menu` opens the pause overlay; `on_tab_next`/`on_tab_prev` cycle
+//! the ring; the tabs are real walker buttons). Everything below the chrome is
+//! the sanctioned SUB-SIGNAL feed, scene-drawn from the raw device snapshot
+//! (`34BE2610` toolkit: `draw_ui_panel` + `draw_text`) — this bench's subject
+//! matter IS the machinery under the signal layer, so its diagnostic reads stay
+//! raw by design while the DEMO chain above is display-only. `prism-alpha`
+//! hosts it.
 
 mod golem;
 
 use std::time::{Duration, Instant};
 
-use flicker::render::{Rect, Renderer, Vec2};
+use flicker::render::{FrameGraph, Rect, Renderer, TextureHandle, Vec2};
 use flicker::scene::{Scene, SceneInput, Transition};
+use flicker::script::{HudCommand, ScriptHost, UiNode, ValueMap};
+use flicker::ui::{
+    render_hud, run_ui, strings, SceneDef, UiInput, UiIntents, UiState, WalkerHandler,
+};
 use flicker_input_core::{
     AbstractControls, ActionSignal, AnalogFrame, ContextualBindings, EventKind, Fired, GamepadAxis,
     GamepadButton, GamepadConfig, InputBinding, InputContext, InputMap, InputState, Key, Resolver,
@@ -55,12 +66,9 @@ const ACCENT: [f32; 4] = [0.45, 0.68, 1.0, 1.0];
 const AMBER: [f32; 4] = [0.92, 0.72, 0.28, 1.0];
 const CYAN: [f32; 4] = [0.34, 0.82, 0.86, 1.0];
 const GREENV: [f32; 4] = [0.34, 0.94, 0.56, 1.0];
-// Context tab bar — the Prism tab pattern, colours matched to the settings-panel tabs.
-const TAB_ACTIVE_BG: [f32; 4] = [0.141, 0.247, 0.471, 0.30];
-const TAB_HOVER_BG: [f32; 4] = [0.141, 0.247, 0.471, 0.15];
-const BRONZE: [f32; 4] = [0.722, 0.592, 0.353, 1.0];
-const TAB_LABEL_ON: [f32; 4] = [0.906, 0.882, 0.824, 1.0];
-const TAB_LABEL_OFF: [f32; 4] = [0.561, 0.541, 0.490, 1.0];
+// The tab bar is AUTHORED chrome now (controllertester.scene.json styles the
+// active/idle washes); these two hold the row's geometry so the scene-drawn
+// feed below still lays out against the same line.
 const TAB_Y: f32 = 86.0;
 const TAB_H: f32 = 28.0;
 
@@ -73,10 +81,32 @@ const CONTEXTS: [InputContext; 4] = [
     InputContext::TextEntry,
 ];
 
+/// The pair script — the scene's LOGIC half, by name (five-line architecture).
+const CT_SCRIPT: &str = include_str!("../../../../content/sensorium/scripts/controllertester.lua");
+/// The shipped scene file — the tests' copy of the authored chrome (the runtime
+/// receives the same file through the manifest `SceneDef`).
+#[cfg(test)]
+const CT_SCENE: &str =
+    include_str!("../../../../content/sensorium/scenes/controllertester.scene.json");
+
+/// The context's id word in the Model (`active_ctx`) and the tab ACTIONS
+/// (`ctx_<word>`) — one vocabulary, both sides.
+fn ctx_word(c: InputContext) -> &'static str {
+    match c.id() {
+        1 => "menu",
+        2 => "radial",
+        3 => "textentry",
+        _ => "world",
+    }
+}
+
 /// The demo handler chain, highest input priority first (spec §4.2 bus, minus the
-/// walker layer the tester has no Lua HUD for). `SCENE_ROOT` is the layer whose
-/// consumed `Menu` press opens the pause overlay.
+/// walker layer — the chrome's walker is the SCENE's seam, not the exhibit's).
+/// `SCENE_ROOT` is the exhibit layer that consumes `Menu` in the report; since
+/// the pause moved onto the declared `on_menu` intent (DC217431), only the
+/// chain-order tests still read the index.
 const LAYER_NAMES: [&str; 4] = ["System", "Scene root", "Modal", "Gameplay"];
+#[cfg(test)]
 const SCENE_ROOT: usize = 1;
 
 /// Keyboard keys shown in the readout row (each lights while held).
@@ -233,9 +263,8 @@ fn is_ui_signal(s: ActionSignal) -> bool {
         | Crouch | Interact | Reload | AttackLight | AttackHeavy | Defend | Special | Dodge
         | LockOn | UseItem | Kick | CounterPerilous | Grapple | Menu | Inventory | Map | Quit
         | ChordBegin | PageNext | PagePrev | PanelNext | PanelPrev | ModeNext | ModePrev
-        | ZoomIn | ZoomOut | Undo | Redo | Cut | Paste | Rename | CreateFolder | ContextMenu => {
-            false
-        }
+        | ZoomIn | ZoomOut | ToggleMouseCapture | Undo | Redo | Cut | Paste | Rename
+        | CreateFolder | ContextMenu => false,
     }
 }
 
@@ -411,14 +440,6 @@ fn ctx_label(c: InputContext) -> &'static str {
     }
 }
 
-/// The `(x, width)` of context tab `i` in a bar across the top of a `screen_x`-wide window.
-fn tab_geom(screen_x: f32, i: usize) -> (f32, f32) {
-    let margin = 40.0;
-    let avail = (screen_x - 2.0 * margin).max(240.0);
-    let w = (avail / CONTEXTS.len() as f32).min(170.0);
-    (margin + i as f32 * w, w)
-}
-
 pub struct ControllerTester {
     /// This frame's input, captured in `update` for `render` to draw the diagram from.
     snap: Option<InputState>,
@@ -441,9 +462,6 @@ pub struct ControllerTester {
     tick: u64,
     bus: BusFrame,
 
-    /// Edge state for the context-cycle control (Tab / pad Back).
-    cycle_prev: bool,
-
     /// The centre stage: the reference body playing locomotion off the SAME
     /// dispatched signals the right-hand panels print.
     stage: GolemStage,
@@ -451,10 +469,67 @@ pub struct ControllerTester {
     gamepad_config: GamepadConfig,
     controls: AbstractControls,
     ui_theme: Option<Theme>,
+    white: Option<TextureHandle>,
+
+    // ── The scene pair (five-line split): the authored CHROME + its script. ──
+    /// The AUTHORED chrome tree off the manifest's def — header, mouse readout,
+    /// context tab bar. `take`n around the walk.
+    authored: Option<UiNode>,
+    /// The pair script (`controllertester.lua`) — composes the status/mouse
+    /// readouts and picks the tab washes. `None` only if it failed to load.
+    script: Option<ScriptHost>,
+    /// The screen's declared bindings (S9), read off the authored root ONCE.
+    ui_intents: UiIntents,
+    /// Token-resolved styles (dotted `style` paths resolve here).
+    ui_styles: serde_json::Value,
+    /// Retained walker interaction state.
+    ui_state: UiState,
+    /// Draw commands stashed by `update`'s walker pass, blitted in `render`.
+    hud_commands: Vec<HudCommand>,
+    /// Intent names fired last frame — republished ONCE into the next Model as
+    /// the transient `sig_<name>` mirror (S9 ruling), then dropped.
+    fired_sigs: Vec<String>,
 }
 
 impl ControllerTester {
-    pub fn new() -> Self {
+    /// The runtime constructor — the manifest hands in the authored `SceneDef`
+    /// (the five-line split): the chrome tree + this bench's style blocks come
+    /// from `controllertester.scene.json`.
+    pub fn new(def: &SceneDef) -> Self {
+        Self::from_parts(def.tree.clone(), def.styles.clone())
+    }
+
+    /// A bench on the SHIPPED scene file — the seam a test drives without an
+    /// app, exercising the same authored chrome the runtime gets.
+    #[cfg(test)]
+    pub fn shipped() -> Self {
+        let def = SceneDef::parse("controllertester", CT_SCENE)
+            .expect("the shipped controllertester.scene.json parses");
+        Self::from_parts(def.tree, def.styles)
+    }
+
+    #[cfg(not(test))]
+    pub fn shipped() -> Self {
+        // Outside tests the manifest is the only construction path; a def-less
+        // bench would be a blank screen, so `Default` routes here loudly.
+        unreachable!("ControllerTester is built from the manifest's SceneDef")
+    }
+
+    fn from_parts(authored: Option<UiNode>, scene_styles_json: Option<serde_json::Value>) -> Self {
+        if authored.is_none() {
+            tracing::error!(
+                "controllertester: the scene def declares no `tree` — no chrome will draw"
+            );
+        }
+        let ui_styles = flicker::ui::load_shared_styles(scene_styles_json.as_ref());
+        let ui_intents = authored.as_ref().map(UiIntents::of).unwrap_or_default();
+        let script = match ScriptHost::new(CT_SCRIPT, "controllertester_pair.lua") {
+            Ok(h) => Some(h),
+            Err(e) => {
+                tracing::error!("controllertester.lua failed to load — raw chrome only: {e}");
+                None
+            }
+        };
         Self {
             snap: None,
             latch: None,
@@ -465,12 +540,78 @@ impl ControllerTester {
             ev: Vec::new(),
             tick: 0,
             bus: BusFrame::default(),
-            cycle_prev: false,
             stage: GolemStage::new(),
             gamepad_config: GamepadConfig::default(),
             controls: AbstractControls::default(),
             ui_theme: None,
+            white: None,
+            authored,
+            script,
+            ui_intents,
+            ui_styles,
+            ui_state: UiState::new(),
+            hud_commands: Vec::new(),
+            fired_sigs: Vec::new(),
         }
+    }
+
+    /// The chrome's RAW model: the selected context word, the device presence
+    /// counts, the pointer raws, and the resolved word bank the pair script
+    /// composes the readouts from. The diagnostic feed below the chrome never
+    /// rides the Model — it draws straight from the snapshot (DC217431).
+    fn hud_model(&self) -> ValueMap {
+        let mut m = ValueMap::new();
+        let snap = self.snap.as_ref();
+        m.set("active_ctx", ctx_word(self.bindings.active()));
+        m.set("connected", snap.is_some_and(|s| s.gamepad_connected(0)));
+        m.set("slots", snap.map_or(0, |s| s.gamepads().count()) as f64);
+        m.set("tick", self.tick as f64);
+        let (mpos, ml, mr, mm) = snap
+            .map(|s| {
+                (
+                    s.mouse_position,
+                    s.mouse_left,
+                    s.mouse_right,
+                    s.mouse_middle,
+                )
+            })
+            .unwrap_or((Vec2::ZERO, false, false, false));
+        m.set("mouse_x", f64::from(mpos.x));
+        m.set("mouse_y", f64::from(mpos.y));
+        m.set("mouse_l", ml);
+        m.set("mouse_r", mr);
+        m.set("mouse_m", mm);
+        for (key, token) in [
+            ("w_gamepad0", "$ctt_gamepad0"),
+            ("w_connected", "$ctt_connected"),
+            ("w_not_detected", "$ctt_not_detected"),
+            ("w_slots", "$ctt_slots"),
+            ("w_tick", "$ctt_tick"),
+            ("w_mouse", "$ctt_mouse"),
+        ] {
+            m.set(key, strings::resolve(token).into_owned());
+        }
+        m
+    }
+
+    /// The frame's full model: the raw variables plus the pair script's derived
+    /// readouts/washes, plus the transient `sig_<name>` mirror of last frame's
+    /// fired intents.
+    fn model(&mut self) -> ValueMap {
+        let raw = self.hud_model();
+        let mut m = raw.clone();
+        if let Some(script) = self.script.as_mut() {
+            if let Err(e) = script.set_model(&raw) {
+                tracing::error!("controllertester.lua set_model failed: {e}");
+            }
+            match script.derive() {
+                Ok(Some(derived)) => m.extend(derived),
+                Ok(None) => {}
+                Err(e) => tracing::error!("controllertester.lua derive() failed: {e}"),
+            }
+        }
+        UiIntents::mirror_into(&mut m, &self.fired_sigs);
+        m
     }
 
     /// Select the context on top of the stack (base World, plus the picked context
@@ -644,7 +785,9 @@ fn panel(r: &mut Renderer, x: f32, y: f32, w: f32, h: f32, title: &str) -> f32 {
 
 impl Scene for ControllerTester {
     fn enter(&mut self, renderer: &mut Renderer) {
-        self.ui_theme = Some(Theme::build(renderer));
+        let theme = Theme::build(renderer);
+        self.white = Some(theme.lua_textures()[0].1); // id 0 = "white"
+        self.ui_theme = Some(theme);
         self.stage.load();
         renderer
             .window()
@@ -655,7 +798,7 @@ impl Scene for ControllerTester {
         &mut self,
         dt: Duration,
         input: &InputState,
-        _signals: &mut SceneInput,
+        signals: &mut SceneInput,
         renderer: &Renderer,
     ) -> Transition {
         self.tick = self.tick.wrapping_add(1);
@@ -664,27 +807,67 @@ impl Scene for ControllerTester {
         self.prev_latch = self.latch;
         self.latch = input.analog_latch();
 
-        // Select context: click a tab, or cycle with Tab (keyboard) / Back-View (pad).
-        if input.mouse_left_pressed {
-            let sx = renderer.size().x;
-            let c = input.mouse_position;
-            for (i, ctx) in CONTEXTS.iter().enumerate() {
-                let (x, w) = tab_geom(sx, i);
-                if c.x >= x && c.x <= x + w && c.y >= TAB_Y && c.y <= TAB_Y + TAB_H {
-                    self.select_context(*ctx);
-                }
+        // ── The CHROME walk (input-P3): the header + tab bar are the authored
+        // tree; the PUMP resolved this frame's events, and ONE dispatch through
+        // the walker fires tab clicks and the screen's DECLARED intents
+        // (`on_menu` / `on_tab_*`) as result names. The DEMO chain below is the
+        // exhibit — display-only, never this scene's own input seam. ──
+        let mut results;
+        {
+            let Some(tree) = self.authored.take() else {
+                return Transition::None;
+            };
+            let model = self.model();
+            let ui_snap = UiInput {
+                mouse: input.mouse_position,
+                clicked: input.mouse_left_pressed,
+                down: input.mouse_left,
+                right_down: input.mouse_right,
+                screen: renderer.size(),
+                typed: String::new(),
+                backspace: false,
+                wheel: input.mouse_wheel_delta,
+                exclusive: false,
+                motion: Default::default(),
+            };
+            let frame = run_ui(&tree, &model, &self.ui_styles, &ui_snap, &mut self.ui_state);
+            let over_hud = frame.results.is_on("hud_hit");
+            results = frame.results.clone();
+            self.hud_commands = frame.commands;
+            let mut walker = WalkerHandler::hud(&mut self.ui_state, over_hud)
+                .with_nav(&tree, &model)
+                .with_rects(&frame.rects)
+                .with_intents(&self.ui_intents);
+            {
+                let mut chain: [&mut dyn InputHandler; 1] = [&mut walker];
+                Router::dispatch(signals.events, &mut chain, signals.route);
+            }
+            self.fired_sigs = walker.take_fired();
+            self.authored = Some(tree);
+        }
+        for name in &self.fired_sigs {
+            results.set(name.clone(), true);
+        }
+
+        // Select context: a tab button, or the declared `on_tab_*` cycle — the
+        // raw Tab-key / pad-Back polls died with the chrome migration.
+        for (action, ctx) in [
+            ("ctx_world", InputContext::World),
+            ("ctx_menu", InputContext::Menu),
+            ("ctx_radial", InputContext::Radial),
+            ("ctx_textentry", InputContext::TextEntry),
+        ] {
+            if results.is_on(action) {
+                self.select_context(ctx);
             }
         }
-        let cycle = input.key_down(Key::Tab)
-            || input
-                .gamepad(0)
-                .is_some_and(|g| g.button_down(GamepadButton::Select));
-        if cycle && !self.cycle_prev {
+        let cycled = i32::from(results.is_on("ctx_next")) - i32::from(results.is_on("ctx_prev"));
+        if cycled != 0 {
             let cur = self.bindings.active();
-            let i = CONTEXTS.iter().position(|c| *c == cur).unwrap_or(0);
-            self.select_context(CONTEXTS[(i + 1) % CONTEXTS.len()]);
+            let i = CONTEXTS.iter().position(|c| *c == cur).unwrap_or(0) as i32;
+            let len = CONTEXTS.len() as i32;
+            self.select_context(CONTEXTS[(i + cycled).rem_euclid(len) as usize]);
         }
-        self.cycle_prev = cycle;
 
         // ── The seam (spec §5/§10): ONE resolve + ONE dispatch. The core Resolver
         // turns the snapshot into Fired edges over the SELECTED context's map; each
@@ -723,14 +906,20 @@ impl Scene for ControllerTester {
         // it — the routing, made physical.
         self.stage.drive(dt, &events, &report, self.latch.as_ref());
 
-        // Scene-root consumed the Menu press → open the pause overlay. Under a modal
-        // context Menu never resolves, so pausing is a World-context action (Tab back
-        // to World, or press Start / Esc there).
-        if report.consumed_by(SCENE_ROOT, ActionSignal::Menu) {
+        // The screen DECLARED `on_menu = "pause_open"` (S9): the walker layer
+        // consumed the PUMP's Menu press and fired the name — the pause is the
+        // scene chrome's, not the exhibit's (the demo chain still SHOWS its
+        // SceneRoot consuming Menu in the panel; it just no longer causes
+        // anything). The overlay shows the PROFILE's map, never the demo maps.
+        if results.is_on("pause_open") {
             let theme = self.ui_theme.expect("theme built in enter");
+            let pause_map = flicker_shell::input_profile()
+                .context_map("World")
+                .cloned()
+                .unwrap_or_else(InputMap::wasd_and_mouse);
             return Transition::Push(Box::new(PauseScene::new(
                 theme,
-                self.bindings.active_map(),
+                &pause_map,
                 &self.controls,
                 &self.gamepad_config,
             )));
@@ -760,9 +949,15 @@ impl Scene for ControllerTester {
             size: Vec2::new((view_x1 - view_x0).max(80.0), content_h),
         };
 
-        // The 3D stage FIRST — meshes draw under the UI pass, so the chrome below
-        // frames the centre hole rather than covering the body.
-        self.stage.render(renderer, view);
+        // The golem is the ROOT surface's element: declared as the frame graph's root
+        // pass, straight into the swapchain (no target, no blit). Meshes draw under the
+        // 2D pass, so the chrome below frames the centre hole rather than covering the body.
+        {
+            let mut fg = FrameGraph::new();
+            let stage = &mut self.stage;
+            fg.root(move |r| stage.render(r, view));
+            fg.execute(renderer);
+        }
 
         // Hole-punch background: four opaque bands around the stage viewport (the
         // old full-screen backdrop would sit OVER the 3D and hide the golem).
@@ -799,7 +994,7 @@ impl Scene for ControllerTester {
             0.0,
         );
         renderer.draw_text(
-            "GOLEM STAGE  \u{00b7}  signals \u{2192} motion",
+            &strings::resolve("$ctt_golem_stage"),
             Vec2::new(view.pos.x + 12.0, view.pos.y + 8.0),
             12.0,
             ACCENT,
@@ -807,7 +1002,7 @@ impl Scene for ControllerTester {
         match (self.stage.error.clone(), self.stage.caption()) {
             (Some(e), _) => {
                 renderer.draw_text(
-                    "reference body failed to load:",
+                    &strings::resolve("$ctt_golem_failed"),
                     Vec2::new(view.pos.x + 12.0, view.pos.y + 30.0),
                     12.0,
                     AMBER,
@@ -832,110 +1027,8 @@ impl Scene for ControllerTester {
 
         let snap = self.snap.as_ref();
 
-        // ── header ──
-        renderer.draw_text(
-            "CONTROLLER TESTER \u{00b7} LIVE BUS INSPECTOR",
-            Vec2::new(margin, 16.0),
-            20.0,
-            ACCENT,
-        );
-        renderer.draw_text(
-            "WASD / left stick move the golem \u{00b7} Shift run \u{00b7} Ctrl crouch \u{00b7} Space jump \u{00b7} Tab / Back cycles context \u{00b7} Esc / Start = menu",
-            Vec2::new(margin, 44.0),
-            12.0,
-            DIM,
-        );
-        let connected = snap.is_some_and(|s| s.gamepad_connected(0));
-        let slots = snap.map_or(0, |s| s.gamepads().count());
-        renderer.draw_text(
-            &format!(
-                "gamepad 0: {}   \u{00b7}   {slots} slot(s)   \u{00b7}   tick {}",
-                if connected {
-                    "CONNECTED"
-                } else {
-                    "not detected"
-                },
-                self.tick
-            ),
-            Vec2::new(margin, 64.0),
-            12.0,
-            if connected { ON_BORDER } else { DIM },
-        );
-        let (mpos, ml, mr, mm) = snap
-            .map(|s| {
-                (
-                    s.mouse_position,
-                    s.mouse_left,
-                    s.mouse_right,
-                    s.mouse_middle,
-                )
-            })
-            .unwrap_or((Vec2::ZERO, false, false, false));
-        renderer.draw_text(
-            &format!(
-                "mouse {:.0},{:.0}  L{} R{} M{}",
-                mpos.x, mpos.y, ml as u8, mr as u8, mm as u8
-            ),
-            Vec2::new(size.x - 230.0, 20.0),
-            12.0,
-            DIM,
-        );
-
-        // ── context tab bar (Prism tab pattern: active tint + bronze underline) ──
-        let cursor = snap.map(|s| s.mouse_position).unwrap_or(Vec2::ZERO);
-        let active_ctx = self.bindings.active();
-        for (i, ctx) in CONTEXTS.iter().enumerate() {
-            let (x, w) = tab_geom(size.x, i);
-            let is_active = *ctx == active_ctx;
-            let hovered = cursor.x >= x
-                && cursor.x <= x + w
-                && cursor.y >= TAB_Y
-                && cursor.y <= TAB_Y + TAB_H;
-            let bg = if is_active {
-                TAB_ACTIVE_BG
-            } else if hovered {
-                TAB_HOVER_BG
-            } else {
-                [0.0; 4]
-            };
-            renderer.draw_ui_panel(
-                Vec2::new(x, TAB_Y),
-                Vec2::new(w, TAB_H),
-                bg,
-                bg,
-                0.0,
-                4.0,
-                0.0,
-                bg,
-                0.0,
-            );
-            if is_active {
-                renderer.draw_ui_panel(
-                    Vec2::new(x, TAB_Y + TAB_H - 3.0),
-                    Vec2::new(w, 3.0),
-                    BRONZE,
-                    BRONZE,
-                    0.0,
-                    0.0,
-                    0.0,
-                    BRONZE,
-                    0.0,
-                );
-            }
-            let col = if is_active {
-                TAB_LABEL_ON
-            } else {
-                TAB_LABEL_OFF
-            };
-            text_centered(
-                renderer,
-                x + w * 0.5,
-                TAB_Y + TAB_H * 0.5,
-                ctx_label(*ctx),
-                14.0,
-                col,
-            );
-        }
+        // (The header, mouse readout and context tab bar are the WALKER's now —
+        // the authored chrome blits over the feed at the end of this pass.)
 
         // (Columns were laid out above — the stage owns the centre.) The diagram
         // occupies the top ~58% of the LEFT column; the analog panel the rest. Scale
@@ -1078,7 +1171,7 @@ impl Scene for ControllerTester {
             analog_top,
             left_w,
             analog_h,
-            "ANALOG LATCH  \u{00b7}  input.analog_latch() (volatile cache)",
+            &strings::resolve("$ctt_analog_latch"),
         );
         match self.latch {
             Some(f) => {
@@ -1094,7 +1187,7 @@ impl Scene for ControllerTester {
                         f.seq,
                         dseq,
                         age_ms,
-                        if stale { "STALE" } else { "LIVE" }
+                        strings::resolve(if stale { "$ctt_stale" } else { "$ctt_live" })
                     ),
                     Vec2::new(left_x0 + 14.0, ay),
                     12.0,
@@ -1148,7 +1241,7 @@ impl Scene for ControllerTester {
                 );
                 ay += 18.0;
                 renderer.draw_text(
-                    "120 Hz cache sampled off the discrete bus; seq climbs while live",
+                    &strings::resolve("$ctt_analog_note"),
                     Vec2::new(left_x0 + 14.0, ay),
                     10.0,
                     DIM,
@@ -1156,7 +1249,7 @@ impl Scene for ControllerTester {
             }
             None => {
                 renderer.draw_text(
-                    "no analog latch this frame (device not sampling)",
+                    &strings::resolve("$ctt_analog_none"),
                     Vec2::new(left_x0 + 14.0, ay),
                     12.0,
                     DIM,
@@ -1172,7 +1265,14 @@ impl Scene for ControllerTester {
         let p3_y = content_top + 2.0 * (ph + gap);
 
         // (1) the active ContextualBindings stack (top of stack first, base = World).
-        let mut cy = panel(renderer, panel_x, p1_y, panel_w, ph, "CONTEXT STACK");
+        let mut cy = panel(
+            renderer,
+            panel_x,
+            p1_y,
+            panel_w,
+            ph,
+            &strings::resolve("$ctt_context_stack"),
+        );
         let depth = self.stack.len();
         for (i, ctx) in self.stack.iter().enumerate().rev() {
             let is_top = i == depth - 1;
@@ -1188,16 +1288,16 @@ impl Scene for ControllerTester {
                 col,
             );
             let tag = if is_top {
-                "active"
+                strings::resolve("$ctt_active_tag")
             } else if i == 0 {
-                "base"
+                strings::resolve("$ctt_base_tag")
             } else {
-                ""
+                "".into()
             };
             if !tag.is_empty() {
-                let tw = renderer.measure_text(tag, 11.0).x;
+                let tw = renderer.measure_text(&tag, 11.0).x;
                 renderer.draw_text(
-                    tag,
+                    &tag,
                     Vec2::new(panel_x + panel_w - 14.0 - tw, cy + 2.0),
                     11.0,
                     DIM,
@@ -1213,7 +1313,7 @@ impl Scene for ControllerTester {
             p2_y,
             panel_w,
             ph,
-            "FOCUS CHAIN  (owner = top of chain)",
+            &strings::resolve("$ctt_focus_chain"),
         );
         for (i, layer) in self.bus.layers.iter().enumerate() {
             let col = if layer.owns { GREENV } else { TXT };
@@ -1234,10 +1334,10 @@ impl Scene for ControllerTester {
                 if layer.owns { GREENV } else { DIM },
             );
             if layer.owns {
-                let tag = "\u{25c0} OWNS";
-                let tw = renderer.measure_text(tag, 11.0).x;
+                let tag = strings::resolve("$ctt_owns");
+                let tw = renderer.measure_text(&tag, 11.0).x;
                 renderer.draw_text(
-                    tag,
+                    &tag,
                     Vec2::new(panel_x + panel_w - 12.0 - tw, cy),
                     11.0,
                     GREENV,
@@ -1247,10 +1347,17 @@ impl Scene for ControllerTester {
         }
 
         // (3) which handler consumed each fired signal this frame (DispatchReport).
-        let mut cy = panel(renderer, panel_x, p3_y, panel_w, ph, "CONSUMED THIS FRAME");
+        let mut cy = panel(
+            renderer,
+            panel_x,
+            p3_y,
+            panel_w,
+            ph,
+            &strings::resolve("$ctt_consumed"),
+        );
         if self.bus.consumed.is_empty() {
             renderer.draw_text(
-                "\u{2014} no signals this frame \u{2014}",
+                &strings::resolve("$ctt_no_signals"),
                 Vec2::new(panel_x + 14.0, cy),
                 12.0,
                 DIM,
@@ -1272,7 +1379,10 @@ impl Scene for ControllerTester {
                 );
                 let (dest, col) = match row.consumer {
                     Some(name) => (format!("\u{2192} {name}"), GREENV),
-                    None => ("\u{2192} passed".to_string(), AMBER),
+                    None => (
+                        format!("\u{2192} {}", strings::resolve("$ctt_passed")),
+                        AMBER,
+                    ),
                 };
                 let tw = renderer.measure_text(&dest, 12.0).x;
                 renderer.draw_text(
@@ -1287,7 +1397,12 @@ impl Scene for ControllerTester {
 
         // ── keyboard pills (bottom strip, below both columns) ──
         let ky = size.y - 24.0;
-        renderer.draw_text("KEYS", Vec2::new(margin, ky), 11.0, DIM);
+        renderer.draw_text(
+            &strings::resolve("$ctt_keys"),
+            Vec2::new(margin, ky),
+            11.0,
+            DIM,
+        );
         let mut x = 84.0;
         for k in KEYS {
             let on = snap.is_some_and(|s| s.key_down(k));
@@ -1315,13 +1430,26 @@ impl Scene for ControllerTester {
                 break;
             }
         }
+
+        // ── the walker CHROME (header · mouse readout · tab bar) — last, so it
+        // draws over the hole-punch bands framing the stage. ──
+        if let Some(white) = self.white {
+            render_hud(renderer, &self.hud_commands, white, &[]);
+        }
     }
 }
 
 impl Default for ControllerTester {
     fn default() -> Self {
-        Self::new()
+        Self::shipped()
     }
+}
+
+/// Build the input-bus inspector as a boxed `Scene` — the CLIENT BEHAVIOUR the
+/// roster registers; the manifest resolves `controllertester.scene.json` and
+/// hands its def here.
+pub fn scene(def: &SceneDef) -> Box<dyn Scene> {
+    Box::new(ControllerTester::new(def))
 }
 
 #[cfg(test)]
@@ -1422,5 +1550,148 @@ mod tests {
                 .action_for(InputBinding::GamepadButton(GamepadButton::East)),
             Some(ActionSignal::Cancel),
         );
+    }
+
+    // ── The scene pair (five-line split; ruling DC217431) ────────────────────
+
+    /// **The shipped scene file authors the chrome.** The tree parses, the
+    /// screen declares the pause + context-cycle intents, the four tab buttons
+    /// carry the context actions, and every component kind and display literal
+    /// in the file is legal — the same def the manifest hands the runtime.
+    #[test]
+    fn the_shipped_scene_authors_the_chrome() {
+        use flicker::script::Value;
+
+        let scene = ControllerTester::shipped();
+        let tree = scene.authored.as_ref().expect("the def declares a tree");
+        for (intent, name) in [
+            ("on_menu", "pause_open"),
+            ("on_tab_next", "ctx_next"),
+            ("on_tab_prev", "ctx_prev"),
+        ] {
+            assert_eq!(
+                tree.props.get(intent),
+                Some(&Value::Text(name.into())),
+                "the screen declares {intent} = {name}"
+            );
+        }
+
+        // One tab button per context, wearing its action.
+        fn actions(n: &UiNode, out: &mut Vec<String>) {
+            if let Some(a) = &n.action {
+                out.push(a.clone());
+            }
+            for c in &n.children {
+                actions(c, out);
+            }
+        }
+        let mut found = Vec::new();
+        actions(tree, &mut found);
+        for ctx in CONTEXTS {
+            let want = format!("ctx_{}", ctx_word(ctx));
+            assert!(
+                found.contains(&want),
+                "a tab button fires '{want}': {found:?}"
+            );
+        }
+
+        assert!(
+            flicker::ui::unknown_kinds(tree).is_empty(),
+            "unknown component kinds: {:?}",
+            flicker::ui::unknown_kinds(tree)
+        );
+        assert!(
+            flicker::ui::raw_display_literals(tree).is_empty(),
+            "raw display literals (labels must ride $tokens): {:?}",
+            flicker::ui::raw_display_literals(tree)
+        );
+        // …and the same law at the Rust publish seam (state words and dotted
+        // paths are wiring; the feed's draw-site copy rides strings::resolve).
+        let flags = flicker::ui::strings::raw_model_publish_literals(include_str!("lib.rs"));
+        assert!(flags.is_empty(), "raw Model-publish copy: {flags:?}");
+    }
+
+    /// **The declared chrome intents fire through the AUTHORED tree** — Menu
+    /// opens the pause, TabNext cycles the context ring; the walker is the
+    /// scene's ONE input layer (the demo chain is the exhibit, not the seam).
+    #[test]
+    fn dispatch_fires_the_declared_chrome_intents() {
+        use flicker::ui::{UiState, WalkerHandler};
+
+        let scene = ControllerTester::shipped();
+        let raw = InputState::new();
+        let events = [
+            InputEvent::new(
+                ActionSignal::Menu,
+                EventKind::Press,
+                InputContext::World,
+                &raw,
+            ),
+            InputEvent::new(
+                ActionSignal::TabNext,
+                EventKind::Press,
+                InputContext::World,
+                &raw,
+            ),
+        ];
+        let mut ui = UiState::new();
+        let mut walker = WalkerHandler::hud(&mut ui, false).with_intents(&scene.ui_intents);
+        let mut rc = RouteCtx::new();
+        {
+            let mut chain: [&mut dyn InputHandler; 1] = [&mut walker];
+            Router::dispatch(&events, &mut chain, &mut rc);
+        }
+        let fired = walker.take_fired();
+        assert!(
+            fired.contains(&"pause_open".to_string()),
+            "on_menu fires: {fired:?}"
+        );
+        assert!(
+            fired.contains(&"ctx_next".to_string()),
+            "on_tab_next fires: {fired:?}"
+        );
+    }
+
+    /// **The pair script composes the chrome readouts over the raw publish** —
+    /// the status line, the pointer line, and the tab washes (the selected
+    /// context's tab wears the active style, the rest idle).
+    #[test]
+    fn the_pair_script_derives_the_chrome_readouts() {
+        let strings = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../content/data/stringtable.json"
+        ))
+        .expect("stringtable reads");
+        flicker::ui::strings::load_str(&strings, "en-us");
+
+        let mut scene = ControllerTester::shipped();
+        let m = scene.model();
+        for key in ["status", "mouse_line"] {
+            assert!(
+                m.text(key)
+                    .is_some_and(|s| !s.is_empty() && !s.starts_with('$')),
+                "derive() must yield display TEXT for '{key}': {:?}",
+                m.get(key)
+            );
+        }
+        assert_eq!(
+            m.text("ctx_world_style"),
+            Some("controllertester.tab_active"),
+            "the selected context's tab is active"
+        );
+        assert_eq!(
+            m.text("ctx_menu_style"),
+            Some("controllertester.tab_idle"),
+            "an unselected tab idles"
+        );
+
+        // Selecting a context moves the wash with it.
+        scene.select_context(InputContext::Radial);
+        let m = scene.model();
+        assert_eq!(
+            m.text("ctx_radial_style"),
+            Some("controllertester.tab_active")
+        );
+        assert_eq!(m.text("ctx_world_style"), Some("controllertester.tab_idle"));
     }
 }

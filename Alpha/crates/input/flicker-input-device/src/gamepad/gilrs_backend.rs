@@ -11,6 +11,7 @@ use flicker_input_core::{GamepadAxis, GamepadButton};
 use gilrs::{self, Gilrs};
 
 use super::{DeviceCaps, PadSnapshot};
+use crate::PadVendor;
 
 /// Pumps gilrs each refresh and maintains the slot-0 snapshot.
 pub struct PlatformGamepad {
@@ -47,6 +48,7 @@ impl PlatformGamepad {
                 snap.reset_neutral();
                 snap.connected = false;
                 snap.caps = DeviceCaps::default();
+                snap.vendor = PadVendor::Generic;
                 return;
             }
         };
@@ -61,6 +63,7 @@ impl PlatformGamepad {
                         snap.reset_neutral();
                         snap.connected = true;
                         snap.caps = DeviceCaps::all();
+                        snap.vendor = self.classify(id);
                     }
                 }
                 gilrs::EventType::Disconnected => {
@@ -69,6 +72,7 @@ impl PlatformGamepad {
                         snap.reset_neutral();
                         snap.connected = false;
                         snap.caps = DeviceCaps::default();
+                        snap.vendor = PadVendor::Generic;
                     }
                 }
                 // Guards keep slot-0 filtering in the arm head; a pad that fails
@@ -104,8 +108,21 @@ impl PlatformGamepad {
                 self.active = Some(id);
                 snap.connected = true;
                 snap.caps = DeviceCaps::all();
+                snap.vendor = self.classify(id);
                 true
             }
+        }
+    }
+
+    /// The vendor of gilrs pad `id`, from its OS name + USB vendor id. `Generic`
+    /// when gilrs is unavailable.
+    fn classify(&self, id: gilrs::GamepadId) -> PadVendor {
+        match self.gilrs.as_ref() {
+            Some(gilrs) => {
+                let gp = gilrs.gamepad(id);
+                PadVendor::from_metadata(gp.name(), gp.vendor_id())
+            }
+            None => PadVendor::Generic,
         }
     }
 }

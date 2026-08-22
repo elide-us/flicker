@@ -137,6 +137,38 @@ pub fn apply(bench: &mut Sablework, results: &ValueMap) -> bool {
         }
     }
 
+    // ── the base colour (the tint knobs) ──
+    // Hue and Saturation recolour the WHOLE ramp at once — the ramp is the recipe's
+    // one colour representation, so a knob reads its current tint and writes the new
+    // one straight back onto every stop. Re-tinting to the colour it already wears
+    // is not an edit: a knob released on its resting value must not re-bake.
+    let (cur_hue, cur_sat) = bench.recipe.out.ramp.tint();
+    let hue = slid(results, "tint_hue").map(|v| (v as f32).rem_euclid(1.0));
+    let sat = slid(results, "tint_sat").map(|v| (v as f32).clamp(0.0, 1.0));
+    if hue.is_some() || sat.is_some() {
+        let (hue, sat) = (hue.unwrap_or(cur_hue), sat.unwrap_or(cur_sat));
+        if (hue - cur_hue).abs() > 1e-4 || (sat - cur_sat).abs() > 1e-4 {
+            bench.recipe.out.ramp.recolor(hue, sat);
+            edited = true;
+        }
+    }
+
+    // ── the emissive palette (swatch picks) ──
+    // Each swatch fires `glow_pick_<i>`; the pick writes the palette colour VERBATIM into
+    // the glow. Unlike a material bind this IS an image edit — it re-bakes. Together with
+    // Roll's snap (below) this route is the ONLY writer of `out.emissive`, so the glow
+    // colour stays inside the palette (B46FFC37).
+    for i in 0..bench.palette.len() {
+        if results.is_on(&format!("glow_pick_{i}")) {
+            if let Some(rgb) = bench.palette.get(i).map(|c| c.rgb) {
+                if bench.recipe.out.emissive != rgb {
+                    bench.recipe.out.emissive = rgb;
+                    edited = true;
+                }
+            }
+        }
+    }
+
     // ── the selected voice's fine knobs ──
     let sel = bench.sel_ch.min(CHANNEL_COUNT - 1);
     let ch = &mut bench.recipe.channels[sel];
@@ -185,6 +217,23 @@ pub fn apply(bench: &mut Sablework, results: &ValueMap) -> bool {
     if let Some(n) = results.number("sel_material") {
         bench.set_material_by_option(n);
     }
+    // ── the page switch + materials-list bind ──
+    // Switching pages is a VIEW change (and closes any open rename, whose field lives on
+    // the bench page). Binding from the list sets the recipe's material by id — the same
+    // recipe field the header dropdown writes, and like it NOT an image edit (no re-bake).
+    if results.is_on("page_bench") {
+        bench.page = 0;
+        bench.cancel_rename();
+    }
+    if results.is_on("page_materials") {
+        bench.page = 1;
+        bench.cancel_rename();
+    }
+    for i in 0..bench.materials.len() {
+        if results.is_on(&format!("mat_pick_{i}")) {
+            bench.recipe.material = bench.materials.get(i).map(|(id, _)| *id);
+        }
+    }
     // The material RENAME — an authored-name edit, not an image edit: begin on the bound
     // material, and commit/cancel from the raw Enter/Esc the scene folded into `results`.
     if results.is_on("rename") {
@@ -212,6 +261,16 @@ pub fn apply(bench: &mut Sablework, results: &ValueMap) -> bool {
             .wrapping_mul(6364136223846793005)
             .wrapping_add(1442695040888963407);
         bench.recipe = flicker_texture::random(seed);
+        // Snap the rolled random glow onto the palette — emissive colours stay bounded
+        // (B46FFC37). `flicker_texture::random` itself stays unrestricted; the restriction
+        // lives HERE, bench-side, so a non-bench caller still gets a free-hue glow.
+        if let Some(rgb) = bench
+            .palette
+            .nearest(bench.recipe.out.emissive)
+            .and_then(|i| bench.palette.get(i).map(|c| c.rgb))
+        {
+            bench.recipe.out.emissive = rgb;
+        }
         edited = true;
     }
     if results.is_on("reseed") {

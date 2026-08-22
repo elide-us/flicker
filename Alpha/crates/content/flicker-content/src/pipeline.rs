@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 
 use crate::bake::bake_rig;
-use crate::conform::conform_to_canonical;
+use crate::conform::{conform_to_canonical, ConformMode};
 use crate::fbx::parse_fbx;
 use crate::rig::rename_to_canonical;
 use crate::scan::{scan_folder, Kind};
@@ -58,7 +58,7 @@ pub fn import_folder(
 
     let mut model = parse_fbx(&rig_entry.path)?;
     rename_to_canonical(&mut model);
-    conform_to_canonical(&mut model, reference).with_context(|| {
+    conform_to_canonical(&mut model, reference, ConformMode::Canonical).with_context(|| {
         format!(
             "conforming {} to {}",
             rig_entry.path.display(),

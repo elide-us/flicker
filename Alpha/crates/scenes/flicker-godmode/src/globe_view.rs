@@ -18,14 +18,21 @@ mod tests {
     use flicker_globe::{GlobeStage, StageLayer};
 
     fn styles() -> serde_json::Value {
-        // The PRODUCTION loader, not a raw file read: stage sources live in the
-        // ui_stages.json satellite and reach the root through load_styles's merge.
+        // The PRODUCTION loader over the SHIPPED scene file's style blocks (the
+        // five-line split): stage sources live in the ui_stages.json satellite
+        // and reach the root through load_styles_for's merge, exactly as the
+        // runtime builds them from the manifest's def.
+        let def = flicker::ui::SceneDef::parse(
+            "godmode",
+            include_str!("../../../../content/sensorium/scenes/godmode.scene.json"),
+        )
+        .expect("the shipped godmode.scene.json parses");
         flicker::ui::load_styles_for(
             concat!(
                 env!("CARGO_MANIFEST_DIR"),
                 "/../../../content/sensorium/resources/ui_theme.json"
             ),
-            Some(&crate::scene_styles()),
+            def.styles.as_ref(),
         )
     }
 

@@ -36,15 +36,6 @@ impl PackKind {
         PackKind::Creature,
     ];
 
-    pub fn label(self) -> &'static str {
-        match self {
-            PackKind::Locomotion => "Locomotion",
-            PackKind::Weapon => "Weapon",
-            PackKind::Ability => "Ability",
-            PackKind::Creature => "Creature",
-        }
-    }
-
     /// The design's per-type accent, as a `loomforge.pack_kind.*` style path.
     pub fn color_path(self) -> &'static str {
         match self {

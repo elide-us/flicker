@@ -90,6 +90,10 @@ pub struct ChatView<'a> {
     pub roster: &'a [RosterEntry],
     /// The local player's nick (speaker chip).
     pub nick: &'a str,
+    /// The resolved word for "You" on the speaker chip — the SCENE resolves it
+    /// through the stringtable (localization stays scene/content-side; this
+    /// builder never ships English of its own).
+    pub you_label: &'a str,
 }
 
 /// Build the floating chat window at `(x, y)` sized `w`×`h`. Returns a
@@ -172,7 +176,11 @@ pub fn chat_panel(x: f32, y: f32, w: f32, h: f32, view: &ChatView) -> UiNode {
     body.children = vec![logwell, roster];
 
     // ── input row: speaker chip · text field (grow) · send ──
-    let mut speaker = text_node(&format!("You · {}", view.nick), &sty("speaker_color"), 13.0);
+    let mut speaker = text_node(
+        &format!("{} · {}", view.you_label, view.nick),
+        &sty("speaker_color"),
+        13.0,
+    );
     speaker.size = Some(speaker_w(view.nick));
     let mut field = styled("text_field", &sty("input"));
     field.id = "chat_input".to_string();
@@ -308,7 +316,7 @@ fn display_channel(ch: &str) -> String {
 }
 
 /// Rough fixed width for the speaker chip — the walker has no glyph metrics, so
-/// estimate from `"You · <nick>"` length and clamp.
+/// estimate from the `"<you_label> · <nick>"` length and clamp.
 fn speaker_w(nick: &str) -> f32 {
     let chars = 6 + nick.chars().count();
     (chars as f32 * 8.0).clamp(90.0, 200.0)
@@ -372,6 +380,7 @@ mod tests {
             lines: &lines,
             roster: &roster,
             nick: "me",
+            you_label: "You",
         };
         let root = chat_panel(40.0, 500.0, 900.0, 300.0, &view);
 
@@ -458,6 +467,7 @@ mod tests {
             lines: &lines,
             roster: &roster,
             nick: "me",
+            you_label: "You",
         };
         let tree = chat_panel(20.0, 400.0, 820.0, 260.0, &view);
 
@@ -471,10 +481,13 @@ mod tests {
             mouse: Vec2::new(0.0, 0.0),
             clicked: false,
             down: false,
+            right_down: false,
             screen: Vec2::new(1280.0, 720.0),
             typed: String::new(),
             backspace: false,
             wheel: 0.0,
+            exclusive: false,
+            motion: Default::default(),
         };
         let mut state = UiState::new();
         let frame = run_ui(&tree, &model, &styles, &input, &mut state);
@@ -501,6 +514,7 @@ mod tests {
             lines: &[],
             roster: &[],
             nick: "me",
+            you_label: "You",
         };
         // Frame at (20,400) 820×260, column pad 6 / gap 6: titlebar 406..436, then the
         // tab row at 442..472. The strip grows to 808 − (34 + 34 + 4 + 4) = 732 wide
@@ -510,10 +524,13 @@ mod tests {
             mouse: Vec2::new(500.0, 457.0),
             clicked: true,
             down: true,
+            right_down: false,
             screen: Vec2::new(1280.0, 720.0),
             typed: String::new(),
             backspace: false,
             wheel: 0.0,
+            exclusive: false,
+            motion: Default::default(),
         };
         let model = ValueMap::new().with("chat_tab", 0.0);
         let f = run_ui(

@@ -41,13 +41,16 @@ pub use mesh::{
     ray_triangle, Camera, MeshDrawOptions, MeshHandle, MeshIndices, MeshVertex, SceneLighting,
 };
 pub use pipeline_ground_fog::GroundFog;
+pub use pipeline_mesh::MATERIAL_PALETTE_LEN;
 pub use pipeline_mesh_textured::{
     build_textured_verts, PbrMaps, TexturedMeshHandle, TexturedVertex,
 };
 pub use pipeline_skinned::{SkinnedMeshHandle, SkinnedMeshPipeline, SkinnedVertex};
 pub use pipeline_text::FontRole;
 pub use pipeline_volumetric::{VolumetricDisk, MAX_VOLUMETRIC_BODIES};
-pub use quad_grid::{QuadGrid, QuadStyle, QuadView, EDITOR_QUADS};
+pub use quad_grid::{
+    Orbit, QuadGrid, QuadStyle, QuadView, ViewportFiller, ViewportLayout, EDITOR_QUADS, ORBIT_FOV_Y,
+};
 pub use renderer::{RenderTargetHandle, Renderer, FULL_TEXTURE};
 pub use stage::{grid_segments, grid_segments_xy, ring_segments};
 pub use texture::TextureHandle;

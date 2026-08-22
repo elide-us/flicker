@@ -18,7 +18,6 @@ use flicker::ui::{
 use flicker_flight::{Flight, FlightPlayer};
 use flicker_input_core::{
     AbstractControls, ActionSignal, EventKind, GamepadConfig, InputContext, InputMap, InputState,
-    MouseButton,
 };
 use flicker_input_router::{InputHandler, Router};
 use flicker_shell::{PauseScene, Theme};
@@ -192,7 +191,7 @@ impl Sim {
     fn hud_model(&self) -> ValueMap {
         // The ENGINE publishes raw flight variables + RESOLVED copy tokens; the PAIR
         // SCRIPT (`solarbirth.lua`) composes the phase line (five-line split).
-        let raw = ValueMap::new()
+        let mut raw = ValueMap::new()
             .with("segment", self.flight.segment_name().to_string())
             .with("progress_pct", f64::from(self.flight.progress() * 100.0))
             .with("sys", strings::resolve("$sb_the_prism_system").into_owned())
@@ -201,6 +200,27 @@ impl Sim {
                 strings::resolve("$sb_approaching").into_owned(),
             )
             .with("settled", strings::resolve("$sb_settled").into_owned());
+
+        // Publish the LIVE control bindings so the HUD/footer show the actual key
+        // (kbm) or glyph (pad) bound to each signal — never a hardcoded string
+        // (MCP 1A292918 T5, 5B9A8B50). Resolved from the ACTIVE context map (the
+        // same one the pause overlay takes), so a rebind or device switch shows next
+        // frame. `bind_Interact`/`glyph_Interact` (Replay) + `bind_Menu` + the device.
+        let ctx = if self.cinematic {
+            "FlightPath"
+        } else {
+            "Flying"
+        };
+        let map = flicker_shell::input_profile()
+            .context_map(ctx)
+            .cloned()
+            .unwrap_or_else(InputMap::flying);
+        flicker_shell::publish_signal_bindings(
+            &mut raw,
+            &map,
+            [ActionSignal::Interact, ActionSignal::Menu],
+        );
+
         let mut m = raw.clone();
         if let Some(script) = &self.script {
             if let Err(e) = script.set_model(&raw) {
@@ -388,22 +408,29 @@ impl Scene for Sim {
         // is the readout PANEL claiming the pointer — it gates the camera so a drag on
         // the readout doesn't orbit; the open sky (the rtt viewport) never claims.
         let mut over_hud = false;
+        let mut pointer = None;
         if let Some(tree) = self.ui_tree.as_ref() {
             let model = self.hud_model();
             let snap = UiInput {
                 mouse: input.mouse_position,
                 clicked: input.mouse_left_pressed,
                 down: input.mouse_left,
+                right_down: input.mouse_right,
                 screen: r.size(),
                 typed: String::new(),
                 backspace: false,
                 wheel: input.mouse_wheel_delta,
+                exclusive: false,
+                motion: Default::default(),
             };
             let frame = run_ui(tree, &model, &self.ui_styles, &snap, &mut self.ui_state);
             over_hud = frame.results.is_on("hud_hit");
             // The walker reserves the full-screen 3D viewport's rect; `render` sizes +
             // composites the offscreen pass into it, and the camera gates to it.
-            self.viewport = frame.rtt_rect("solarbirth_view");
+            self.viewport = frame.surface_rect("solarbirth_view");
+            // The pointer SAMPLE for the sky surface — the walker's barrier (A8C9F02B
+            // §4b): none while the cursor is on the readout or the footer.
+            pointer = frame.surface_pointer("solarbirth_view").cloned();
             self.hud_commands = frame.commands;
         }
 
@@ -493,23 +520,16 @@ impl Scene for Sim {
             * ZOOM_STICK_RATE
             * dts;
         // Pan/zoom apply only OFF the rail (`active = !cinematic`); on the rail this is a
-        // no-op and the flight drives the pose below. Gated to the rtt viewport (and
-        // blocked over the readout panel) now that the 3D is a viewport, not the window.
+        // no-op and the flight drives the pose below. The pointer half is the walker's
+        // surface sample (none over the readout/footer — the barrier).
         self.cam
-            .update(input, look, zoom, self.viewport, over_hud, !self.cinematic);
+            .update(pointer.as_ref(), look, zoom, !self.cinematic);
         if self.cinematic {
             // A LOOK gesture on the OPEN SKY drops out of the cinematic to the free
             // camera: an RMB-drag begun inside the viewport (not over a panel), or a
             // right-stick deflection. Left-click no longer grabs — it is reserved for
             // select-target.
-            let m = input.mouse_position;
-            let in_view = self.viewport.is_some_and(|r| {
-                m.x >= r.pos.x
-                    && m.x <= r.pos.x + r.size.x
-                    && m.y >= r.pos.y
-                    && m.y <= r.pos.y + r.size.y
-            });
-            let grabbed = (input.mouse_pressed(MouseButton::Right) && !over_hud && in_view)
+            let grabbed = pointer.as_ref().is_some_and(|p| p.pressed && p.right)
                 || stick_yaw != 0.0
                 || stick_pitch != 0.0;
             if grabbed {
@@ -764,10 +784,13 @@ mod tests {
             mouse: Vec2::new(30.0, 30.0), // parked ON the readout panel
             clicked: false,
             down: false,
+            right_down: false,
             screen: Vec2::new(1920.0, 1080.0),
             typed: String::new(),
             backspace: false,
             wheel: 0.0,
+            exclusive: false,
+            motion: Default::default(),
         };
         let frame = run_ui(&tree, &model, &styles, &snap, &mut UiState::new());
         let texts = frame
@@ -775,8 +798,13 @@ mod tests {
             .iter()
             .filter(|c| matches!(c, HudCommand::Text { .. }))
             .count();
-        // title + phase + hint + roster header + one row per planet.
-        assert_eq!(texts, 4 + planets.len(), "every readout line renders");
+        // The readout (title + phase + roster header + one row per planet) plus the
+        // footer's control-hint labels + MENU button all render as text.
+        assert!(
+            texts >= 3 + planets.len(),
+            "readout + footer text renders ({texts} lines for {} planets)",
+            planets.len()
+        );
         // The readout is a PANEL over the full-screen rtt now: the pointer on it is a
         // UI hit, so the camera (which gates on `!hud_hit`) won't orbit there — the
         // opposite of the old bare-text drag-through.
@@ -785,10 +813,10 @@ mod tests {
             "the readout panel claims the pointer (camera drag is blocked over it)"
         );
         // The full-screen 3D viewport must reserve a slot — a source-LESS `rtt` is
-        // skipped by the walker (`rtt_rect` → None → the scene draws nothing), which
+        // skipped by the walker (`surface_rect` → None → the scene draws nothing), which
         // is exactly the blank-viewport bug this guards against at build time.
         let vp = frame
-            .rtt_rect("solarbirth_view")
+            .surface_rect("solarbirth_view")
             .expect("the rtt viewport reserved a slot");
         assert!(
             vp.size.x > 100.0 && vp.size.y > 100.0,

@@ -96,6 +96,78 @@ impl ColorRamp {
         }
         last.color
     }
+
+    /// The ramp's representative `(hue, saturation)`, read from its most saturated
+    /// stop — where the hue is best defined, since a near-black or near-grey stop
+    /// barely has one. `(0, 0)` for an empty or fully greyscale ramp.
+    ///
+    /// The ramp is the ONE representation of a recipe's colour; this is a reading
+    /// of it for the bench's Hue/Saturation knobs, not a second copy that could
+    /// drift from it.
+    pub fn tint(&self) -> (f32, f32) {
+        self.stops
+            .iter()
+            .map(|st| hsv_of(st.color))
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+            .map_or((0.0, 0.0), |(h, s, _)| (h, s))
+    }
+
+    /// Re-tint every stop onto a single `hue`/`saturation`, keeping each stop's
+    /// position and BRIGHTNESS. The dark→light value profile that gives the surface
+    /// its relief and contrast survives; only the chroma is swept onto one hue — so
+    /// a grey stone becomes gold without losing its light-to-dark shape.
+    ///
+    /// This is the write side of the bench's colour knobs. It collapses a
+    /// multi-hue authored ramp to a single-hue sweep by design: the moment you
+    /// reach for the Hue knob, one hue is what you are asking for.
+    pub fn recolor(&mut self, hue: f32, saturation: f32) {
+        for st in &mut self.stops {
+            let (_, _, v) = hsv_of(st.color);
+            st.color = hsv(hue, saturation, v);
+        }
+    }
+}
+
+/// HSV → linear RGB. `h` wraps, so a hue walked past 1.0 keeps going round the
+/// wheel rather than clamping to magenta. The ONE hue→rgb conversion in the crate,
+/// shared by the randomiser and the bench's tint knobs.
+pub(crate) fn hsv(h: f32, s: f32, v: f32) -> [f32; 3] {
+    let h = h.rem_euclid(1.0) * 6.0;
+    let c = v * s;
+    let x = c * (1.0 - (h % 2.0 - 1.0).abs());
+    let (r, g, b) = match h as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = v - c;
+    [r + m, g + m, b + m]
+}
+
+/// Linear RGB → `(hue, saturation, value)`, the inverse of [`hsv`]. Hue is `0` for
+/// a greyscale colour, where it is undefined rather than meaningful.
+fn hsv_of(rgb: [f32; 3]) -> (f32, f32, f32) {
+    let [r, g, b] = rgb;
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let c = max - min;
+    let v = max;
+    let s = if max > f32::EPSILON { c / max } else { 0.0 };
+    // The dominant channel picks the hue sextant — chosen by ORDERING, never by
+    // float-equality against `max`.
+    let h = if c <= f32::EPSILON {
+        0.0
+    } else if r >= g && r >= b {
+        ((g - b) / c).rem_euclid(6.0)
+    } else if g >= b {
+        (b - r) / c + 2.0
+    } else {
+        (r - g) / c + 4.0
+    };
+    (h / 6.0, s, v)
 }
 
 /// How the mixed field projects into the PBR maps.
@@ -281,6 +353,61 @@ mod tests {
         };
         assert_eq!(extreme.roughness_at(1.0), 1.0);
         assert_eq!(extreme.roughness_at(0.0), 0.0);
+    }
+
+    /// The colour knobs' round trip: `recolor` sweeps the ramp onto one hue while
+    /// keeping each stop's brightness, and `tint` reads that hue/saturation back —
+    /// so the bench's knob echoes exactly what it just set instead of drifting
+    /// under the hand.
+    #[test]
+    fn recolor_sets_a_readable_tint_and_keeps_the_value_profile() {
+        let mut ramp = ColorRamp::default(); // the neutral stone sweep
+        let values: Vec<f32> = ramp.stops.iter().map(|s| hsv_of(s.color).2).collect();
+
+        ramp.recolor(0.13, 0.8); // gold
+        let (h, s) = ramp.tint();
+        assert!(
+            (h - 0.13).abs() < 1e-3,
+            "hue reads back what recolor set: {h}"
+        );
+        assert!((s - 0.8).abs() < 1e-3, "saturation reads back: {s}");
+
+        for (st, v0) in ramp.stops.iter().zip(&values) {
+            // Only the chroma moved — the dark→light shape is untouched.
+            assert!(
+                (hsv_of(st.color).2 - v0).abs() < 1e-6,
+                "brightness preserved"
+            );
+            // Gold: red and green sit over blue at every stop.
+            assert!(
+                st.color[0] > st.color[2] && st.color[1] > st.color[2],
+                "not a warm hue: {:?}",
+                st.color
+            );
+        }
+    }
+
+    /// A fully greyscale ramp has no hue to report — `tint` says so rather than
+    /// inventing an angle, so the knob rests at zero.
+    #[test]
+    fn a_grey_ramp_reports_no_tint() {
+        let grey = ColorRamp {
+            stops: vec![
+                RampStop {
+                    at: 0.0,
+                    color: [0.1, 0.1, 0.1],
+                },
+                RampStop {
+                    at: 1.0,
+                    color: [0.8, 0.8, 0.8],
+                },
+            ],
+        };
+        let (h, s) = grey.tint();
+        assert!(
+            h.abs() < 1e-6 && s.abs() < 1e-6,
+            "grey has a tint: h{h} s{s}"
+        );
     }
 }
 

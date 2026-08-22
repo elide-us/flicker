@@ -3,17 +3,10 @@
   "styles": {
     "settings": {
       "window": {
-        "w": 1180,
-        "h": 726,
-        "min_margin": 32,
         "radius": 4,
         "fill_top": "$stone3",
         "fill_bot": "$stone1",
-        "border": "$edge2",
-        "shadow": "$shadow",
-        "shadow_dy": 18,
-        "shadow_feather": 46,
-        "shadow_grow": 4
+        "border": "$edge2"
       },
       "titlebar": {
         "h": 52,
@@ -494,7 +487,7 @@
     }
   },
   "tree": {
-    "component": "screen",
+    "component": "surface",
     "id": "settings",
     "on_cancel": "settings_close",
     "on_page_next": "page_next",

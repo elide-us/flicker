@@ -1,0 +1,649 @@
+{
+  "_comment": "Loomforge Bench SCENE DEFINITION (201F4F51 template-free). The four-page animation-authoring editor over one flicker.pack: STATE MACHINE (tool rail · scene-drawn node-graph canvas in the walker-reserved `lf_canvas` rect · the pack rail, whose clip library / transition inspector swap on `rail_clips`/`rail_edge` · the scene-drawn TAE preview strip in `lf_tae_strip`), PACK BROWSER (filter rail · card grid · manifest detail), CREATURE COMPOSER (pending), TAE EDITOR (track list · doll + transport · event inspector · the scene-drawn page timeline in `lf_tae_page_strip`). The `loomforge` behaviour plays it (flicker-loomforge); loomforge.lua derives page gates, tab/tool/filter/card/response washes. The named container cells (`lf_clip_rows`, `lf_pack_cards`, `lf_skel_rows`) are REFILLED by the behaviour at event time (pack load / scroll / filter / scan) — the sablework Rust-fills-the-container pattern, content-keyed so the doll slot ids stay honest poster-cache keys; their row labels ride binds, never literals. Styles were folded in from the crate's quarantined scene_styles.json (the dead canvas.grid and tae_lane.track keys did not move).",
+  "behaviour": "loomforge",
+  "params": {},
+  "styles": {
+    "loomforge": {
+      "top_bar": {
+        "fill_top": "$stone4",
+        "fill_bot": "$stone2",
+        "border": "$edge2",
+        "border_w": 1,
+        "radius": 0
+      },
+      "title": {
+        "color": "$ink_bright"
+      },
+      "badge": {
+        "color": "$bronze"
+      },
+      "tab_bar": {
+        "fill_top": "$stone2",
+        "fill_bot": "$stone1",
+        "border": "$edge1",
+        "border_w": 1,
+        "radius": 0
+      },
+      "tab_active": {
+        "fill_top": "$sap_base",
+        "fill_bot": "$sap_base_lo",
+        "border": "$sap_border",
+        "border_w": 1,
+        "label": "$ink_bright",
+        "radius": 3
+      },
+      "tab_idle": {
+        "fill_top": "$stone3",
+        "fill_bot": "$stone2",
+        "border": "$edge2",
+        "border_w": 1,
+        "label": "$dim",
+        "radius": 3
+      },
+      "button_primary": {
+        "fill_top": "$sap_hover",
+        "fill_bot": "$sap_base",
+        "border": "$sap_border",
+        "border_w": 1,
+        "label": "$ink_bright",
+        "radius": 3
+      },
+      "button_secondary": {
+        "fill_top": "$stone4",
+        "fill_bot": "$stone2",
+        "border": "$edge3",
+        "border_w": 1,
+        "label": "$ink",
+        "radius": 3
+      },
+      "body": {
+        "fill_top": "$stage_void",
+        "fill_bot": "$stage_void",
+        "border": "$edge1",
+        "border_w": 1,
+        "radius": 0
+      },
+      "body_text": {
+        "color": "$ink"
+      },
+      "_canvas_comment": "Scene-drawn node-graph colours, read by dotted path (the canvas cannot ride a node style). Card geometry constants live in canvas.rs; lane ORDER lives in tae::Lane::ALL.",
+      "canvas": {
+        "bg": "$stage_void",
+        "card_fill_top": "$stone3",
+        "card_fill_bot": "$stone1",
+        "card_border": "$edge2",
+        "card_border_sel": "$sap_border",
+        "card_label": "$ink",
+        "card_label_sel": "$sap_hover_border",
+        "card_meta": "$dim",
+        "stage_top": "$stone2",
+        "stage_bot": "$stage_void",
+        "stage_border": "$edge1",
+        "edge": "$bronze",
+        "edge_sel": "$rune_glow_hi",
+        "drop_hint": "$rune_glow_hi"
+      },
+      "rail": {
+        "fill_top": "$stone3",
+        "fill_bot": "$stone1",
+        "border": "$edge2",
+        "border_w": 1,
+        "radius": 0
+      },
+      "rail_title": {
+        "color": "$bronze"
+      },
+      "rail_text": {
+        "color": "$ink"
+      },
+      "clip_row": {
+        "fill_top": "$stone2",
+        "fill_bot": "$stone1",
+        "border": "$edge1",
+        "border_w": 1,
+        "radius": 3,
+        "label": "$ink"
+      },
+      "clip_stage": {
+        "fill_top": "$stone2",
+        "fill_bot": "$stage_void",
+        "border": "$edge1",
+        "border_w": 1,
+        "radius": 3
+      },
+      "_pack_kind_comment": "The four derived pack kinds' accents — read by color path from the refilled card meta rows AND from packs::PackKind::color_path.",
+      "pack_kind": {
+        "locomotion": { "color": "$sig_green" },
+        "weapon": { "color": "$hp_hi" },
+        "ability": { "color": "$sapphire" },
+        "creature": { "color": "$bronze" }
+      },
+      "tae": {
+        "fill_top": "$stone1",
+        "fill_bot": "$stage_void",
+        "border": "$bronze_deep"
+      },
+      "_tae_lane_comment": "The nine timeline lanes' swatch/row/row_border/event colours plus the strip's shared ruler/playhead/selection keys and the budget verdict trio. Lane ORDER lives in Rust (tae::Lane::ALL), not here.",
+      "tae_lane": {
+        "ruler": "$dim",
+        "track_border": "$edge1",
+        "playhead": "$rune_glow_hi",
+        "event_sel": "$rune_glow_hi",
+        "budget_ok": "$sig_green",
+        "budget_tight": "$sig_yellow",
+        "budget_over": "$hp_hi",
+        "hitbox": { "swatch": "$hp_hi", "row": "$stone1", "row_border": "$edge1", "event": "$hp_hi" },
+        "hyperarmor": { "swatch": "$sig_yellow", "row": "$stone1", "row_border": "$edge1", "event": "$sig_yellow" },
+        "iframe": { "swatch": "$sapphire", "row": "$stone1", "row_border": "$edge1", "event": "$sapphire" },
+        "cancel": { "swatch": "$sig_green", "row": "$stone1", "row_border": "$edge1", "event": "$sig_green" },
+        "parry": { "swatch": "$rune_glow_hi", "row": "$stone1", "row_border": "$edge1", "event": "$rune_glow_hi" },
+        "telegraph": { "swatch": "$bronze", "row": "$stone1", "row_border": "$edge1", "event": "$bronze" },
+        "sfx": { "swatch": "$dim_soft", "row": "$stone1", "row_border": "$edge1", "event": "$dim_soft" },
+        "vfx": { "swatch": "$dim", "row": "$stone1", "row_border": "$edge1", "event": "$dim" },
+        "notify": { "swatch": "$faint", "row": "$stone1", "row_border": "$edge1", "event": "$faint" }
+      }
+    }
+  },
+  "tree": {
+    "component": "surface",
+    "id": "loomforge",
+    "on_menu": "pause_open",
+    "on_tab_next": "tab_next",
+    "on_tab_prev": "tab_prev",
+    "on_mode_next": "tool_next",
+    "on_mode_prev": "tool_prev",
+    "children": [
+      {
+        "component": "cell",
+        "anchor": "top_left",
+        "width_frac": 1.0,
+        "height_frac": 1.0,
+        "children": [
+          {
+            "component": "row",
+            "id": "lf_top",
+            "style": "loomforge.top_bar",
+            "size": 56,
+            "pad_x": 16,
+            "pad_y": 10,
+            "gap": 12,
+            "align": "center",
+            "children": [
+              { "component": "text", "text": "$lf_title", "text_size": 21, "font": "label", "color": "loomforge.title.color", "size": 210 },
+              { "component": "text", "text_bind": "rig_badge", "text_size": 11, "font": "label", "color": "loomforge.badge.color", "size": 240 },
+              { "component": "text", "text_bind": "lf_status", "text_size": 12, "font": "label", "color": "loomforge.rail_text.color", "grow": 1.0 },
+              { "component": "button", "id": "validate", "action": "validate", "label": "$lf_validate", "style": "loomforge.button_secondary", "size": 110, "size_class": "md", "tab_group": "lf_top", "nav_ordinal": 1 },
+              { "component": "button", "id": "save", "action": "save", "label_bind": "save_label", "style": "loomforge.button_primary", "size": 90, "size_class": "md", "tab_group": "lf_top", "nav_ordinal": 2 }
+            ]
+          },
+          {
+            "component": "row",
+            "id": "lf_tabs",
+            "style": "loomforge.tab_bar",
+            "size": 40,
+            "pad": 6,
+            "align": "center",
+            "gap": 4,
+            "children": [
+              { "component": "button", "id": "tab_sm", "action": "tab_sm", "label": "$lf_tab_sm", "style_bind": "tab_sm_sty", "size": 170, "size_class": "sm", "tab_group": "lf_tabs", "nav_ordinal": 1 },
+              { "component": "button", "id": "tab_pack", "action": "tab_pack", "label": "$lf_tab_pack", "style_bind": "tab_pack_sty", "size": 170, "size_class": "sm", "tab_group": "lf_tabs", "nav_ordinal": 2 },
+              { "component": "button", "id": "tab_creature", "action": "tab_creature", "label": "$lf_tab_creature", "style_bind": "tab_creature_sty", "size": 170, "size_class": "sm", "tab_group": "lf_tabs", "nav_ordinal": 3 },
+              { "component": "button", "id": "tab_tae", "action": "tab_tae", "label": "$lf_tab_tae", "style_bind": "tab_tae_sty", "size": 170, "size_class": "sm", "tab_group": "lf_tabs", "nav_ordinal": 4 }
+            ]
+          },
+          {
+            "component": "cell",
+            "id": "lf_sm",
+            "visible_bind": "page_sm",
+            "grow": 1.0,
+            "children": [
+              {
+                "component": "row",
+                "grow": 1.0,
+                "children": [
+                  {
+                    "component": "cell",
+                    "id": "lf_tools",
+                    "style": "loomforge.rail",
+                    "size": 56,
+                    "pad": 8,
+                    "gap": 6,
+                    "nav_ordinal": 1,
+                    "children": [
+                      { "component": "button", "id": "tool_select", "action": "tool_select", "label": "$lf_tool_select", "style_bind": "tool_select_sty", "size": 36, "size_class": "sm", "tab_group": "lf_tools", "nav_ordinal": 1 },
+                      { "component": "button", "id": "tool_add", "action": "tool_add", "label": "$lf_tool_add", "style_bind": "tool_add_sty", "size": 36, "size_class": "sm", "tab_group": "lf_tools", "nav_ordinal": 2 },
+                      { "component": "button", "id": "tool_link", "action": "tool_link", "label": "$lf_tool_link", "style_bind": "tool_link_sty", "size": 36, "size_class": "sm", "tab_group": "lf_tools", "nav_ordinal": 3 },
+                      { "component": "button", "id": "tool_delete", "action": "tool_delete", "label": "$lf_tool_delete", "style_bind": "tool_delete_sty", "size": 36, "size_class": "sm", "tab_group": "lf_tools", "nav_ordinal": 4 }
+                    ]
+                  },
+                  {
+                    "component": "panel",
+                    "id": "lf_canvas_pane",
+                    "style": "loomforge.body",
+                    "pane": true,
+                    "nav_ordinal": 2,
+                    "grow": 1.0,
+                    "children": [
+                      { "component": "surface", "id": "lf_canvas", "grow": 1.0 }
+                    ]
+                  },
+                  {
+                    "component": "cell",
+                    "id": "lf_rail",
+                    "style": "loomforge.rail",
+                    "size": 320,
+                    "pad": 14,
+                    "gap": 6,
+                    "nav_ordinal": 3,
+                    "children": [
+                      {
+                        "component": "cell",
+                        "id": "lf_rail_clips",
+                        "visible_bind": "rail_clips",
+                        "gap": 6,
+                        "children": [
+                          { "component": "text", "text": "$lf_pack_manager", "text_size": 12, "font": "label", "color": "loomforge.rail_title.color", "size": 20 },
+                          { "component": "text", "text_bind": "pack_summary", "text_size": 13, "font": "label", "color": "loomforge.rail_text.color", "size": 18 },
+                          { "component": "text", "text": "$lf_drag_hint", "text_size": 13, "font": "label", "color": "loomforge.rail_text.color", "size": 20 },
+                          { "component": "button", "id": "cycle_trigger", "action": "cycle_trigger", "label_bind": "link_trigger_label", "style": "loomforge.button_secondary", "size": 28, "size_class": "sm", "tab_group": "lf_rail", "nav_ordinal": 1 },
+                          { "component": "cell", "id": "lf_clip_rows", "gap": 6 },
+                          { "component": "text", "text_bind": "clip_scroll_line", "text_size": 11, "font": "label", "color": "loomforge.rail_text.color", "size": 16 },
+                          {
+                            "component": "row",
+                            "size": 24,
+                            "gap": 6,
+                            "align": "center",
+                            "children": [
+                              { "component": "button", "id": "clip_prev", "action": "clip_prev", "label": "‹", "enabled_bind": "clip_prev_enabled", "style": "loomforge.button_secondary", "size": 30, "size_class": "sm", "tab_group": "lf_rail", "nav_ordinal": 40 },
+                              { "component": "cell", "grow": 1.0 },
+                              { "component": "button", "id": "clip_next", "action": "clip_next", "label": "›", "enabled_bind": "clip_next_enabled", "style": "loomforge.button_secondary", "size": 30, "size_class": "sm", "tab_group": "lf_rail", "nav_ordinal": 41 }
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        "component": "cell",
+                        "id": "lf_rail_edge",
+                        "visible_bind": "rail_edge",
+                        "gap": 6,
+                        "children": [
+                          { "component": "text", "text": "$lf_transition", "text_size": 12, "font": "label", "color": "loomforge.rail_title.color", "size": 20 },
+                          { "component": "text", "text_bind": "edge_head", "text_size": 15, "font": "label", "color": "loomforge.title.color", "size": 24 },
+                          { "component": "button", "id": "edge_trigger", "action": "edge_trigger", "label_bind": "edge_trigger_label", "style": "loomforge.button_secondary", "size": 28, "size_class": "sm", "tab_group": "lf_rail", "nav_ordinal": 50 },
+                          {
+                            "component": "row", "size": 26, "gap": 6, "align": "center",
+                            "children": [
+                              { "component": "text", "text_bind": "edge_prio_line", "text_size": 13, "font": "label", "color": "loomforge.rail_text.color", "grow": 1.0 },
+                              { "component": "button", "id": "prio_dec", "action": "prio_dec", "label": "−", "style": "loomforge.button_secondary", "size": 26, "size_class": "sm", "tab_group": "lf_rail", "nav_ordinal": 51 },
+                              { "component": "button", "id": "prio_inc", "action": "prio_inc", "label": "+", "style": "loomforge.button_secondary", "size": 26, "size_class": "sm", "tab_group": "lf_rail", "nav_ordinal": 52 }
+                            ]
+                          },
+                          {
+                            "component": "row", "size": 26, "gap": 6, "align": "center",
+                            "children": [
+                              { "component": "text", "text_bind": "edge_blend_line", "text_size": 13, "font": "label", "color": "loomforge.rail_text.color", "grow": 1.0 },
+                              { "component": "button", "id": "blend_dec", "action": "blend_dec", "label": "−", "style": "loomforge.button_secondary", "size": 26, "size_class": "sm", "tab_group": "lf_rail", "nav_ordinal": 53 },
+                              { "component": "button", "id": "blend_inc", "action": "blend_inc", "label": "+", "style": "loomforge.button_secondary", "size": 26, "size_class": "sm", "tab_group": "lf_rail", "nav_ordinal": 54 }
+                            ]
+                          },
+                          { "component": "text", "text_bind": "edge_window_line", "visible_bind": "edge_window_shown", "text_size": 13, "font": "label", "color": "loomforge.rail_text.color", "size": 18 },
+                          { "component": "button", "id": "edge_delete", "action": "edge_delete", "label": "$lf_delete_transition", "style": "loomforge.button_secondary", "size": 28, "size_class": "sm", "tab_group": "lf_rail", "nav_ordinal": 55 },
+                          { "component": "text", "text": "$lf_edge_hint", "text_size": 12, "font": "label", "color": "loomforge.rail_text.color", "size": 18 }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              { "component": "surface", "id": "lf_tae_strip", "style": "loomforge.tae", "size": 150 }
+            ]
+          },
+          {
+            "component": "cell",
+            "id": "lf_pack",
+            "visible_bind": "page_pack",
+            "grow": 1.0,
+            "children": [
+              {
+                "component": "row",
+                "grow": 1.0,
+                "children": [
+                  {
+                    "component": "cell",
+                    "id": "lf_pack_filter",
+                    "style": "loomforge.rail",
+                    "size": 220,
+                    "pad": 12,
+                    "gap": 4,
+                    "nav_ordinal": 1,
+                    "children": [
+                      { "component": "text", "text": "$lf_filter_packs", "text_size": 12, "font": "label", "color": "loomforge.rail_title.color", "size": 20 },
+                      { "component": "button", "id": "packkind_0", "action": "packkind_0", "label_bind": "packkind_0_label", "style_bind": "packkind_0_sty", "size": 24, "size_class": "sm", "tab_group": "lf_pack_filter", "nav_ordinal": 1 },
+                      { "component": "button", "id": "packkind_1", "action": "packkind_1", "label_bind": "packkind_1_label", "style_bind": "packkind_1_sty", "size": 24, "size_class": "sm", "tab_group": "lf_pack_filter", "nav_ordinal": 2 },
+                      { "component": "button", "id": "packkind_2", "action": "packkind_2", "label_bind": "packkind_2_label", "style_bind": "packkind_2_sty", "size": 24, "size_class": "sm", "tab_group": "lf_pack_filter", "nav_ordinal": 3 },
+                      { "component": "button", "id": "packkind_3", "action": "packkind_3", "label_bind": "packkind_3_label", "style_bind": "packkind_3_sty", "size": 24, "size_class": "sm", "tab_group": "lf_pack_filter", "nav_ordinal": 4 },
+                      { "component": "text", "text": "$lf_skeleton", "text_size": 12, "font": "label", "color": "loomforge.rail_title.color", "size": 22 },
+                      { "component": "cell", "id": "lf_skel_rows", "gap": 4 }
+                    ]
+                  },
+                  {
+                    "component": "cell",
+                    "id": "lf_pack_grid",
+                    "style": "loomforge.body",
+                    "grow": 1.0,
+                    "pad": 16,
+                    "gap": 10,
+                    "nav_ordinal": 2,
+                    "children": [
+                      { "component": "text", "text": "$lf_pack_library", "text_size": 22, "font": "label", "color": "loomforge.title.color", "size": 28 },
+                      { "component": "text", "text_bind": "pack_count_line", "text_size": 13, "font": "label", "color": "loomforge.rail_text.color", "size": 18 },
+                      { "component": "cell", "id": "lf_pack_cards", "gap": 12, "grow": 1.0 },
+                      { "component": "text", "text": "$lf_no_packs_match", "visible_bind": "packs_empty", "text_size": 14, "font": "label", "color": "loomforge.rail_text.color", "size": 20 }
+                    ]
+                  },
+                  {
+                    "component": "cell",
+                    "id": "lf_pack_detail",
+                    "style": "loomforge.rail",
+                    "size": 340,
+                    "pad": 14,
+                    "gap": 4,
+                    "nav_ordinal": 3,
+                    "children": [
+                      { "component": "text", "text_bind": "pack_name", "text_size": 20, "font": "label", "color": "loomforge.title.color", "size": 26 },
+                      { "component": "text", "text_bind": "pack_kind_line", "text_size": 11, "font": "label", "color_bind": "pack_kind_color", "size": 16 },
+                      { "component": "text", "text": "$lf_manifest", "text_size": 11, "font": "label", "color": "loomforge.rail_title.color", "size": 20 },
+                      {
+                        "component": "row", "size": 17, "gap": 6,
+                        "children": [
+                          { "component": "text", "text": "$lf_format", "text_size": 13, "font": "label", "color": "loomforge.rail_title.color", "size": 120 },
+                          { "component": "text", "text_bind": "pack_format", "text_size": 13, "font": "label", "color": "loomforge.rail_text.color", "grow": 1.0 }
+                        ]
+                      },
+                      {
+                        "component": "row", "size": 17, "gap": 6,
+                        "children": [
+                          { "component": "text", "text": "$lf_version", "text_size": 13, "font": "label", "color": "loomforge.rail_title.color", "size": 120 },
+                          { "component": "text", "text_bind": "pack_version", "text_size": 13, "font": "label", "color": "loomforge.rail_text.color", "grow": 1.0 }
+                        ]
+                      },
+                      {
+                        "component": "row", "size": 17, "gap": 6,
+                        "children": [
+                          { "component": "text", "text": "$lf_skeleton_word", "text_size": 13, "font": "label", "color": "loomforge.rail_title.color", "size": 120 },
+                          { "component": "text", "text_bind": "pack_skeleton", "text_size": 13, "font": "label", "color": "loomforge.rail_text.color", "grow": 1.0 }
+                        ]
+                      },
+                      {
+                        "component": "row", "size": 17, "gap": 6,
+                        "children": [
+                          { "component": "text", "text": "$lf_states_word", "text_size": 13, "font": "label", "color": "loomforge.rail_title.color", "size": 120 },
+                          { "component": "text", "text_bind": "pack_states", "text_size": 13, "font": "label", "color": "loomforge.rail_text.color", "grow": 1.0 }
+                        ]
+                      },
+                      {
+                        "component": "row", "size": 17, "gap": 6,
+                        "children": [
+                          { "component": "text", "text": "$lf_transitions_word", "text_size": 13, "font": "label", "color": "loomforge.rail_title.color", "size": 120 },
+                          { "component": "text", "text_bind": "pack_transitions", "text_size": 13, "font": "label", "color": "loomforge.rail_text.color", "grow": 1.0 }
+                        ]
+                      },
+                      {
+                        "component": "row", "size": 17, "gap": 6,
+                        "children": [
+                          { "component": "text", "text": "$lf_tae_events_word", "text_size": 13, "font": "label", "color": "loomforge.rail_title.color", "size": 120 },
+                          { "component": "text", "text_bind": "pack_events", "text_size": 13, "font": "label", "color": "loomforge.rail_text.color", "grow": 1.0 }
+                        ]
+                      },
+                      {
+                        "component": "row", "size": 17, "gap": 6,
+                        "children": [
+                          { "component": "text", "text": "$lf_combat_windows", "text_size": 13, "font": "label", "color": "loomforge.rail_title.color", "size": 120 },
+                          { "component": "text", "text_bind": "pack_combat", "text_size": 13, "font": "label", "color": "loomforge.rail_text.color", "grow": 1.0 }
+                        ]
+                      },
+                      { "component": "text", "text": "$lf_note", "visible_bind": "pack_note_shown", "text_size": 11, "font": "label", "color": "loomforge.rail_title.color", "size": 20 },
+                      { "component": "text", "text_bind": "pack_note_0", "text_size": 12, "font": "label", "color": "loomforge.rail_text.color", "size": 15 },
+                      { "component": "text", "text_bind": "pack_note_1", "text_size": 12, "font": "label", "color": "loomforge.rail_text.color", "size": 15 },
+                      { "component": "text", "text_bind": "pack_note_2", "text_size": 12, "font": "label", "color": "loomforge.rail_text.color", "size": 15 },
+                      { "component": "text", "text_bind": "pack_note_3", "text_size": 12, "font": "label", "color": "loomforge.rail_text.color", "size": 15 },
+                      { "component": "text", "text_bind": "pack_note_4", "text_size": 12, "font": "label", "color": "loomforge.rail_text.color", "size": 15 },
+                      { "component": "text", "text_bind": "pack_note_5", "text_size": 12, "font": "label", "color": "loomforge.rail_text.color", "size": 15 },
+                      { "component": "text", "text_bind": "pack_note_6", "text_size": 12, "font": "label", "color": "loomforge.rail_text.color", "size": 15 },
+                      { "component": "text", "text_bind": "pack_note_7", "text_size": 12, "font": "label", "color": "loomforge.rail_text.color", "size": 15 },
+                      { "component": "button", "id": "pack_load", "action": "pack_load", "label_bind": "pack_load_label", "style_bind": "pack_load_sty", "size": 30, "size_class": "md", "tab_group": "lf_pack_detail", "nav_ordinal": 1 }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "component": "cell",
+            "id": "lf_creature",
+            "visible_bind": "page_creature",
+            "style": "loomforge.body",
+            "grow": 1.0,
+            "pad": 24,
+            "gap": 10,
+            "children": [
+              { "component": "text", "text": "$lf_creature_pending", "text_size": 16, "font": "label", "color": "loomforge.body_text.color", "size": 22 },
+              { "component": "text", "text_bind": "lf_warnings", "text_size": 14, "font": "label", "color": "loomforge.rail_text.color", "size": 20 }
+            ]
+          },
+          {
+            "component": "cell",
+            "id": "lf_tae",
+            "visible_bind": "page_tae",
+            "grow": 1.0,
+            "children": [
+              {
+                "component": "row",
+                "grow": 1.0,
+                "children": [
+                  {
+                    "component": "cell",
+                    "id": "lf_tae_tracks",
+                    "style": "loomforge.rail",
+                    "size": 240,
+                    "pad": 12,
+                    "gap": 3,
+                    "nav_ordinal": 1,
+                    "children": [
+                      { "component": "text", "text": "$lf_editing_clip", "text_size": 11, "font": "label", "color": "loomforge.rail_title.color", "size": 18 },
+                      { "component": "text", "text_bind": "tae_clip_name", "text_size": 16, "font": "label", "color": "loomforge.pack_kind.locomotion.color", "size": 22 },
+                      { "component": "text", "text_bind": "tae_clip_axis", "text_size": 11, "font": "label", "color": "loomforge.rail_text.color", "size": 16 },
+                      { "component": "text", "text": "$lf_event_tracks", "text_size": 11, "font": "label", "color": "loomforge.rail_title.color", "size": 20 },
+                      {
+                        "component": "row", "size": 17, "gap": 6, "align": "center",
+                        "children": [
+                          { "component": "text", "text": "●", "text_size": 10, "color": "loomforge.tae_lane.hitbox.swatch", "size": 14 },
+                          { "component": "text", "text": "$lf_lane_hitbox", "text_size": 13, "font": "label", "color": "loomforge.rail_text.color", "grow": 1.0 },
+                          { "component": "text", "text_bind": "lane_0_count", "text_size": 13, "font": "label", "color": "loomforge.rail_text.color", "size": 30, "align": "right" }
+                        ]
+                      },
+                      {
+                        "component": "row", "size": 17, "gap": 6, "align": "center",
+                        "children": [
+                          { "component": "text", "text": "●", "text_size": 10, "color": "loomforge.tae_lane.iframe.swatch", "size": 14 },
+                          { "component": "text", "text": "$lf_lane_iframe", "text_size": 13, "font": "label", "color": "loomforge.rail_text.color", "grow": 1.0 },
+                          { "component": "text", "text_bind": "lane_1_count", "text_size": 13, "font": "label", "color": "loomforge.rail_text.color", "size": 30, "align": "right" }
+                        ]
+                      },
+                      {
+                        "component": "row", "size": 17, "gap": 6, "align": "center",
+                        "children": [
+                          { "component": "text", "text": "●", "text_size": 10, "color": "loomforge.tae_lane.parry.swatch", "size": 14 },
+                          { "component": "text", "text": "$lf_lane_parry", "text_size": 13, "font": "label", "color": "loomforge.rail_text.color", "grow": 1.0 },
+                          { "component": "text", "text_bind": "lane_2_count", "text_size": 13, "font": "label", "color": "loomforge.rail_text.color", "size": 30, "align": "right" }
+                        ]
+                      },
+                      {
+                        "component": "row", "size": 17, "gap": 6, "align": "center",
+                        "children": [
+                          { "component": "text", "text": "●", "text_size": 10, "color": "loomforge.tae_lane.cancel.swatch", "size": 14 },
+                          { "component": "text", "text": "$lf_lane_cancel", "text_size": 13, "font": "label", "color": "loomforge.rail_text.color", "grow": 1.0 },
+                          { "component": "text", "text_bind": "lane_3_count", "text_size": 13, "font": "label", "color": "loomforge.rail_text.color", "size": 30, "align": "right" }
+                        ]
+                      },
+                      {
+                        "component": "row", "size": 17, "gap": 6, "align": "center",
+                        "children": [
+                          { "component": "text", "text": "●", "text_size": 10, "color": "loomforge.tae_lane.hyperarmor.swatch", "size": 14 },
+                          { "component": "text", "text": "$lf_lane_hyperarmor", "text_size": 13, "font": "label", "color": "loomforge.rail_text.color", "grow": 1.0 },
+                          { "component": "text", "text_bind": "lane_4_count", "text_size": 13, "font": "label", "color": "loomforge.rail_text.color", "size": 30, "align": "right" }
+                        ]
+                      },
+                      {
+                        "component": "row", "size": 17, "gap": 6, "align": "center",
+                        "children": [
+                          { "component": "text", "text": "●", "text_size": 10, "color": "loomforge.tae_lane.telegraph.swatch", "size": 14 },
+                          { "component": "text", "text": "$lf_lane_telegraph", "text_size": 13, "font": "label", "color": "loomforge.rail_text.color", "grow": 1.0 },
+                          { "component": "text", "text_bind": "lane_5_count", "text_size": 13, "font": "label", "color": "loomforge.rail_text.color", "size": 30, "align": "right" }
+                        ]
+                      },
+                      {
+                        "component": "row", "size": 17, "gap": 6, "align": "center",
+                        "children": [
+                          { "component": "text", "text": "●", "text_size": 10, "color": "loomforge.tae_lane.sfx.swatch", "size": 14 },
+                          { "component": "text", "text": "$lf_lane_sfx", "text_size": 13, "font": "label", "color": "loomforge.rail_text.color", "grow": 1.0 },
+                          { "component": "text", "text_bind": "lane_6_count", "text_size": 13, "font": "label", "color": "loomforge.rail_text.color", "size": 30, "align": "right" }
+                        ]
+                      },
+                      {
+                        "component": "row", "size": 17, "gap": 6, "align": "center",
+                        "children": [
+                          { "component": "text", "text": "●", "text_size": 10, "color": "loomforge.tae_lane.vfx.swatch", "size": 14 },
+                          { "component": "text", "text": "$lf_lane_vfx", "text_size": 13, "font": "label", "color": "loomforge.rail_text.color", "grow": 1.0 },
+                          { "component": "text", "text_bind": "lane_7_count", "text_size": 13, "font": "label", "color": "loomforge.rail_text.color", "size": 30, "align": "right" }
+                        ]
+                      },
+                      {
+                        "component": "row", "size": 17, "gap": 6, "align": "center",
+                        "children": [
+                          { "component": "text", "text": "●", "text_size": 10, "color": "loomforge.tae_lane.notify.swatch", "size": 14 },
+                          { "component": "text", "text": "$lf_lane_notify", "text_size": 13, "font": "label", "color": "loomforge.rail_text.color", "grow": 1.0 },
+                          { "component": "text", "text_bind": "lane_8_count", "text_size": 13, "font": "label", "color": "loomforge.rail_text.color", "size": 30, "align": "right" }
+                        ]
+                      },
+                      { "component": "text", "text": "$lf_server_budget", "visible_bind": "budget_server_shown", "text_size": 11, "font": "label", "color": "loomforge.rail_title.color", "size": 20 },
+                      { "component": "text", "text_bind": "budget_server_line", "visible_bind": "budget_server_shown", "color_bind": "budget_server_color", "text_size": 12, "font": "label", "size": 17 },
+                      { "component": "text", "text": "$lf_player_budget", "visible_bind": "budget_player_shown", "text_size": 11, "font": "label", "color": "loomforge.rail_title.color", "size": 20 },
+                      { "component": "text", "text_bind": "budget_player_line", "visible_bind": "budget_player_shown", "color_bind": "budget_player_color", "text_size": 12, "font": "label", "size": 17 }
+                    ]
+                  },
+                  {
+                    "component": "cell",
+                    "id": "lf_tae_preview",
+                    "style": "loomforge.body",
+                    "grow": 1.0,
+                    "pad": 12,
+                    "gap": 8,
+                    "nav_ordinal": 2,
+                    "children": [
+                      { "component": "text", "text_bind": "tae_frame_line", "text_size": 12, "font": "label", "color": "loomforge.pack_kind.locomotion.color", "size": 18 },
+                      { "component": "surface", "id": "taedoll", "source": "portrait", "style": "loomforge.clip_stage", "width": 300, "height": 300 },
+                      {
+                        "component": "row",
+                        "id": "tae_transport",
+                        "size": 30,
+                        "gap": 6,
+                        "align": "center",
+                        "children": [
+                          { "component": "button", "id": "tae_prev", "action": "tae_prev", "label": "‹", "style": "loomforge.button_secondary", "size": 30, "size_class": "sm", "tab_group": "lf_tae_preview", "nav_ordinal": 1 },
+                          { "component": "button", "id": "tae_play", "action": "tae_play", "label_bind": "tae_play_glyph", "style": "loomforge.button_secondary", "size": 30, "size_class": "sm", "tab_group": "lf_tae_preview", "nav_ordinal": 2 },
+                          { "component": "button", "id": "tae_next", "action": "tae_next", "label": "›", "style": "loomforge.button_secondary", "size": 30, "size_class": "sm", "tab_group": "lf_tae_preview", "nav_ordinal": 3 },
+                          { "component": "text", "text_bind": "tae_time", "text_size": 12, "font": "label", "color": "loomforge.rail_text.color", "size": 70 }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "component": "cell",
+                    "id": "lf_tae_insp",
+                    "style": "loomforge.rail",
+                    "size": 320,
+                    "pad": 12,
+                    "gap": 3,
+                    "nav_ordinal": 3,
+                    "children": [
+                      {
+                        "component": "cell",
+                        "id": "lf_tae_empty",
+                        "visible_bind": "tae_no_event",
+                        "gap": 3,
+                        "children": [
+                          { "component": "text", "text": "$lf_event", "text_size": 11, "font": "label", "color": "loomforge.rail_title.color", "size": 18 },
+                          { "component": "text", "text": "$lf_event_prompt", "text_size": 12, "font": "label", "color": "loomforge.rail_text.color", "size": 30 }
+                        ]
+                      },
+                      {
+                        "component": "cell",
+                        "id": "lf_tae_event",
+                        "visible_bind": "tae_has_event",
+                        "gap": 3,
+                        "children": [
+                          { "component": "text", "text_bind": "tae_ev_head", "color_bind": "tae_ev_head_color", "text_size": 17, "font": "label", "size": 24 },
+                          { "component": "text", "text_bind": "tae_ev_label", "text_size": 11, "font": "label", "color": "loomforge.rail_text.color", "size": 16 },
+                          { "component": "text", "text": "$lf_timing", "text_size": 11, "font": "label", "color": "loomforge.rail_title.color", "size": 20 },
+                          {
+                            "component": "row", "size": 26, "gap": 6, "align": "center",
+                            "children": [
+                              { "component": "text", "text_bind": "tae_start_line", "text_size": 13, "font": "label", "color": "loomforge.rail_text.color", "grow": 1.0 },
+                              { "component": "button", "id": "tae_start_dec", "action": "tae_start_dec", "label": "−", "style": "loomforge.button_secondary", "size": 26, "size_class": "sm", "tab_group": "lf_tae_insp", "nav_ordinal": 1 },
+                              { "component": "button", "id": "tae_start_inc", "action": "tae_start_inc", "label": "+", "style": "loomforge.button_secondary", "size": 26, "size_class": "sm", "tab_group": "lf_tae_insp", "nav_ordinal": 2 }
+                            ]
+                          },
+                          {
+                            "component": "row", "size": 26, "gap": 6, "align": "center",
+                            "children": [
+                              { "component": "text", "text_bind": "tae_end_line", "text_size": 13, "font": "label", "color": "loomforge.rail_text.color", "grow": 1.0 },
+                              { "component": "button", "id": "tae_end_dec", "action": "tae_end_dec", "label": "−", "style": "loomforge.button_secondary", "size": 26, "size_class": "sm", "tab_group": "lf_tae_insp", "nav_ordinal": 3 },
+                              { "component": "button", "id": "tae_end_inc", "action": "tae_end_inc", "label": "+", "style": "loomforge.button_secondary", "size": 26, "size_class": "sm", "tab_group": "lf_tae_insp", "nav_ordinal": 4 }
+                            ]
+                          },
+                          { "component": "text", "text": "$lf_shape", "text_size": 11, "font": "label", "color": "loomforge.rail_title.color", "size": 20 },
+                          { "component": "text", "text_bind": "tae_attach_line", "text_size": 12, "font": "label", "color": "loomforge.rail_text.color", "size": 17 },
+                          {
+                            "component": "row", "size": 26, "gap": 6, "align": "center",
+                            "children": [
+                              { "component": "text", "text_bind": "tae_cap_line", "text_size": 13, "font": "label", "color": "loomforge.rail_text.color", "grow": 1.0 },
+                              { "component": "button", "id": "tae_cap_dec", "action": "tae_cap_dec", "label": "−", "style": "loomforge.button_secondary", "size": 26, "size_class": "sm", "tab_group": "lf_tae_insp", "nav_ordinal": 5 },
+                              { "component": "button", "id": "tae_cap_inc", "action": "tae_cap_inc", "label": "+", "style": "loomforge.button_secondary", "size": 26, "size_class": "sm", "tab_group": "lf_tae_insp", "nav_ordinal": 6 }
+                            ]
+                          },
+                          { "component": "text", "text": "$lf_damage", "text_size": 11, "font": "label", "color": "loomforge.rail_title.color", "size": 20 },
+                          { "component": "text", "text_bind": "tae_damage_line", "text_size": 12, "font": "label", "color": "loomforge.rail_text.color", "size": 17 },
+                          { "component": "text", "text_bind": "tae_poise_line", "text_size": 12, "font": "label", "color": "loomforge.rail_text.color", "size": 17 },
+                          { "component": "button", "id": "tae_hit", "action": "tae_hit", "label_bind": "tae_hit_label", "style": "loomforge.button_secondary", "size": 26, "size_class": "sm", "tab_group": "lf_tae_insp", "nav_ordinal": 7 },
+                          { "component": "text", "text_bind": "tae_resp_head", "color_bind": "tae_resp_head_color", "text_size": 11, "font": "label", "size": 20 },
+                          { "component": "button", "id": "tae_resp_0", "action": "tae_resp_0", "label_bind": "tae_resp_0_label", "style_bind": "tae_resp_0_sty", "size": 22, "size_class": "sm", "tab_group": "lf_tae_insp", "nav_ordinal": 8 },
+                          { "component": "button", "id": "tae_resp_1", "action": "tae_resp_1", "label_bind": "tae_resp_1_label", "style_bind": "tae_resp_1_sty", "size": 22, "size_class": "sm", "tab_group": "lf_tae_insp", "nav_ordinal": 9 },
+                          { "component": "button", "id": "tae_resp_2", "action": "tae_resp_2", "label_bind": "tae_resp_2_label", "style_bind": "tae_resp_2_sty", "size": 22, "size_class": "sm", "tab_group": "lf_tae_insp", "nav_ordinal": 10 },
+                          { "component": "button", "id": "tae_resp_3", "action": "tae_resp_3", "label_bind": "tae_resp_3_label", "style_bind": "tae_resp_3_sty", "size": 22, "size_class": "sm", "tab_group": "lf_tae_insp", "nav_ordinal": 11 },
+                          { "component": "button", "id": "tae_resp_4", "action": "tae_resp_4", "label_bind": "tae_resp_4_label", "style_bind": "tae_resp_4_sty", "size": 22, "size_class": "sm", "tab_group": "lf_tae_insp", "nav_ordinal": 12 },
+                          {
+                            "component": "row", "size": 26, "gap": 6, "align": "center",
+                            "children": [
+                              { "component": "text", "text_bind": "tae_parry_line", "text_size": 13, "font": "label", "color": "loomforge.rail_text.color", "grow": 1.0 },
+                              { "component": "button", "id": "tae_pscale_dec", "action": "tae_pscale_dec", "label": "−", "style": "loomforge.button_secondary", "size": 26, "size_class": "sm", "tab_group": "lf_tae_insp", "nav_ordinal": 13 },
+                              { "component": "button", "id": "tae_pscale_inc", "action": "tae_pscale_inc", "label": "+", "style": "loomforge.button_secondary", "size": 26, "size_class": "sm", "tab_group": "lf_tae_insp", "nav_ordinal": 14 }
+                            ]
+                          },
+                          { "component": "text", "text": "$lf_feedback", "text_size": 11, "font": "label", "color": "loomforge.rail_title.color", "size": 20 },
+                          { "component": "text", "text_bind": "tae_sfx_line", "text_size": 12, "font": "label", "color": "loomforge.pack_kind.locomotion.color", "size": 17 },
+                          { "component": "text", "text_bind": "tae_vfx_line", "text_size": 12, "font": "label", "color": "loomforge.pack_kind.locomotion.color", "size": 17 }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              { "component": "surface", "id": "lf_tae_page_strip", "style": "loomforge.tae", "size": 260 }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

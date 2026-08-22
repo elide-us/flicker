@@ -81,7 +81,7 @@ here — anchors, sizes, pads, gaps:
 
 ```jsonc
 {
-  "component": "screen",
+  "component": "surface",
   "on_menu": "pause_open",              // input intent, declared as data
   "children": [
     {
@@ -246,7 +246,7 @@ code, and scene-specific values ride scene files. Never put a per-component or
 per-scene block here; a gate enforces that too.
 
 **`ui_stages.json` holds the RTT stage sources** — named offscreen sub-scenes
-(lighting preset, camera, content layers) that a tree's `rtt` node composites
+(lighting preset, camera, content layers) that a tree's nested `surface` node composites
 into its rect. The node says where; the stage says what.
 
 All three merge into one root at load, then tokens resolve — so a dotted style

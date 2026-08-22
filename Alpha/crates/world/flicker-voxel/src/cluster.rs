@@ -264,7 +264,7 @@ mod tests {
     }
 
     fn nonempty_material() -> Material {
-        Material::new(7, 11, 200).unwrap()
+        Material::new(7, 11, 200)
     }
 
     fn solid_grey() -> Voxel {
@@ -391,12 +391,12 @@ mod tests {
         let v1 = Voxel::new(
             VoxelState::Solid,
             CornerVector::from_bytes([1, 1, 1]),
-            Material::new(1, 0, 0).unwrap(),
+            Material::new(1, 0, 0),
         );
         let v2 = Voxel::new(
             VoxelState::Solid,
             CornerVector::from_bytes([2, 2, 2]),
-            Material::new(2, 0, 0).unwrap(),
+            Material::new(2, 0, 0),
         );
         let where_ = coord(100, 100, 100);
         c.set(where_, v1);

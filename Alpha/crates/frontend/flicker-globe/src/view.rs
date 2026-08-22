@@ -2,13 +2,13 @@
 //! region instead of straight to the swapchain.
 //!
 //! The difference is not cosmetic. A scene-painted globe is a backdrop that the
-//! panels float over; an `rtt` node is a piece of the surface, laid out by the
+//! panels float over; a nested `surface` node is a piece of the screen, laid out by the
 //! same walker that lays out everything else, so a bench can put instruments
 //! beside the planet without either one guessing where the other ended up.
 //!
 //! The walker never fills the rect it reserves — it runs late, and offscreen
 //! passes must run FIRST (they reset the shared per-frame draw queues). So the
-//! contract is a hand-off: the walker publishes an `RttSlot` in `update`, and
+//! contract is a hand-off: the walker publishes a `SurfaceSlot` in `update`, and
 //! the scene declares this pass against that rect at the top of `render`.
 //!
 //! Lifted out of `flicker-godmode` when the Populous bench needed the same
@@ -19,6 +19,7 @@ use flicker::render::{
     Camera, CompositeTarget, FrameGraph, MeshDrawOptions, MeshHandle, Rect, RenderTargetHandle,
     Renderer, SceneLighting,
 };
+use flicker::ui::SurfaceSlot;
 use glam::{Mat4, Vec3};
 
 /// Line geometry drawn over the globe, **grouped by colour** — one group is one
@@ -195,11 +196,40 @@ fn parse_layer(v: &serde_json::Value) -> Option<StageLayer> {
     }
 }
 
+/// Where and how a nested globe surface is seated this frame — the walker's
+/// [`SurfaceSlot`] reduced to what the view honours: the image rect, the node's
+/// sub-layer, its composite tint, and its liveness (a surface authored `live: false`
+/// keeps its last image and skips the pass — the poster rule).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Seat {
+    pub rect: Rect,
+    pub layer: f32,
+    pub tint: [f32; 4],
+    pub live: bool,
+}
+
+impl From<&SurfaceSlot> for Seat {
+    fn from(s: &SurfaceSlot) -> Self {
+        Seat {
+            rect: Rect {
+                pos: glam::Vec2::new(s.x, s.y),
+                size: glam::Vec2::new(s.w, s.h),
+            },
+            layer: s.layer,
+            tint: s.tint,
+            live: s.live,
+        }
+    }
+}
+
 /// A globe's offscreen target, sized to whatever rect the walker reserved.
 #[derive(Default)]
 pub struct GlobeView {
     target: Option<RenderTargetHandle>,
     size: (u32, u32),
+    /// The target has been drawn into at least once — a poster (`live: false`) surface
+    /// still renders its first frame.
+    drawn: bool,
 }
 
 impl GlobeView {
@@ -225,13 +255,14 @@ impl GlobeView {
         &mut self,
         r: &mut Renderer,
         fg: &mut FrameGraph<'f>,
-        rect: Rect,
-        layer: f32,
+        seat: Seat,
+        base_layer: f32,
         camera: Camera,
         stage: &GlobeStage,
         meshes: &[MeshHandle],
         arrows: &'f Arrows,
     ) {
+        let rect = seat.rect;
         let w = (rect.size.x.round() as u32).max(1);
         let h = (rect.size.y.round() as u32).max(1);
         match self.target {
@@ -239,18 +270,65 @@ impl GlobeView {
             Some(t) => {
                 r.resize_render_target(t, w, h);
                 self.size = (w, h);
+                self.drawn = false;
             }
             None => {
                 self.target = Some(r.create_render_target(w, h));
                 self.size = (w, h);
+                self.drawn = false;
             }
         }
         let Some(target) = self.target else { return };
 
+        // Liveness is the poster rule: a surface that is not live skips the pass and
+        // composites the image it already holds; a never-drawn one renders once.
+        if seat.live || !self.drawn {
+            fg.target(
+                target,
+                stage.clear,
+                Self::draw_pass(camera, stage, meshes, arrows),
+            );
+            self.drawn = true;
+        }
+        // `frame: None` — the walker already drew the node's holder panel on the 2D
+        // path, so a second frame here would double the chrome. The composite lands at
+        // the node's own sub-layer above the scene's base, with the node's tint.
+        fg.composite_panel(
+            target,
+            CompositeTarget::Screen,
+            rect,
+            base_layer + seat.layer,
+            seat.tint,
+            None,
+            None,
+        );
+    }
+
+    /// Declare the globe as an element of the ROOT surface — straight into the
+    /// swapchain, no target, no composite, no blit. The full-window planet (Epoch
+    /// Simulation) draws this way; a windowed globe goes through [`Self::render`].
+    /// Needs no view state, which is the point: a root globe allocates nothing.
+    pub fn render_root<'f>(
+        fg: &mut FrameGraph<'f>,
+        camera: Camera,
+        stage: &GlobeStage,
+        meshes: &[MeshHandle],
+        arrows: &'f Arrows,
+    ) {
+        fg.root(Self::draw_pass(camera, stage, meshes, arrows));
+    }
+
+    /// The ONE draw body both surfaces share: the lit shells, then the arrows.
+    fn draw_pass<'f>(
+        camera: Camera,
+        stage: &GlobeStage,
+        meshes: &[MeshHandle],
+        arrows: &'f Arrows,
+    ) -> impl FnOnce(&mut Renderer) + 'f {
         let lighting = stage.lighting;
         let opts = MeshDrawOptions::default();
         let meshes: Vec<MeshHandle> = meshes.to_vec();
-        fg.target(target, stage.clear, move |r| {
+        move |r| {
             r.set_scene(lighting);
             r.set_camera(&camera);
             for h in meshes {
@@ -262,18 +340,7 @@ impl GlobeView {
             for (color, segments) in arrows {
                 r.draw_lines(segments, *color);
             }
-        });
-        // `frame: None` — the walker already drew the node's `rtt_holder` panel
-        // on the 2D path, so a second frame here would double the chrome.
-        fg.composite_panel(
-            target,
-            CompositeTarget::Screen,
-            rect,
-            layer,
-            [1.0; 4],
-            None,
-            None,
-        );
+        }
     }
 
     /// Give the target back. A bench that leaves its viewport (scene `exit`)
@@ -282,6 +349,7 @@ impl GlobeView {
         if let Some(t) = self.target.take() {
             r.free_render_target(t);
             self.size = (0, 0);
+            self.drawn = false;
         }
     }
 }

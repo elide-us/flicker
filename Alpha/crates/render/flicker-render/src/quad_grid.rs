@@ -184,6 +184,11 @@ impl QuadGrid {
         self.viewport = rect;
     }
 
+    /// The confined viewport, if one is set (see [`Self::set_viewport`]).
+    pub fn viewport(&self) -> Option<Rect> {
+        self.viewport
+    }
+
     /// The tiling area: the confined viewport when one is set, else the whole screen.
     fn area(&self, screen: Vec2) -> Rect {
         self.viewport.unwrap_or(Rect {
@@ -337,9 +342,554 @@ impl QuadGrid {
     }
 }
 
+/// Vertical field of view of the perspective orbit view. Named because the pan needs it to
+/// convert pixels to world units — if the two disagreed, panning would drift against the cursor.
+pub const ORBIT_FOV_Y: f32 = 60.0 * std::f32::consts::PI / 180.0;
+
+/// Orbit camera state for an interactive body/asset view — THE camera component every
+/// paperdoll-style viewport shares (Aaron 2026-08-20: "you should not have to code a custom
+/// orbit view on every paperdoll — make a component"). A scene holds one per view, feeds the
+/// pointer through [`Orbit::apply_pointer`] each frame, and builds its camera with
+/// [`Orbit::camera`]. A view that renders a body and skips the pointer contract is a bug,
+/// not a style choice.
+#[derive(Clone, Copy)]
+pub struct Orbit {
+    pub yaw: f32,
+    pub pitch: f32,
+    /// Distance as a multiple of the model radius, so it frames any asset size.
+    pub dist_scale: f32,
+    /// Wheel zoom, multiplying the framing. `1.0` is the default framing; applied to the
+    /// perspective distance AND the orthographic height. PER VIEW — a holder of several
+    /// `Orbit`s zooms only the panel under the cursor.
+    pub zoom: f32,
+    /// This view's look-at point, slid across its plane by the right-drag pan. Zero frames the
+    /// asset's centre; panning is what lets the user work up close on a hand or a skull.
+    pub pan: Vec3,
+}
+
+impl Default for Orbit {
+    fn default() -> Self {
+        // Start FACE-ON-ish: the eye orbits the XY plane as `(cos yaw, sin yaw, sin pitch)`, and a
+        // character faces +Y, so yaw ≈ π/2 looks at its front. Backed off a little (1.25) for a
+        // three-quarter view, which reads the silhouette better than dead-on, and lifted slightly.
+        Self {
+            yaw: 1.25,
+            pitch: 0.22,
+            dist_scale: 2.4,
+            zoom: 1.0,
+            pan: Vec3::ZERO,
+        }
+    }
+}
+
+impl Orbit {
+    /// Eye distance for a model of `radius` — the ONE place the framing multipliers are applied,
+    /// so the camera and the pan's pixel scale cannot disagree.
+    pub fn dist(&self, radius: f32) -> f32 {
+        (radius * self.dist_scale * self.zoom).max(1.0)
+    }
+
+    /// The framing radius the ORTHOGRAPHIC views should be built with, so the wheel zooms all
+    /// panels together instead of only the perspective one.
+    pub fn ortho_radius(&self, radius: f32) -> f32 {
+        radius * self.zoom
+    }
+
+    /// Wheel zoom. MULTIPLICATIVE, so a notch is a constant proportion and zooming feels the same
+    /// whether you are framed on a whole body or already close on a hand — an additive step would
+    /// crawl when far out and jump when near. Clamped so the wheel can never invert or escape.
+    pub fn zoom_by(&mut self, wheel: f32) {
+        if wheel == 0.0 || !wheel.is_finite() {
+            return;
+        }
+        self.zoom = (self.zoom * (1.0 - wheel * 0.12)).clamp(0.05, 6.0);
+    }
+
+    /// The eye's offset from the look-at point. Z-up source content: orbit in the XY plane,
+    /// elevation on Z.
+    fn eye_offset(&self, radius: f32) -> Vec3 {
+        let (sy, cy) = self.yaw.sin_cos();
+        let cp = self.pitch.cos();
+        Vec3::new(cy * cp, sy * cp, self.pitch.sin()) * self.dist(radius)
+    }
+
+    pub fn camera(&self, radius: f32) -> Camera {
+        let r = self.dist(radius);
+        Camera {
+            position: self.pan + self.eye_offset(radius),
+            target: self.pan,
+            up: Vec3::Z,
+            fov_y_radians: ORBIT_FOV_Y,
+            near: 0.01,
+            // Measured from the look-at point, so a panned-away camera cannot clip the asset.
+            far: r * 12.0 + self.pan.length(),
+            ortho_height: None,
+        }
+    }
+
+    /// Slide THIS view's look-at point across its own plane — the right-drag pan. Each view owns
+    /// its `Orbit`, so a pan moves only the panel under the cursor; the others stay put.
+    ///
+    /// Takes the CAMERA rather than an angle so the basis comes from the view actually being
+    /// dragged: dragging in TOP pans across XY, in FRONT across XZ. Deriving it from the orbit
+    /// angles instead would pan along the PERSPECTIVE plane, which feels broken in an
+    /// orthographic panel.
+    ///
+    /// Scaled so the content tracks the cursor **1:1, at any zoom**: an orthographic camera
+    /// states its visible height outright, a perspective one's is `2·dist·tan(fov/2)` at the
+    /// look-at depth. A fixed per-pixel constant (as the orbit uses for angles) would crawl on a
+    /// large asset and bolt on a small one, since both heights scale with the model radius.
+    pub fn pan_by_view(&mut self, delta: Vec2, cam: &Camera, viewport_h: f32) {
+        if viewport_h <= 0.0 {
+            return;
+        }
+        let forward = (cam.target - cam.position).normalize_or_zero();
+        let right = forward.cross(cam.up).normalize_or_zero();
+        let up = right.cross(forward).normalize_or_zero();
+        let visible_h = match cam.ortho_height {
+            Some(h) => h,
+            None => 2.0 * (cam.position - cam.target).length() * (cam.fov_y_radians * 0.5).tan(),
+        };
+        let world_per_px = visible_h / viewport_h;
+        // The CONTENT follows the cursor, so the look-at point moves the OPPOSITE way; screen Y
+        // grows downward, so dragging down raises the target and the asset slides down with it.
+        self.pan += (-right * delta.x + up * delta.y) * world_per_px;
+    }
+
+    /// Turn the orbit by a pointer delta in pixels — the ONE place the drag feel (radians per
+    /// pixel, the pitch clamp) lives, so a single view and a multi-panel holder turn alike.
+    pub fn orbit_by(&mut self, delta: Vec2) {
+        self.yaw -= delta.x * 0.006;
+        self.pitch = (self.pitch + delta.y * 0.006).clamp(-1.4, 1.4);
+    }
+
+    /// THE default pointer contract for a perspective body view — one call a frame from the
+    /// scene's input path: left-drag orbits, right-drag pans in the view's own plane, wheel
+    /// zooms. A multi-panel holder routes per view through [`ViewportFiller::apply_pointer`],
+    /// which calls the individual methods with each panel's own camera basis.
+    pub fn apply_pointer(
+        &mut self,
+        delta: Vec2,
+        left: bool,
+        right: bool,
+        wheel: f32,
+        radius: f32,
+        viewport_h: f32,
+    ) {
+        if left {
+            self.orbit_by(delta);
+        }
+        if right {
+            let cam = self.camera(radius);
+            self.pan_by_view(delta, &cam, viewport_h);
+        }
+        self.zoom_by(wheel);
+    }
+}
+
+/// The catalogued `viewport` layouts — how many camera views the kind tiles and how.
+/// `Single` is one orbit view (a paperdoll/body view); `Pair` two independent orbit views
+/// (compare two subjects side by side); `Quad` the 2×2 editor grid ([`EDITOR_QUADS`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ViewportLayout {
+    Single,
+    Pair,
+    Quad,
+}
+
+/// One free-orbit perspective view — the single/pair layouts have no fixed orthographic
+/// sides, so each panel orbits (`ortho: None`).
+const SINGLE_VIEW: [QuadView; 1] = [QuadView {
+    label: "VIEW",
+    label_flipped: "VIEW",
+    ortho: None,
+}];
+const PAIR_VIEWS: [QuadView; 2] = [
+    QuadView {
+        label: "A",
+        label_flipped: "A",
+        ortho: None,
+    },
+    QuadView {
+        label: "B",
+        label_flipped: "B",
+        ortho: None,
+    },
+];
+
+impl ViewportLayout {
+    /// Parse the node's `layout` prop. An unknown name returns `None` so the caller fails
+    /// LOUD rather than this guessing a layout (4BB12A75).
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "single" => Some(Self::Single),
+            "pair" => Some(Self::Pair),
+            "quad" => Some(Self::Quad),
+            _ => None,
+        }
+    }
+
+    /// The view set + column count this layout tiles.
+    fn views(self) -> (&'static [QuadView], usize) {
+        match self {
+            Self::Single => (&SINGLE_VIEW, 1),
+            Self::Pair => (&PAIR_VIEWS, 2),
+            Self::Quad => (&EDITOR_QUADS, 2),
+        }
+    }
+
+    /// How many camera views this layout renders — a caller draws content for each.
+    pub fn view_count(self) -> usize {
+        self.views().0.len()
+    }
+}
+
+/// THE shared multi-view viewport a `surface` scene node drives — a [`QuadGrid`] plus one
+/// [`Orbit`] per view, so a bench stops hand-rolling `grid: QuadGrid, orbits: [Orbit; N]`
+/// and the per-view pointer routing (Aaron 2026-08-20: *"you should not have to code a
+/// custom orbit view on every paperdoll — make a component"*).
+///
+/// The split that keeps flicker-widgets 2D: the WALKER reserves the rect (a `viewport`
+/// node emits an `rtt`-family slot), the BEHAVIOUR — which owns the [`Renderer`] and the
+/// frame graph — holds one of these keyed off the node id, seats it in the reserved rect
+/// each frame with [`Self::set_rect`], feeds it the pointer, and renders the model.
+pub struct ViewportFiller {
+    grid: QuadGrid,
+    /// One orbit per view — a per-panel pan/zoom, so dragging one leaves the others put.
+    orbits: Vec<Orbit>,
+}
+
+impl ViewportFiller {
+    /// Build the grid + one orbit per view for a catalogued `layout`, creating the targets.
+    pub fn new(renderer: &mut Renderer, layout: ViewportLayout) -> Self {
+        let (views, cols) = layout.views();
+        Self::with_views(renderer, views, cols)
+    }
+
+    /// The same over a BENCH-AUTHORED view set — its own corner labels / ortho sides (the
+    /// Clayworks clip pair labels its panels ROOT MOTION / IN PLACE). The node's `layout` still
+    /// sizes the reserved slot; which views fill it is the behaviour's.
+    pub fn with_views(renderer: &mut Renderer, views: &'static [QuadView], cols: usize) -> Self {
+        Self {
+            grid: QuadGrid::new(renderer, views, cols),
+            orbits: vec![Orbit::default(); views.len()],
+        }
+    }
+
+    /// Seat the grid inside the rect the walker reserved for this node this frame
+    /// (`UiFrame::surface_slot(id)`). One call a frame.
+    pub fn set_rect(&mut self, rect: Rect) {
+        self.grid.set_viewport(Some(rect));
+    }
+
+    /// The rect the grid is seated in (`None` before the first seat).
+    pub fn rect(&self) -> Option<Rect> {
+        self.grid.viewport()
+    }
+
+    /// The layout grid — cells, cursor→view, label boxes, flips.
+    pub fn grid(&self) -> &QuadGrid {
+        &self.grid
+    }
+
+    pub fn grid_mut(&mut self) -> &mut QuadGrid {
+        &mut self.grid
+    }
+
+    /// View `i`'s orbit — for a behaviour that drives a camera from signals (stick look on the
+    /// perspective panel) or reads its framing.
+    pub fn orbit(&self, i: usize) -> &Orbit {
+        &self.orbits[i]
+    }
+
+    pub fn orbit_mut(&mut self, i: usize) -> &mut Orbit {
+        &mut self.orbits[i]
+    }
+
+    /// The layout's view count — for a caller that draws per-view content.
+    pub fn view_count(&self) -> usize {
+        self.orbits.len()
+    }
+
+    /// View `i`'s camera framing `radius`-sized content from ITS OWN orbit: a perspective view
+    /// uses the orbit camera verbatim, an ortho view is framed around that orbit's look-at at
+    /// `radius · zoom` — the one expression every consumer used to spell out by hand.
+    pub fn camera(&self, i: usize, radius: f32) -> Camera {
+        let o = &self.orbits[i];
+        self.grid
+            .camera(i, o.ortho_radius(radius), &o.camera(radius))
+    }
+
+    /// Every view's camera, each framing its own radius (the clip pair frames ROOT MOTION wider
+    /// than IN PLACE).
+    pub fn cameras_with(&self, radius_of: impl Fn(usize) -> f32) -> Vec<Camera> {
+        (0..self.orbits.len())
+            .map(|i| self.camera(i, radius_of(i)))
+            .collect()
+    }
+
+    /// The view under `cursor` and its camera — the basis a drag in that panel pans in.
+    pub fn camera_at(&self, cursor: Vec2, screen: Vec2, radius: f32) -> Option<(usize, Camera)> {
+        let i = self.grid.cell_at(cursor, screen)?;
+        Some((i, self.camera(i, radius)))
+    }
+
+    /// Forget every view's pan + zoom. A new subject reframes — or it opens off-screen, or at
+    /// the last one's magnification, because a camera is still parked where it was left.
+    pub fn reset_framing(&mut self) {
+        for o in &mut self.orbits {
+            o.pan = Vec3::ZERO;
+            o.zoom = 1.0;
+        }
+    }
+
+    /// A click on an ORTHO view's corner label flips it to the opposite side (TOP↔BOTTOM,
+    /// LEFT↔RIGHT, FRONT↔BACK) and returns the view; a perspective view has no side and is
+    /// never a flip target. `QuadGrid::flipped` stays the single source of truth the
+    /// composited label reads, so text and view cannot drift.
+    pub fn toggle_flip_at(&mut self, cursor: Vec2, screen: Vec2) -> Option<usize> {
+        let i = self.grid.cell_at(cursor, screen)?;
+        if self.grid.views()[i].ortho.is_none() || !self.grid.label_hit(i, cursor, screen) {
+            return None;
+        }
+        let f = self.grid.flipped.get_mut(i)?;
+        *f = !*f;
+        Some(i)
+    }
+
+    /// Route one pointer sample to the view UNDER the cursor, and only it: left-drag ORBITS
+    /// (a perspective notion — only a perspective view turns; the ortho views are fixed axes),
+    /// right-drag PANS in that view's own plane (TOP across XY, FRONT across XZ — the basis is
+    /// the panel's camera, never the perspective one), the wheel ZOOMS that view. A cursor over
+    /// no panel moves nothing — it does not saturate into view 0.
+    #[allow(clippy::too_many_arguments)]
+    pub fn apply_pointer(
+        &mut self,
+        cursor: Vec2,
+        screen: Vec2,
+        delta: Vec2,
+        left: bool,
+        right: bool,
+        wheel: f32,
+        radius: f32,
+    ) {
+        let Some(i) = self.grid.cell_at(cursor, screen) else {
+            return;
+        };
+        let viewport_h = self.grid.cell(i, screen).size.y;
+        let view_cam = self.camera(i, radius);
+        let persp = self.grid.views()[i].ortho.is_none();
+        let o = &mut self.orbits[i];
+        if left && persp {
+            o.orbit_by(delta);
+        }
+        if right {
+            o.pan_by_view(delta, &view_cam, viewport_h);
+        }
+        o.zoom_by(wheel);
+    }
+
+    /// The pick ray in the view under `cursor`, in the view's draw space, plus WHICH view —
+    /// built from that view's own camera exactly as [`Self::render`] frames it. `None` when the
+    /// cursor is outside every panel.
+    pub fn pick_ray_at(
+        &self,
+        cursor: Vec2,
+        screen: Vec2,
+        radius: f32,
+    ) -> Option<(usize, (Vec3, Vec3))> {
+        let i = self.grid.cell_at(cursor, screen)?;
+        let local = self.grid.local_cursor(i, cursor, screen)?;
+        let vp = self.grid.cell(i, screen).size;
+        self.camera(i, radius)
+            .pick_ray(local, vp)
+            .map(|ray| (i, ray))
+    }
+
+    /// Render every view of `radius`-sized content into its target and composite into the
+    /// reserved rect at `layer`; `draw` draws view `i` with its camera already set. Each view
+    /// frames on its own orbit, so pan/zoom stay independent per panel.
+    ///
+    /// **ORDER: call this BEFORE the scene's `render_hud`.** The offscreen passes RESET the
+    /// renderer's per-frame draw queues, so anything queued earlier in the frame is DISCARDED
+    /// — a HUD drawn first vanishes (the Component Catalog shipped blank this way, 2026-08-21).
+    /// Composite one layer above the HUD (`base + 2` over a HUD at `base + 1`) so the views
+    /// land inside the well the walker drew rather than under it.
+    pub fn render<F>(&self, r: &mut Renderer, layer: f32, radius: f32, draw: F)
+    where
+        F: Fn(&mut Renderer, usize) + Copy,
+    {
+        self.render_framed(r, layer, |_| radius, draw);
+    }
+
+    /// [`Self::render`] with a PER-VIEW framing radius — for panels that show different
+    /// subjects (the clip pair's travelling vs in-place variants). Same ordering contract.
+    pub fn render_framed<F>(
+        &self,
+        r: &mut Renderer,
+        layer: f32,
+        radius_of: impl Fn(usize) -> f32,
+        draw: F,
+    ) where
+        F: Fn(&mut Renderer, usize) + Copy,
+    {
+        let cameras = self.cameras_with(radius_of);
+        self.grid.render_with(r, layer, &cameras, draw);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The three catalogued layouts map to 1 / 2 / 4 views, and an unknown name fails LOUD
+    /// (returns `None`) rather than resolving to a silent default.
+    #[test]
+    fn viewport_layouts_map_to_view_counts() {
+        assert_eq!(ViewportLayout::from_name("single").unwrap().view_count(), 1);
+        assert_eq!(ViewportLayout::from_name("pair").unwrap().view_count(), 2);
+        assert_eq!(ViewportLayout::from_name("quad").unwrap().view_count(), 4);
+        assert_eq!(ViewportLayout::from_name("nope"), None);
+    }
+
+    /// The filler routes a pointer sample to the view UNDER the cursor only: left-drag turns
+    /// the perspective panel and never a fixed-axis ortho one; right-drag in TOP pans across
+    /// its own XY plane (z stays put); a cursor over no panel moves nothing.
+    #[test]
+    fn filler_routes_the_pointer_to_the_view_under_the_cursor_only() {
+        let mut f = bare_filler();
+        let screen = Vec2::new(1000.0, 800.0);
+        let base = Orbit::default();
+        f.apply_pointer(
+            Vec2::new(100.0, 100.0),
+            screen,
+            Vec2::new(40.0, -20.0),
+            true,
+            false,
+            0.0,
+            10.0,
+        );
+        assert!(f.orbit(0).yaw != base.yaw, "left-drag in PERSP orbits it");
+        assert_eq!(f.orbit(1).yaw, base.yaw, "and no other view");
+        f.apply_pointer(
+            Vec2::new(900.0, 100.0),
+            screen,
+            Vec2::new(40.0, -20.0),
+            true,
+            false,
+            0.0,
+            10.0,
+        );
+        assert_eq!(
+            f.orbit(1).yaw,
+            base.yaw,
+            "left-drag in TOP does not orbit a fixed axis"
+        );
+        f.apply_pointer(
+            Vec2::new(900.0, 100.0),
+            screen,
+            Vec2::new(30.0, 10.0),
+            false,
+            true,
+            0.0,
+            10.0,
+        );
+        assert!(f.orbit(1).pan != Vec3::ZERO, "right-drag in TOP pans it");
+        assert_eq!(f.orbit(1).pan.z, 0.0, "in TOP's own XY plane");
+        assert_eq!(f.orbit(0).pan, Vec3::ZERO, "PERSP untouched");
+        let zoom = f.orbit(0).zoom;
+        f.apply_pointer(
+            Vec2::new(-5.0, -5.0),
+            screen,
+            Vec2::ZERO,
+            true,
+            true,
+            1.0,
+            10.0,
+        );
+        assert_eq!(f.orbit(0).zoom, zoom, "off every panel: nothing moves");
+    }
+
+    /// Only an ORTHO view's label box is a flip target; `reset_framing` forgets pan + zoom.
+    #[test]
+    fn filler_flips_only_an_ortho_label_and_resets_framing() {
+        let mut f = bare_filler();
+        let screen = Vec2::new(1000.0, 800.0);
+        let centre = |r: Rect| r.pos + r.size * 0.5;
+        assert_eq!(
+            f.toggle_flip_at(centre(f.grid().label_rect(0, screen)), screen),
+            None,
+            "PERSP has no side"
+        );
+        assert_eq!(
+            f.toggle_flip_at(centre(f.grid().label_rect(1, screen)), screen),
+            Some(1)
+        );
+        assert!(f.grid().flipped[1], "TOP flipped to BOTTOM");
+        assert_eq!(
+            f.toggle_flip_at(Vec2::new(750.0, 200.0), screen),
+            None,
+            "mid-panel is not the label"
+        );
+        f.orbit_mut(2).pan = Vec3::X;
+        f.orbit_mut(3).zoom = 2.0;
+        f.reset_framing();
+        assert_eq!(f.orbit(2).pan, Vec3::ZERO);
+        assert_eq!(f.orbit(3).zoom, 1.0);
+    }
+
+    /// `camera_at` / `pick_ray_at` answer for the view under the cursor and `None` outside.
+    #[test]
+    fn filler_camera_and_pick_ray_follow_the_cursor_view() {
+        let f = bare_filler();
+        let screen = Vec2::new(1000.0, 800.0);
+        assert_eq!(
+            f.camera_at(Vec2::new(900.0, 700.0), screen, 10.0)
+                .map(|(i, _)| i),
+            Some(3)
+        );
+        assert!(f.camera_at(Vec2::new(-1.0, 0.0), screen, 10.0).is_none());
+        assert_eq!(
+            f.pick_ray_at(Vec2::new(100.0, 100.0), screen, 10.0)
+                .map(|(i, _)| i),
+            Some(0)
+        );
+        assert!(f.pick_ray_at(Vec2::new(-1.0, 0.0), screen, 10.0).is_none());
+    }
+
+    /// A filler over the bare editor grid — no renderer, pure routing/camera math.
+    fn bare_filler() -> ViewportFiller {
+        ViewportFiller {
+            grid: bare_grid(),
+            orbits: vec![Orbit::default(); 4],
+        }
+    }
+
+    /// THE POINTER CONTRACT (Aaron 2026-08-20, after a preview page shipped with a dead
+    /// camera): one call moves the orbit — left-drag turns, right-drag pans, wheel zooms.
+    /// Any body view wired through `apply_pointer` gets the standard interaction for free.
+    #[test]
+    fn orbit_apply_pointer_turns_pans_and_zooms() {
+        let mut o = Orbit::default();
+        let base = o;
+        o.apply_pointer(Vec2::new(40.0, -25.0), true, false, 0.0, 100.0, 800.0);
+        assert!(
+            o.yaw != base.yaw && o.pitch != base.pitch,
+            "left-drag orbits"
+        );
+        assert_eq!(o.pan, base.pan, "left-drag does not pan");
+
+        let mut o = Orbit::default();
+        o.apply_pointer(Vec2::new(30.0, 10.0), false, true, 0.0, 100.0, 800.0);
+        assert!(o.pan != Vec3::ZERO, "right-drag pans the look-at point");
+        assert_eq!(o.yaw, base.yaw, "right-drag does not orbit");
+
+        let mut o = Orbit::default();
+        o.apply_pointer(Vec2::ZERO, false, false, 1.0, 100.0, 800.0);
+        assert!(o.zoom < 1.0, "a wheel notch zooms in");
+        o.apply_pointer(Vec2::ZERO, false, false, f32::NAN, 100.0, 800.0);
+        assert!(o.zoom.is_finite(), "a NaN wheel is ignored");
+    }
 
     /// A 4-view grid at 2 columns lays out TL, TR, BL, BR — the order `EDITOR_QUADS`
     /// documents, which the paperdoll's click routing depends on.

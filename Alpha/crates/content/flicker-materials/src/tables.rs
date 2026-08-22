@@ -66,6 +66,9 @@ pub struct Tables {
     by_number: HashMap<u8, usize>,
     material_by_id: HashMap<u8, usize>,
     material_by_name: HashMap<String, usize>,
+    /// compound name → the material whose `represents` claims it (the
+    /// classifier's primary key; uniqueness gated at load).
+    material_by_compound: HashMap<String, usize>,
     compound_by_name: HashMap<String, usize>,
     compound_by_id: HashMap<u16, usize>,
     rock_by_id: HashMap<String, usize>,
@@ -78,7 +81,60 @@ impl Tables {
     pub fn from_source(source: &impl TableSource) -> Result<Self, MaterialError> {
         let elements = source.load_elements()?;
         let materials = source.load_materials()?;
+        // Content gates (fail loud, never a silent fallback): every material
+        // except the id-0 Air placeholder carries its render class, and the
+        // reserved exotic-emissive block (248-255) stays empty until released
+        // by ruling (both ruled 2026-08-19).
+        for m in &materials {
+            if m.id != 0 && m.render_class.is_none() {
+                return Err(MaterialError::Schema {
+                    path: "materials (TableSource)".into(),
+                    detail: format!("material {} ({}) has no render_class", m.id, m.name),
+                });
+            }
+            if m.id >= crate::material::RESERVED_EXOTIC_FIRST {
+                return Err(MaterialError::Schema {
+                    path: "materials (TableSource)".into(),
+                    detail: format!(
+                        "material {} ({}) is inside the reserved exotic block {}-255",
+                        m.id,
+                        m.name,
+                        crate::material::RESERVED_EXOTIC_FIRST
+                    ),
+                });
+            }
+        }
         let compounds = source.load_compounds()?;
+        // `represents` gate: every named compound must exist in the catalog,
+        // and no compound may be claimed by two materials — a fork in "which
+        // material does this compound draw as" would be silent ambiguity.
+        {
+            let known: std::collections::HashSet<&str> =
+                compounds.iter().map(|c| c.name.as_str()).collect();
+            let mut claimed: HashMap<&str, &str> = HashMap::new();
+            for m in &materials {
+                for name in &m.represents {
+                    if !known.contains(name.as_str()) {
+                        return Err(MaterialError::Schema {
+                            path: "materials (TableSource)".into(),
+                            detail: format!(
+                                "material {} ({}) represents unknown compound {name:?}",
+                                m.id, m.name
+                            ),
+                        });
+                    }
+                    if let Some(prev) = claimed.insert(name.as_str(), m.name.as_str()) {
+                        return Err(MaterialError::Schema {
+                            path: "materials (TableSource)".into(),
+                            detail: format!(
+                                "compound {name:?} is represented by both {prev} and {}",
+                                m.name
+                            ),
+                        });
+                    }
+                }
+            }
+        }
         let rocks = source.load_rocks()?;
         Ok(Self::build_all(elements, materials, compounds, rocks))
     }
@@ -138,6 +194,11 @@ impl Tables {
             .enumerate()
             .map(|(i, m)| (m.name.clone(), i))
             .collect();
+        let material_by_compound = materials
+            .iter()
+            .enumerate()
+            .flat_map(|(i, m)| m.represents.iter().map(move |c| (c.clone(), i)))
+            .collect();
         let compound_by_name = compounds
             .iter()
             .enumerate()
@@ -156,6 +217,7 @@ impl Tables {
             by_number,
             material_by_id,
             material_by_name,
+            material_by_compound,
             compound_by_name,
             compound_by_id,
             rocks,
@@ -171,6 +233,23 @@ impl Tables {
     /// All material rows, in load order.
     pub fn materials(&self) -> &[MaterialDef] {
         &self.materials
+    }
+
+    /// The mesh-pass colour palette: one RGBA per catalog slot, index = id
+    /// (the shape `Renderer::set_material_palette` takes). Undefined slots —
+    /// and Air (id 0, never drawn) — stay LOUD-WRONG MAGENTA, matching the
+    /// renderer's boot palette, so a voxel carrying an undefined id renders
+    /// visibly "missing" instead of silently plausible. Colours are the
+    /// catalog's placeholder `color` rows until Sablework-defined textures
+    /// land per slot.
+    pub fn render_palette(&self) -> [[f32; 4]; 256] {
+        let mut colors = [[1.0, 0.0, 1.0, 1.0]; 256];
+        for m in &self.materials {
+            if m.id != 0 {
+                colors[m.id as usize] = [m.color[0], m.color[1], m.color[2], 1.0];
+            }
+        }
+        colors
     }
 
     /// The element with the given chemical symbol (e.g. `"Fe"`).
@@ -191,6 +270,16 @@ impl Tables {
     /// The material with the given display name (e.g. `"Granite"`).
     pub fn material_by_name(&self, name: &str) -> Option<&MaterialDef> {
         self.material_by_name.get(name).map(|&i| &self.materials[i])
+    }
+
+    /// The material whose `represents` claims the given compound name — the
+    /// classifier's primary key (e.g. `"Hematite"` or `"Iron Oxide"` → the
+    /// Hematite material). `None` for compounds no material represents; the
+    /// classifier then falls back to element-signature matching.
+    pub fn material_representing(&self, compound_name: &str) -> Option<&MaterialDef> {
+        self.material_by_compound
+            .get(compound_name)
+            .map(|&i| &self.materials[i])
     }
 
     /// All compound rows, in load order (empty if the catalog isn't present).
@@ -427,19 +516,76 @@ mod tests {
         assert!(t.material(200).is_none());
     }
 
+    /// The 4-way render axis (ratified 2026-08-19): every material except the
+    /// id-0 Air placeholder carries exactly one class, the reserved exotic
+    /// block (248-255) is empty, and the class assignments match the ruling —
+    /// rock/ore hard-edge, soil/sediment blendable, liquids translucent
+    /// (Water KEEPS its slot), Lava emissive.
+    #[test]
+    fn render_classes_cover_the_index() {
+        use crate::material::{RenderClass, RESERVED_EXOTIC_FIRST};
+        let t = tables();
+        for m in t.materials() {
+            if m.id == 0 {
+                assert!(m.render_class.is_none(), "Air is never drawn, no class");
+                continue;
+            }
+            assert!(m.render_class.is_some(), "{}: render_class missing", m.name);
+            assert!(
+                m.id < RESERVED_EXOTIC_FIRST,
+                "{}: id {} is inside the reserved exotic block",
+                m.name,
+                m.id
+            );
+        }
+        let class = |name: &str| t.material_by_name(name).unwrap().render_class.unwrap();
+        assert_eq!(class("Granite"), RenderClass::HardEdge);
+        assert_eq!(class("Hematite"), RenderClass::HardEdge);
+        assert_eq!(class("Dirt"), RenderClass::Blendable);
+        assert_eq!(class("Sand"), RenderClass::Blendable);
+        assert_eq!(class("Water"), RenderClass::Translucent);
+        assert_eq!(class("Ice"), RenderClass::Translucent);
+        assert_eq!(class("Lava"), RenderClass::Emissive);
+    }
+
+    /// The render palette maps id → catalog colour, and every UNDEFINED slot
+    /// (plus Air, never drawn) stays the loud-wrong magenta — no invented
+    /// fallback colour anywhere.
+    #[test]
+    fn render_palette_is_catalog_colors_over_loud_magenta() {
+        const MAGENTA: [f32; 4] = [1.0, 0.0, 1.0, 1.0];
+        let t = tables();
+        let pal = t.render_palette();
+        let granite = t.material_by_name("Granite").unwrap();
+        assert_eq!(
+            pal[granite.id as usize],
+            [granite.color[0], granite.color[1], granite.color[2], 1.0],
+            "a defined slot carries its catalog colour"
+        );
+        assert_eq!(pal[0], MAGENTA, "Air stays loud-wrong (never drawn)");
+        assert_eq!(pal[200], MAGENTA, "an undefined slot stays loud-wrong");
+        assert_eq!(pal[255], MAGENTA, "the reserved block stays loud-wrong");
+    }
+
     #[test]
     fn compounds_load_from_the_catalog() {
         let t = tables();
-        // The Prism BookIII catalog (Common/Alloy/Biological/Mineral/Useful/Gemstone;
-        // 77 rows after Feldspar id 42 retired 2026-07-13, superseded by the split
-        // feldspars — retired ids are never reused) + the 12 sim-required minerals
-        // merged in from the rock tier (Unification Ruling R6b — ONE mineral registry) = 89,
-        // + the 5 sim-required atmospheric gas species (ids 91-95: N₂, SO₂, HCl, CH₄, NH₃)
-        // added for the outgassing/atmosphere sim (2026-07-14) = 94,
-        // + Oxygen (id 96) added for the biosphere (2026-08-05): free O₂ is a
-        // BIOSIGNATURE — photosynthesis is the only thing in the sim that makes
-        // it, and there was nothing in the catalog to credit = 95.
+        // The catalog is assembled from TWO sibling files (split 2026-08-19), one id
+        // space. compounds.json holds the 77 gameplay rows: the Prism BookIII catalog
+        // (Common/Alloy/Biological/Mineral/Useful/Gemstone) minus Feldspar id 42
+        // (retired 2026-07-13, superseded by the split feldspars — retired ids are
+        // never reused). crust_compounds.json holds the 18 world-formation-sim rows:
+        // the 12 sim-required R6b minerals (ids 79-90, ONE mineral registry) + the 6
+        // sim-required gas species (ids 91-96: N₂, SO₂, HCl, CH₄, NH₃, and O₂ — the
+        // last a BIOSIGNATURE the biosphere credits). The loader appends both = 95.
         assert_eq!(t.compounds().len(), 95);
+        // 95 UNIQUE ids and names. A cross-file duplicate (same id/name authored in
+        // both split files) would hide inside the bare len() — the by-id/by-name
+        // indexes silently collapse duplicates — so guard the merge channel directly.
+        let ids: HashSet<u16> = t.compounds().iter().map(|c| c.id).collect();
+        let names: HashSet<&str> = t.compounds().iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(ids.len(), 95, "duplicate compound id across the split");
+        assert_eq!(names.len(), 95, "duplicate compound name across the split");
         assert!(t.compound("Feldspar").is_none(), "Feldspar (42) is retired");
         // The organic vocabulary the biosphere books its tissue in. These three
         // shipped a placeholder C₁H₁O₁ until 2026-08-05, which made them
@@ -485,7 +631,9 @@ mod tests {
     fn merged_minerals_are_first_class_compounds() {
         let t = tables();
         // The 12 rock-forming minerals moved out of rocks.json (R6b) continue the
-        // catalog id space and carry their physical fields.
+        // catalog id space and carry their physical fields. They now live in the
+        // sibling crust_compounds.json (split 2026-08-19), so resolving them here
+        // doubles as the guard that the loader merges that second file.
         let oli = t.compound("Olivine").expect("Olivine present");
         assert_eq!(oli.id, 79);
         assert_eq!(oli.category, "mineral");

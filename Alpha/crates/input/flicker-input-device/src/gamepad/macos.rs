@@ -8,9 +8,10 @@
 //! `flicker-app/src/gamepad/macos.rs`, refactored to fill a [`PadSnapshot`].
 
 use flicker_input_core::{GamepadAxis, GamepadButton};
-use objc2_game_controller::{GCController, GCExtendedGamepad};
+use objc2_game_controller::{GCController, GCDevice, GCExtendedGamepad};
 
 use super::{DeviceCaps, PadSnapshot};
+use crate::PadVendor;
 
 /// Reads the active controller via the GameController framework each refresh.
 #[derive(Default)]
@@ -42,6 +43,7 @@ impl PlatformGamepad {
                 snap.reset_neutral();
                 read_pad(&pad, snap);
                 snap.caps = DeviceCaps::all();
+                snap.vendor = read_vendor(&controller);
                 connected = true;
                 break; // single player — slot 0 is the first extended pad
             }
@@ -50,6 +52,7 @@ impl PlatformGamepad {
         if !connected {
             snap.reset_neutral();
             snap.caps = DeviceCaps::default();
+            snap.vendor = PadVendor::Generic;
         }
         snap.connected = connected;
 
@@ -65,6 +68,19 @@ impl PlatformGamepad {
         }
         self.was_connected = connected;
     }
+}
+
+/// Classify the connected controller's vendor from its GameController metadata.
+/// `productCategory` ("Xbox One", "DualSense", "MFi", …) is the stable classifier;
+/// `vendorName` (the product string) backs it up. GameController exposes no USB id,
+/// so the string path decides ([`PadVendor::from_metadata`]).
+fn read_vendor(controller: &GCController) -> PadVendor {
+    // SAFETY: snapshot reads on the GCDevice protocol; main thread, once per frame.
+    let category = unsafe { controller.productCategory() }.to_string();
+    let name = unsafe { controller.vendorName() }
+        .map(|s| s.to_string())
+        .unwrap_or_default();
+    PadVendor::from_metadata(&format!("{category} {name}"), None)
 }
 
 /// Copy one controller's live GameController-framework state into the snapshot.

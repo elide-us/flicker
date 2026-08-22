@@ -158,6 +158,16 @@ pub struct Renderer {
     /// so main-frame draws queued BEFORE it are silently destroyed — this counter
     /// is what lets that destruction be LOUD instead.
     frame_draws: u32,
+    /// Whether the renderer is inside a DECLARED pass — an offscreen target's closure
+    /// ([`Renderer::render_to_texture`]) or a [`crate::FrameGraph::root`] element. A 3D
+    /// draw queued outside one is a STRAY: counted in `stray_3d_draws` and reported at
+    /// [`Renderer::end_frame`]. The screen is a surface that is declared, not assumed —
+    /// immediate-mode 3D to the swapchain was the holdout the gate exists to name.
+    in_pass: bool,
+    /// 3D draws queued outside a declared pass this frame (see `in_pass`).
+    stray_3d_draws: u32,
+    /// Consecutive frames that carried a stray — the report is rate-limited on it.
+    stray_3d_frames: u32,
 
     /// Offscreen render targets, indexed by [`RenderTargetHandle`] (slot pool).
     render_targets: Vec<Option<RenderTarget>>,
@@ -319,6 +329,9 @@ impl Renderer {
             current_layer: 0.0,
             current_clip: None,
             frame_draws: 0,
+            in_pass: false,
+            stray_3d_draws: 0,
+            stray_3d_frames: 0,
             render_targets: Vec::new(),
             free_target_slots: Vec::new(),
             sky_this_frame: false,
@@ -653,6 +666,28 @@ impl Renderer {
         self.frame_draws += 1;
     }
 
+    /// Count one queued 3D draw; outside a declared pass it is a STRAY (see
+    /// [`Self::in_pass`]). Every 3D `draw_*` entry point calls this instead of
+    /// [`Self::note_draw`] — a new 3D entry point must too, or it escapes the gate.
+    #[inline]
+    fn note_3d_draw(&mut self) {
+        self.note_draw();
+        if !self.in_pass {
+            self.stray_3d_draws += 1;
+        }
+    }
+
+    /// Enter / leave a declared pass on the MAIN frame — the frame graph's root element.
+    /// Offscreen passes mark themselves around their closure in
+    /// [`Self::render_to_texture`].
+    pub(crate) fn begin_pass(&mut self) {
+        self.in_pass = true;
+    }
+
+    pub(crate) fn end_pass(&mut self) {
+        self.in_pass = false;
+    }
+
     /// Set the ambient 2D layer for subsequent `draw_sprite`/`draw_text`/
     /// `draw_triangle` calls. Higher layers draw on top; ties break by
     /// submission order. 2D ordering is pure painter's order — the depth buffer
@@ -896,6 +931,18 @@ impl Renderer {
         self.scene = scene;
     }
 
+    /// Upload the material-catalog colour palette for the 3D mesh pass — one
+    /// RGBA per `MaterialId` (index = id, `materials.json` order). The pipeline
+    /// boots all-magenta (loud-wrong), so a voxel scene sets this once from the
+    /// loaded catalog at init; undefined slots should be left magenta rather
+    /// than given an invented fallback colour. Persists until the next call.
+    pub fn set_material_palette(
+        &mut self,
+        colors: &[[f32; 4]; crate::pipeline_mesh::MATERIAL_PALETTE_LEN],
+    ) {
+        self.mesh.set_material_palette(&self.queue, colors);
+    }
+
     /// Request the procedural sky behind the 3D scene this frame. Fakes
     /// atmospheric scattering from the current [`SceneLighting`] (sun/moon
     /// directions + colours and the `sky_zenith`/`sky_horizon` palette) — a
@@ -904,7 +951,7 @@ impl Renderer {
     /// you want a sky; omit it (menus/loading) to keep the flat `clear_color`.
     /// A no-op unless a camera is also set this frame (it needs the view ray).
     pub fn draw_sky(&mut self) {
-        self.note_draw();
+        self.note_3d_draw();
         self.draw_sky = true;
     }
 
@@ -932,7 +979,7 @@ impl Renderer {
     /// via [`Renderer::set_camera`]) supplies the view and projection.
     /// `options` controls fill vs wireframe and the tint.
     pub fn draw_mesh(&mut self, mesh: MeshHandle, model: Mat4, options: MeshDrawOptions) {
-        self.note_draw();
+        self.note_3d_draw();
         self.mesh
             .push(mesh, model, options.tint, options.wireframe, options.gloss);
     }
@@ -969,7 +1016,7 @@ impl Renderer {
         model: Mat4,
         options: MeshDrawOptions,
     ) {
-        self.note_draw();
+        self.note_3d_draw();
         self.mesh_textured.push(
             mesh,
             texture,
@@ -992,7 +1039,7 @@ impl Renderer {
         model: Mat4,
         options: MeshDrawOptions,
     ) {
-        self.note_draw();
+        self.note_3d_draw();
         self.mesh_textured.push(
             mesh,
             texture,
@@ -1019,7 +1066,7 @@ impl Renderer {
         model: Mat4,
         options: MeshDrawOptions,
     ) {
-        self.note_draw();
+        self.note_3d_draw();
         self.mesh_textured.push(
             mesh,
             texture,
@@ -1069,7 +1116,7 @@ impl Renderer {
         palettes: &[Mat4],
         bone_count: u32,
     ) {
-        self.note_draw();
+        self.note_3d_draw();
         self.skinned.draw_instanced(
             &self.device,
             &self.queue,
@@ -1091,7 +1138,7 @@ impl Renderer {
     /// persistence. Cheap (12 segments → 24 vertices). Multiple boxes
     /// per frame are fine.
     pub fn draw_bounding_box(&mut self, min: Vec3, max: Vec3, color: [f32; 4]) {
-        self.note_draw();
+        self.note_3d_draw();
         self.lines.push_box(min, max, color);
     }
 
@@ -1106,7 +1153,7 @@ impl Renderer {
     /// vertex buffer growth strategy; tens of thousands of segments
     /// per frame are comfortable on modern hardware.
     pub fn draw_lines(&mut self, segments: &[(Vec3, Vec3)], color: [f32; 4]) {
-        self.note_draw();
+        self.note_3d_draw();
         for &(a, b) in segments {
             self.lines.push_segment(a, b, color);
         }
@@ -1116,7 +1163,7 @@ impl Renderer {
     /// so the segments show through opaque geometry — for a skeleton overlay laid over the
     /// mesh, or other debug gizmos you want visible regardless of occlusion.
     pub fn draw_lines_overlay(&mut self, segments: &[(Vec3, Vec3)], color: [f32; 4]) {
-        self.note_draw();
+        self.note_3d_draw();
         for &(a, b) in segments {
             self.lines_overlay.push_segment(a, b, color);
         }
@@ -1139,7 +1186,7 @@ impl Renderer {
         uv_max: Vec2,
         color: [f32; 4],
     ) {
-        self.note_draw();
+        self.note_3d_draw();
         self.billboard
             .push(texture, world_position, world_size, uv_min, uv_max, color);
     }
@@ -1158,7 +1205,7 @@ impl Renderer {
         uv_max: Vec2,
         color: [f32; 4],
     ) {
-        self.note_draw();
+        self.note_3d_draw();
         self.billboard
             .push_additive(texture, world_position, world_size, uv_min, uv_max, color);
     }
@@ -1311,7 +1358,9 @@ impl Renderer {
         }
 
         self.begin_frame(); // fresh sub-frame queues
+        self.in_pass = true;
         f(self); // the caller queues the sub-scene
+        self.in_pass = false;
         if let Err(e) = self.prepare_frame(size) {
             tracing::warn!("render_to_texture: prepare failed: {e:?}");
             self.begin_frame();
@@ -1502,6 +1551,26 @@ impl Renderer {
     /// Encode and submit the swapchain frame. Recoverable surface losses reconfigure and
     /// skip the frame.
     pub fn end_frame(&mut self) -> Result<()> {
+        // ── THE DECLARED-SURFACE GATE ──
+        // 3D queued outside any declared pass still renders (it lands in the main
+        // frame's opaque pass), but it is the immediate-mode path the live-scene
+        // container retired: such content belongs in `FrameGraph::root` (the screen
+        // surface) or an offscreen target. Reported on the first stray frame and every
+        // 300th after, so a steady violation stays visible without flooding the log.
+        if self.stray_3d_draws > 0 {
+            self.stray_3d_frames += 1;
+            if self.stray_3d_frames % 300 == 1 {
+                tracing::warn!(
+                    "end_frame: {} 3D draw(s) were queued OUTSIDE a declared pass this \
+                     frame — declare full-window content with FrameGraph::root (the screen \
+                     surface) or draw it inside an offscreen target",
+                    self.stray_3d_draws
+                );
+            }
+            self.stray_3d_draws = 0;
+        } else {
+            self.stray_3d_frames = 0;
+        }
         self.prepare_frame(self.screen)?;
 
         let frame = match self.surface.get_current_texture() {

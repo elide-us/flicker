@@ -397,18 +397,23 @@ impl InputMap {
         map
     }
 
-    /// The bench-nav tier of the three-tier focus model (controller is the
-    /// floor: stick = panels, d-pad = selection within one, A/B = Confirm /
-    /// Cancel), bound in the WORLD preset because benches run there — a
-    /// declared `on_panel_*` / `on_confirm` with no World binding is dead
-    /// hardware, exactly the trap the rails fell into. A stick FLICK past the
-    /// deadzone is one panel step (the resolver edges each binding), so the
-    /// left stick walks the focus cursor between panes; d-pad and arrows move
-    /// the selection inside one. A screen that declares none of these leaves
-    /// every event to the walker's own nav defaults, so gameplay maps are
-    /// unaffected. Keyboard Confirm rides Enter (Space stays Jump here — the
-    /// Menu context map makes its own choices); pointer users need no Cancel
-    /// key, since for KBM the pane context is implied by the cursor.
+    /// The bench-nav tier of the focus model (controller is the floor), bound in the
+    /// WORLD preset because benches run there — a declared nav/confirm signal with no
+    /// World binding is dead hardware, exactly the trap the rails fell into.
+    ///
+    /// FLATTENED (plan 1A292918 T2): the pane tier answers BOTH devices, but through
+    /// SEPARATE intents that must never be tangled (Aaron 2026-08-18) — the D-PAD emits
+    /// `Nav*`, the LEFT STICK emits `Panel*`. The walker's pane tier consumes both (each
+    /// moves the focus cursor between panel stops, geometrically when rects are present);
+    /// in-control components (a slider nudge, a list step) answer ONLY the d-pad's `Nav*`,
+    /// never the stick. The stick is AXIS-SPLIT because one physical input binds exactly
+    /// one signal (binding.rs invariant): X → `Panel*` (the pane cursor — `PanelPrev`
+    /// left, `PanelNext` right), Y → `Zoom*` (an entered viewport's camera, the Populous
+    /// globe). So the D-PAD owns VERTICAL pane moves; the stick cannot also drive them
+    /// without stealing the globe's zoom. A stick FLICK past the deadzone is one step.
+    /// A screen that declares none of these leaves every event to the walker's nav
+    /// defaults, so gameplay maps are unaffected. Keyboard Confirm rides Enter (Space
+    /// stays Jump — the Menu map chooses its own).
     pub(crate) fn bind_bench_nav(&mut self) {
         use crate::device::GamepadButton;
         self.bind(
@@ -454,10 +459,12 @@ impl InputMap {
             ActionSignal::Cancel,
             InputBinding::GamepadButton(GamepadButton::East),
         );
-        // The stick's other axis: up draws the entered viewport's camera in,
-        // down backs it away (Positive = forward/up, the same convention the
-        // gamepad preset's MoveForward uses). The wheel stays the pointer's
-        // zoom, outside the signal map.
+        // The stick AXIS-SPLIT (one physical input binds exactly one signal —
+        // binding.rs invariant): X is the pane cursor (Panel*, above — its own intent,
+        // NOT the d-pad's Nav*), Y is the entered viewport's camera (Zoom*, the Populous
+        // globe): up = ZoomIn, down = ZoomOut. So VERTICAL pane moves are the d-pad's —
+        // the stick cannot also drive them without stealing the globe's zoom. The wheel
+        // stays the pointer's zoom, outside the signal map.
         self.bind(
             ActionSignal::ZoomIn,
             InputBinding::GamepadAxis {
@@ -1018,6 +1025,75 @@ mod tests {
         assert_eq!(
             map.action_for(InputBinding::Key(Key::Space)),
             Some(ActionSignal::Jump)
+        );
+    }
+
+    /// The FLATTENED bench-nav tier (plan 1A292918 T2): the World preset benches run
+    /// under must bind the whole focus tier, or a control is dead hardware (drift-gate
+    /// 8634C200). Pins the SEPARATE-INTENT contract (Aaron 2026-08-18): the d-pad drives
+    /// `Nav*`, the left stick drives its OWN `Panel*` — the two are never tangled.
+    #[test]
+    fn the_world_preset_covers_the_whole_bench_focus_tier() {
+        use crate::device::GamepadButton;
+        let map = InputMap::wasd_and_mouse();
+        for sig in [
+            ActionSignal::NavUp,
+            ActionSignal::NavDown,
+            ActionSignal::NavLeft,
+            ActionSignal::NavRight,
+            ActionSignal::Confirm,
+            ActionSignal::Cancel,
+        ] {
+            assert!(
+                !map.bindings_for(sig).is_empty(),
+                "{sig:?} is unbound in the bench World map — dead hardware"
+            );
+        }
+        // The stick is AXIS-SPLIT and emits its OWN pane intent: X → Panel* (the pane
+        // cursor, separate from the d-pad's Nav*), Y → Zoom (the entered globe's camera).
+        // The d-pad — never the stick — owns Nav*, so in-control components (sliders) that
+        // answer only Nav* are never disturbed by the stick.
+        assert!(
+            map.bindings_for(ActionSignal::PanelPrev)
+                .iter()
+                .any(|b| matches!(
+                    b,
+                    InputBinding::GamepadAxis {
+                        axis: GamepadAxis::LeftStickX,
+                        direction: AxisDirection::Negative
+                    }
+                )),
+            "left stick X- is the stick's OWN pane intent (PanelPrev), not Nav*"
+        );
+        assert!(
+            !map.bindings_for(ActionSignal::NavLeft)
+                .iter()
+                .any(|b| matches!(
+                    b,
+                    InputBinding::GamepadAxis {
+                        axis: GamepadAxis::LeftStickX,
+                        ..
+                    }
+                )),
+            "Nav* is the D-PAD's alone — the stick must not be tangled into it"
+        );
+        assert!(
+            map.bindings_for(ActionSignal::NavUp)
+                .iter()
+                .any(|b| matches!(b, InputBinding::GamepadButton(GamepadButton::DPadUp))),
+            "the d-pad owns vertical pane moves (stick Y is the camera's)"
+        );
+        assert!(
+            map.bindings_for(ActionSignal::ZoomIn)
+                .iter()
+                .any(|b| matches!(
+                    b,
+                    InputBinding::GamepadAxis {
+                        axis: GamepadAxis::LeftStickY,
+                        direction: AxisDirection::Positive
+                    }
+                )),
+            "stick Y+ stays the entered viewport's zoom (Populous globe — not regressed)"
         );
     }
 

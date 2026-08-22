@@ -95,6 +95,16 @@ pub trait Scene {
         None
     }
 
+    /// Whether this scene wants the mouse CAPTURED this frame — the player has toggled
+    /// it into exclusive, locked-cursor camera control (the live-scene container's
+    /// barrier §4e). The runner grabs + hides the OS cursor while it holds; the scene
+    /// feeds `exclusive: true` into its walker's `UiInput` the same frame so the walker
+    /// force-captures the root surface. Default `false` = free-mouse play. Only the TOP
+    /// scene's is consulted.
+    fn pointer_captured(&self) -> bool {
+        false
+    }
+
     /// Draw the scene. Overlays draw over whatever is already on screen.
     fn render(&mut self, renderer: &mut Renderer);
 
@@ -446,6 +456,13 @@ impl App for SceneManager {
     /// The runner resolves the pump's events for THIS — the top scene's context.
     fn active_context(&self) -> Option<InputContext> {
         self.stack.last().and_then(|s| s.input_context())
+    }
+
+    /// The top scene's exclusive-capture request — the runner locks the cursor while it
+    /// holds. A pushed overlay (pause/settings) declares `false` by default, so opening
+    /// the pause menu releases the cursor with no extra wiring.
+    fn pointer_captured(&self) -> bool {
+        self.stack.last().is_some_and(|s| s.pointer_captured())
     }
 
     fn update(

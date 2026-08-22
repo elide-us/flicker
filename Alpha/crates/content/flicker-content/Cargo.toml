@@ -1,6 +1,6 @@
 [package]
 name = "flicker-content"
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 license.workspace = true
 publish = false
@@ -12,7 +12,7 @@ publish = false
 # ">1 → let the user choose" guard. Pure std; the FBX parser + rigging + bake land in later slices.
 # POC location (crates/) per the cluster migration policy; graduates once hardened.
 [dependencies]
-ufbx = "0.11.2"
+ufbx = "0.11.3"
 anyhow.workspace = true
 glam.workspace = true
 serde.workspace = true

@@ -69,7 +69,7 @@ pub mod router;
 // ── Flat public surface (crate root) ──
 pub use event::{Flow, InputEvent};
 pub use handler::InputHandler;
-pub use nav::{nav, tab, Focusable, NavDir};
+pub use nav::{nav, nav_geometric, Focusable, NavDir};
 pub use router::{
     apply_context_requests, DispatchReport, FocusChange, RouteCtx, Router, RouterRequest,
 };

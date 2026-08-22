@@ -31,21 +31,33 @@ pub enum ViewMode {
 }
 
 impl ViewMode {
+    /// The view's display label, as a stringtable `$token` — the bench resolves
+    /// it at its publish/draw sites, so this module never hands out raw copy.
     pub fn label(self) -> &'static str {
         match self {
-            ViewMode::Material => "material",
-            ViewMode::Heat => "convection heat",
-            ViewMode::Layers => "layer stack",
+            ViewMode::Material => "$pe_view_material",
+            ViewMode::Heat => "$pe_view_heat",
+            ViewMode::Layers => "$pe_view_layers",
         }
     }
 }
 
-/// Cycle to the next view (the `V` key).
+/// Cycle to the next view (the view control / the declared `on_mode_next`).
 pub fn cycle_view(mode: ViewMode) -> ViewMode {
     match mode {
         ViewMode::Material => ViewMode::Heat,
         ViewMode::Heat => ViewMode::Layers,
         ViewMode::Layers => ViewMode::Material,
+    }
+}
+
+/// Cycle to the previous view (the declared `on_mode_prev`) — the ring above, walked
+/// backwards, so a pad axis covers all three without a button per view.
+pub fn cycle_view_back(mode: ViewMode) -> ViewMode {
+    match mode {
+        ViewMode::Material => ViewMode::Layers,
+        ViewMode::Heat => ViewMode::Material,
+        ViewMode::Layers => ViewMode::Heat,
     }
 }
 
@@ -198,28 +210,29 @@ pub fn cell_heat_color(c: &HexState) -> [f32; 3] {
     heat_color(flicker_worldengine::cooling::normalized(c.temperature))
 }
 
-/// The legend for a view: `(label, colour)` rows the scene draws as a swatch key.
+/// The legend for a view: `($token label, colour)` rows the scene draws as a
+/// swatch key — labels resolve at the draw site.
 pub fn legend_entries(mode: ViewMode) -> Vec<(&'static str, [f32; 3])> {
     match mode {
         ViewMode::Material => vec![
-            ("O oxygen", element_color(Some(8))),
-            ("Si silicate", element_color(Some(14))),
-            ("Al aluminium", element_color(Some(13))),
-            ("Fe iron", element_color(Some(26))),
-            ("Ca calcium", element_color(Some(20))),
-            ("Mg magnesium", element_color(Some(12))),
-            ("C carbon", element_color(Some(6))),
+            ("$pe_leg_o", element_color(Some(8))),
+            ("$pe_leg_si", element_color(Some(14))),
+            ("$pe_leg_al", element_color(Some(13))),
+            ("$pe_leg_fe", element_color(Some(26))),
+            ("$pe_leg_ca", element_color(Some(20))),
+            ("$pe_leg_mg", element_color(Some(12))),
+            ("$pe_leg_c", element_color(Some(6))),
         ],
         ViewMode::Heat => vec![
-            ("cold downwelling", [0.20, 0.34, 0.72]),
-            ("neutral", [0.35, 0.33, 0.40]),
-            ("hot upwelling", [0.96, 0.62, 0.28]),
+            ("$pe_leg_cold", [0.20, 0.34, 0.72]),
+            ("$pe_leg_neutral", [0.35, 0.33, 0.40]),
+            ("$pe_leg_hot", [0.96, 0.62, 0.28]),
         ],
         ViewMode::Layers => vec![
-            ("solid rock", phase_color(Phase::Solid)),
-            ("molten", phase_color(Phase::Molten)),
-            ("liquid (water)", phase_color(Phase::Liquid)),
-            ("gas (air)", phase_color(Phase::Gas)),
+            ("$pe_leg_solid", phase_color(Phase::Solid)),
+            ("$pe_leg_molten", phase_color(Phase::Molten)),
+            ("$pe_leg_liquid", phase_color(Phase::Liquid)),
+            ("$pe_leg_gas", phase_color(Phase::Gas)),
         ],
     }
 }

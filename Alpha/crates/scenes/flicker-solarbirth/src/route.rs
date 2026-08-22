@@ -87,7 +87,7 @@ mod tests {
         let raw = InputState::new();
         let events = [ev(ActionSignal::Menu, EventKind::Press, &raw)];
         let mut tree = UiNode {
-            component: "screen".into(),
+            component: "surface".into(),
             ..Default::default()
         };
         tree.props

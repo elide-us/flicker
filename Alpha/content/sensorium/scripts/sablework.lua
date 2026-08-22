@@ -41,6 +41,25 @@ function M.derive()
   end
   out.lit_shown = (view == #MAPS)
 
+  -- The emissive swatches: the selected one wears the "_sel" style block, the rest their
+  -- base. The base path is built from the swatch's id (published per swatch); Rust never
+  -- publishes a raw style path, so the model-publish strings gate stays clean.
+  local gsel = (Model and Model.glow_sel) or -1
+  local gcount = (Model and Model.glow_count) or 0
+  for i = 1, gcount do
+    local id = Model["glow_sw" .. i .. "_id"]
+    if id then
+      out["glow_sw" .. i .. "_sty"] = "sablework.glowsw." .. id .. ((gsel == i - 1) and "_sel" or "")
+    end
+  end
+
+  -- The bench <-> materials page switch: gate the two page bodies, wash the two tabs.
+  local page = (Model and Model.sel_page) or 0
+  out.page_bench_shown = (page == 0)
+  out.page_materials_shown = (page == 1)
+  out.page_bench_sty = (page == 0) and "sablework.button_on" or "sablework.button"
+  out.page_materials_sty = (page == 1) and "sablework.button_on" or "sablework.button"
+
   -- The material rename: the dropdown yields to a draft field while editing, and the Rename
   -- affordance shows only when a material is bound and no edit is open. (`renaming` is
   -- published raw by the behaviour; these are the derived companions the tree gates on.)

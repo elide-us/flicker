@@ -27,11 +27,13 @@
 //!   gray out absent ones; spec §6.4).
 
 mod gamepad;
+mod monitor;
 mod window;
 
 use flicker_input_core::InputState;
 
 pub use gamepad::{DeviceCaps, GamepadSource};
+pub use monitor::{last_input_context, note_frame, InputDeviceKind, PadVendor};
 pub use window::WindowSource;
 
 /// A platform input source that accumulates held-state and flushes it into the

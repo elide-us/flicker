@@ -9,10 +9,11 @@
 -- is content — the "%d%%" wording lives here, not in Rust (five-line architecture).
 --
 -- react() is the orchestration: the engine reports `done` when the timeline
--- completes (this is what will gate the real pre-load), or `cancel` on Esc / B.
--- The returned intent (`next` / `exit`) is FIRED as the scene's result and routed
--- by the scene FILE's `exits`. `confirm` is intentionally ignored — a click must
--- not skip a load in progress (the whole point of the "do not close" notice).
+-- completes (this is what will gate the real pre-load), `cancel` on Esc / B, or
+-- `confirm` on A / click. The returned intent (`next` / `exit`) is FIRED as the
+-- scene's result and routed by the scene FILE's `exits`: `confirm` and `done` both
+-- advance (`next`); `cancel` backs out (`exit`). Confirm now clicks through the
+-- pre-load screen too (Aaron, 2026-08-18), no longer held open against a Confirm.
 
 local M = {}
 
@@ -26,6 +27,7 @@ end
 
 function M.react(sig)
   if sig.cancel then return { exit = true } end
+  if sig.confirm then return { next = true } end
   if sig.done then return { next = true } end
   return {}
 end

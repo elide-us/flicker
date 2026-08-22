@@ -1,7 +1,7 @@
 {
   "_comment": "SHARED display-confirm overlay (scenes/shared/ — Aaron 2026-08-14 ruling 2A3592D0). Extracted from the retired Rust `menu_tree` builder: a full-bleed `screen` with a flat `screens.confirm` overlay (the new resolution stays visible behind it) under a centered `popup_panel` with Keep / Revert buttons (gated on the `show_keep` / `show_revert` slices its pair script `scripts/shared/confirm.lua` lights via `visible_bind` — the authoring example a human copies and varies; the auto-revert timeout is the safety net, so hiding a button never leaves the change un-decided). The live revert countdown rides the `subtitle` bind (ConfirmDisplayScene feeds `subtitle` each frame). NO `on_cancel`: Keep / Revert / timeout only, no Esc affordance. NO `behaviour` key (the manifest skips scenes/shared/); loaded by ConfirmDisplayScene via include_str! + parse_ui_json, which also holds `confirm.lua` through MenuView's pair-script slot; chrome styles ride Main.scene.json's carrier through `main_scene_styles()`.",
   "tree": {
-    "component": "screen",
+    "component": "surface",
     "anchor": "top_left",
     "width_frac": 1.0,
     "height_frac": 1.0,

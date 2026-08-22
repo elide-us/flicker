@@ -43,18 +43,16 @@ members = [
     # The Prism-Alpha client (the app that hosts the scenes).
     "Alpha/prism-alpha",
     # World-sim / standalone POC crates — root crates/.
-    "crates/flicker-worldstate",
-    "crates/flicker-worldgen",
-    "crates/flicker-worldengine",
-    "crates/flicker-worldgrid",
-    "crates/flicker-worldtile",
-    "crates/flicker-poc-chemistry",
+    "Alpha/crates/world/flicker-worldstate",
+    "Alpha/crates/world/flicker-worldgen",
+    "Alpha/crates/world/flicker-worldengine",
+    "Alpha/crates/world/flicker-worldgrid",
+    "Alpha/crates/world/flicker-worldtile",
+    "Alpha/crates/world/flicker-poc-chemistry",
     "crates/flicker-celestial",
     "crates/flicker-system",
-    "crates/flicker-world",
     "crates/flicker-greed",
-    "crates/flicker-orrery",
-    "crates/flicker-paperdoll",
+    "Alpha/crates/world/flicker-orrery",
 ]
 
 [workspace.package]
@@ -79,23 +77,23 @@ pollster = "0.4.0"
 
 # Math
 glam = { version = "0.29.3", features = ["bytemuck", "serde"] }
-bytemuck = { version = "1.25.0", features = ["derive"] }
+bytemuck = { version = "1.25.2", features = ["derive"] }
 
 # Scripting
 mlua = { version = "0.10.5", features = ["luau", "vendored", "async", "serialize"] }
 
 # Async runtime (for net + async script bridge)
-tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
 
 # Networking
 tokio-tungstenite = "0.24.0"
 reqwest = { version = "0.12.28", default-features = false, features = ["json", "rustls-tls"] }
 
 # Serialization
-serde = { version = "1.0.228", features = ["derive"] }
+serde = { version = "1.0.229", features = ["derive"] }
 # `float_roundtrip` makes JSON float parsing bit-exact, so a `.epoch` capture (and
 # any other serialized sim state) reloads to identical f64s — no per-load ULP drift.
-serde_json = { version = "1.0.150", features = ["float_roundtrip"] }
+serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
 
 # Compression — gzip for cluster bakes, wire packets, asset blobs.
 # `rust_backend` keeps it pure-Rust (no zlib system dep); fine for our
@@ -115,8 +113,8 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 
 # Error handling
-thiserror = "2.0.18"
-anyhow = "1.0.102"
+thiserror = "2.0.20"
+anyhow = "1.0.104"
 
 # Image loading (for textures)
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
@@ -125,17 +123,17 @@ image = { version = "0.25.10", default-features = false, features = ["png", "jpe
 glyphon = "0.6.0"
 
 # Small, dependency-free RNG used by example games.
-fastrand = "2.4.1"
+fastrand = "2.5.0"
 
 # Internal cross-crate deps
 clayengine = { version = "0.1.0", path = "Alpha/crates/core/clayengine" }
 flicker-materials = { version = "0.1.0", path = "Alpha/crates/content/flicker-materials" }
-flicker-worldstate = { version = "0.1.0", path = "crates/flicker-worldstate" }
-flicker-worldgen = { version = "0.1.0", path = "crates/flicker-worldgen" }
-flicker-worldengine = { version = "0.1.0", path = "crates/flicker-worldengine" }
-flicker-worldgrid = { version = "0.1.0", path = "crates/flicker-worldgrid" }
-flicker-poc-chemistry = { version = "0.1.0", path = "crates/flicker-poc-chemistry" }
-flicker-worldtile = { version = "0.1.0", path = "crates/flicker-worldtile" }
+flicker-worldstate = { version = "0.1.0", path = "Alpha/crates/world/flicker-worldstate" }
+flicker-worldgen = { version = "0.1.0", path = "Alpha/crates/world/flicker-worldgen" }
+flicker-worldengine = { version = "0.1.0", path = "Alpha/crates/world/flicker-worldengine" }
+flicker-worldgrid = { version = "0.1.0", path = "Alpha/crates/world/flicker-worldgrid" }
+flicker-poc-chemistry = { version = "0.1.0", path = "Alpha/crates/world/flicker-poc-chemistry" }
+flicker-worldtile = { version = "0.1.0", path = "Alpha/crates/world/flicker-worldtile" }
 flicker-celestial = { version = "0.1.0", path = "crates/flicker-celestial" }
 flicker-system = { version = "0.1.0", path = "crates/flicker-system" }
 flicker-primitive = { version = "0.1.0", path = "Alpha/crates/content/flicker-primitive" }
@@ -171,7 +169,7 @@ flicker-assetpipeline = { version = "0.1.0", path = "Alpha/crates/scenes/flicker
 rfd = "0.15.4"
 # Shared GPU-free planet-layout model (the orrery) — the roster + orbits both the
 # solar-birth cinematic and the heliocentric sky read (single source of truth).
-flicker-orrery = { version = "0.1.0", path = "crates/flicker-orrery" }
+flicker-orrery = { version = "0.1.0", path = "Alpha/crates/world/flicker-orrery" }
 
 [profile.dev]
 opt-level = 1

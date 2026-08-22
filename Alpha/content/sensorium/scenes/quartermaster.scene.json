@@ -197,7 +197,7 @@
     }
   },
   "tree": {
-    "component": "screen",
+    "component": "surface",
     "id": "quartermaster",
     "on_menu": "pause_open",
     "on_undo": "undo",

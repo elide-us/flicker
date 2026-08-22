@@ -2,7 +2,7 @@
   "_comment": "MAIN MENU (CeLogo exits here) — template-FREE (201F4F51): every node names a real component KIND. The SAME backdrop as before (screens.menu gradient + the Muse sprite injected into `muse_slot` by the behaviour + edge scrims + prism thread, all layer 0) sits under a two-column WORKBENCH (a `row` — the former multi_view — at layer 1): LEFT = the nav MENU (a `popup_panel` Component: PRISM title + realm/settings/quit buttons, each a walker focus node in group `menu`), RIGHT = the content SCENE SELECTOR (a `paged_menu` Component with BOTH rails hidden, its content 5 page slices gated on shown_realm_0..4). A realm button fires `mode_<realm>` -> the engine mirrors `sig_mode_<realm>` one frame -> menu.lua's arrange() latches the page and lights that slice; the behaviour fills each `scene_list_<n>` with that realm's SceneEntry rows. Backdrop shows in the workbench's pad/gap margins, exactly as before.",
   "behaviour": "menu",
   "tree": {
-    "component": "screen",
+    "component": "surface",
     "id": "main_menu",
     "children": [
       {
@@ -133,6 +133,21 @@
                         "tab_group": "menu",
                         "nav_ordinal": 5,
                         "variant": "danger"
+                      },
+                      {
+                        "component": "cell",
+                        "size": 8
+                      },
+                      {
+                        "component": "button",
+                        "id": "open_update_page",
+                        "action": "open_update_page",
+                        "label": "$menu_update_available",
+                        "visible_bind": "update_available",
+                        "size_class": "lg",
+                        "tab_group": "menu",
+                        "nav_ordinal": 6,
+                        "variant": "primary"
                       }
                     ]
                   },
@@ -223,6 +238,20 @@
         "color": "modal.studio.color",
         "font": "label",
         "layer": 1
+      },
+      {
+        "component": "text",
+        "text_bind": "app_version",
+        "anchor": "bottom_right",
+        "offset": [
+          -26,
+          -34
+        ],
+        "size": 13,
+        "text_size": 9,
+        "color": "modal.studio.color",
+        "font": "label",
+        "layer": 1
       }
     ]
   },
@@ -237,11 +266,7 @@
         "border_w": 1,
         "fill_top": "$stone3",
         "fill_bot": "$stone1",
-        "border": "$edge2",
-        "shadow": "$shadow",
-        "shadow_dy": 20,
-        "shadow_feather": 44,
-        "shadow_grow": 4
+        "border": "$edge2"
       },
       "title": {
         "size": 52,
@@ -595,7 +620,17 @@
         "dpad_down": 12,
         "dpad_left": 13,
         "dpad_right": 14,
-        "stick": 15
+        "stick": 15,
+        "face_south": 4,
+        "face_east": 5,
+        "face_west": 6,
+        "face_north": 7,
+        "bumper_l": 2,
+        "bumper_r": 3,
+        "trigger_l": 0,
+        "trigger_r": 1,
+        "stick_l": 15,
+        "stick_r": 15
       }
     }
   }

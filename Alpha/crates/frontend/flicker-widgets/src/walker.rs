@@ -14,30 +14,36 @@
 //! and gamepad, so the router writes focus *through* the walker via
 //! [`apply_focus`](WalkerHandler::apply_focus) rather than owning a second store.
 //!
-//! # Directional nav (spec §8)
+//! # Directional nav (spec §8, flattened per plan 1A292918 T2/T3)
 //!
-//! When the walker layer is given the current UI tree ([`WalkerHandler::with_nav`]),
-//! it also **consumes** the directional-nav signals while it owns a focusable tree.
-//! **One meaning per signal, and the walker owns all of them:**
+//! When the walker layer is given the current UI tree ([`WalkerHandler::with_nav`])
+//! — and, for spatial moves, this frame's resolved rects
+//! ([`with_rects`](WalkerHandler::with_rects)) — it **consumes** the directional-nav
+//! signals while it owns a focusable tree. **One meaning per signal, and the walker
+//! owns all of them:**
 //!
-//! * `PanelNext`/`PanelPrev` (the LEFT STICK) pick the PANE — cycling pane CONTAINERS,
-//!   in each container's authored `nav_ordinal` order. Panes NEST (Aaron 2026-08-15):
-//!   a container is a node other nodes CLAIM as their `tab_group` (or one authored
-//!   `pane: true`); entering pushes onto a stack, the ring scopes to the top, and
-//!   Cancel pops one level at a time.
-//!   ([`tab`] over the lock-filtered [`ring`](WalkerHandler::ring)), suppressed once a
-//!   pane is entered. The container is a focusable whose `id` equals its own `tab_group`.
-//! * `NavUp/Down/Left/Right` move inside the current ring by `nav_ordinal` ([`nav`]),
-//!   with the slider nudge folded in. While NAVIGATING the ring is the containers, so the
-//!   d-pad no-ops on a container until Confirm enters; ENTERED, the ring is the pane's
-//!   interior, so the d-pad walks the pane's controls. Flat groups (no container — menus,
-//!   settings rows) ring whole in both states, so they navigate with no pane ceremony.
+//! * `NavUp/Down/Left/Right` (the D-PAD) move focus. On an un-entered pane CONTAINER
+//!   they move BETWEEN the top-tier stops: GEOMETRICALLY when rects are present
+//!   ([`nav_geometric`] — the stop that sits that way on screen, no wrap at the edge),
+//!   else by the ordinal stop ring ([`nav`], wrapping). ENTERED, they walk the scoped
+//!   cluster's interior ([`nav`], with the slider nudge folded in). In-control
+//!   components answer the d-pad ALONE. Flat groups (menus, settings rows — no
+//!   container) ring whole and are unchanged.
 //! * `Confirm` fires the focused node's `action` the SAME way a click does
 //!   (`results.set(action, true)`), delivered on the ONE drain,
-//!   [`take_fired`](WalkerHandler::take_fired); on an actionless pane CONTAINER it ENTERS
-//!   the pane (gold lock rim) and drops focus inside. Nav-tier contract MCP `1B5F6BB8`.
-//! * `Cancel` exits an entered pane one level (refocus the container), else requests a
-//!   context pop / back-out ([`cancelled`](WalkerHandler::cancelled)).
+//!   [`take_fired`](WalkerHandler::take_fired); on an actionless pane CONTAINER it
+//!   SCOPES into the cluster (gold lock rim) and drops focus to its lowest-ordinal
+//!   control. Benches are FLAT — every control sits one Confirm below a directly
+//!   reachable stop (enter depth ≤ 1) — but the scope mechanism still NESTS for a
+//!   scene that authors subpanels. Nav-tier contract MCP `1B5F6BB8` (amended).
+//! * `Cancel` exits a scoped cluster one level (refocus the container), else requests
+//!   a context pop / back-out ([`cancelled`](WalkerHandler::cancelled)).
+//! * `PanelNext`/`PanelPrev` (the LEFT STICK) are the stick's OWN pane intent — SEPARATE
+//!   from the d-pad's `Nav*`, never tangled (Aaron 2026-08-18). They drive the SAME pane
+//!   tier ([`pane_move`](WalkerHandler::pane_move)): on a bench they move between panel
+//!   stops like the d-pad (geometric with rects, ordinal ring without); on a menu they
+//!   hop flat groups ([`cycle_group`]). Suppressed once a cluster is scoped — the
+//!   interior belongs to the d-pad — and they NEVER nudge a control.
 //!
 //! `TabNext`/`TabPrev` (the bumpers) are deliberately NOT here: they belong to the
 //! page/tab control's tab rail, which steps itself.
@@ -53,7 +59,7 @@
 
 use flicker_input_core::{ActionSignal, EventKind};
 use flicker_input_router::{
-    nav, Flow, FocusChange, Focusable, InputEvent, InputHandler, NavDir, RouteCtx,
+    nav, nav_geometric, Flow, FocusChange, Focusable, InputEvent, InputHandler, NavDir, RouteCtx,
 };
 use flicker_script::{UiNode, ValueMap};
 
@@ -179,6 +185,21 @@ impl<'a> WalkerHandler<'a> {
         self
     }
 
+    /// Patch this frame's RESOLVED screen rects (`UiFrame.rects`) onto the collected
+    /// focusables, so the flattened panel tier can move GEOMETRICALLY
+    /// ([`nav_geometric`]) — "Left from the centre lands on the channel beside it."
+    /// Call AFTER [`with_nav`](Self::with_nav). Ids absent from `rects` keep the zero
+    /// rect and fall back to the ordinal stop ring, so a scene (or a headless test)
+    /// that passes nothing still navigates — just not spatially.
+    pub fn with_rects(mut self, rects: &[(String, [f32; 4])]) -> Self {
+        for f in &mut self.focusables {
+            if let Some((_, r)) = rects.iter().find(|(id, _)| id == &f.id) {
+                f.rect = *r;
+            }
+        }
+        self
+    }
+
     /// Whether `id` is a pane container — claimed by members, or explicitly
     /// authored `pane: true`. The one test `try_enter`, the ring and the flat-group
     /// rule all consult, so the tiers can never disagree about what a container is.
@@ -288,18 +309,19 @@ impl<'a> WalkerHandler<'a> {
             ActionSignal::NavDown => self.nudge_or_move(current.as_deref(), NavDir::Down),
             ActionSignal::NavLeft => self.nudge_or_move(current.as_deref(), NavDir::Left),
             ActionSignal::NavRight => self.nudge_or_move(current.as_deref(), NavDir::Right),
-            // The LEFT STICK is the panel tier: it cycles top-tier pane CONTAINERS
-            // (`tab`), in the AUTHORED order (each container's `nav_ordinal` — Aaron
-            // 2026-08-15: the stick-stop order is explicit, never tree-implicit). ONLY
-            // while navigating — once any pane is ENTERED (nav-tier contract 1B5F6BB8)
-            // the left stick belongs to that pane's interior (its camera), so
-            // panel-cycling is suppressed until Cancel unwinds the stack. (The bumpers
-            // are NOT here — they belong to the page/tab control's own rail.)
+            // The LEFT STICK drives the pane tier through `Panel*` — the stick's OWN
+            // intent, SEPARATE from the d-pad's `Nav*` (Aaron 2026-08-18: the two are
+            // never tangled, and in-control components answer only the d-pad). On a
+            // bench it moves between panel stops exactly as the d-pad does at the top
+            // tier (geometric with rects, ordinal ring without); on a menu it hops flat
+            // groups. Suppressed once a pane is ENTERED — the interior belongs to the
+            // d-pad (and the entered viewport's camera). (The bumpers are NOT here —
+            // they belong to the page/tab control's own rail.)
             ActionSignal::PanelNext if !self.ui.entered() => {
-                self.cycle_group(current.as_deref(), true)
+                self.pane_move(current.as_deref(), NavDir::Right, true)
             }
             ActionSignal::PanelPrev if !self.ui.entered() => {
-                self.cycle_group(current.as_deref(), false)
+                self.pane_move(current.as_deref(), NavDir::Left, false)
             }
             ActionSignal::PanelNext | ActionSignal::PanelPrev => {}
             ActionSignal::Confirm => {
@@ -384,21 +406,49 @@ impl<'a> WalkerHandler<'a> {
     }
 
     fn move_focus(&mut self, current: Option<&str>, dir: NavDir) {
-        // The d-pad never walks the TOP TIER: containers are the left stick's ring,
-        // and a d-pad press on an un-entered container no-ops (explicit entry,
-        // 1B5F6BB8). Once entered, subpanel containers are ordinary ring members
-        // the d-pad moves across; flat-group members (menus, settings rows) were
-        // never containers and keep d-pad nav.
+        let ring = self.ring();
+        // FLATTENED TOP TIER (plan 1A292918 T2/T3): a direction on an un-entered pane
+        // CONTAINER moves BETWEEN top-tier stops — no enter-to-reach. With this frame's
+        // resolved rects it moves GEOMETRICALLY (the stop that sits that way on screen)
+        // and does NOT wrap at the surface edge; with no rects (headless tests, a scene
+        // that passes none) it falls back to the ordinal stop ring, which wraps.
+        // Entered clusters and flat-group members fall through to the ordinal ring
+        // below — menus and settings rows navigate exactly as before.
         if !self.ui.entered() {
             if let Some(cur) = current {
                 if self.is_container(cur) {
+                    let has_rect = ring
+                        .iter()
+                        .any(|f| f.id == cur && f.rect[2] > 0.0 && f.rect[3] > 0.0);
+                    let next = if has_rect {
+                        nav_geometric(&ring, cur, dir)
+                    } else {
+                        nav(&ring, Some(cur), dir)
+                    };
+                    if let Some(id) = next {
+                        self.ui.request_focus(id);
+                    }
                     return;
                 }
             }
         }
-        let ring = self.ring();
         if let Some(id) = nav(&ring, current, dir) {
             self.ui.request_focus(id);
+        }
+    }
+
+    /// The STICK's pane-tier move (`Panel*` — the stick's OWN intent, SEPARATE from the
+    /// d-pad's `Nav*`; Aaron 2026-08-18). On a bench (the focused stop is a container) it
+    /// moves between panel stops exactly as the d-pad does at the top tier — geometric
+    /// with rects, the ordinal stop ring without — via [`move_focus`]. On a menu (flat
+    /// groups, no container) it HOPS groups via [`cycle_group`] (the main-menu pin,
+    /// A61E7175). It NEVER nudges a control: the stick is the pane cursor, and in-control
+    /// components answer only the d-pad.
+    fn pane_move(&mut self, current: Option<&str>, dir: NavDir, forward: bool) {
+        if current.is_some_and(|c| self.is_container(c)) {
+            self.move_focus(current, dir);
+        } else {
+            self.cycle_group(current, forward);
         }
     }
 
@@ -814,7 +864,7 @@ mod tests {
         let mut ui = UiState::new();
         let mut rc = RouteCtx::new();
         let mut intents_tree = UiNode {
-            component: "screen".into(),
+            component: "surface".into(),
             id: "root".into(),
             ..Default::default()
         };
@@ -913,7 +963,7 @@ mod tests {
         col.width = Some(200.0);
         col.children = vec![vdial, hdial];
         let mut tree = UiNode {
-            component: "screen".into(),
+            component: "surface".into(),
             id: "root".into(),
             ..Default::default()
         };
@@ -927,10 +977,13 @@ mod tests {
             mouse: Vec2::ZERO,
             clicked: false,
             down: false,
+            right_down: false,
             screen: Vec2::new(800.0, 600.0),
             typed: String::new(),
             backspace: false,
             wheel: 0.0,
+            exclusive: false,
+            motion: Default::default(),
         };
         let mut ui = UiState::new();
         ui.request_focus("vdial");
@@ -1026,7 +1079,7 @@ mod tests {
     fn a_hidden_subtree_contributes_no_focusables() {
         // A visible screen, plus an overlay gated by `dialog_open`.
         let mut screen = UiNode {
-            component: "screen".into(),
+            component: "surface".into(),
             ..Default::default()
         };
         let mut bench = UiNode {
@@ -1297,13 +1350,128 @@ mod tests {
         assert_eq!(h.ui.focused(), Some("populous"), "…both ways");
     }
 
-    /// **PANES NEST (Aaron 2026-08-15).** Enter the rack → the ring is its voice-row
-    /// SUBPANELS; enter a row → the ring is that row's controls; `Cancel` pops exactly
-    /// one level per press, refocusing the container it leaves (B never skips). The
-    /// stick stays suppressed at every depth, and the top tier cycles in AUTHORED
-    /// ordinal order.
+    /// **THE FLATTENED TOP TIER MOVES GEOMETRICALLY** (plan 1A292918 T2/T3). With this
+    /// frame's rects, a direction lands on the stop that actually sits that way on
+    /// screen — Left from the centre view → the card beside it; Down walks the stacked
+    /// cards; Right returns to the view — and there is NO WRAP at the surface edge.
     #[test]
-    fn panes_nest_and_cancel_pops_one_level_at_a_time() {
+    fn the_flattened_top_tier_moves_geometrically_with_rects() {
+        let raw = InputState::new();
+        // Three stacked "cards" on the left + a tall "view" on the right, each a
+        // container claimed by one control. Geometry (not ordinal) decides adjacency.
+        let mk = |id: &str, ord: u32| {
+            let mut c = UiNode {
+                id: id.into(),
+                component: "panel".into(),
+                nav_ordinal: ord,
+                ..Default::default()
+            };
+            c.children
+                .push(button(&format!("{id}_c"), id, 1, &format!("{id}_c")));
+            c
+        };
+        let mut tree = UiNode {
+            id: "root".into(),
+            component: "cell".into(),
+            ..Default::default()
+        };
+        tree.children.push(mk("voice_1", 2));
+        tree.children.push(mk("voice_2", 3));
+        tree.children.push(mk("voice_3", 4));
+        tree.children.push(mk("view", 8));
+
+        let rects = vec![
+            ("voice_1".to_string(), [0.0, 0.0, 100.0, 40.0]),
+            ("voice_2".to_string(), [0.0, 50.0, 100.0, 40.0]),
+            ("voice_3".to_string(), [0.0, 100.0, 100.0, 40.0]),
+            ("view".to_string(), [150.0, 0.0, 120.0, 140.0]),
+        ];
+        let mut ui = UiState::new();
+        let mut rc = RouteCtx::new();
+        let mut h = WalkerHandler::hud(&mut ui, false)
+            .with_nav(&tree, &shown())
+            .with_rects(&rects);
+
+        h.ui.request_focus("view".to_string());
+        // Left from the centre lands on the top-left card (banded; ties → lowest ordinal).
+        h.handle(&press(ActionSignal::NavLeft, &raw), &mut rc);
+        assert_eq!(
+            h.ui.focused(),
+            Some("voice_1"),
+            "Left from the view → the adjacent card"
+        );
+        // Down walks the stacked cards.
+        h.handle(&press(ActionSignal::NavDown, &raw), &mut rc);
+        assert_eq!(h.ui.focused(), Some("voice_2"));
+        // Right returns to the view beside them.
+        h.handle(&press(ActionSignal::NavRight, &raw), &mut rc);
+        assert_eq!(h.ui.focused(), Some("view"), "Right from a card → the view");
+        // No wrap: nothing above voice_1.
+        h.ui.request_focus("voice_1".to_string());
+        h.handle(&press(ActionSignal::NavUp, &raw), &mut rc);
+        assert_eq!(
+            h.ui.focused(),
+            Some("voice_1"),
+            "nothing above voice_1 → no move (the tier does not wrap)"
+        );
+    }
+
+    /// The STICK's `Panel*` is a SEPARATE intent from the d-pad's `Nav*` (Aaron
+    /// 2026-08-18), but it drives the SAME geometric pane tier: on a bench with rects,
+    /// PanelPrev/PanelNext move between panel stops by geometry, just like the d-pad.
+    #[test]
+    fn the_stick_pane_intent_moves_the_tier_geometrically() {
+        let raw = InputState::new();
+        let mk = |id: &str, ord: u32| {
+            let mut c = UiNode {
+                id: id.into(),
+                component: "panel".into(),
+                nav_ordinal: ord,
+                ..Default::default()
+            };
+            c.children
+                .push(button(&format!("{id}_c"), id, 1, &format!("{id}_c")));
+            c
+        };
+        let mut tree = UiNode {
+            id: "root".into(),
+            component: "cell".into(),
+            ..Default::default()
+        };
+        tree.children.push(mk("voice_1", 2));
+        tree.children.push(mk("voice_2", 3));
+        tree.children.push(mk("view", 8));
+        let rects = vec![
+            ("voice_1".to_string(), [0.0, 0.0, 100.0, 40.0]),
+            ("voice_2".to_string(), [0.0, 50.0, 100.0, 40.0]),
+            ("view".to_string(), [150.0, 0.0, 120.0, 140.0]),
+        ];
+        let mut ui = UiState::new();
+        let mut rc = RouteCtx::new();
+        let mut h = WalkerHandler::hud(&mut ui, false)
+            .with_nav(&tree, &shown())
+            .with_rects(&rects);
+
+        h.ui.request_focus("view".to_string());
+        // Stick-left (PanelPrev) → the channel geometrically to the left of the view.
+        h.handle(&press(ActionSignal::PanelPrev, &raw), &mut rc);
+        assert_eq!(
+            h.ui.focused(),
+            Some("voice_1"),
+            "the stick moves the pane tier geometrically, like the d-pad"
+        );
+        assert!(!h.ui.entered(), "moving the pane tier never enters");
+        // Stick-right (PanelNext) → back to the view.
+        h.handle(&press(ActionSignal::PanelNext, &raw), &mut rc);
+        assert_eq!(h.ui.focused(), Some("view"), "…and back, both ways");
+    }
+
+    /// **The scope mechanism still NESTS for authored subpanels.** The flatten retired
+    /// enter-to-reach for benches (a card's controls are one Confirm below a directly
+    /// reachable stop), but a scene that authors subpanels still scopes one level per
+    /// Confirm and pops one per Cancel — the catalog + future scenes depend on it.
+    #[test]
+    fn authored_subpanels_still_nest_one_level() {
         let raw = InputState::new();
         let mut rack = UiNode {
             id: "rack".into(),
@@ -1333,27 +1501,19 @@ mod tests {
             ));
             rack.children.push(row);
         }
-        let mut out_pane = UiNode {
-            id: "out".into(),
-            component: "panel".into(),
-            nav_ordinal: 2,
-            ..Default::default()
-        };
-        out_pane.children.push(button("out_a", "out", 1, "act_o"));
         let mut tree = UiNode {
             id: "root".into(),
             component: "cell".into(),
             ..Default::default()
         };
         tree.children.push(rack);
-        tree.children.push(out_pane);
 
         let mut ui = UiState::new();
         let mut rc = RouteCtx::new();
         let mut h = WalkerHandler::hud(&mut ui, false).with_nav(&tree, &shown());
 
-        // Top tier in authored order; enter drops onto the first SUBPANEL.
-        h.handle(&press(ActionSignal::PanelNext, &raw), &mut rc);
+        // The d-pad acquires the rack (top tier) and Confirm scopes into its subpanels.
+        h.handle(&press(ActionSignal::NavDown, &raw), &mut rc);
         assert_eq!(h.ui.focused(), Some("rack"));
         h.handle(&press(ActionSignal::Confirm, &raw), &mut rc);
         assert_eq!(h.ui.entered_group(), Some("rack"), "one level in");
@@ -1363,11 +1523,11 @@ mod tests {
             "focus lands on the first subpanel"
         );
 
-        // The ring is the rows.
+        // The ring is the subpanels; the d-pad walks them.
         h.handle(&press(ActionSignal::NavDown, &raw), &mut rc);
         assert_eq!(h.ui.focused(), Some("voice_2"));
 
-        // Enter the row: a second level; the ring is its controls.
+        // Enter a subpanel: a second level; the ring is its controls.
         h.handle(&press(ActionSignal::Confirm, &raw), &mut rc);
         assert_eq!(h.ui.entered_group(), Some("voice_2"), "two levels in");
         assert_eq!(h.ui.focused(), Some("v2_a"));
@@ -1375,46 +1535,38 @@ mod tests {
         assert_eq!(
             h.ui.focused(),
             Some("v2_b"),
-            "the d-pad walks the row's controls"
+            "the d-pad walks the subpanel's controls"
         );
 
-        // The stick is suppressed at every depth.
-        h.handle(&press(ActionSignal::PanelNext, &raw), &mut rc);
-        assert_eq!(
-            h.ui.focused(),
-            Some("v2_b"),
-            "stick belongs to the pane at depth"
-        );
-
-        // Cancel pops ONE level per press, refocusing what it leaves.
+        // Cancel pops ONE level per press, refocusing what it leaves (B never skips).
         h.handle(&press(ActionSignal::Cancel, &raw), &mut rc);
-        assert_eq!(h.ui.entered_group(), Some("rack"), "back to the rack ring");
+        assert_eq!(
+            h.ui.entered_group(),
+            Some("rack"),
+            "back to the subpanel ring"
+        );
         assert_eq!(
             h.ui.focused(),
             Some("voice_2"),
-            "…standing on the row just left"
+            "…standing on the subpanel just left"
         );
-        assert!(!h.cancelled(), "a pane exit is never a scene cancel");
+        assert!(!h.cancelled(), "a scope exit is never a scene cancel");
         h.handle(&press(ActionSignal::Cancel, &raw), &mut rc);
-        assert!(!h.ui.entered(), "navigating again");
+        assert!(!h.ui.entered(), "back to the top tier");
         assert_eq!(h.ui.focused(), Some("rack"));
         assert!(!h.cancelled());
-
-        // And the stick resumes, in authored order.
-        h.handle(&press(ActionSignal::PanelNext, &raw), &mut rc);
-        assert_eq!(h.ui.focused(), Some("out"));
     }
 
-    /// **Entry is EXPLICIT (nav-tier contract 1B5F6BB8).** On an un-entered pane container
-    /// the D-PAD does NOTHING — controller input must not land inside until `Confirm`
-    /// enters. Confirm then drops focus to the pane's lowest-ordinal interior; the d-pad
-    /// walks the interior ONLY; `Cancel` returns focus to the container.
+    /// **The d-pad MOVES the panel tier, then Confirm SCOPES a cluster** (plan
+    /// 1A292918 T2/T3 — replaces the retired `strict_entry_gates_the_dpad...`). No
+    /// enter-to-reach: the d-pad walks directly between top-tier stops; Confirm scopes
+    /// focus into the stop's exclusive control ring; Cancel exits one level. This
+    /// fixture passes no rects, exercising the ordinal stop-ring fallback (the
+    /// geometric path is pinned by `the_flattened_top_tier_moves_geometrically...`).
     #[test]
-    fn strict_entry_gates_the_dpad_until_confirm_then_walks_the_interior() {
+    fn the_dpad_moves_the_panel_tier_then_confirm_scopes_a_cluster() {
         let raw = InputState::new();
-        // A pane CONTAINER (claimed by its two interior controls) plus a second,
-        // interior-less pane (explicit `pane: true`) so there is something to
-        // cycle between. Stick order authored on the ordinals.
+        // Two pane CONTAINERS, each claimed by its interior controls.
         let mut pane_a = UiNode {
             id: "pane_a".into(),
             component: "panel".into(),
@@ -1429,9 +1581,7 @@ mod tests {
             nav_ordinal: 2,
             ..Default::default()
         };
-        pane_b
-            .props
-            .insert("pane".into(), flicker_script::Value::Bool(true));
+        pane_b.children.push(button("b_one", "pane_b", 1, "b_one"));
         let mut tree = UiNode {
             id: "root".into(),
             component: "cell".into(),
@@ -1444,47 +1594,46 @@ mod tests {
         let mut rc = RouteCtx::new();
         let mut h = WalkerHandler::hud(&mut ui, false).with_nav(&tree, &shown());
 
-        h.handle(&press(ActionSignal::PanelNext, &raw), &mut rc);
-        assert_eq!(
-            h.ui.focused(),
-            Some("pane_a"),
-            "left stick lands on the container"
-        );
-
-        // The D-PAD is dead on an un-entered container — the whole point of explicit entry.
+        // The d-pad acquires the top tier, then MOVES between stops — no Confirm needed.
         h.handle(&press(ActionSignal::NavDown, &raw), &mut rc);
         assert_eq!(
             h.ui.focused(),
             Some("pane_a"),
-            "d-pad no-ops until the pane is entered"
+            "d-pad acquires the top tier"
         );
-        assert!(!h.ui.entered());
+        h.handle(&press(ActionSignal::NavDown, &raw), &mut rc);
+        assert_eq!(
+            h.ui.focused(),
+            Some("pane_b"),
+            "d-pad moves between stops — no enter-to-reach"
+        );
+        assert!(!h.ui.entered(), "moving the panel tier never enters");
+        h.handle(&press(ActionSignal::NavUp, &raw), &mut rc);
+        assert_eq!(h.ui.focused(), Some("pane_a"), "…both ways");
 
-        // Confirm ENTERS and drops focus to the lowest-ordinal interior.
+        // Confirm SCOPES focus into the stop's exclusive control ring.
         h.handle(&press(ActionSignal::Confirm, &raw), &mut rc);
-        assert_eq!(h.ui.entered_group(), Some("pane_a"), "the pane is locked");
+        assert_eq!(
+            h.ui.entered_group(),
+            Some("pane_a"),
+            "Confirm scopes the cluster"
+        );
         assert_eq!(
             h.ui.focused(),
             Some("a_one"),
-            "focus dropped to the lowest-ordinal interior"
+            "focus drops to the lowest-ordinal control"
         );
-
-        // The d-pad now walks the INTERIOR only.
         h.handle(&press(ActionSignal::NavDown, &raw), &mut rc);
         assert_eq!(
             h.ui.focused(),
             Some("a_two"),
-            "d-pad walks the pane interior"
+            "the d-pad now walks the cluster's controls"
         );
 
-        // Cancel EXITS one level and returns focus to the container.
+        // Cancel exits one level, back to the top tier on the cluster it left.
         h.handle(&press(ActionSignal::Cancel, &raw), &mut rc);
-        assert!(!h.ui.entered(), "Cancel unlocked the pane");
-        assert_eq!(
-            h.ui.focused(),
-            Some("pane_a"),
-            "Cancel refocused the container"
-        );
+        assert!(!h.ui.entered(), "Cancel exited the cluster");
+        assert_eq!(h.ui.focused(), Some("pane_a"), "…refocusing the stop");
     }
 
     /// **A value control STEPS on its own axis and MOVES FOCUS on the cross axis** — never a
@@ -1636,7 +1785,7 @@ mod tests {
         col.width = Some(200.0);
         col.children = vec![btn];
         let mut tree = UiNode {
-            component: "screen".into(),
+            component: "surface".into(),
             id: "root".into(),
             ..Default::default()
         };
@@ -1648,10 +1797,13 @@ mod tests {
             mouse: Vec2::new(100.0, 20.0),
             clicked: true,
             down: true,
+            right_down: false,
             screen: Vec2::new(800.0, 600.0),
             typed: String::new(),
             backspace: false,
             wheel: 0.0,
+            exclusive: false,
+            motion: Default::default(),
         };
         let mut ui = UiState::new();
 

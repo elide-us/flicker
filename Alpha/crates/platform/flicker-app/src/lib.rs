@@ -154,6 +154,16 @@ pub trait App: 'static {
         false
     }
 
+    /// Whether the app's active surface wants the mouse CAPTURED this frame — the
+    /// player has toggled the top scene into exclusive, locked-cursor camera control
+    /// (the live-scene container's barrier §4e). The runner reads this after `update`
+    /// and grabs/hides the OS cursor accordingly, feeding relative motion into
+    /// `mouse_delta`. `false` (default) = ordinary free-mouse play. A `SceneManager`
+    /// forwards its top scene's declaration.
+    fn pointer_captured(&self) -> bool {
+        false
+    }
+
     fn render(&mut self, renderer: &mut Renderer);
 }
 

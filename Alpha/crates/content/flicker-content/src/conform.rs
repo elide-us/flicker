@@ -6,7 +6,7 @@
 //!
 //! `reorient` rebuilds each bone's rest frame in two steps: (1) base frame = the REFERENCE's world
 //! orientation + THIS body's positions (fixes the Mixamo Y-down-bone vs UE X-down-bone convention);
-//! (2) LIMB-ALIGN each limb bone (arms/legs/feet) — rotate its frame by the minimal rotation taking
+//! (2) LIMB-ALIGN each limb bone (arms/hands/legs/feet) — rotate its frame by the minimal rotation taking
 //! the reference's limb direction onto THIS body's, so its axis points down this body's own limb and
 //! the shared clips' absolute rotations land where they should. Torso bones (pelvis/spine/clavicle/
 //! neck/head) are NEVER limb-aligned (the pelvis→child tilt trap) — they keep the reference frame.
@@ -69,13 +69,19 @@ fn fk(locals: &[Mat4], parents: &[i32]) -> Vec<Mat4> {
 }
 
 /// Limb bone → the child joint down the same chain that defines its direction. Torso bones are
-/// absent — deliberately NOT limb-aligned.
+/// absent — deliberately NOT limb-aligned. The HAND is a limb too (2026-08-21): left on the
+/// canon's world orientation, a hand whose flesh does not continue the canon's arm line played
+/// every clip's hand direction that far off — 37° on the golem's A-pose, "hands bent away from the
+/// default angle". Its finger root (`middle_01`) is the joint a human annotates to say where the
+/// hand points; see [`canonical_world_frames`] for a hand that has no fingers yet.
 fn limb_child(name: &str) -> Option<&'static str> {
     Some(match name {
         "upperarm_l" => "lowerarm_l",
         "lowerarm_l" => "hand_l",
+        "hand_l" => "middle_01_l",
         "upperarm_r" => "lowerarm_r",
         "lowerarm_r" => "hand_r",
+        "hand_r" => "middle_01_r",
         "thigh_l" => "calf_l",
         "calf_l" => "foot_l",
         "foot_l" => "ball_l",
@@ -374,6 +380,26 @@ pub struct ConformReport {
 /// Reorient `model`'s bones to conform to the reference skeleton (PrismHumanBaseA). Writes each
 /// bone's new local TRS + inverse_bind in place.
 pub fn reorient_to_canonical(model: &mut RawModel, reference: &Path) -> Result<ConformReport> {
+    let (t, report) = canonical_world_frames(model, reference)?;
+    // Derive local + inverse_bind from the final frames T (absolute retarget; no retarget_rot).
+    write_world_frames(&mut model.bones, &t);
+    Ok(report)
+}
+
+/// The canonical world frames this body's bones take under conform's reorient — the reference's
+/// world ORIENTATION carried on THIS body's own joint POSITIONS, with each limb frame turned to
+/// point down this body's own limb — computed WITHOUT writing them back into the model.
+///
+/// [`reorient_to_canonical`] writes these (the standard path). An AS-PROVIDED import keeps the
+/// vendor's core frames untouched, yet [`infer_canonical_bones`] still needs this canonical BASIS to
+/// hang the twists / fingers / face bones on: composing a canonical-basis offset directly onto a
+/// vendor frame (a differing bone-axis convention) throws the inferred bones off the mesh. Because
+/// reorient preserves POSITIONS, this basis shares the vendor rig's joint positions, so bones placed
+/// on it land exactly where the canonical path would.
+fn canonical_world_frames(
+    model: &RawModel,
+    reference: &Path,
+) -> Result<(Vec<Mat4>, ConformReport)> {
     // This body's world frames (built from the parsed local TRS).
     let fg = model_world_frames(model);
     let idx: HashMap<String, usize> = model
@@ -411,12 +437,21 @@ pub fn reorient_to_canonical(model: &mut RawModel, reference: &Path) -> Result<C
         let Some(ch) = limb_child(&b.name) else {
             continue;
         };
-        let (Some(&this_ch), Some(&ref_bone), Some(&ref_ch)) =
-            (idx.get(ch), cidx.get(&b.name), cidx.get(ch))
-        else {
+        let (Some(&ref_bone), Some(&ref_ch)) = (cidx.get(&b.name), cidx.get(ch)) else {
             continue;
         };
-        let u = (pos_of(g0[this_ch]) - pos_of(g0[i])).normalize_or_zero();
+        // This body's limb direction: to its child joint — or, for a hand whose fingers are not
+        // inferred yet, onward along its own forearm. The canon's hand is collinear with its
+        // forearm, so that is the canon's own rule on this body; it also makes the fingers infer
+        // along THIS arm instead of the canon's world direction.
+        let u = match idx.get(ch) {
+            Some(&this_ch) => pos_of(g0[this_ch]) - pos_of(g0[i]),
+            None if matches!(b.name.as_str(), "hand_l" | "hand_r") && b.parent >= 0 => {
+                pos_of(g0[i]) - pos_of(g0[b.parent as usize])
+            }
+            None => continue,
+        }
+        .normalize_or_zero();
         let v = (pos_of(cg[ref_ch]) - pos_of(cg[ref_bone])).normalize_or_zero();
         if u.length_squared() < 1e-10 || v.length_squared() < 1e-10 {
             continue;
@@ -426,9 +461,7 @@ pub fn reorient_to_canonical(model: &mut RawModel, reference: &Path) -> Result<C
         report.limbs_aligned += 1;
     }
 
-    // 3. derive local + inverse_bind from the final frames T (absolute retarget; no retarget_rot).
-    write_world_frames(&mut model.bones, &t);
-    Ok(report)
+    Ok((t, report))
 }
 
 /// This body's `limb` bone length ÷ the reference's — trusting Meshy's LENGTHS (memory 03BBF8F4).
@@ -459,6 +492,12 @@ fn limb_length_ratio(
 #[derive(Debug, Clone, Default)]
 pub struct InferReport {
     pub added: Vec<String>,
+    /// Bones REPARENTED onto the canonical chain (world frame preserved) — a source rig that
+    /// lacked a canonical link parented straight past it (Meshy's one-neck rig hangs `head`
+    /// off `neck_01`), and without the splice the inferred link dangles as a leaf and the
+    /// shared clips' rotation for it is silently lost on this body (the 2026-08-20 golem's
+    /// measured head jut).
+    pub spliced: Vec<String>,
     pub hand_scale_l: f32,
     pub hand_scale_r: f32,
 }
@@ -466,17 +505,26 @@ pub struct InferReport {
 /// Add the canonical bones Meshy never produces — the in-app port of
 /// `rename_meshy_to_canonical.py::infer_canonical_bones`. Whatever the reference (PrismHumanBaseA)
 /// has and this body lacks (30 fingers + 8 twists + 2 weapon sockets + jaw/eyes) is inferred from the
-/// reference's own local offset, hung off THIS body's already-canonical parent frame and scaled by
-/// this body's limb-length ratio.
+/// reference's own local offset, hung off THIS body's canonical parent frame and scaled by this
+/// body's limb-length ratio.
 ///
-/// Runs AFTER [`reorient_to_canonical`], and that ordering is what makes it correct: every parent
-/// frame is already canonical, so a twist lands at the same FRACTION along this body's limb, and a
-/// finger chain off the (deliberately un-limb-aligned) hand reproduces the reference hand orientation.
+/// The parent frame it hangs off is the CANONICAL basis (reference orientation on this body's joint
+/// positions). In [`ConformMode::Canonical`] the model was already reoriented, so its own frames ARE
+/// that basis. In [`ConformMode::AsProvided`] the core keeps the vendor frames, so the canonical
+/// basis is computed separately ([`canonical_world_frames`]) — otherwise the reference-basis offsets
+/// would be rotated by the vendor's own bone-axis convention and land the inferred bones off the mesh
+/// (the "inferred bones translated off the mesh" symptom). Each bone's LOCAL is expressed against its
+/// ACTUAL parent frame, so FK reproduces the same world frame in both modes; a twist still lands at
+/// the same FRACTION along this body's limb.
 /// SCALE: Meshy gives no hand length, so fingers + sockets are sized by the FOREARM ratio ("a
 /// straight hand of standard proportion"). Inferred bones carry NO weights — they are appended after
 /// the mesh's joint indices are baked, so no vertex references them; they resolve and rotate but
 /// deform nothing until each body's hand mesh is weighted to them (the follow-on).
-pub fn infer_canonical_bones(model: &mut RawModel, reference: &Path) -> Result<InferReport> {
+pub fn infer_canonical_bones(
+    model: &mut RawModel,
+    reference: &Path,
+    mode: ConformMode,
+) -> Result<InferReport> {
     let refs = load_reference_skeleton(reference)?;
     let cg = fk(
         &refs.iter().map(|b| b.local).collect::<Vec<_>>(),
@@ -531,11 +579,20 @@ pub fn infer_canonical_bones(model: &mut RawModel, reference: &Path) -> Result<I
         scale.insert(b.name.clone(), s);
     }
 
-    // Append each inferred bone: parent frame is already canonical, so W = parent_global · scaled_local.
+    // Append each inferred bone on the CANONICAL basis, with its LOCAL taken against the ACTUAL
+    // parent frame so FK reproduces the same world frame whether the core was reoriented (canonical)
+    // or kept as provided (vendor frames): W = basis_parent · scaled_local, local = actual_parent⁻¹ · W.
     let mut g = g0;
+    let mut basis = match mode {
+        // Canonical: the model was already reoriented, so its own frames ARE the canonical basis.
+        ConformMode::Canonical => g.clone(),
+        // As provided: the core keeps the vendor frames — compute the canonical basis to hang on.
+        ConformMode::AsProvided => canonical_world_frames(model, reference)?.0,
+    };
     let mut idx = idx0;
     let mut report = InferReport {
         added: Vec::new(),
+        spliced: Vec::new(),
         hand_scale_l,
         hand_scale_r,
     };
@@ -547,8 +604,9 @@ pub fn infer_canonical_bones(model: &mut RawModel, reference: &Path) -> Result<I
         // Reference local with its translation scaled onto this body's limb.
         let mut new_l = b.local;
         new_l.w_axis = (new_l.w_axis.truncate() * s).extend(1.0);
-        let w = g[pidx] * new_l;
-        let (sc, r, t) = new_l.to_scale_rotation_translation();
+        let w = basis[pidx] * new_l;
+        let local = g[pidx].inverse() * w;
+        let (sc, r, t) = local.to_scale_rotation_translation();
         model.bones.push(RawBone {
             name: b.name.clone(),
             parent: pidx as i32,
@@ -559,9 +617,119 @@ pub fn infer_canonical_bones(model: &mut RawModel, reference: &Path) -> Result<I
         });
         idx.insert(b.name.clone(), model.bones.len() - 1);
         g.push(w);
+        basis.push(w);
         report.added.push(b.name.clone());
     }
+
+    report.spliced = splice_canonical_chain(model, reference)?;
     Ok(report)
+}
+
+/// Repair the CHAIN of an already-canonical model: reparent every canonical bone onto its
+/// canonical parent — PRESERVING its world frame, so the rest pose does not move — then
+/// re-sort parents-before-children and remap every parent index and vertex joint.
+///
+/// THE SPLICE (2026-08-20): a source rig that LACKED a canonical link parented straight past
+/// it — Meshy's one-neck rig hangs `head` off `neck_01`, so the inferred `neck_02` dangled as
+/// a childless leaf and every shared clip's neck_02 rotation was silently LOST on that body
+/// (the head composed one link short of the canonical chain — the measured golem head jut).
+/// Runs at the end of [`infer_canonical_bones`], and STANDALONE over a reloaded staged rig,
+/// whose baked file may carry the pre-fix chain: the human's fitted joints stay exactly where
+/// they were put, and only the chain composition is repaired. Returns the reparented names.
+pub fn splice_canonical_chain(model: &mut RawModel, reference: &Path) -> Result<Vec<String>> {
+    let refs = load_reference_skeleton(reference)?;
+    let cidx: HashMap<String, usize> = refs
+        .iter()
+        .enumerate()
+        .map(|(i, b)| (b.name.clone(), i))
+        .collect();
+    let idx: HashMap<String, usize> = model
+        .bones
+        .iter()
+        .enumerate()
+        .map(|(i, b)| (b.name.clone(), i))
+        .collect();
+    let g = model_world_frames(model);
+    let mut spliced = Vec::new();
+    for i in 0..model.bones.len() {
+        let name = model.bones[i].name.clone();
+        let Some(&ci) = cidx.get(&name) else { continue };
+        let cparent = refs[ci].parent;
+        // The reference's `root` is synthesized at bake, so a root-parented canonical bone
+        // (pelvis) stays a model root here.
+        let want: i32 = if cparent < 0 {
+            -1
+        } else {
+            let pname = &refs[cparent as usize].name;
+            if pname == "root" {
+                -1
+            } else {
+                match idx.get(pname.as_str()) {
+                    Some(&p) => p as i32,
+                    None => continue, // canonical parent absent — leave as-is
+                }
+            }
+        };
+        if want == model.bones[i].parent {
+            continue;
+        }
+        let local = match usize::try_from(want) {
+            Ok(p) => g[p].inverse() * g[i],
+            Err(_) => g[i],
+        };
+        let (sc, r, t) = local.to_scale_rotation_translation();
+        let b = &mut model.bones[i];
+        b.parent = want;
+        b.translation = t.to_array();
+        b.rotation = r.to_array();
+        b.scale = sc.to_array();
+        spliced.push(name);
+    }
+
+    // The splice can point a bone at a parent stored LATER in the vec (`head` at an appended
+    // `neck_02`), and every world-frame walk in the pipeline is a single forward pass that
+    // requires parents to precede children. Re-sort — canonical bones in the reference's own
+    // topological order, everything else after in its original relative order (its parents are
+    // canonical or preceded it before, so the invariant holds) — and remap every parent index
+    // and vertex joint through the permutation.
+    if !spliced.is_empty() {
+        let n = model.bones.len();
+        let mut order: Vec<usize> = (0..n).collect();
+        order.sort_by_key(|&i| {
+            match cidx.get(&model.bones[i].name) {
+                Some(&ci) => (0, ci, i), // canonical: reference topological order
+                None => (1, 0, i),       // stragglers: after, original relative order
+            }
+        });
+        let mut perm = vec![0usize; n]; // old index → new index
+        for (new_i, &old_i) in order.iter().enumerate() {
+            perm[old_i] = new_i;
+        }
+        let mut bones = Vec::with_capacity(n);
+        for &old_i in &order {
+            let mut b = model.bones[old_i].clone();
+            b.parent = match usize::try_from(b.parent) {
+                Ok(p) => perm[p] as i32,
+                Err(_) => -1,
+            };
+            bones.push(b);
+        }
+        model.bones = bones;
+        for v in &mut model.vertices {
+            for j in &mut v.joints {
+                *j = perm[*j as usize] as u32;
+            }
+        }
+        debug_assert!(
+            model
+                .bones
+                .iter()
+                .enumerate()
+                .all(|(i, b)| b.parent < i as i32),
+            "the splice re-sort must leave parents before children"
+        );
+    }
+    Ok(spliced)
 }
 
 /// The full canonical conform, in order: mesh-derived hip WIDTH → limb-align reorient → infer the
@@ -578,19 +746,49 @@ pub struct ConformOutput {
 }
 
 /// Run the full conform against `reference` (use [`default_reference`] for PrismHumanBaseA).
-pub fn conform_to_canonical(model: &mut RawModel, reference: &Path) -> Result<ConformOutput> {
-    let hip = derive_hip_placement(model);
-    let shoulder = derive_shoulder_placement(model);
-    let ankle = derive_ankle_placement(model);
-    let reorient = reorient_to_canonical(model, reference)?;
-    let infer = infer_canonical_bones(model, reference)?;
-    Ok(ConformOutput {
-        hip,
-        shoulder,
-        ankle,
-        reorient,
-        infer,
-    })
+/// How [`conform_to_canonical`] treats the vendor's rig.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ConformMode {
+    /// Derive the joint widths, reorient every bone onto the canonical reference frame, then
+    /// complete the bone set — the standard path that makes a vendor rig drive the shared clips.
+    #[default]
+    Canonical,
+    /// Keep the vendor rig EXACTLY as provided: skip the hip/shoulder/ankle width derivation AND
+    /// [`reorient_to_canonical`], so every vendor bone keeps its own position and rest frame. Only
+    /// the bone set is completed ([`infer_canonical_bones`]) so the shared clips have targets — and
+    /// the inferred fill-ins carry no weights, so the vendor's own bones alone drive the mesh. The
+    /// diagnostic path: stage a vendor rig untouched to see whether it already animates cleanly
+    /// against the shared clips, rather than assuming it needs the correction.
+    AsProvided,
+}
+
+pub fn conform_to_canonical(
+    model: &mut RawModel,
+    reference: &Path,
+    mode: ConformMode,
+) -> Result<ConformOutput> {
+    match mode {
+        ConformMode::Canonical => {
+            let hip = derive_hip_placement(model);
+            let shoulder = derive_shoulder_placement(model);
+            let ankle = derive_ankle_placement(model);
+            let reorient = reorient_to_canonical(model, reference)?;
+            let infer = infer_canonical_bones(model, reference, ConformMode::Canonical)?;
+            Ok(ConformOutput {
+                hip,
+                shoulder,
+                ankle,
+                reorient,
+                infer,
+            })
+        }
+        // As provided: no derive passes, no reorient — every vendor bone keeps its position and
+        // frame. Only the bone set is completed so the shared clips resolve their targets.
+        ConformMode::AsProvided => Ok(ConformOutput {
+            infer: infer_canonical_bones(model, reference, ConformMode::AsProvided)?,
+            ..Default::default()
+        }),
+    }
 }
 
 /// The canonical reference rig — **GolemBaseSkeleton**, the AUTHORED baseline
@@ -607,9 +805,206 @@ pub fn default_reference() -> std::path::PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fbx::parse_fbx;
+    use crate::fbx::{parse_fbx, RawBone, RawVertex};
     use crate::rig::rename_to_canonical;
     use std::collections::HashSet;
+
+    /// THE SPLICE GUARD (2026-08-20, skips without the content tree): a Meshy-shaped source
+    /// parents `head` straight to `neck_01` (it has one neck), so the inferred `neck_02` used
+    /// to dangle as a leaf — the canonical clips' neck_02 rotation was silently lost and the
+    /// head composed one link short (the golem's measured head jut). After conform, `head`
+    /// must hang off `neck_02`, parents must precede children, and the mesh's joint indices
+    /// must follow the bones they were weighted to through the re-sort.
+    #[test]
+    fn conform_splices_inferred_links_into_the_chain() {
+        let reference = default_reference();
+        if !crate::package::file_exists(&reference) {
+            eprintln!("skipping: no content tree");
+            return;
+        }
+        let bone = |name: &str, parent: i32, t: [f32; 3]| RawBone {
+            name: name.to_string(),
+            parent,
+            translation: t,
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            scale: [1.0, 1.0, 1.0],
+            inverse_bind: [
+                1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+            ],
+        };
+        let mut model = RawModel {
+            bones: vec![
+                bone("pelvis", -1, [0.0, 0.0, 95.0]),
+                bone("spine_01", 0, [0.0, 0.0, 10.0]),
+                bone("spine_02", 1, [0.0, 0.0, 10.0]),
+                bone("spine_03", 2, [0.0, 0.0, 10.0]),
+                bone("neck_01", 3, [0.0, 0.0, 19.0]),
+                bone("head", 4, [0.0, 0.0, 4.0]), // Meshy shape: head skips the second neck link
+            ],
+            vertices: vec![RawVertex {
+                p: [0.0, -8.0, 155.0],
+                n: [0.0, -1.0, 0.0],
+                uv: [0.0, 0.0],
+                joints: [5, 0, 0, 0], // weighted to `head` at its pre-splice index
+                weights: [1.0, 0.0, 0.0, 0.0],
+            }],
+            indices: vec![0, 0, 0],
+        };
+        let out = conform_to_canonical(&mut model, &reference, ConformMode::Canonical)
+            .expect("conform runs");
+        assert!(
+            out.infer.spliced.iter().any(|n| n == "head"),
+            "the head must be reported spliced, got {:?}",
+            out.infer.spliced
+        );
+        let idx = |name: &str| {
+            model
+                .bones
+                .iter()
+                .position(|b| b.name == name)
+                .unwrap_or_else(|| panic!("{name} present"))
+        };
+        let head = idx("head");
+        let parent = model.bones[head].parent;
+        assert_eq!(
+            model.bones[usize::try_from(parent).expect("head has a parent")].name,
+            "neck_02",
+            "the head hangs off the spliced neck_02"
+        );
+        for (i, b) in model.bones.iter().enumerate() {
+            assert!(
+                b.parent < i as i32,
+                "parents precede children after the re-sort ({} at {i} points at {})",
+                b.name,
+                b.parent
+            );
+        }
+        let v = &model.vertices[0];
+        assert_eq!(
+            usize::try_from(v.joints[0]).unwrap(),
+            head,
+            "the vertex follows the bone it was weighted to through the remap"
+        );
+        assert_eq!(v.weights[0], 1.0);
+    }
+
+    /// THE AS-PROVIDED GUARD (2026-08-20): `ConformMode::AsProvided` stages the vendor rig
+    /// UNTOUCHED — no hip/shoulder/ankle width derivation, no reorient — while still completing
+    /// the bone set so the shared clips have targets. It exists to test whether a raw Meshy rig
+    /// already drives our clips, so any pass that MOVES a vendor bone would defeat it.
+    #[test]
+    fn as_provided_skips_derive_and_reorient_but_completes_the_bone_set() {
+        let reference = default_reference();
+        if !crate::package::file_exists(&reference) {
+            eprintln!("skipping: no content tree");
+            return;
+        }
+        let bone = |name: &str, parent: i32, t: [f32; 3]| RawBone {
+            name: name.to_string(),
+            parent,
+            translation: t,
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            scale: [1.0, 1.0, 1.0],
+            inverse_bind: [
+                1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+            ],
+        };
+        let mut model = RawModel {
+            bones: vec![
+                bone("pelvis", -1, [0.0, 0.0, 95.0]),
+                bone("spine_01", 0, [0.0, 0.0, 10.0]),
+                bone("spine_02", 1, [0.0, 0.0, 10.0]),
+                bone("spine_03", 2, [0.0, 0.0, 10.0]),
+                bone("neck_01", 3, [0.0, 0.0, 19.0]),
+                bone("head", 4, [0.0, 0.0, 4.0]),
+            ],
+            vertices: vec![],
+            indices: vec![],
+        };
+        let out = conform_to_canonical(&mut model, &reference, ConformMode::AsProvided)
+            .expect("as-provided conform runs");
+        // No reorient and no derive passes ran.
+        assert_eq!(
+            out.reorient.limbs_aligned, 0,
+            "as-provided runs no reorient"
+        );
+        assert!(
+            out.hip.left.is_none() && out.hip.right.is_none(),
+            "as-provided derives no hip width"
+        );
+        // The bone set is still completed so the shared clips resolve (neck_02 among the added).
+        assert!(
+            out.infer.added.iter().any(|n| n == "neck_02"),
+            "the bone set is completed, got {:?}",
+            out.infer.added
+        );
+        // The vendor root keeps its position exactly (the pelvis is never reparented).
+        let pelvis = model
+            .bones
+            .iter()
+            .find(|b| b.name == "pelvis")
+            .expect("pelvis present");
+        assert_eq!(
+            pelvis.translation,
+            [0.0, 0.0, 95.0],
+            "the vendor pelvis is untouched"
+        );
+    }
+
+    /// THE AS-PROVIDED INFERENCE GUARD (2026-08-20): inferred bones (twists, fingers, eyes) must land
+    /// on the CANONICAL basis even when the vendor core keeps a non-canonical rest frame — the fix for
+    /// the "inferred bones translated off the mesh" symptom (eyes/shoulders/knees sticking out). A
+    /// vendor head carrying a 90° rest rotation must still get its eye inferred to the SAME world spot
+    /// the canonical path places it — not rotated by the vendor frame.
+    #[test]
+    fn as_provided_infers_on_the_canonical_basis_regardless_of_vendor_frame() {
+        use glam::{Mat4, Quat, Vec3};
+        let reference = default_reference();
+        if !crate::package::file_exists(&reference) {
+            eprintln!("skipping: no content tree");
+            return;
+        }
+        // A vendor-style head whose REST FRAME is rotated 90° about X — a differing bone-axis
+        // convention, the thing the bug composed the canonical offset onto.
+        let rot = Quat::from_rotation_x(std::f32::consts::FRAC_PI_2);
+        let head_pos = Vec3::new(0.0, 0.0, 148.0);
+        let head_world = Mat4::from_rotation_translation(rot, head_pos);
+        let make = || RawModel {
+            bones: vec![RawBone {
+                name: "head".to_string(),
+                parent: -1,
+                translation: head_pos.to_array(),
+                rotation: rot.to_array(),
+                scale: [1.0, 1.0, 1.0],
+                inverse_bind: head_world.inverse().to_cols_array(),
+            }],
+            vertices: vec![],
+            indices: vec![],
+        };
+        let eye_world = |m: &RawModel| -> Option<Vec3> {
+            let g = model_world_frames(m);
+            m.bones
+                .iter()
+                .position(|b| b.name == "eye_l")
+                .map(|i| pos_of(g[i]))
+        };
+
+        // Canonical path: reorient the vendor frame, then infer.
+        let mut canon = make();
+        reorient_to_canonical(&mut canon, &reference).unwrap();
+        infer_canonical_bones(&mut canon, &reference, ConformMode::Canonical).unwrap();
+        // As-provided: keep the vendor frame, infer on the canonical basis.
+        let mut raw = make();
+        infer_canonical_bones(&mut raw, &reference, ConformMode::AsProvided).unwrap();
+
+        let (Some(ce), Some(re)) = (eye_world(&canon), eye_world(&raw)) else {
+            panic!("eye_l must be inferred off the head in both modes");
+        };
+        assert!(
+            (ce - re).length() < 0.5,
+            "as-provided must infer the eye on the canonical basis (canonical {ce:?} vs as-provided {re:?})"
+        );
+    }
 
     /// Worst world position (cm) + orientation (deg) delta of `model`'s bones vs the oracle at
     /// `reference`, matched by name (bones absent from the oracle, e.g. a synthesized root, skipped).
@@ -846,7 +1241,7 @@ mod tests {
         rename_to_canonical(&mut model);
         derive_hip_placement(&mut model);
         reorient_to_canonical(&mut model, &reference).unwrap();
-        let report = infer_canonical_bones(&mut model, &reference).unwrap();
+        let report = infer_canonical_bones(&mut model, &reference, ConformMode::Canonical).unwrap();
         eprintln!(
             "added {} bones, total {}; hand_scale l={:.3} r={:.3}",
             report.added.len(),
@@ -936,7 +1331,7 @@ mod tests {
         }
         let mut model = parse_fbx(&fbx).unwrap();
         rename_to_canonical(&mut model);
-        conform_to_canonical(&mut model, &reference).unwrap();
+        conform_to_canonical(&mut model, &reference, ConformMode::Canonical).unwrap();
 
         // Every oracle bone except `root` must be present in my conform.
         let refs = load_reference_skeleton(&reference).unwrap();
@@ -1003,7 +1398,7 @@ mod tests {
         let rz = |n: &str| ridx.get(n).map(|&i| pos_of(raw[i]).z).unwrap_or(f32::NAN);
         eprintln!("low-res human RAW z: pelvis {:.1}, head {:.1}, foot_l {:.1}  (oracle 95.6 / 153.2 / 9.9)", rz("pelvis"), rz("head"), rz("foot_l"));
 
-        conform_to_canonical(&mut model, &reference).unwrap();
+        conform_to_canonical(&mut model, &reference, ConformMode::Canonical).unwrap();
 
         // Per-bone distance to the oracle — top few, to characterise the difference.
         let refs = load_reference_skeleton(&reference).unwrap();
@@ -1292,7 +1687,7 @@ mod tests {
             }
             derive_ankle_placement(&mut model);
             reorient_to_canonical(&mut model, &reference).unwrap();
-            infer_canonical_bones(&mut model, &reference).unwrap();
+            infer_canonical_bones(&mut model, &reference, ConformMode::Canonical).unwrap();
             let ua_rest = {
                 let w = model_world_frames(&model);
                 let i = model
@@ -1350,6 +1745,76 @@ mod tests {
                     && b.inverse_bind.iter().all(|f| f.is_finite())
             }),
             "every reoriented bone has finite TRS + inverse_bind"
+        );
+    }
+
+    /// THE WRIST GUARD (2026-08-21): a hand is a limb — its frame turns to point down THIS body's
+    /// hand (to its `middle_01`) exactly as the forearm turns down the forearm. Left on the canon's
+    /// world orientation, the golem's hand played every clip's hand direction 37° off its flesh
+    /// ("hands bent away from the default angle"). Without fingers yet, the hand continues its own
+    /// forearm, so the fingers infer along this body's arm.
+    #[test]
+    fn a_hand_aligns_to_its_fingers_and_continues_its_forearm_without_them() {
+        let reference = default_reference();
+        if !crate::package::file_exists(&reference) {
+            eprintln!("skipping: no content tree");
+            return;
+        }
+        let refs = load_reference_skeleton(&reference).unwrap();
+        let cg = fk(
+            &refs.iter().map(|b| b.local).collect::<Vec<_>>(),
+            &refs.iter().map(|b| b.parent).collect::<Vec<_>>(),
+        );
+        let cpos = |n: &str| pos_of(cg[refs.iter().position(|b| b.name == n).unwrap()]);
+        let v_canon = (cpos("middle_01_l") - cpos("hand_l")).normalize();
+        let bone = |name: &str, parent: i32, t: [f32; 3]| RawBone {
+            name: name.to_string(),
+            parent,
+            translation: t,
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            scale: [1.0, 1.0, 1.0],
+            inverse_bind: [
+                1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+            ],
+        };
+        // A forearm running out-and-down, a hand on its end, and (optionally) a finger root
+        // straight below the wrist — a hand that does NOT continue its forearm.
+        let arm = |fingers: bool| {
+            let mut bones = vec![
+                bone("lowerarm_l", -1, [45.0, 0.0, 118.0]),
+                bone("hand_l", 0, [19.0, 0.0, -17.0]),
+            ];
+            if fingers {
+                bones.push(bone("middle_01_l", 1, [0.0, 0.0, -8.0]));
+            }
+            RawModel {
+                bones,
+                vertices: vec![],
+                indices: vec![],
+            }
+        };
+        // Where the hand's frame says the hand points: the canon's hand direction carried by it.
+        let hand_points = |m: &RawModel| -> Vec3 {
+            let g = model_world_frames(m);
+            let i = m.bones.iter().position(|b| b.name == "hand_l").unwrap();
+            (glam::Mat3::from_mat4(g[i]) * v_canon).normalize()
+        };
+
+        let mut with = arm(true);
+        reorient_to_canonical(&mut with, &reference).unwrap();
+        let d = hand_points(&with);
+        assert!(
+            (d - Vec3::new(0.0, 0.0, -1.0)).length() < 1e-3,
+            "with fingers the hand points down its own finger root, got {d:?}"
+        );
+
+        let mut without = arm(false);
+        reorient_to_canonical(&mut without, &reference).unwrap();
+        let d = hand_points(&without);
+        let forearm = Vec3::new(19.0, 0.0, -17.0).normalize();
+        assert!(
+            (d - forearm).length() < 1e-3,
+            "without fingers the hand continues its forearm, got {d:?} vs {forearm:?}"
         );
     }
 }

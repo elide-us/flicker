@@ -81,6 +81,11 @@ pub struct TextOutcome {
     pub submit: bool,
     /// Esc — leave text entry, keeping the draft.
     pub cancel: bool,
+    /// The one-way hand-off claimed the keyboard THIS frame (T edge or panel
+    /// click). The scene mirrors this into its `input_context()` truth — on the
+    /// pump the RUNNER owns the context stack, so the scene reports rather than
+    /// applies.
+    pub entered: bool,
 }
 
 impl CommandHandler {
@@ -145,7 +150,11 @@ impl CommandHandler {
         }
 
         self.owns_keyboard = focused || entered;
-        TextOutcome { submit, cancel }
+        TextOutcome {
+            submit,
+            cancel,
+            entered,
+        }
     }
 }
 
@@ -342,7 +351,7 @@ mod tests {
         let events = [ev(ActionSignal::Menu, EventKind::Press, &raw)];
         // The screen declaration, exactly as hud_pocclusters.lua's root carries it.
         let mut tree = UiNode {
-            component: "screen".into(),
+            component: "surface".into(),
             ..Default::default()
         };
         tree.props

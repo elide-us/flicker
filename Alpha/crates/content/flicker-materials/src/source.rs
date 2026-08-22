@@ -20,6 +20,11 @@ pub const PERIODIC_TABLE_FILE: &str = "periodic_table.json";
 pub const MATERIALS_FILE: &str = "materials.json";
 /// Filename of the compound catalog within a [`JsonTableSource`] directory.
 pub const COMPOUNDS_FILE: &str = "compounds.json";
+/// Sibling of [`COMPOUNDS_FILE`] holding the mantle + world-formation-simulation
+/// compounds (ids 79-96, split out 2026-08-19). Loaded and appended into the SAME
+/// catalog: the two files share one id space, so a consumer resolves any compound
+/// by name/id regardless of which file it came from.
+pub const CRUST_COMPOUNDS_FILE: &str = "crust_compounds.json";
 /// Filename of the rock catalog within a [`JsonTableSource`] directory.
 pub const ROCKS_FILE: &str = "rocks.json";
 
@@ -150,8 +155,8 @@ struct MaterialsFile {
     materials: Vec<MaterialDef>,
 }
 
-/// Top-level shape of `compounds.json` — `_meta` is ignored; only `compounds`
-/// is read.
+/// Top-level shape of the compound-catalog files (`compounds.json` and its
+/// sibling `crust_compounds.json`) — `_meta` is ignored; only `compounds` is read.
 #[derive(Deserialize)]
 struct CompoundsFile {
     compounds: Vec<CompoundDef>,
@@ -175,13 +180,22 @@ impl TableSource for JsonTableSource {
     }
 
     fn load_compounds(&self) -> Result<Vec<CompoundDef>, MaterialError> {
-        // Tolerant of a content dir that has no compound catalog yet.
-        let path = self.dir.join(COMPOUNDS_FILE);
-        if !path.exists() {
-            return Ok(Vec::new());
+        // The catalog is split across two sibling files that share ONE id space:
+        // `compounds.json` (gameplay rows 1-78) and `crust_compounds.json` (the
+        // mantle + world-formation-sim rows 79-96). Both are appended into the same
+        // catalog so every consumer resolves any compound by name/id, wherever it
+        // lives. Each is tolerant of absence — a content dir that predates either
+        // file still loads (a network/DB source later merges the same way).
+        let mut compounds = Vec::new();
+        for file in [COMPOUNDS_FILE, CRUST_COMPOUNDS_FILE] {
+            let path = self.dir.join(file);
+            if !path.exists() {
+                continue;
+            }
+            let parsed: CompoundsFile = read_json(&path)?;
+            compounds.extend(parsed.compounds);
         }
-        let file: CompoundsFile = read_json(&path)?;
-        Ok(file.compounds)
+        Ok(compounds)
     }
 
     fn load_rocks(&self) -> Result<Vec<RockDef>, MaterialError> {

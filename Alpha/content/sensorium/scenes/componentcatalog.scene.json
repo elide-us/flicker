@@ -1,9 +1,9 @@
 {
-  "_comment": "ComponentCatalog UI-TEST scene DEFINITION (201F4F51 template-free). A left nav rail of bookmarks beside a RIGHT scroll TRAY: every component in its own card box, all present, flowing in a scrollable `list`; a bookmark scrolls the tray to that card (card_i.y - card_0.y), the top card's bookmark highlights. The standalone `tabs` control is RETIRED here — superseded by the PTT (paged_menu); the Paged Menu card demos the real nested page->tab behavior (Page 1: Tab 1/Tab 2, Page 2: Tab 3/Tab 4) via two page-gated `pill_toggle` tab rails (the PTT lays out the first VISIBLE rail). The Nav Footer card's BACK/NEXT buttons fire the SAME cat_pm_page_prev/next names the page rail steps on and the root's on_page_prev/next intents fire — one signal name, every trigger. 26 cards. Display strings are $tokens; interactive VALUES ride binds the bench seeds + folds; the paged-menu visibility binds are derived in the PAIR SCRIPT (componentcatalog.lua) from the page/tab. The bench owns + loads this file.",
+  "_comment": "ComponentCatalog UI-TEST scene DEFINITION (201F4F51 template-free). A left nav rail of bookmarks beside a RIGHT scroll TRAY: every component in its own card box, all present, flowing in a scrollable `list`; a bookmark scrolls the tray to that card (card_i.y - card_0.y), the top card's bookmark highlights. The standalone `tabs` control is RETIRED here — superseded by the PTT (paged_menu); the Paged Menu card demos the real nested page->tab behavior (Page 1: Tab 1/Tab 2, Page 2: Tab 3/Tab 4) via two page-gated `pill_toggle` tab rails (the PTT lays out the first VISIBLE rail). The Nav Footer card's BACK/NEXT buttons fire the SAME cat_pm_page_prev/next names the page rail steps on and the root's on_page_prev/next intents fire — one signal name, every trigger. 27 cards. Display strings are $tokens; interactive VALUES ride binds the bench seeds + folds; the paged-menu visibility binds are derived in the PAIR SCRIPT (componentcatalog.lua) from the page/tab. The bench owns + loads this file.",
   "behaviour": "componentcatalog",
   "params": {},
   "tree": {
-    "component": "screen",
+    "component": "surface",
     "id": "catalog",
     "on_menu": "pause_open",
     "on_page_next": "cat_pm_page_next",
@@ -308,6 +308,16 @@
                             "size_class": "md",
                             "tab_group": "cat_nav",
                             "nav_ordinal": 26
+                          },
+                          {
+                            "component": "button",
+                            "id": "nav_26",
+                            "label": "$cat_nav_surface",
+                            "style_bind": "nav_sty_26",
+                            "action": "nav_26",
+                            "size_class": "md",
+                            "tab_group": "cat_nav",
+                            "nav_ordinal": 27
                           }
                         ]
                       }
@@ -1278,6 +1288,36 @@
                                 "color": "panel.stat_label"
                               }
                             ]
+                          },
+                          {
+                            "component": "panel",
+                            "id": "card_26",
+                            "style": "panel",
+                            "pad": 14,
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text": "$cat_nav_surface",
+                                "text_size": 14,
+                                "font": "label",
+                                "color": "panel.stat_value"
+                              },
+                              {
+                                "component": "surface",
+                                "id": "cat_surface",
+                                "layout": "quad",
+                                "style": "panel",
+                                "height": 260
+                              },
+                              {
+                                "component": "text",
+                                "text": "$cat_surface_note",
+                                "text_size": 11,
+                                "font": "label",
+                                "color": "panel.stat_label"
+                              }
+                            ]
                           }
                         ]
                       }
@@ -1317,11 +1357,7 @@
         "border_w": 1,
         "fill_top": "$stone3",
         "fill_bot": "$stone1",
-        "border": "$edge2",
-        "shadow": "$shadow",
-        "shadow_dy": 20,
-        "shadow_feather": 44,
-        "shadow_grow": 4
+        "border": "$edge2"
       },
       "title": {
         "size": 52,
@@ -1622,7 +1658,17 @@
         "dpad_down": 12,
         "dpad_left": 13,
         "dpad_right": 14,
-        "stick": 15
+        "stick": 15,
+        "face_south": 4,
+        "face_east": 5,
+        "face_west": 6,
+        "face_north": 7,
+        "bumper_l": 2,
+        "bumper_r": 3,
+        "trigger_l": 0,
+        "trigger_r": 1,
+        "stick_l": 15,
+        "stick_r": 15
       }
     },
     "resource_gauge": {
@@ -1763,17 +1809,10 @@
     },
     "settings": {
       "window": {
-        "w": 1180,
-        "h": 726,
-        "min_margin": 32,
         "radius": 4,
         "fill_top": "$stone3",
         "fill_bot": "$stone1",
-        "border": "$edge2",
-        "shadow": "$shadow",
-        "shadow_dy": 18,
-        "shadow_feather": 46,
-        "shadow_grow": 4
+        "border": "$edge2"
       },
       "runes": {
         "size": 16,

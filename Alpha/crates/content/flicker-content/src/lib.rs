@@ -33,12 +33,13 @@ pub use flicker_core::roots;
 
 pub use bake::{
     attach_world, bake_garment, bake_prop, bake_rig, bake_skin, fitting_base, garment_socket,
-    write_garment, write_prop, write_rig, write_rig_file, Fit, MountPoint,
+    load_rig_raw, write_garment, write_prop, write_rig, write_rig_file, Fit, MountPoint,
 };
 pub use conform::{
     conform_to_canonical, default_reference, derive_ankle_placement, derive_hip_placement,
-    derive_shoulder_placement, infer_canonical_bones, reorient_to_canonical, AnkleReport,
-    ConformOutput, ConformReport, HipReport, InferReport, ShoulderReport,
+    derive_shoulder_placement, infer_canonical_bones, reorient_to_canonical,
+    splice_canonical_chain, AnkleReport, ConformMode, ConformOutput, ConformReport, HipReport,
+    InferReport, ShoulderReport,
 };
 pub use fbx::{apply_orientation, parse_fbx, quarter_turn, RawBone, RawModel, RawVertex};
 pub use flicker_core::roots::{

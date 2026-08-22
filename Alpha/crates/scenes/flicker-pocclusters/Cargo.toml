@@ -1,6 +1,6 @@
 [package]
 name = "flicker-pocclusters"
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 license.workspace = true
 publish = false
@@ -27,6 +27,10 @@ flicker-voxel.workspace = true
 # LOGICAL name (`cluster_X_Y_Z.json`), resolved gz-first through the shared routine.
 flicker-core.workspace = true
 flicker-worker.workspace = true
+# The material catalog (materials.json) — colours for the mesh palette the
+# voxel field renders with — resolved through the roots service.
+flicker-materials.workspace = true
+flicker-content.workspace = true
 glam.workspace = true
 # Resolves the walker's node `style` paths against `ui_theme.json` (styles Value).
 serde_json.workspace = true

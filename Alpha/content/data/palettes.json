@@ -1,0 +1,20 @@
+{
+  "_meta": {
+    "purpose": "Bounded colour sets for recipe channels. `emissive` is THE set out.emissive may take (the material-budget invariant, B46FFC37): the Sablework bench writes an entry VERBATIM into the recipe and snaps Roll's random glow to the nearest entry. This keeps emissive variants bounded and lets emissive colours align with a small palette rather than a full RGB space.",
+    "set": "The curated plastic set (Aaron, ruled 2026-08-19, D6 of ruling BC95B08F): core red/green/blue, secondary magenta/cyan/white, extended orange/violet. BLACK IS EXCLUDED by that ruling - black is the absence of light, not a light colour; never add it here. Supersedes the interim EGA-16 set.",
+    "space": "Values are the recipe's native colour domain — map byte / 255, written verbatim to out.emissive and into the swatch styles, with NO linear<->sRGB conversion (the same convention every shipped ramp stop and the rolled hsv() glow already use).",
+    "order": "Array index IS the identity: swatch order, nav order, and the pick index are all this array's position. Appending grows the set with no code change. NOTE: because Roll snaps to the nearest entry, re-rolling the SAME seed after editing this file can land on a different colour — saved recipes are immune (they store the snapped value)."
+  },
+  "palettes": {
+    "emissive": [
+      { "id": "red",     "rgb": [1.000, 0.000, 0.000] },
+      { "id": "green",   "rgb": [0.000, 1.000, 0.000] },
+      { "id": "blue",    "rgb": [0.000, 0.000, 1.000] },
+      { "id": "magenta", "rgb": [1.000, 0.000, 1.000] },
+      { "id": "cyan",    "rgb": [0.000, 1.000, 1.000] },
+      { "id": "white",   "rgb": [1.000, 1.000, 1.000] },
+      { "id": "orange",  "rgb": [1.000, 0.500, 0.000] },
+      { "id": "violet",  "rgb": [0.500, 0.000, 1.000] }
+    ]
+  }
+}

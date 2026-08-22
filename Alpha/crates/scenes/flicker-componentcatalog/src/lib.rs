@@ -1,6 +1,6 @@
 //! flicker-componentcatalog: the UI TEST scene — a workbench that shows ONE demo copy
 //! of every Rust widget component ([`RUST_COMPONENT_KINDS`]) with all its features
-//! enabled. Every component sits in its own card box; all 26 flow top-to-bottom in a
+//! enabled. Every component sits in its own card box; all 27 flow top-to-bottom in a
 //! scrollable tray on the right. A left nav rail of bookmarks SCROLLS the tray to a
 //! card, and the bookmark of the card at the top of the view highlights.
 //!
@@ -19,10 +19,14 @@
 
 use std::time::Duration;
 
-use flicker::render::{Renderer, TextureHandle};
+use flicker::render::{
+    grid_segments_xy, Rect, Renderer, TextureHandle, Vec3, ViewportFiller, ViewportLayout,
+};
 use flicker::scene::{Scene, SceneInput, Transition};
 use flicker::script::{HudCommand, ScriptHost, UiNode, ValueMap};
-use flicker::ui::{render_hud, run_ui, SceneDef, UiInput, UiIntents, UiState, WalkerHandler};
+use flicker::ui::{
+    render_hud, run_ui, SceneDef, SurfacePointer, UiInput, UiIntents, UiState, WalkerHandler,
+};
 use flicker_input_core::{AbstractControls, GamepadConfig, InputMap, InputState};
 use flicker_input_router::{InputHandler, Router};
 use flicker_shell::{PauseScene, Theme};
@@ -73,6 +77,41 @@ fn tree_binds(tree: &UiNode) -> Vec<String> {
     out
 }
 
+/// The viewport-card demo's framing radius and wireframe colours.
+const DEMO_RADIUS: f32 = 2.2;
+const DEMO_GROUND: [f32; 4] = [0.25, 0.28, 0.34, 1.0];
+const DEMO_CUBE: [f32; 4] = [0.55, 0.75, 0.95, 1.0];
+
+/// The viewport demo's content — a unit cube standing on the grid floor, as the 12
+/// wireframe edges `Renderer::draw_lines` takes. One card, so rebuilding it a frame is free.
+fn demo_cube() -> Vec<(Vec3, Vec3)> {
+    let c = |x: f32, y: f32, z: f32| Vec3::new(x, y, z);
+    let p = [
+        c(-1.0, -1.0, -1.0),
+        c(1.0, -1.0, -1.0),
+        c(1.0, 1.0, -1.0),
+        c(-1.0, 1.0, -1.0),
+        c(-1.0, -1.0, 1.0),
+        c(1.0, -1.0, 1.0),
+        c(1.0, 1.0, 1.0),
+        c(-1.0, 1.0, 1.0),
+    ];
+    vec![
+        (p[0], p[1]),
+        (p[1], p[2]),
+        (p[2], p[3]),
+        (p[3], p[0]),
+        (p[4], p[5]),
+        (p[5], p[6]),
+        (p[6], p[7]),
+        (p[7], p[4]),
+        (p[0], p[4]),
+        (p[1], p[5]),
+        (p[2], p[6]),
+        (p[3], p[7]),
+    ]
+}
+
 /// The UI test scene. Everything a frame needs lives here; the shell drives it through
 /// the [`Scene`] trait.
 pub struct ComponentCatalog {
@@ -105,6 +144,16 @@ pub struct ComponentCatalog {
     demo: ValueMap,
     /// The PAIR SCRIPT host (`componentcatalog.lua`).
     script: Option<ScriptHost>,
+    /// The viewport card's shared filler — built LAZILY on first render (it needs
+    /// `&mut Renderer`), then seated in the reserved rect each frame.
+    viewport: Option<ViewportFiller>,
+    /// The rect + layout the walker reserved for the `cat_surface` node this frame
+    /// (captured in `update`; consumed in the input-less `render`). `None` when off screen.
+    surface_seat: Option<(Rect, ViewportLayout)>,
+    /// The walker's pointer SAMPLE for the card's surface this frame (the barrier) —
+    /// `render` replays it to orbit the panel under the cursor; `render` gets no input
+    /// of its own, and the bench never reads the device for it.
+    pointer: Option<SurfacePointer>,
 }
 
 impl ComponentCatalog {
@@ -140,6 +189,9 @@ impl ComponentCatalog {
                     None
                 }
             },
+            viewport: None,
+            surface_seat: None,
+            pointer: None,
         }
     }
 
@@ -152,6 +204,12 @@ impl ComponentCatalog {
         raw.set(CONTENT_SCROLL_BIND, f64::from(self.content_scroll));
         raw.set("section", self.section as f64);
         raw.set("card_count", self.cards.len() as f64);
+        // Q2 (ruling 7AB130A7): publish the live display device so the Paged Menu drops
+        // its pad shoulder-glyph hints on kbm and shows them on a controller.
+        raw.set(
+            "input_device",
+            flicker::input_device::last_input_context().token(),
+        );
         let mut m = raw.clone();
         if let Some(script) = &self.script {
             if let Err(e) = script.set_model(&raw) {
@@ -228,12 +286,23 @@ impl Scene for ComponentCatalog {
             mouse: input.mouse_position,
             clicked: input.mouse_left_pressed,
             down: input.mouse_left,
+            right_down: input.mouse_right,
             screen,
             typed: String::new(),
             backspace: false,
             wheel: input.mouse_wheel_delta,
+            exclusive: false,
+            motion: Default::default(),
         };
         let frame = run_ui(tree, &model, &self.ui_styles, &snap, &mut self.ui_state);
+        // The viewport card: capture the rect+layout the walker reserved and this frame's
+        // pointer sample, for the input-less `render` to seat + orbit (a left-drag over a
+        // panel orbits it; the filler self-gates to the cursor-over-viewport).
+        self.surface_seat = frame.surface_slot("cat_surface");
+        // …and the walker's pointer SAMPLE for the surface (the barrier, A8C9F02B §4b):
+        // present only while the cursor is over the card's well with no UI over it, or
+        // while a press that began there is still held — never a device read.
+        self.pointer = frame.surface_pointer("cat_surface").cloned();
         let hud_hit = frame.results.is_on("hud_hit");
         // Take the frame apart: the draw commands to blit, the result values to read, and
         // the per-card RECTS the scroll-to needs (each card box reports its resolved Y).
@@ -297,8 +366,43 @@ impl Scene for ComponentCatalog {
     }
 
     fn render(&mut self, renderer: &mut Renderer) {
+        let base_layer = renderer.layer();
+        // The viewport card FIRST. Its frame graph's offscreen passes RESET the per-frame
+        // draw queues (the "render RTTs before the main view" rule), so anything queued
+        // before it is discarded — the HUD MUST come after. Seat the shared filler in the
+        // rect the walker reserved, orbit the panel under the cursor on a left-drag, and
+        // render a wireframe stage (ground grid + a cube) into it — the kind's LIVE catalog
+        // exerciser. Wheel is left out so it never fights the tray scroll. Composites at
+        // `base+2`, ABOVE the HUD's `base+1`, so the views land inside the card's well.
+        if let Some((rect, layout)) = self.surface_seat {
+            if self.viewport.is_none() {
+                self.viewport = Some(ViewportFiller::new(renderer, layout));
+            }
+            let vf = self.viewport.as_mut().unwrap();
+            vf.set_rect(rect);
+            if let Some(p) = &self.pointer {
+                let orbit = p.captured && p.left;
+                vf.apply_pointer(
+                    p.cursor,
+                    renderer.size(),
+                    p.delta,
+                    orbit,
+                    false,
+                    0.0,
+                    DEMO_RADIUS,
+                );
+            }
+            let ground = grid_segments_xy(0.5, 2.5, -1.0);
+            let cube = demo_cube();
+            vf.render(renderer, base_layer + 2.0, DEMO_RADIUS, |r, _view| {
+                r.draw_lines(&ground, DEMO_GROUND);
+                r.draw_lines(&cube, DEMO_CUBE);
+            });
+        }
         if let Some(&white) = self.textures.first() {
+            renderer.set_layer(base_layer + 1.0);
             render_hud(renderer, &self.hud_commands, white, &self.textures);
+            renderer.set_layer(base_layer);
         }
     }
 }
@@ -592,10 +696,13 @@ mod tests {
             mouse: flicker::render::Vec2::new(-1.0, -1.0),
             clicked: false,
             down: false,
+            right_down: false,
             screen: flicker::render::Vec2::new(1920.0, 1080.0),
             typed: String::new(),
             backspace: false,
             wheel: 0.0,
+            exclusive: false,
+            motion: Default::default(),
         };
         let frame = run_ui(&tree, &model, &styles, &snap, &mut UiState::default());
         let want = [fill[0], fill[1], fill[2], fill[3]];
@@ -609,12 +716,13 @@ mod tests {
     }
 
     /// **Every pane group has a clear panel-navigation layer** (nav-tier contract
-    /// 1B5F6BB8): a `tab_group` with interior controls must have exactly ONE ordinal-0
-    /// actionless CONTAINER whose id equals the group, so the left stick lands on the pane
-    /// (not a leaf) and the d-pad reaches the interior only after Confirm enters. This is
-    /// the "ambiguous panel navigation is a violation" rule as a gate — `cat_content` was a
-    /// container-less group (`PanelNext` deposited the cursor on a leaf inside it), which
-    /// this now forbids.
+    /// 1B5F6BB8, flattened per 1A292918): a `tab_group` with interior controls must have
+    /// exactly ONE actionless CONTAINER (with a non-zero authored ordinal) whose id equals
+    /// the group, so a panel stop is a real container and never a bare leaf. The flatten
+    /// lets BOTH the stick and the d-pad move between those stops; `Confirm` still scopes
+    /// into a container's interior. This is the "ambiguous panel navigation is a violation"
+    /// rule as a gate — `cat_content` was a container-less group (nav deposited the cursor
+    /// on a leaf inside it), which this forbids.
     #[test]
     fn every_pane_group_has_a_clear_container() {
         let tree = SceneDef::parse("componentcatalog", CATALOG_SCENE)
@@ -745,6 +853,46 @@ mod tests {
         assert!(
             missing.is_empty(),
             "engine kinds with no demo in the catalog: {missing:?}"
+        );
+    }
+
+    /// **PRESENCE GATE for the `surface` card.** `surface` is a STRUCTURAL kind (the one
+    /// kind at two depths — the root screen and every nested live surface), so the
+    /// roster-coverage gate above, which derives its demand from the Rust component
+    /// roster, no longer reaches it. The live-scene container's exerciser (card_26: a
+    /// quad-layout nested surface the `ViewportFiller` fills, orbit on left-drag) is
+    /// ratified catalog content (BDE5BFD0 / A8C9F02B), so its absence is a failure
+    /// here, by name — a drift gate must cover the channel the drift travels (8634C200).
+    #[test]
+    fn the_surface_kind_keeps_its_live_catalog_card() {
+        let json: serde_json::Value =
+            serde_json::from_str(CATALOG_SCENE).expect("the catalog scene is JSON");
+        fn find<'a>(v: &'a serde_json::Value, id: &str) -> Option<&'a serde_json::Value> {
+            match v {
+                serde_json::Value::Object(m) => {
+                    if m.get("id").and_then(|i| i.as_str()) == Some(id) {
+                        return Some(v);
+                    }
+                    m.values().find_map(|c| find(c, id))
+                }
+                serde_json::Value::Array(a) => a.iter().find_map(|c| find(c, id)),
+                _ => None,
+            }
+        }
+        let node =
+            find(&json, "cat_surface").expect("the catalog carries the `cat_surface` card node");
+        assert_eq!(
+            node.get("component").and_then(|c| c.as_str()),
+            Some("surface"),
+            "the card's node is a `surface`"
+        );
+        assert!(
+            node.get("layout").and_then(|l| l.as_str()).is_some(),
+            "the card authors a `layout` so the filler tiles more than one pane"
+        );
+        assert!(
+            CATALOG_SCENE.contains("\"nav_26\"") && CATALOG_SCENE.contains("\"card_26\""),
+            "the surface card keeps its bookmark and its card box"
         );
     }
 }

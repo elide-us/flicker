@@ -1,7 +1,7 @@
 {
   "_comment": "SHARED pause overlay (scenes/shared/ — Aaron 2026-08-14 ruling 2A3592D0: pop-up modals become shared modal TREES, one definition, no per-scene copy). Extracted from the retired Rust `menu_tree` builder: a full-bleed `screen` with a `screens.pause` backdrop under a centered `popup_panel` whose four buttons (Resume / Settings / Main Menu / Quit) fire their own id as the action name — the shell's PauseScene reads them off `results`. Esc / pad-B fold to `resume` via the root `on_cancel` (S9). The pair script `scripts/shared/pause.lua` is the AUTHORING EXAMPLE: its `arrange()` lights the `show_settings` / `show_main_menu` / `show_quit` slices this tree gates its optional buttons on (`visible_bind`), so a human copies the pair and flips one off to vary the menu. Resume stays ungated — the always-present way out. NO `behaviour` key: the manifest skips scenes/shared/; PauseScene loads this via include_str! + parse_ui_json AND holds `pause.lua` through MenuView's pair-script slot (folded each frame via set_model ▸ arrange ▸ to_model, like settings/menu), and its chrome styles (`screens.pause`, `modal.*`) ride Main.scene.json's carrier through `main_scene_styles()`, exactly as when the tree was Rust-built.",
   "tree": {
-    "component": "screen",
+    "component": "surface",
     "anchor": "top_left",
     "width_frac": 1.0,
     "height_frac": 1.0,

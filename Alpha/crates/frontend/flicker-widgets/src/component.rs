@@ -49,6 +49,10 @@ pub struct UiInput {
     pub clicked: bool,
     /// Left-button *held* state (for slider drags).
     pub down: bool,
+    /// Right-button *held* state. The walker takes a SURFACE CAPTURE on EITHER button's
+    /// press edge (it derives the right edge itself, frame to frame) and reports both
+    /// buttons in the [`SurfacePointer`] a surface's element receives.
+    pub right_down: bool,
     /// Screen size (the root layout rect).
     pub screen: Vec2,
     /// Text committed by the keyboard this frame — appended to a focused
@@ -61,6 +65,19 @@ pub struct UiInput {
     /// `list` region under the pointer. Scenes wire their engine snapshot's
     /// `mouse_wheel_delta` straight in; `0.0` on wheel-less frames.
     pub wheel: f32,
+    /// EXCLUSIVE pointer mode — the player has toggled the scene into locked-cursor
+    /// camera control (the live-scene container's barrier §4e). While set, the walker
+    /// hands the ROOT surface a forced-captured [`SurfacePointer`] (its `delta` is the
+    /// relative [`motion`](Self::motion), not an absolute cursor move) and claims no UI
+    /// pointer, so the whole surface is the camera and a behaviour's mode-agnostic
+    /// `root_pointer()` camera path just works. The cursor lock itself is the runner's
+    /// (via `App::pointer_captured`). Default `false` = ordinary free-mouse play.
+    pub exclusive: bool,
+    /// This frame's RELATIVE mouse motion (pixels) — the engine snapshot's
+    /// `mouse_delta`. Drives the forced-captured pointer's `delta` in [`exclusive`](Self::exclusive)
+    /// mode, where the OS cursor is locked and its absolute position is frozen. `0.0`
+    /// on motion-less frames; ignored in free mode (which uses the absolute cursor move).
+    pub motion: Vec2,
 }
 
 // ── Draw cache ───────────────────────────────────────────────────────────────
@@ -298,17 +315,23 @@ pub struct UiState {
     /// OBSERVED by the walker layer, never consumed, so chord verbs elsewhere
     /// keep working. A held chord scales a nudge to the coarse step.
     pub(crate) chord: bool,
-    /// Pane ENTER STACK — the nav-tier contract (MCP 1B5F6BB8), NESTED per Aaron's
-    /// 2026-08-15 ruling: panels and subpanels are one mechanism at depth. Empty
-    /// while NAVIGATING between top-tier panes (the LEFT STICK cycles containers,
-    /// the d-pad no-ops on a container); each `Confirm` on a focused container
-    /// PUSHES its id and drops focus to its lowest-ordinal interior — so entering
-    /// the rack scopes the ring to its voice rows, and entering a row scopes it to
-    /// that row's controls. `Cancel` pops exactly ONE level and refocuses the
-    /// popped container (B never skips); a mouse click clears the whole stack
-    /// (pointer modality). The container whose `id` is the TOP of the stack wears
-    /// the gold lock rim; scenes gate viewport cameras on that top entry.
+    /// Pane ENTER STACK — the nav-tier contract (MCP 1B5F6BB8, FLATTENED per plan
+    /// 1A292918). Empty while NAVIGATING the top tier, where the LEFT STICK and the
+    /// D-PAD both move focus between panel stops (walker `move_focus`, geometrically
+    /// when rects are present). Each `Confirm` on a focused container PUSHES its id and
+    /// drops focus to its lowest-ordinal interior — so entering a channel scopes the
+    /// ring to its controls. Benches are FLAT (one Confirm reaches any control — enter
+    /// depth ≤ 1), but the stack still NESTS for a scene that authors subpanels.
+    /// `Cancel` pops exactly ONE level and refocuses the popped container (B never
+    /// skips); a mouse click clears the whole stack (pointer modality). The container
+    /// whose `id` is the TOP of the stack wears the gold lock rim; scenes gate viewport
+    /// cameras on that top entry.
     pub(crate) entered: Vec<String>,
+    /// The surface holding the POINTER CAPTURE — an unclaimed press began inside it and
+    /// a button is still down (see [`SurfacePointer`]). The root's id for the root.
+    surface_capture: Option<String>,
+    /// Last frame's right-button state, for the right press edge.
+    right_was_down: bool,
     /// Live press-feedback flashes, `action/result name → intensity 0..1`
     /// (Aaron, 2026-08-08: *"the icons should briefly glow … to indicate the
     /// click … Even if it does nothing, the visual cue is important UX"* — and
@@ -464,12 +487,13 @@ impl UiState {
     }
 }
 
-/// One `rtt` node's reserved picture-in-picture slot — a rect the walker laid
-/// out but deliberately does not fill.
+/// One NESTED `surface` node's reserved slot — a rect the walker laid out but
+/// deliberately does not fill. (The ROOT surface is the screen itself: its element is
+/// the frame graph's root pass, and it reserves nothing.)
 ///
 /// The walker runs late (its commands are main-frame draws), while
 /// `FrameGraph::execute` must run FIRST in a scene's `render()` — the offscreen
-/// passes reset the shared per-frame draw queues. A `rtt` node therefore
+/// passes reset the shared per-frame draw queues. A nested `surface` therefore
 /// *reserves* its rect here, and the scene feeds the slot to its frame graph:
 ///
 /// ```text
@@ -482,10 +506,12 @@ impl UiState {
 /// the graph only blits the image. That keeps every panel in the codebase drawn
 /// by exactly one code path.
 #[derive(Clone, Debug, PartialEq)]
-pub struct RttSlot {
+pub struct SurfaceSlot {
     /// The node's `id` — a scene keys its per-slot render target off this.
     pub id: String,
-    /// Which `stages.<source>` sub-scene to render (the node's `source` prop).
+    /// Which `stages.<source>` element to render (the node's `source` prop), or
+    /// empty: a surface whose content the behaviour publishes itself (a globe, a
+    /// bench viewport) authors no source.
     pub source: String,
     /// The IMAGE rect in screen pixels — already inset inside the node's frame.
     pub x: f32,
@@ -502,6 +528,51 @@ pub struct RttSlot {
     /// Composite tint (default opaque white), from the node's `tint` dotted colour
     /// path or its style block.
     pub tint: [f32; 4],
+    /// The node's `layout` (single|pair|quad, default single) — how many camera
+    /// panes a behaviour-side [`flicker_render::ViewportFiller`] tiles in it. Lets
+    /// the behaviour size the filler off the reserved slot instead of re-reading
+    /// the node.
+    pub layout: flicker_render::ViewportLayout,
+}
+
+/// The pointer SAMPLE a surface's element receives — the live-scene container's BARRIER
+/// (contract A8C9F02B §4b). Produced by the walker; a behaviour never reads the device.
+///
+/// UI captures first, then pass-through: a surface is **hot** when the cursor is over it
+/// and no node painted OVER it claimed the pointer (a claiming ancestor — the pane panel,
+/// the list tray — does not cover it; a claiming node placed after it does). With no nested
+/// surface hot, the ROOT surface is the floor. An unclaimed press inside the hot surface
+/// **captures** the sample for that surface until both buttons are up — exactly as a slider
+/// drag keeps its capture — so a drag that wanders over a panel keeps orbiting, and a drag
+/// that STARTED on a panel never reaches the world. While a slider drag is captured every
+/// surface is cold.
+///
+/// A filler orbits on `captured && left`, pans on `captured && right`, zooms on `wheel`
+/// while hot, and picks on `pressed`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SurfacePointer {
+    /// The surface node's `id` (the root's id for the root surface).
+    pub id: String,
+    /// This is the ROOT surface — the screen itself.
+    pub root: bool,
+    /// Cursor in screen pixels.
+    pub cursor: Vec2,
+    /// Cursor relative to the surface's top-left.
+    pub local: Vec2,
+    /// Cursor motion since last frame (screen pixels).
+    pub delta: Vec2,
+    /// Left / right button held.
+    pub left: bool,
+    pub right: bool,
+    /// A press edge (either button) landed on this surface THIS frame — the frame the
+    /// capture was taken. A pick happens here.
+    pub pressed: bool,
+    /// This frame's wheel delta (positive = up).
+    pub wheel: f32,
+    /// The press that began inside this surface is still held.
+    pub captured: bool,
+    /// The surface's rect in screen pixels (the screen for the root).
+    pub rect: flicker_render::Rect,
 }
 
 /// The output of one [`run_ui`] pass: the draw commands (for
@@ -513,9 +584,12 @@ pub struct UiFrame {
     /// Toggles / slider values / fired actions, plus `hud_hit` (pointer over any
     /// UI region — so the scene behind must not pick through).
     pub results: ValueMap,
-    /// PiP slots reserved by `rtt` nodes this frame — see [`RttSlot`]. Empty
-    /// for a tree with no stages, so existing callers are unaffected.
-    pub rtts: Vec<RttSlot>,
+    /// Slots reserved by NESTED `surface` nodes this frame — see [`SurfaceSlot`].
+    /// Empty for a tree with no nested surfaces, so existing callers are unaffected.
+    pub surfaces: Vec<SurfaceSlot>,
+    /// This frame's pointer sample — for the ONE surface that is hot or captured, if any.
+    /// Read it through [`surface_pointer`](Self::surface_pointer) / [`root_pointer`](Self::root_pointer).
+    pub pointer: Option<SurfacePointer>,
     /// Every ID'd node's RESOLVED rect (`[x, y, w, h]`), in placement order —
     /// what the layout actually gave each named control this frame. The
     /// twice-burned lesson behind it: a control can be perfectly formed in the
@@ -529,22 +603,59 @@ pub struct UiFrame {
 }
 
 impl UiFrame {
-    /// The rect the walker reserved for the `rtt` node with this `id`, as the
-    /// render-crate rect an offscreen pass composites into. `None` while the
-    /// viewport is off screen — which is also what lets a scene skip the pass
+    /// The rect the walker reserved for the nested `surface` node with this `id`,
+    /// as the render-crate rect an offscreen pass composites into. `None` while the
+    /// surface is off screen — which is also what lets a scene skip the pass
     /// entirely that frame.
     ///
-    /// This is THE hand-off for an RTT viewport (the walker reserves, the scene
-    /// fills), so it lives here rather than as a find/map dance every scene
-    /// repeats and one of them eventually gets subtly wrong.
-    pub fn rtt_rect(&self, id: &str) -> Option<flicker_render::Rect> {
-        self.rtts
+    /// This is THE hand-off for a surface (the walker reserves, the scene fills),
+    /// so it lives here rather than as a find/map dance every scene repeats and
+    /// one of them eventually gets subtly wrong.
+    pub fn surface_rect(&self, id: &str) -> Option<flicker_render::Rect> {
+        self.surfaces
             .iter()
             .find(|s| s.id == id)
             .map(|s| flicker_render::Rect {
                 pos: Vec2::new(s.x, s.y),
                 size: Vec2::new(s.w, s.h),
             })
+    }
+
+    /// The reserved rect AND layout for the nested `surface` node with this `id` — the
+    /// hand-off a behaviour needs to build/seat its [`flicker_render::ViewportFiller`]
+    /// (the walker reserves, the behaviour fills). `None` when the id is absent or off
+    /// screen — the SEAT gate: an unseated surface gets no pointer and renders nothing.
+    pub fn surface_slot(
+        &self,
+        id: &str,
+    ) -> Option<(flicker_render::Rect, flicker_render::ViewportLayout)> {
+        self.surfaces.iter().find(|s| s.id == id).map(|s| {
+            (
+                flicker_render::Rect {
+                    pos: Vec2::new(s.x, s.y),
+                    size: Vec2::new(s.w, s.h),
+                },
+                s.layout,
+            )
+        })
+    }
+
+    /// The full reserved slot for the nested `surface` node with this `id` — rect, layer,
+    /// tint and liveness — for a filler that honours all of them. `None` when unseated.
+    pub fn surface(&self, id: &str) -> Option<&SurfaceSlot> {
+        self.surfaces.iter().find(|s| s.id == id)
+    }
+
+    /// This frame's pointer sample for the surface with this `id`, if the pointer is over
+    /// it (hot) or captured by it — the barrier's hand-off (see [`SurfacePointer`]).
+    pub fn surface_pointer(&self, id: &str) -> Option<&SurfacePointer> {
+        self.pointer.as_ref().filter(|p| p.id == id)
+    }
+
+    /// This frame's pointer sample for the ROOT surface — the screen itself — when no UI
+    /// node and no nested surface has it (the root is entered by default).
+    pub fn root_pointer(&self) -> Option<&SurfacePointer> {
+        self.pointer.as_ref().filter(|p| p.root)
     }
 
     /// The rect the layout RESOLVED for the id'd node this frame — any node,
@@ -714,14 +825,24 @@ pub fn run_ui(
     {
         state.pointer_mode = true;
     }
+    let prev_mouse = state.last_mouse.map_or(input.mouse, |(m, _)| m);
     state.last_mouse = Some((input.mouse, input.screen));
     // This frame's pointer activations start empty — the hit pass below records
     // each fired `action` (the walker drains them into the one `sig_<name>` mirror,
     // rule 37722F91 / pump P2). Cleared here, not in `take_fired`, so a scene that
     // runs no walker cannot accumulate stale clicks across frames.
     state.fired_pointer.clear();
-    for p in &placed {
-        hit_node(p, model, input, state, styles, &mut results, &mut hud_hit);
+    // `last_claim` = the placement index of the LAST node that claimed the pointer this
+    // frame. The surface pass below reads it: a surface is hot only if it is painted over
+    // every claimant under the cursor.
+    let mut last_claim: Option<usize> = None;
+    for (i, p) in placed.iter().enumerate() {
+        let mut claimed = false;
+        hit_node(p, model, input, state, styles, &mut results, &mut claimed);
+        if claimed {
+            hud_hit = true;
+            last_claim = Some(i);
+        }
     }
     // The generic every-frame TYPED-FOLD: this frame's keyboard input flows into the
     // FOCUSED node's bound string, in Rust, whatever the pointer is doing — see
@@ -741,6 +862,81 @@ pub fn run_ui(
     if !state.dragging.is_empty() {
         hud_hit = true;
     }
+
+    // ── SURFACE POINTER — the live-scene container's barrier (A8C9F02B §4b) ──
+    // See [`SurfacePointer`]: hot = over the surface with nothing painted over it claiming;
+    // the root is the floor; an unclaimed press captures until both buttons are up; a
+    // captured slider drag leaves every surface cold. A surface NEVER claims, so the
+    // walker's own `hud_hit` is untouched by any of this.
+    let right_pressed = input.right_down && !state.right_was_down;
+    state.right_was_down = input.right_down;
+    let pressed = input.clicked || right_pressed;
+    if !(input.down || input.right_down) {
+        state.surface_capture = None;
+    }
+    let is_surface = |p: &Placed| p.node.component == "surface";
+    let covered = |i: usize| last_claim.is_some_and(|c| c > i) || !state.dragging.is_empty();
+    // The root is placed first and spans the window, so it is the search's last candidate.
+    let hot = placed
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(i, p)| is_surface(p) && p.rect.contains(input.mouse) && !covered(*i))
+        .map(|(_, p)| p);
+    if pressed && state.surface_capture.is_none() {
+        state.surface_capture = hot.map(|p| p.node.id.clone());
+    }
+    let target = match state.surface_capture.as_deref() {
+        Some(id) => placed.iter().find(|p| is_surface(p) && p.node.id == id),
+        None => hot,
+    };
+    if state.surface_capture.is_some() && target.is_none() {
+        // The captured surface vanished (a page flip mid-drag): release.
+        state.surface_capture = None;
+    }
+    let pointer = target.map(|p| SurfacePointer {
+        id: p.node.id.clone(),
+        root: std::ptr::eq(p.node, tree),
+        cursor: input.mouse,
+        local: Vec2::new(input.mouse.x - p.rect.x, input.mouse.y - p.rect.y),
+        delta: input.mouse - prev_mouse,
+        left: input.down,
+        right: input.right_down,
+        pressed: pressed && hot.is_some_and(|h| std::ptr::eq(h.node, p.node)),
+        wheel: input.wheel,
+        captured: state.surface_capture.is_some(),
+        rect: flicker_render::Rect {
+            pos: Vec2::new(p.rect.x, p.rect.y),
+            size: Vec2::new(p.rect.w, p.rect.h),
+        },
+    });
+    // EXCLUSIVE mode (§4e): the player locked the cursor to the camera. The ROOT surface
+    // (placed first, spanning the window) is force-captured and NO UI claims the pointer —
+    // a behaviour reads the same `root_pointer()` it reads in free mode, and its `delta`
+    // is the relative `motion` the runner accumulated under the lock. The HUD is still
+    // laid out and drawn; it just cannot be clicked while the mouse IS the camera.
+    let (pointer, hud_hit) = if input.exclusive {
+        let root = &placed[0];
+        let p = SurfacePointer {
+            id: root.node.id.clone(),
+            root: true,
+            cursor: input.mouse,
+            local: input.mouse,
+            delta: input.motion,
+            left: input.down,
+            right: input.right_down,
+            pressed,
+            wheel: input.wheel,
+            captured: true,
+            rect: flicker_render::Rect {
+                pos: Vec2::new(root.rect.x, root.rect.y),
+                size: Vec2::new(root.rect.w, root.rect.h),
+            },
+        };
+        (Some(p), false)
+    } else {
+        (pointer, hud_hit)
+    };
 
     // Drag channel: publish the in-flight payload and the release edge so a scene-owned
     // canvas can resolve the drop against its own geometry. Deliberately does NOT force
@@ -879,21 +1075,45 @@ pub fn run_ui(
         commands.push(HudCommand::Clip { rect: None });
     }
 
-    // Stage pass: `rtt` nodes reserve a PiP slot for the scene's frame graph to
-    // fill (the walker cannot — see `RttSlot`). Their backdrop panel was already
-    // drawn above by the normal styled-box path, so only the INSET image rect
-    // travels here.
-    let mut rtts = Vec::new();
+    // Surface pass: every NESTED `surface` node reserves a slot for the scene's frame
+    // graph to fill (the walker cannot — see `SurfaceSlot`). The ROOT surface is the
+    // screen itself — its element is the graph's root pass — so it reserves nothing.
+    // A surface's backdrop panel was already drawn above by the normal styled-box path,
+    // so only the INSET image rect travels here.
+    let mut surfaces = Vec::new();
     for p in &placed {
-        if p.node.component != "rtt" {
+        if p.node.component != "surface" || std::ptr::eq(p.node, tree) {
             continue;
         }
-        let Some(source) = ptext(p.node, "source") else {
+        // `layout` (single|pair|quad, default single) tells the behaviour's ViewportFiller
+        // how many camera panes to tile. An unknown name fails LOUD (4BB12A75) rather
+        // than resolving to a default.
+        let layout_name = ptext(p.node, "layout").unwrap_or("single");
+        let Some(layout) = flicker_render::ViewportLayout::from_name(layout_name) else {
             tracing::warn!(
-                "rtt node {:?} has no `source` prop — slot skipped",
-                p.node.id
+                "surface node {:?} has unknown layout {:?} — slot skipped",
+                p.node.id,
+                layout_name
             );
             continue;
+        };
+        // `source` names a `stages.<source>` element the scene renders into the slot;
+        // OPTIONAL — a surface whose content the behaviour publishes itself (a globe, a
+        // bench viewport) authors none. A name that resolves to no stage is a typo: say
+        // so (4BB12A75), but still reserve — a loud warning beats a blank surface.
+        let source = match ptext(p.node, "source") {
+            Some(s) => {
+                if jpath(styles, &format!("stages.{s}")).is_null() {
+                    tracing::warn!(
+                        "surface node {:?} names source {:?} but no `stages.{s}` exists — \
+                         check the name (a behaviour-filled surface authors no source)",
+                        p.node.id,
+                        s
+                    );
+                }
+                s.to_string()
+            }
+            None => String::new(),
         };
         let st = style_of(p.node, styles);
         // `inset` may ride as a node prop or sit in the shared panel style, so a
@@ -913,9 +1133,9 @@ pub fn run_ui(
             Some(path) => json_color(jpath(styles, path), [1.0; 4]),
             None => first_color(st, &["tint"], [1.0; 4]),
         };
-        rtts.push(RttSlot {
+        surfaces.push(SurfaceSlot {
             id: p.node.id.clone(),
-            source: source.to_string(),
+            source,
             x: img.x,
             y: img.y,
             w: img.w,
@@ -923,6 +1143,7 @@ pub fn run_ui(
             layer: p.layer,
             live,
             tint,
+            layout,
         });
     }
 
@@ -1102,7 +1323,8 @@ pub fn run_ui(
     UiFrame {
         commands,
         results,
-        rtts,
+        surfaces,
+        pointer,
         rects,
         stats,
     }
@@ -2388,11 +2610,12 @@ fn hit_node(
             }
         }
         // A styled container (a panel) claims the pointer, so a click on the
-        // panel background doesn't pick through to the scene. An `rtt` claims it
-        // too: the PiP image is UI surface, not a hole through to the world.
-        "row" | "cell" | "stack" | "screen" | "rtt" | "grid"
-            if has_style(node, styles) && r.contains(input.mouse) =>
-        {
+        // panel background doesn't pick through to the scene. A `surface` is NOT in
+        // this list, styled or not: it is the floor the UI sits on, so an unclaimed
+        // click over it passes through to the scene's own layer beneath the walker
+        // (the live-scene container's barrier) — a styled backdrop well never blocks
+        // its own element.
+        "row" | "cell" | "stack" | "grid" if has_style(node, styles) && r.contains(input.mouse) => {
             *hud_hit = true;
         }
         _ => {}
@@ -2915,7 +3138,7 @@ fn node_fingerprint(
     let structural_pane = !node.id.is_empty()
         && matches!(
             node.component.as_str(),
-            "cell" | "row" | "stack" | "screen" | "rtt" | "grid"
+            "cell" | "row" | "stack" | "surface" | "grid"
         );
     h.bool(structural_pane && state.focused() == Some(node.id.as_str()));
     h.bool(structural_pane && state.entered_group() == Some(node.id.as_str()));
@@ -3175,6 +3398,13 @@ fn component_props(
                 "glyph_style".to_string(),
                 jpath(styles, ptext(node, "glyph_style").unwrap_or("pad_glyphs")).clone(),
             );
+            // The keycap box for a kbm-side hint affordance (the twin of the pad
+            // `glyph_style` atlas) — resolved like the glyph atlas so a hint can render
+            // the bound KEY when the player is on keyboard/mouse (1A292918 T5).
+            props.insert(
+                "cap_style".to_string(),
+                jpath(styles, ptext(node, "cap_style").unwrap_or("nav_footer.cap")).clone(),
+            );
             // The legend label colour is a dotted path (a colour cannot ride as a
             // scalar prop) — resolved to rgba here, like the popup chrome colours.
             let c = json_color(
@@ -3284,6 +3514,32 @@ fn component_props(
             "rune_color".to_string(),
             serde_json::json!([c[0], c[1], c[2], c[3]]),
         );
+    }
+    // A `signal` node's DEVICE-ADAPTIVE control face (P5, ruling 7AB130A7): resolve
+    // which face the current device wants and its value, plus the atlas + keycap styles,
+    // so a presentational draw (the tooltip) has everything without a model/styles
+    // handle. The `input_device`/`bind_<sig>`/`glyph_<sig>` channel is scene-published,
+    // exactly like the nav_footer legend. `aff_glyph` (pad) / `aff_key` (kbm) are absent
+    // when that family is unbound — the draw then falls back to a static rune / plain name.
+    if let Some(sig) = ptext(node, "signal") {
+        props.insert(
+            "glyph_style".to_string(),
+            jpath(styles, ptext(node, "glyph_style").unwrap_or("pad_glyphs")).clone(),
+        );
+        props.insert(
+            "cap_style".to_string(),
+            jpath(styles, ptext(node, "cap_style").unwrap_or("tooltip.cap")).clone(),
+        );
+        if model.text("input_device").is_some_and(|d| d != "kbm") {
+            if let Some(g) = model
+                .text(&format!("glyph_{sig}"))
+                .filter(|g| !g.is_empty())
+            {
+                props.insert("aff_glyph".to_string(), Json::String(g.to_string()));
+            }
+        } else if let Some(k) = model.text(&format!("bind_{sig}")).filter(|k| !k.is_empty()) {
+            props.insert("aff_key".to_string(), Json::String(k.to_string()));
+        }
     }
     // Segmented controls (pill_toggle / tabs / select / context_menu) iterate their
     // children's props (each carries a `value` / `label`); pass them as a plain list so
@@ -3404,11 +3660,11 @@ fn draw_node(
             }
             return Some(props);
         }
-        // Styled boxes — including `cell` (the generic layout box) and an `rtt`, whose
-        // panel IS its PiP backdrop; the scene's frame graph blits the render target over
-        // this (see `RttSlot`). All draw a bg ONLY when they carry a style — an unstyled
-        // box (a plain unstyled `cell`) is transparent structure.
-        "cell" | "row" | "stack" | "screen" | "rtt" | "grid" => {
+        // Styled boxes — including `cell` (the generic layout box) and a `surface`, whose
+        // panel IS its backdrop well; the scene's frame graph blits the render target over
+        // this (see `SurfaceSlot`). All draw a bg ONLY when they carry a style — an
+        // unstyled box (a plain unstyled `cell`) is transparent structure.
+        "cell" | "row" | "stack" | "surface" | "grid" => {
             if !st.is_null() {
                 // A styled structural box that IS a pane wears the same states a
                 // `panel` does (nested panes 2026-08-15) — the window strips and
@@ -3655,7 +3911,15 @@ fn rust_hit_shape(kind: &str) -> Option<HitShape> {
         // BESPOKE tier: a raw image passes clicks through, a PRESENTING one — it
         // carries the fade ramp — is a boot surface and claims, so a click lands on
         // it as the skip.)
-        "tooltip" | "gauge" | "resource_gauge" | "stat_dot" | "medallion" => Some(HitShape::None),
+        // A `surface` NEVER claims (it is a structural kind — the container arm of
+        // `hit_node` is what actually decides it, and leaves it out; listed here so the
+        // rule stands beside the other non-claimants): its content is interactive through
+        // the BEHAVIOUR's own layer beneath the walker (orbit, gizmo picks — the
+        // world-below-walker chain), so a click must PASS THROUGH to it. Its nav stop is
+        // the enclosing pane's (Look/Zoom route to it while that pane is entered).
+        "tooltip" | "gauge" | "resource_gauge" | "stat_dot" | "medallion" | "surface" => {
+            Some(HitShape::None)
+        }
         _ => None,
     }
 }
@@ -3958,10 +4222,45 @@ fn draw_tooltip(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
     let meta_sz = jnum(s, "meta_size", 12.0);
     let gap = jnum(s, "gap", 4.0);
 
-    // Optional element rune, top-left — the text column then indents past it so the
-    // glyph and the headline share one baseline.
+    // Leading slot, top-left — the text column indents past it so the glyph and the
+    // headline share a baseline. A `signal` tooltip shows the DEVICE-ADAPTIVE control
+    // affordance (component_props resolved it into `aff_key`/`aff_glyph`): a keycap of
+    // the bound key on kbm, the positional pad glyph on a controller (P5, 7AB130A7).
+    // Otherwise an optional static element rune.
     let mut indent = 0.0;
-    if let Some(rune) = props
+    if let Some(key) = props.get("aff_key").and_then(|v| v.as_str()) {
+        let color = first_color(s, &["name_color"], INK);
+        let cap = Rect {
+            x: inner.x,
+            y: inner.y,
+            w: keycap_width(key, name_sz, name_sz),
+            h: name_sz,
+        };
+        draw_keycap(
+            cap,
+            key,
+            props.get("cap_style").unwrap_or(&Json::Null),
+            color,
+            0.0,
+            out,
+        );
+        indent = cap.w + 6.0;
+    } else if let Some(glyph) = props.get("aff_glyph").and_then(|v| v.as_str()) {
+        draw_paged_hint(
+            Some(Rect {
+                x: inner.x,
+                y: inner.y,
+                w: name_sz,
+                h: name_sz,
+            }),
+            glyph,
+            name_sz,
+            props.get("glyph_style").unwrap_or(&Json::Null),
+            0.0,
+            out,
+        );
+        indent = name_sz + 6.0;
+    } else if let Some(rune) = props
         .get("rune")
         .and_then(|v| v.as_str())
         .filter(|t| !t.is_empty())
@@ -4522,7 +4821,10 @@ fn box_rect(r: Rect, props: &Json) -> Rect {
     let size = jnum(props, "box", 14.0);
     Rect {
         x: r.x,
-        y: r.y,
+        // Vertically CENTRE the box in its node, so in a row of taller controls (buttons,
+        // sliders) the check/toggle/radio aligns with their centres instead of riding the
+        // top edge. When the node is exactly the box's height this is a no-op.
+        y: r.y + (r.h - size).max(0.0) * 0.5,
         w: size,
         h: size,
     }
@@ -5818,7 +6120,10 @@ fn draw_slider(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
                 fill_hi,
             );
         }
-        let hy = track.y + track.h * (1.0 - t);
+        // INSET so the bar rides WITHIN the rail (its centre travels from `hw/2` above the
+        // floor at min to `hw/2` below the ceiling at max) instead of hanging half off each
+        // end. The live readout keys off this same centre, so it follows the bar.
+        let hy = track.y + hw * 0.5 + (track.h - hw) * (1.0 - t);
         push_panel(
             out,
             Rect {
@@ -5916,7 +6221,10 @@ fn draw_slider(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
     push_panel(
         out,
         Rect {
-            x: track.x + track.w * t - hw * 0.5,
+            // INSET so the knob rides WITHIN the rail — its left edge tracks the value from
+            // the rail's left (t=0) to `track.w - hw` (t=1). Centring on the value instead
+            // hangs half the knob off each end, which reads as broken alignment at 0/max.
+            x: track.x + (track.w - hw) * t,
             y: track.y - over,
             w: hw,
             h: track.h + 2.0 * over,
@@ -7940,6 +8248,15 @@ fn draw_paged_menu(
     if let (Some(rule), Some(rs)) = (lay.rule, jopt(props, "rule_style")) {
         draw_panel_bg(rule, rs, out);
     }
+    // Q2 (ruling 7AB130A7): the shoulder glyphs are a PAD affordance — a controller's
+    // limited control set needs tab/page steps taught. Suppress them when the system
+    // SAYS kbm: the rails stay mouse-clickable and the keyboard shortcuts still fire
+    // (`hit_paged_menu` is untouched — only the DRAW is gated). An absent/unknown device
+    // keeps them (no positive kbm signal → no hide), so a scene that never publishes
+    // `input_device` is unchanged.
+    if model.text("input_device") == Some("kbm") {
+        return;
+    }
     let glyph_style = props.get("glyph_style").unwrap_or(&Json::Null);
     let hg = pnum(node, "hint_glyph").unwrap_or(26.0) as f32;
     let hg2 = pnum(node, "hint_glyph2").unwrap_or(22.0) as f32;
@@ -8065,17 +8382,24 @@ fn footer_layout(node: &UiNode, outer: Rect, model: &ValueMap) -> FooterLayout {
         ));
         x += w + node.gap;
     }
-    // The legend: glyph + label pairs from the left, clipped at the cluster.
+    // The legend: affordance + label pairs from the left, clipped at the cluster. Each
+    // affordance is DEVICE-ADAPTIVE (a square controller glyph on a pad, a text-width
+    // keycap on kbm), so its width varies per hint — layout and draw share
+    // `hint_aff_kind`/`hint_aff_width` on the SAME `input_device` read.
     let g = pnum(node, "hint_glyph").unwrap_or(20.0) as f32;
     let hgap = pnum(node, "hint_gap").unwrap_or(8.0) as f32;
+    let cap_size = pnum(node, "cap_size").unwrap_or(13.0) as f32;
+    let pad = model.text("input_device").is_some_and(|d| d != "kbm");
     let mut hx = inner.x;
     let mut hints = Vec::new();
     for (i, c) in node.children.iter().enumerate() {
         if c.component != "option" || !visible(c, model) {
             continue;
         }
+        let aw = hint_aff_width(&hint_aff_kind(c, pad), c, model, g, cap_size);
+        let aff = if aw > 0.0 { aw + hgap } else { 0.0 };
         let lw = c.size.unwrap_or(80.0);
-        if hx + g + hgap + lw > cluster_left - node.gap {
+        if hx + aff + lw > cluster_left - node.gap {
             break;
         }
         hints.push((
@@ -8083,17 +8407,17 @@ fn footer_layout(node: &UiNode, outer: Rect, model: &ValueMap) -> FooterLayout {
             Rect {
                 x: hx,
                 y: inner.y + (inner.h - g) * 0.5,
-                w: g,
+                w: aw,
                 h: g,
             },
             Rect {
-                x: hx + g + hgap,
+                x: hx + aff,
                 y: inner.y,
                 w: lw,
                 h: inner.h,
             },
         ));
-        hx += g + hgap + lw + node.gap;
+        hx += aff + lw + node.gap;
     }
     FooterLayout {
         rule,
@@ -8111,6 +8435,111 @@ fn footer_span(glyph: &Rect, label: &Rect) -> Rect {
         w: label.x + label.w - glyph.x,
         h: label.h,
     }
+}
+
+/// A legend hint's affordance — the face that precedes its help label. A `signal` hint
+/// is DEVICE-ADAPTIVE: a controller [`Glyph`](AffKind::Glyph) when the player is on a
+/// pad, a [`Keycap`](AffKind::Keycap) of the bound key on kbm. A plain hint with a
+/// static `glyph` is always a glyph; a bare label hint has [`None`](AffKind::None).
+enum AffKind {
+    None,
+    Glyph,
+    Keycap,
+}
+
+/// Which affordance a hint shows, given whether the player is on a pad — the ONE
+/// decision `footer_layout` (sizing) and `draw_nav_footer` (drawing) both read, so the
+/// reserved slot and the drawn face can never disagree.
+fn hint_aff_kind(c: &UiNode, pad: bool) -> AffKind {
+    if ptext(c, "signal").is_some() {
+        if pad {
+            AffKind::Glyph
+        } else {
+            AffKind::Keycap
+        }
+    } else if ptext(c, "glyph").is_some() {
+        AffKind::Glyph
+    } else {
+        AffKind::None
+    }
+}
+
+/// The width to reserve for a hint's affordance: a square `g` for a glyph, a
+/// text-measured cap for a keycap (never below a square), nothing for a bare label.
+fn hint_aff_width(kind: &AffKind, c: &UiNode, model: &ValueMap, g: f32, cap_size: f32) -> f32 {
+    match kind {
+        AffKind::None => 0.0,
+        AffKind::Glyph => g,
+        AffKind::Keycap => {
+            let key = ptext(c, "signal")
+                .and_then(|s| model.text(&format!("bind_{s}")))
+                .unwrap_or("");
+            keycap_width(key, cap_size, g)
+        }
+    }
+}
+
+/// A keycap's width from its key text — a crude per-glyph advance (there are no font
+/// metrics at layout time) plus horizontal padding, never narrower than a square `min`.
+/// Short keys ("E") read square; longer legends ("Space") widen.
+fn keycap_width(key: &str, size: f32, min: f32) -> f32 {
+    if key.is_empty() {
+        return min;
+    }
+    (key.chars().count() as f32 * size * 0.62 + 14.0).max(min)
+}
+
+/// A KEYCAP affordance: the bound KEY drawn as a small bordered cap — the kbm twin of a
+/// controller glyph. The box is `cap_style` (its `$token` fills/border resolved by
+/// [`draw_panel_bg`]); an absent block falls back to neutral chrome. The key rides the
+/// legend colour, tinting toward the glyph flash under a press so a cap and a glyph
+/// acknowledge a click alike.
+fn draw_keycap(
+    r: Rect,
+    key: &str,
+    cap_style: &Json,
+    text_color: [f32; 4],
+    flash: f32,
+    out: &mut Vec<HudCommand>,
+) {
+    if cap_style.is_null() {
+        out.push(HudCommand::Panel {
+            x: r.x,
+            y: r.y,
+            w: r.w,
+            h: r.h,
+            color: PANEL,
+            color2: PANEL,
+            grad: 0.0,
+            radius: 3.0,
+            border: 1.0,
+            border_color: INK,
+            feather: 0.0,
+            layer: 0.0,
+        });
+    } else {
+        draw_panel_bg(r, cap_style, out);
+    }
+    let mut color = text_color;
+    if flash > 0.0 {
+        color = lerp_color(color, FLASH_LIT, flash);
+    }
+    let size = (r.h * 0.6).min(13.0);
+    let ty = r.y + (r.h - text_line_h(size)) * 0.5;
+    push_text(
+        out,
+        r.x + r.w * 0.5,
+        ty,
+        key,
+        size,
+        color,
+        TextAlign::Center,
+        FontRole::Label,
+        false,
+        false,
+        0.0,
+        None,
+    );
 }
 
 /// The **nav footer** — the bench-standard bottom band: a LEGEND of controller-glyph +
@@ -8137,7 +8566,12 @@ fn draw_nav_footer(
         draw_panel_bg(lay.rule, rs, out);
     }
     let glyph_style = props.get("glyph_style").unwrap_or(&Json::Null);
+    let cap_style = props.get("cap_style").unwrap_or(&Json::Null);
     let label_color = first_color(props, &["label_color_rgba"], DIM);
+    // The player's current device decides each hint's affordance: a controller glyph on
+    // a pad, a keycap of the bound key on kbm (1A292918 T5). The glyph NAME / key TEXT
+    // come from the scene-published `glyph_<sig>` / `bind_<sig>` for the hint's `signal`.
+    let pad = model.text("input_device").is_some_and(|d| d != "kbm");
     // A pressed pointer lights the entry under it — the same press-only highlight the
     // PTT's hint gutters carry (clears on release, so nothing lingers).
     let pressed = jbool(props, "pressed");
@@ -8149,14 +8583,26 @@ fn draw_nav_footer(
         } else {
             0.0
         };
-        draw_paged_hint(
-            Some(*gr),
-            ptext(c, "glyph").unwrap_or_default(),
-            gr.h,
-            glyph_style,
-            flash,
-            out,
-        );
+        match hint_aff_kind(c, pad) {
+            AffKind::None => {}
+            AffKind::Glyph => {
+                // A signal hint takes its glyph NAME from the published `glyph_<sig>`
+                // (the bound pad control); a plain hint keeps its static `glyph`.
+                let name = match ptext(c, "signal") {
+                    Some(s) => model.text(&format!("glyph_{s}")).unwrap_or_default(),
+                    None => ptext(c, "glyph").unwrap_or_default(),
+                };
+                draw_paged_hint(Some(*gr), name, gr.h, glyph_style, flash, out);
+            }
+            AffKind::Keycap => {
+                if let Some(key) = ptext(c, "signal")
+                    .and_then(|s| model.text(&format!("bind_{s}")))
+                    .filter(|k| !k.is_empty())
+                {
+                    draw_keycap(*gr, key, cap_style, label_color, flash, out);
+                }
+            }
+        }
         // The help label: `label_bind` (live Model text) else the `$token` literal.
         let text = match ptext(c, "label_bind").and_then(|k| model.text(k)) {
             Some(t) => t.to_string(),
@@ -8977,7 +9423,7 @@ mod tests {
         col.width = Some(120.0);
         col.children = vec![cb, btn];
 
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![col];
         page
     }
@@ -8987,11 +9433,207 @@ mod tests {
             mouse: Vec2::new(x, y),
             clicked,
             down: clicked,
+            right_down: false,
             screen: Vec2::new(800.0, 600.0),
             typed: String::new(),
             backspace: false,
             wheel: 0.0,
+            exclusive: false,
+            motion: Default::default(),
         }
+    }
+
+    #[test]
+    fn a_surface_is_hot_unclaimed_and_an_unclaimed_press_captures_it_until_release() {
+        let st = serde_json::json!({ "well": { "fill_top": [0.1, 0.1, 0.1, 1.0] } });
+        let mut s = node("surface");
+        s.id = "view".into();
+        s.anchor = Some(UiAnchor::TopLeft);
+        s.offset = [100.0, 100.0];
+        s.width = Some(200.0);
+        s.height = Some(200.0);
+        s = prop(s, "style", Value::Text("well".into()));
+        let mut b = node("button");
+        b.id = "b".into();
+        b.anchor = Some(UiAnchor::TopLeft);
+        b.offset = [500.0, 100.0];
+        b.width = Some(100.0);
+        b.height = Some(40.0);
+        b = prop(b, "action", Value::Text("go".into()));
+        let mut page = node("surface");
+        page.id = "root".into();
+        page.children = vec![s, b];
+        let m = ValueMap::new();
+        let mut state = UiState::new();
+
+        // Hover the nested surface: hot, not captured; a styled surface never claims.
+        let f = run_ui(&page, &m, &st, &input_at(150.0, 150.0, false), &mut state);
+        let p = f
+            .surface_pointer("view")
+            .expect("hot under an unclaimed pointer");
+        assert!(!p.captured && !p.pressed && !p.root);
+        assert_eq!(p.local, Vec2::new(50.0, 50.0));
+        assert!(!f.results.is_on("hud_hit"), "a surface never claims");
+        // Press inside: captured + pressed.
+        let f = run_ui(&page, &m, &st, &input_at(150.0, 150.0, true), &mut state);
+        let p = f.surface_pointer("view").expect("captured on the press");
+        assert!(p.captured && p.pressed && p.left);
+        // Drag out over the button, still held: the capture survives, the delta flows.
+        let held = UiInput {
+            down: true,
+            right_down: false,
+            ..input_at(550.0, 120.0, false)
+        };
+        let f = run_ui(&page, &m, &st, &held, &mut state);
+        let p = f
+            .surface_pointer("view")
+            .expect("capture survives leaving the rect");
+        assert!(p.captured && p.left && !p.pressed);
+        assert_eq!(p.delta, Vec2::new(400.0, -30.0));
+        // Release over the button: the capture ends; the button is UI → no surface pointer.
+        let f = run_ui(&page, &m, &st, &input_at(550.0, 120.0, false), &mut state);
+        assert!(f.pointer.is_none(), "UI above the floor claims the pointer");
+        assert!(f.results.is_on("hud_hit"));
+        // A press ON the button never captures a surface, and a drag that started there
+        // stays uncaptured even when it crosses the surface.
+        let f = run_ui(&page, &m, &st, &input_at(550.0, 120.0, true), &mut state);
+        assert!(f.pointer.is_none());
+        let crossing = UiInput {
+            down: true,
+            right_down: false,
+            ..input_at(150.0, 150.0, false)
+        };
+        let f = run_ui(&page, &m, &st, &crossing, &mut state);
+        assert!(
+            f.surface_pointer("view").is_some_and(|p| !p.captured),
+            "hot, but a drag that began on UI never captures"
+        );
+        // The open root: nothing claims → the root surface is the floor.
+        let f = run_ui(&page, &m, &st, &input_at(700.0, 500.0, false), &mut state);
+        let p = f.root_pointer().expect("the root surface is the floor");
+        assert!(p.root && !p.captured && p.id == "root");
+        // The right button captures too (a pan), and is reported as such.
+        let rmb = UiInput {
+            right_down: true,
+            ..input_at(150.0, 150.0, false)
+        };
+        let f = run_ui(&page, &m, &st, &rmb, &mut state);
+        let p = f.surface_pointer("view").expect("a right press captures");
+        assert!(p.captured && p.pressed && p.right && !p.left);
+    }
+
+    #[test]
+    fn exclusive_mode_force_captures_the_root_and_claims_no_ui() {
+        // A full-screen surface with a button over it. In FREE mode a press on the
+        // button claims (no surface pointer); the SAME frame with `exclusive: true`
+        // force-captures the ROOT and claims NOTHING — the mouse is the camera.
+        let st = serde_json::json!({ "slab": { "fill_top": [0.1, 0.1, 0.1, 1.0] } });
+        let mut b = node("button");
+        b.id = "b".into();
+        b.anchor = Some(UiAnchor::TopLeft);
+        b.offset = [40.0, 40.0];
+        b.width = Some(120.0);
+        b.height = Some(40.0);
+        b = prop(b, "action", Value::Text("go".into()));
+        let mut page = node("surface");
+        page.id = "root".into();
+        page.children = vec![b];
+        let m = ValueMap::new();
+        let mut state = UiState::new();
+
+        // Free: a press on the button claims → no surface pointer, hud_hit set.
+        let free = run_ui(&page, &m, &st, &input_at(60.0, 55.0, true), &mut state);
+        assert!(free.pointer.is_none() && free.results.is_on("hud_hit"));
+
+        // Exclusive: the cursor sits on the button and the left button is DOWN, but the
+        // walker hands the ROOT a forced-captured pointer, claims no UI, and the delta is
+        // the relative `motion` (the runner's locked-cursor accumulation), not a cursor move.
+        let held = UiInput {
+            mouse: Vec2::new(60.0, 55.0),
+            clicked: false,
+            down: true,
+            right_down: false,
+            screen: Vec2::new(800.0, 600.0),
+            typed: String::new(),
+            backspace: false,
+            wheel: 0.0,
+            exclusive: true,
+            motion: Vec2::new(7.0, -3.0),
+        };
+        let ex = run_ui(&page, &m, &st, &held, &mut state);
+        let p = ex
+            .root_pointer()
+            .expect("exclusive force-captures the root");
+        assert!(p.root && p.captured && p.left);
+        assert_eq!(
+            p.delta,
+            Vec2::new(7.0, -3.0),
+            "delta is the relative motion, not a cursor move"
+        );
+        assert!(
+            !ex.results.is_on("hud_hit"),
+            "no UI claims the pointer while the mouse is the camera"
+        );
+        assert!(
+            ex.surface_pointer("b").is_none(),
+            "a non-surface node never receives the sample"
+        );
+    }
+
+    #[test]
+    fn a_claiming_ancestor_does_not_cover_a_surface_but_a_node_painted_over_it_does() {
+        let st = serde_json::json!({ "slab": { "fill_top": [0.2, 0.2, 0.2, 1.0] } });
+        let mut s = node("surface");
+        s.id = "view".into();
+        s.anchor = Some(UiAnchor::TopLeft);
+        s.offset = [10.0, 10.0];
+        s.width = Some(180.0);
+        s.height = Some(180.0);
+        let mut pane = node("panel");
+        pane.id = "pane".into();
+        pane.anchor = Some(UiAnchor::TopLeft);
+        pane.width = Some(200.0);
+        pane.height = Some(200.0);
+        pane.children = vec![s];
+        let mut lid = node("cell");
+        lid.id = "lid".into();
+        lid.anchor = Some(UiAnchor::TopLeft);
+        lid.offset = [0.0, 100.0];
+        lid.width = Some(200.0);
+        lid.height = Some(100.0);
+        lid = prop(lid, "style", Value::Text("slab".into()));
+        let mut page = node("surface");
+        page.id = "root".into();
+        page.children = vec![pane, lid];
+        let m = ValueMap::new();
+        // Upper half: the panel (an ANCESTOR) claims, but the surface is painted over it.
+        let f = run_ui(
+            &page,
+            &m,
+            &st,
+            &input_at(100.0, 50.0, false),
+            &mut UiState::new(),
+        );
+        assert!(
+            f.surface_pointer("view").is_some(),
+            "a claiming ancestor does not cover its own surface"
+        );
+        assert!(
+            f.results.is_on("hud_hit"),
+            "the pane still reports UI for the walker's routing"
+        );
+        // Lower half: the styled lid is painted AFTER the surface → it covers it.
+        let f = run_ui(
+            &page,
+            &m,
+            &st,
+            &input_at(100.0, 150.0, false),
+            &mut UiState::new(),
+        );
+        assert!(
+            f.pointer.is_none(),
+            "a claiming node painted over the surface covers it"
+        );
     }
 
     /// A wheel tick at a parked pointer — the input a `list` scrolls on.
@@ -9069,7 +9711,7 @@ mod tests {
         col.anchor = Some(UiAnchor::TopLeft);
         col.width = Some(200.0);
         col.children = vec![t1, t2];
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![col];
 
         let f = run_ui(
@@ -9116,7 +9758,7 @@ mod tests {
         col.anchor = Some(UiAnchor::TopLeft);
         col.width = Some(160.0);
         col.children = vec![t, btn];
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![col];
 
         let f = run_ui(
@@ -9257,7 +9899,7 @@ mod tests {
         col.anchor = Some(UiAnchor::TopLeft);
         col.width = Some(120.0);
         col.children = vec![mk("p1", "b1"), mk("p2", "b2")];
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![col];
         let model = ValueMap::new();
         let mut state = UiState::new();
@@ -9357,7 +9999,7 @@ mod tests {
         dis.id = "dis".into();
         dis.bind = Some("dis".into());
         dis.enabled_bind = Some("off".into());
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![sel, tog, dis];
 
         let styles = serde_json::json!({});
@@ -9437,7 +10079,7 @@ mod tests {
             b.size = Some(40.0);
             list.children.push(b);
         }
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![list];
 
         let model = ValueMap::new().with("off", 0.0);
@@ -9513,7 +10155,7 @@ mod tests {
         col.anchor = Some(UiAnchor::TopLeft);
         col.width = Some(120.0);
         col.children = vec![named, anon];
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![col];
         let model = ValueMap::new();
         let mut state = UiState::new();
@@ -9595,7 +10237,7 @@ mod tests {
         c.width = Some(50.0);
         c.height = Some(20.0);
         c.anchor = Some(UiAnchor::TopLeft);
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![c];
         let model = ValueMap::new();
         let mut state = UiState::new();
@@ -9731,7 +10373,7 @@ mod tests {
             row.visible_bind = Some(format!("show{i}"));
             sc.children.push(row);
         }
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![sc];
         let styles = serde_json::json!({});
         let input = input_at(-9.0, -9.0, false);
@@ -9781,7 +10423,7 @@ mod tests {
             t.width = Some(200.0);
             t.height = Some(30.0);
             t.children = vec![opt];
-            let mut page = node("screen");
+            let mut page = node("surface");
             page.children = vec![t];
             page
         };
@@ -9816,7 +10458,7 @@ mod tests {
             row.size = Some(50.0);
             sc.children.push(row);
         }
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![sc];
         let styles = serde_json::json!({});
 
@@ -9894,7 +10536,7 @@ mod tests {
             row.size = Some(row_h);
             sc.children.push(row);
         }
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![sc];
         page
     }
@@ -10137,7 +10779,7 @@ mod tests {
             row = prop(row, "text", Value::Text(format!("R{i}")));
             sc.children.push(row);
         }
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![sc];
         let styles = serde_json::json!({});
         let input = input_at(-9.0, -9.0, false);
@@ -10210,7 +10852,7 @@ mod tests {
                 row.size = Some(row_h);
                 sc.children.push(row);
             }
-            let mut page = node("screen");
+            let mut page = node("surface");
             page.children = vec![sc];
             page
         };
@@ -10520,7 +11162,7 @@ mod tests {
         col.offset = [16.0, 16.0];
         col.width = Some(120.0);
         col.children = vec![btn];
-        let mut t = node("screen");
+        let mut t = node("surface");
         t.children = vec![col];
 
         let model = ValueMap::new();
@@ -10575,7 +11217,7 @@ mod tests {
         tl.width = Some(60.0);
         tl.height = Some(60.0);
         tl.anchor = Some(UiAnchor::TopLeft);
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![tl];
         let st = serde_json::json!({});
         let model = ValueMap::new().with("sel", false);
@@ -10627,7 +11269,7 @@ mod tests {
         b.anchor = Some(UiAnchor::TopLeft);
         b = prop(b, "label", Value::Text("HOT".into()));
         b = prop(b, "style", Value::Text("badge".into()));
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![b];
         let st = serde_json::json!({ "badge": { "pad": 6, "h": 16 } });
         let model = ValueMap::new();
@@ -10707,7 +11349,7 @@ mod tests {
         tg.height = Some(25.0);
         tg.anchor = Some(UiAnchor::TopLeft);
         tg = prop(tg, "style", Value::Text("tg".into()));
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![tg];
 
         let st = serde_json::json!({
@@ -10746,10 +11388,13 @@ mod tests {
             mouse: Vec2::new(999.0, 999.0),
             clicked: false,
             down: false,
+            right_down: false,
             screen: Vec2::new(800.0, 600.0),
             typed: String::new(),
             backspace: false,
             wheel: 0.0,
+            exclusive: false,
+            motion: Default::default(),
         };
         let frame = run_ui(&page, &on, &st, &idle, &mut state);
         assert!(
@@ -10769,7 +11414,7 @@ mod tests {
         tg.height = Some(41.0);
         tg.anchor = Some(UiAnchor::TopLeft);
         tg = prop(tg, "style", Value::Text("tg".into()));
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![tg];
         let st = serde_json::json!({ "tg": { "w": 50, "h": 25 } });
         let model = ValueMap::new().with("sw", false);
@@ -10822,7 +11467,7 @@ mod tests {
         col.offset = [16.0, 16.0];
         col.width = Some(120.0);
         col.children = vec![radio("r_a", "a"), radio("r_b", "b")];
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![col];
 
         let model = ValueMap::new().with("choice", "a");
@@ -11020,7 +11665,7 @@ mod tests {
         // Options are CHILD data nodes (value+label), not placed sub-widgets.
         pill.children = vec![opt(0.0, "Low"), opt(1.0, "Med"), opt(2.0, "High")];
 
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![pill];
 
         let styles = serde_json::json!({
@@ -11347,7 +11992,7 @@ mod tests {
         sel = prop(sel, "placeholder", Value::Text("Choose…".into()));
         sel = prop(sel, "style", Value::Text("controls".into()));
         sel.children = vec![opt(0.0, "Alpha"), opt(1.0, "Beta")];
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![sel];
         page
     }
@@ -11371,7 +12016,7 @@ mod tests {
         sel.anchor = Some(UiAnchor::TopLeft);
         sel = prop(sel, "style", Value::Text("controls".into()));
         sel.children = vec![bound(0.0, "opt0_name"), bound(1.0, "opt1_name")];
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![sel];
 
         let styles = select_styles_json();
@@ -11623,7 +12268,7 @@ mod tests {
         tf.bind = Some("name".into());
         tf = prop(tf, "placeholder", Value::Text("enter name".into()));
         tf = prop(tf, "style", Value::Text("field".into()));
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![tf];
 
         let styles = serde_json::json!({
@@ -11765,7 +12410,7 @@ mod tests {
             second = prop(second, "value", Value::Number(1.0));
             second = prop(second, "label", Value::Text("B".into()));
             strip.children = vec![first, second];
-            let mut page = node("screen");
+            let mut page = node("surface");
             page.children = vec![strip];
 
             let model = ValueMap::new().with("pick", 0.0);
@@ -11816,7 +12461,7 @@ mod tests {
         let mut second = prop(node("option"), "value", b);
         second = prop(second, "label", Value::Text("B".into()));
         strip.children = vec![first, second];
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![strip];
         page
     }
@@ -12100,7 +12745,7 @@ mod tests {
                 .any(|k| k == "focused" || k.ends_with("_style")),
             "the caller passes no focus flag and no rim style — only the block name"
         );
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![pane];
 
         let rim_of = |styles: &serde_json::Value, state: &mut UiState| -> (f64, [f32; 4]) {
@@ -12290,7 +12935,7 @@ mod tests {
         col.offset = [16.0, 16.0];
         col.width = Some(200.0);
         col.children = vec![hint, strip];
-        let mut screen = node("screen");
+        let mut screen = node("surface");
         screen.children = vec![col];
 
         let mut state = UiState::new();
@@ -12340,7 +12985,7 @@ mod tests {
         pop.anchor = Some(UiAnchor::TopLeft);
         pop = prop(pop, "title", Value::Text("POP".into()));
         pop.children = vec![item("it0"), item("it1")];
-        let mut screen = node("screen");
+        let mut screen = node("surface");
         screen.children = vec![pop];
 
         let f = run_ui(
@@ -12377,7 +13022,7 @@ mod tests {
         pop.id = "pop".into();
         pop.anchor = Some(UiAnchor::TopLeft);
         pop = prop(pop, "title", Value::Text("PAUSED".into()));
-        let mut screen = node("screen");
+        let mut screen = node("surface");
         screen.children = vec![pop];
         let styles = serde_json::json!({ "modal": { "panel": { "fill": [0.1, 0.1, 0.1, 1.0] } } });
 
@@ -12436,7 +13081,7 @@ mod tests {
             pm = prop(pm, "hide_tabs", Value::Bool(true));
         }
         pm.children = vec![pages, tabs, content];
-        let mut screen = node("screen");
+        let mut screen = node("surface");
         screen.children = vec![pm];
         screen
     }
@@ -12535,6 +13180,53 @@ mod tests {
     }
 
     #[test]
+    fn paged_menu_hides_glyph_hints_on_kbm_only() {
+        // Q2 (ruling 7AB130A7): the shoulder glyphs are a PAD affordance — suppressed
+        // when the system SAYS kbm, shown on a pad, and KEPT when the device is unknown
+        // (absent), so a scene that never publishes `input_device` is unchanged. The
+        // rails' hit-test (mouse click / keyboard shortcut) is untouched either way.
+        let styles = serde_json::json!({
+            "paged_menu": { "frame": { "fill": [0.05, 0.05, 0.07, 1.0] }, "rule": { "color": [0.4, 0.3, 0.2, 1.0] } },
+            "pad_glyphs": { "tex": 7, "cols": 4, "rows": 4, "cells": { "lt": 0, "rt": 1, "lb": 2, "rb": 3 } },
+        });
+        let probe = |device: Option<&str>| {
+            let mut model = ValueMap::new()
+                .with("page", 0.0)
+                .with("tab", 0.0)
+                .with("paged_tabs_shown", true);
+            if let Some(d) = device {
+                model.set("input_device", d);
+            }
+            let f = run_ui(
+                &paged_menu_tree(false),
+                &model,
+                &styles,
+                &input_at(-9.0, -9.0, false),
+                &mut UiState::new(),
+            );
+            let glyphs = f
+                .commands
+                .iter()
+                .filter(|c| matches!(c, HudCommand::Sprite { tex: 7, .. }))
+                .count();
+            let rule = f.commands.iter().any(|c| {
+                matches!(c, HudCommand::Panel { h, y, .. }
+                    if (*h - 1.0).abs() < 0.01 && (*y - 82.0).abs() < 0.01)
+            });
+            (glyphs, rule)
+        };
+        // kbm: no shoulder glyphs, but the chrome (1px rule) still draws.
+        assert_eq!(
+            probe(Some("kbm")),
+            (0, true),
+            "kbm hides the shoulder glyphs, keeps the chrome"
+        );
+        // A pad shows all four; an unknown/absent device keeps them too.
+        assert_eq!(probe(Some("xbox")).0, 4, "a pad shows the shoulder glyphs");
+        assert_eq!(probe(None).0, 4, "an unpublished device keeps the glyphs");
+    }
+
+    #[test]
     fn paged_menu_hint_gutter_click_fires_the_rails_step() {
         // Start on the LAST page (1 of 2) so a prev actually MOVES — a clamp at the
         // first would hide whether the gutter even fired.
@@ -12603,7 +13295,7 @@ mod tests {
         pm = prop(pm, "style", Value::Text("paged_menu.frame".into()));
         pm = prop(pm, "page_side", Value::Text("left".into()));
         pm.children = vec![pages, tabs, content];
-        let mut screen = node("screen");
+        let mut screen = node("surface");
         screen.children = vec![pm];
 
         let styles = serde_json::json!({
@@ -12708,7 +13400,7 @@ mod tests {
         pm.pad = 40.0;
         pm = prop(pm, "page_side", Value::Text("left".into()));
         pm.children = vec![pages, content];
-        let mut screen = node("screen");
+        let mut screen = node("surface");
         screen.children = vec![pm];
 
         // The RT gutter sits BELOW the top-aligned stack: y = 40 + hint_h 36 + stack 126 =
@@ -12765,9 +13457,88 @@ mod tests {
             btn("back", "ft_back"),
             btn("next", "ft_next"),
         ];
-        let mut screen = node("screen");
+        let mut screen = node("surface");
         screen.children = vec![ft];
         screen
+    }
+
+    #[test]
+    fn nav_footer_hint_swaps_keycap_and_glyph_by_device() {
+        // A `signal` hint renders the KEY as a keycap on kbm, the controller GLYPH on a
+        // pad — driven by the scene-published `input_device` + `bind_<sig>`/`glyph_<sig>`.
+        let styles = serde_json::json!({
+            "nav_footer": {
+                "rule": { "color": [0.4, 0.3, 0.2, 1.0] },
+                "label": [0.5, 0.5, 0.5, 1.0],
+                "cap": {
+                    "fill_top": [0.1, 0.1, 0.1, 1.0],
+                    "fill_bot": [0.1, 0.1, 0.1, 1.0],
+                    "border": [0.3, 0.3, 0.3, 1.0],
+                    "border_w": 1,
+                    "radius": 3
+                }
+            },
+            "pad_glyphs": { "tex": 7, "cols": 4, "rows": 4, "cells": { "x": 6 } },
+        });
+        let footer = || {
+            let mut hint = node("option");
+            hint = prop(hint, "signal", Value::Text("Interact".into()));
+            hint = prop(hint, "label", Value::Text("Replay".into()));
+            hint.size = Some(80.0);
+            let mut ft = node("nav_footer");
+            ft.id = "ft".into();
+            ft.anchor = Some(UiAnchor::TopLeft);
+            ft.width = Some(800.0);
+            ft.height = Some(52.0);
+            ft.pad = 10.0;
+            ft.gap = 8.0;
+            ft.children = vec![hint];
+            let mut screen = node("surface");
+            screen.children = vec![ft];
+            screen
+        };
+
+        // kbm: the bound key renders as a keycap (a Text "E"), no atlas sprite.
+        let kbm = ValueMap::new()
+            .with("input_device", "kbm")
+            .with("bind_Interact", "E");
+        let f = run_ui(
+            &footer(),
+            &kbm,
+            &styles,
+            &input_at(-9.0, -9.0, false),
+            &mut UiState::new(),
+        );
+        assert!(
+            f.commands
+                .iter()
+                .any(|c| matches!(c, HudCommand::Text { text, .. } if text == "E")),
+            "kbm draws the bound key as a keycap"
+        );
+        assert!(
+            !f.commands
+                .iter()
+                .any(|c| matches!(c, HudCommand::Sprite { tex: 7, .. })),
+            "kbm draws no controller glyph"
+        );
+
+        // pad: the bound control renders from the atlas, no keycap key text.
+        let pad = ValueMap::new()
+            .with("input_device", "xbox")
+            .with("glyph_Interact", "x");
+        let f = run_ui(
+            &footer(),
+            &pad,
+            &styles,
+            &input_at(-9.0, -9.0, false),
+            &mut UiState::new(),
+        );
+        assert!(
+            f.commands
+                .iter()
+                .any(|c| matches!(c, HudCommand::Sprite { tex: 7, .. })),
+            "pad draws the controller glyph from the atlas"
+        );
     }
 
     #[test]
@@ -12934,7 +13705,7 @@ mod tests {
         radio.width = Some(200.0);
         radio.height = Some(30.0);
         radio.anchor = Some(UiAnchor::TopLeft);
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![radio];
         let model = ValueMap::new().with("sec", "sec_audio");
         let f = run_ui(
@@ -12962,7 +13733,7 @@ mod tests {
         tf.bind = Some("name".into());
         tf = prop(tf, "placeholder", Value::Text("enter name".into()));
         tf = prop(tf, "style", Value::Text("field".into()));
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![tf];
         page
     }
@@ -13575,7 +14346,7 @@ mod tests {
         cb = prop(cb, "box", Value::Number(14.0));
         cb = prop(cb, "label", Value::Text("Enable".into()));
         cb = prop(cb, "style", Value::Text("cb".into()));
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![cb];
 
         let panels = |checked: bool| {
@@ -13624,7 +14395,7 @@ mod tests {
         tg.width = Some(60.0);
         tg.height = Some(24.0);
         tg = prop(tg, "style", Value::Text("tg".into()));
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![tg];
         // The knob is the small SQUARE panel (w == h, smaller than the 24px pill height).
         let knob_x = |on: bool| {
@@ -13667,7 +14438,7 @@ mod tests {
         tile.height = Some(40.0);
         tile = prop(tile, "style", Value::Text("on".into()));
         tile = prop(tile, "style_off", Value::Text("off".into()));
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![tile];
         let fill = |loaded: bool| {
             let model = ValueMap::new().with("loaded", loaded).with("sel", false);
@@ -13716,7 +14487,7 @@ mod tests {
         pt.height = Some(28.0);
         pt = prop(pt, "style", Value::Text("pt".into()));
         pt.children = vec![seg("walk", "Walk"), seg("run", "Run")];
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![pt];
 
         let panels = |selected: &str| {
@@ -13764,7 +14535,7 @@ mod tests {
         strip = prop(strip, "tab_active", Value::Text("active".into()));
         strip = prop(strip, "tab_idle", Value::Text("idle".into()));
         strip.children = vec![tab("a", "A"), tab("b", "B")];
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![strip];
 
         let model = ValueMap::new().with("sel", "a");
@@ -13815,7 +14586,7 @@ mod tests {
         sl = prop(sl, "min", Value::Number(0.0));
         sl = prop(sl, "max", Value::Number(100.0));
         sl = prop(sl, "style", Value::Text("sl".into()));
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![sl];
         // Panels, in order (S3 sunk tracks): track (full width 100), fill
         // (value-scaled), handle.
@@ -13865,7 +14636,7 @@ mod tests {
         sp = prop(sp, "decimals", Value::Number(0.0));
         sp = prop(sp, "suffix", Value::Text(" fps".into()));
         sp = prop(sp, "style", Value::Text("st".into()));
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![sp];
         let model = ValueMap::new().with("n", 60.0);
         let f = run_ui(
@@ -14024,10 +14795,13 @@ mod tests {
             mouse: Vec2::new(50.0, 50.0),
             clicked: true,
             down: true,
+            right_down: false,
             screen,
             typed: String::new(),
             backspace: false,
             wheel: 0.0,
+            exclusive: false,
+            motion: Default::default(),
         };
         let f = run_ui(&row, &model, &styles(), &press, &mut state);
         assert_eq!(f.results.text("drag_kind"), Some("clip"));
@@ -14044,10 +14818,13 @@ mod tests {
             mouse: Vec2::new(180.0, 90.0),
             clicked: false,
             down: true,
+            right_down: false,
             screen,
             typed: String::new(),
             backspace: false,
             wheel: 0.0,
+            exclusive: false,
+            motion: Default::default(),
         };
         let f = run_ui(&row, &model, &styles(), &hold, &mut state);
         assert!(f.results.is_on("drag_active"));
@@ -14058,10 +14835,13 @@ mod tests {
             mouse: Vec2::new(180.0, 90.0),
             clicked: false,
             down: false,
+            right_down: false,
             screen,
             typed: String::new(),
             backspace: false,
             wheel: 0.0,
+            exclusive: false,
+            motion: Default::default(),
         };
         let f = run_ui(&row, &model, &styles(), &release, &mut state);
         assert!(f.results.is_on("drag_dropped"), "release reports the drop");
@@ -14094,7 +14874,7 @@ mod tests {
         sl = prop(sl, "slider_h", Value::Number(12.0));
         sl = prop(sl, "min", Value::Number(0.0));
         sl = prop(sl, "max", Value::Number(100.0));
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![sl];
 
         let st = serde_json::json!({});
@@ -14118,10 +14898,13 @@ mod tests {
             mouse: Vec2::new(180.0, 10.0),
             clicked: false,
             down: true,
+            right_down: false,
             screen: Vec2::new(800.0, 600.0),
             typed: String::new(),
             backspace: false,
             wheel: 0.0,
+            exclusive: false,
+            motion: Default::default(),
         };
         let frame = run_ui(&page, &model, &st, &held, &mut state);
         assert_eq!(
@@ -14143,10 +14926,13 @@ mod tests {
             mouse: Vec2::new(180.0, 10.0),
             clicked: false,
             down: false,
+            right_down: false,
             screen: Vec2::new(800.0, 600.0),
             typed: String::new(),
             backspace: false,
             wheel: 0.0,
+            exclusive: false,
+            motion: Default::default(),
         };
         let frame = run_ui(&page, &model, &st, &up, &mut state);
         let v = frame.results.number("v").expect("release commits the bind");
@@ -14176,7 +14962,7 @@ mod tests {
         sl = prop(sl, "slider_h", Value::Number(12.0));
         sl = prop(sl, "min", Value::Number(0.0));
         sl = prop(sl, "max", Value::Number(100.0));
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![sl];
 
         let st = serde_json::json!({});
@@ -14193,10 +14979,13 @@ mod tests {
             mouse: Vec2::new(x, 400.0),
             clicked: false,
             down,
+            right_down: false,
             screen: Vec2::new(800.0, 600.0),
             typed: String::new(),
             backspace: false,
             wheel: 0.0,
+            exclusive: false,
+            motion: Default::default(),
         };
         let f = run_ui(&page, &model, &st, &off(180.0, true), &mut state);
         assert_eq!(
@@ -14243,7 +15032,7 @@ mod tests {
         sl = prop(sl, "min", Value::Number(0.0));
         sl = prop(sl, "max", Value::Number(100.0));
         sl = prop(sl, "focus_group", Value::Text("fit_focus".into()));
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![sl];
         let st = serde_json::json!({});
         let model = ValueMap::new().with("v", 25.0);
@@ -14270,10 +15059,13 @@ mod tests {
             mouse: Vec2::new(170.0, 20.0),
             clicked: false,
             down: true,
+            right_down: false,
             screen: Vec2::new(800.0, 600.0),
             typed: String::new(),
             backspace: false,
             wheel: 0.0,
+            exclusive: false,
+            motion: Default::default(),
         };
         let f = run_ui(&page, &model, &st, &held, &mut state);
         assert_eq!(
@@ -14320,10 +15112,13 @@ mod tests {
             mouse: Vec2::new(170.0, 10.0),
             clicked: false,
             down: false,
+            right_down: false,
             screen: Vec2::new(800.0, 600.0),
             typed: String::new(),
             backspace: false,
             wheel: 0.0,
+            exclusive: false,
+            motion: Default::default(),
         };
         let f = run_ui(&page, &model, &st, &up, &mut state);
         let v = f.results.number("v").expect("release commits");
@@ -14365,10 +15160,13 @@ mod tests {
             mouse: Vec2::new(170.0, 10.0),
             clicked: false,
             down: false,
+            right_down: false,
             screen: Vec2::new(800.0, 600.0),
             typed: String::new(),
             backspace: false,
             wheel: 0.0,
+            exclusive: false,
+            motion: Default::default(),
         };
         let f = run_ui(&page, &stale, &st, &up, &mut state);
         let committed = f.results.number("v").expect("release commits");
@@ -14412,10 +15210,13 @@ mod tests {
             mouse: Vec2::new(170.0, 10.0),
             clicked: false,
             down: false,
+            right_down: false,
             screen: Vec2::new(800.0, 600.0),
             typed: String::new(),
             backspace: false,
             wheel: 0.0,
+            exclusive: false,
+            motion: Default::default(),
         };
         run_ui(&page, &stale, &st, &up, &mut state);
 
@@ -14473,7 +15274,7 @@ mod tests {
         sl = prop(sl, "value_w", Value::Number(40.0));
         sl = prop(sl, "min", Value::Number(0.0));
         sl = prop(sl, "max", Value::Number(100.0));
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![sl];
         (page, serde_json::json!({}))
     }
@@ -14485,7 +15286,7 @@ mod tests {
         hidden.visible_bind = Some("shown".into());
         hidden.size = Some(24.0);
         hidden.anchor = Some(UiAnchor::TopLeft);
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![hidden];
 
         let model = ValueMap::new().with("shown", false);
@@ -14525,7 +15326,7 @@ mod tests {
         muse = prop(muse, "width_frac", Value::Number(1.0));
         muse = prop(muse, "aspect", Value::Number(1.0)); // square → height follows width
 
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![muse];
 
         let model = ValueMap::new();
@@ -14578,7 +15379,7 @@ mod tests {
         popup = prop(popup, "layer", Value::Number(1.0));
         popup = prop(popup, "style", Value::Text("btn".into())); // any style → a panel bg
 
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![muse, popup];
 
         let model = ValueMap::new();
@@ -14629,7 +15430,7 @@ mod tests {
                        "border": [0.2,0.2,0.2,1.0], "border_w": 1, "radius": 6, "inset": 2 },
             "warm": [1.0, 0.9, 0.8, 1.0]
         });
-        let mut s = node("rtt");
+        let mut s = node("surface");
         s.id = "pack_thumb".into();
         s.anchor = Some(UiAnchor::TopLeft);
         s.offset = [10.0, 20.0];
@@ -14638,7 +15439,7 @@ mod tests {
         s = prop(s, "style", Value::Text("thumb".into()));
         s = prop(s, "source", Value::Text("portrait".into()));
         s = prop(s, "tint", Value::Text("warm".into()));
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![s];
 
         let mut state = UiState::new();
@@ -14650,8 +15451,8 @@ mod tests {
             &mut state,
         );
 
-        assert_eq!(frame.rtts.len(), 1, "one PiP slot reserved");
-        let slot = &frame.rtts[0];
+        assert_eq!(frame.surfaces.len(), 1, "one PiP slot reserved");
+        let slot = &frame.surfaces[0];
         assert_eq!(slot.id, "pack_thumb");
         assert_eq!(slot.source, "portrait");
         // The image rect is the node rect inset by the STYLE's `inset` — so a whole
@@ -14672,14 +15473,17 @@ mod tests {
                 .any(|c| matches!(c, HudCommand::Panel { .. })),
             "stage drew its panel backdrop"
         );
-        assert!(frame.results.is_on("hud_hit"), "a stage claims the pointer");
+        assert!(
+            !frame.results.is_on("hud_hit"),
+            "a surface never claims the pointer, styled or not — it passes through to its element"
+        );
     }
 
     #[test]
-    fn stage_liveness_follows_its_bind_and_a_sourceless_stage_reserves_nothing() {
+    fn stage_liveness_follows_its_bind_and_a_sourceless_surface_still_reserves() {
         let st = serde_json::json!({ "thumb": { "fill_top": [0.1,0.1,0.1,1.0] } });
         let staged = |id: &str, live_key: &str| {
-            let mut s = node("rtt");
+            let mut s = node("surface");
             s.id = id.into();
             s.anchor = Some(UiAnchor::TopLeft);
             s.width = Some(40.0);
@@ -14688,13 +15492,14 @@ mod tests {
             s = prop(s, "source", Value::Text("portrait".into()));
             prop(s, "live_bind", Value::Text(live_key.into()))
         };
-        // A stage with no `source` is dropped rather than reserving a broken slot.
-        let mut orphan = node("rtt");
+        // A surface with no `source` still reserves: its content is behaviour-published
+        // (a globe, a bench viewport), so the slot is whole without a stage name.
+        let mut orphan = node("surface");
         orphan.id = "orphan".into();
         orphan.width = Some(10.0);
         orphan.height = Some(10.0);
 
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![staged("hot", "sel"), staged("cold", "unsel"), orphan];
 
         let model = ValueMap::new().with("sel", true).with("unsel", false);
@@ -14708,12 +15513,26 @@ mod tests {
         );
 
         assert_eq!(
-            frame.rtts.len(),
-            2,
-            "the source-less stage reserved nothing"
+            frame.surfaces.len(),
+            3,
+            "the source-less surface reserves too"
         );
-        let live_of = |id: &str| frame.rtts.iter().find(|s| s.id == id).unwrap().live;
+        let live_of = |id: &str| frame.surfaces.iter().find(|s| s.id == id).unwrap().live;
         assert!(live_of("hot"), "bound true → renders a fresh target");
+        assert!(
+            live_of("orphan"),
+            "no liveness policy → live, and no source → empty"
+        );
+        assert_eq!(
+            frame
+                .surfaces
+                .iter()
+                .find(|s| s.id == "orphan")
+                .unwrap()
+                .source,
+            "",
+            "a behaviour-filled surface carries no stage name"
+        );
         assert!(
             !live_of("cold"),
             "bound false → scene reuses its cached poster"
@@ -14736,7 +15555,7 @@ mod tests {
         rc = prop(rc, "bl", Value::Text("ᚨ".into()));
         rc = prop(rc, "br", Value::Text("ᛟ".into()));
         rc = prop(rc, "runes_style", Value::Text("runes".into()));
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![rc];
 
         let glow: [f32; 4] = [0.43, 0.59, 1.0, 1.0];
@@ -14814,6 +15633,66 @@ mod tests {
     }
 
     #[test]
+    fn tooltip_shows_the_device_adaptive_affordance() {
+        // A `signal` tooltip renders the bound control in its leading slot: a keycap of
+        // the key on kbm, the positional pad glyph on a controller (from the
+        // scene-published bind_/glyph_/input_device). It stays presentational.
+        let mut tip = node("tooltip");
+        tip.id = "tip".into();
+        tip.width = Some(220.0);
+        tip.height = Some(48.0);
+        tip.anchor = Some(UiAnchor::TopLeft);
+        tip.offset = [10.0, 10.0];
+        tip = prop(tip, "style", Value::Text("tip".into()));
+        tip = prop(tip, "signal", Value::Text("Interact".into()));
+        tip = prop(tip, "name", Value::Text("Restart".into()));
+        let styles = serde_json::json!({
+            "tip": {
+                "bg": [0.05, 0.06, 0.09, 0.94], "pad": 10,
+                "name_color": [0.9, 0.9, 0.85, 1.0], "name_size": 16
+            },
+            "tooltip": { "cap": { "fill_top": [0.1, 0.1, 0.1, 1.0], "fill_bot": [0.1, 0.1, 0.1, 1.0], "border": [0.3, 0.3, 0.3, 1.0], "border_w": 1, "radius": 3 } },
+            "pad_glyphs": { "tex": 7, "cols": 4, "rows": 4, "cells": { "face_west": 6 } },
+        });
+        let probe = |device: &str, face_key: &str, face_val: &str| {
+            let model = ValueMap::new()
+                .with("input_device", device)
+                .with(face_key, face_val);
+            let mut page = node("surface");
+            page.children = vec![tip.clone()];
+            run_ui(
+                &page,
+                &model,
+                &styles,
+                &input_at(-9.0, -9.0, false),
+                &mut UiState::new(),
+            )
+        };
+        // kbm: the bound key as a keycap (a Text "E"), no atlas glyph.
+        let f = probe("kbm", "bind_Interact", "E");
+        assert!(
+            f.commands
+                .iter()
+                .any(|c| matches!(c, HudCommand::Text { text, .. } if text == "E")),
+            "kbm tooltip draws the bound key as a keycap"
+        );
+        assert!(
+            !f.commands
+                .iter()
+                .any(|c| matches!(c, HudCommand::Sprite { tex: 7, .. })),
+            "kbm tooltip draws no controller glyph"
+        );
+        // pad: the positional glyph from the atlas, no keycap key text.
+        let f = probe("xbox", "glyph_Interact", "face_west");
+        assert!(
+            f.commands
+                .iter()
+                .any(|c| matches!(c, HudCommand::Sprite { tex: 7, .. })),
+            "pad tooltip draws the positional glyph from the atlas"
+        );
+    }
+
+    #[test]
     fn tooltip_paints_name_meta_and_a_coloured_rune_without_claiming_the_pointer() {
         // A floating info card the SCENE positions (rect) and gates (visible_bind):
         // an element rune badge, a name headline, and a dim meta line. Presentational
@@ -14846,7 +15725,7 @@ mod tests {
         let model = ValueMap::new();
         let mut state = UiState::new();
 
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![tip.clone()];
 
         // Click squarely over the card (rect 20,20 .. 240,84; centre ≈ 130,52) — a
@@ -14931,7 +15810,7 @@ mod tests {
         // and emits no Rune-face glyph.
         let mut plain = tip;
         plain.props.remove("rune");
-        let mut page2 = node("screen");
+        let mut page2 = node("surface");
         page2.children = vec![plain];
         let frame = run_ui(
             &page2,
@@ -14970,7 +15849,7 @@ mod tests {
         b.height = Some(40.0);
         b.anchor = Some(UiAnchor::TopLeft);
         b = prop(b, "style", Value::Text("btn".into()));
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![b];
         let st = serde_json::json!({ "btn": {
             "fill_top": [0.1, 0.1, 0.1, 1.0], "hover_top": [0.9, 0.9, 0.9, 1.0] } });
@@ -15042,7 +15921,7 @@ mod tests {
         g.bind = Some("mp".into());
         g = prop(g, "tone", Value::Text("mana".into()));
         g = prop(g, "style", Value::Text("resource_gauge".into()));
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![g];
 
         let st = serde_json::json!({
@@ -15098,7 +15977,7 @@ mod tests {
         g = prop(g, "lo", Value::Number(0.3));
         g = prop(g, "hi", Value::Number(0.7));
         g = prop(g, "style", Value::Text("gauge".into()));
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![g];
 
         let st = serde_json::json!({
@@ -15355,7 +16234,7 @@ mod tests {
         a = prop(a, "cd_bind", Value::Text("cd1".into()));
         a = prop(a, "charges_bind", Value::Text("ch1".into()));
         a = prop(a, "style", Value::Text("action_slot".into()));
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![a];
 
         let st = serde_json::json!({
@@ -15423,7 +16302,7 @@ mod tests {
         d.anchor = Some(UiAnchor::TopRight);
         d = prop(d, "hue", Value::Text("green".into()));
         d = prop(d, "style", Value::Text("stat_dot".into()));
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![m, d];
 
         let st = serde_json::json!({
@@ -15479,7 +16358,7 @@ mod tests {
         b = prop(b, "label", Value::Text("NEW".into()));
         b = prop(b, "tone", Value::Text("accent".into()));
         b = prop(b, "style", Value::Text("badge".into()));
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![b];
 
         let st = serde_json::json!({
@@ -15565,7 +16444,7 @@ mod tests {
         b2 = prop(b2, "tone", Value::Text("accent".into())); // tone present…
         b2 = prop(b2, "solid", Value::Bool(true)); // …but solid wins
         b2 = prop(b2, "style", Value::Text("badge".into()));
-        let mut page2 = node("screen");
+        let mut page2 = node("surface");
         page2.children = vec![b2];
         let frame = run_ui(
             &page2,
@@ -15600,7 +16479,7 @@ mod tests {
             b = prop(b, "label", Value::Text("!".into()));
             b = prop(b, "tone", Value::Text(tone.into()));
             b = prop(b, "style", Value::Text("badge".into()));
-            let mut page = node("screen");
+            let mut page = node("surface");
             page.children = vec![b];
             let mut state = UiState::new();
             let f = run_ui(
@@ -15664,7 +16543,7 @@ mod tests {
         menu = prop(menu, "style", Value::Text("menu".into()));
         menu.children = vec![cut, copy, divider, paste, del];
 
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![menu];
 
         // The reused settings.controls.menu block shape (values inline, not a live path).
@@ -15826,7 +16705,7 @@ mod tests {
         menu.anchor = Some(UiAnchor::TopLeft);
         menu = prop(menu, "style", Value::Text("menu".into()));
         menu.children = vec![cut, copy, divider, paste, del];
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![menu];
         page
     }
@@ -15980,7 +16859,7 @@ mod tests {
                 it
             })
             .collect();
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![menu];
         let styles = context_menu_styles();
         let model = ValueMap::new();
@@ -16053,7 +16932,7 @@ mod tests {
         menu.anchor = Some(UiAnchor::TopLeft);
         menu = prop(menu, "style", Value::Text("menu".into()));
         menu.children = vec![cut, copy, divider];
-        let mut page = node("screen");
+        let mut page = node("surface");
         page.children = vec![menu];
 
         let f = run_ui(
@@ -16334,7 +17213,7 @@ mod tests {
     }
 
     fn page_of(child: UiNode) -> UiNode {
-        let mut p = node("screen");
+        let mut p = node("surface");
         p.children = vec![child];
         p
     }
@@ -17105,8 +17984,9 @@ mod tests {
                 // Fill to 0.625 of 180, then the 1px highlight along its top edge.
                 pin_panel(92.0, 34.0, 112.5, 12.0, FILL, 6.0),
                 pin_rect(92.0, 34.0, 112.5, 1.0, HI),
-                // Handle: 7 wide, centred on the fill's end, overhanging 4px each side.
-                pin_panel(201.0, 30.0, 7.0, 20.0, HANDLE, 2.0),
+                // Handle: 7 wide, INSET within the rail (left edge at 92+(180−7)·0.625),
+                // overhanging 4px above/below the thin rail.
+                pin_panel(200.125, 30.0, 7.0, 20.0, HANDLE, 2.0),
                 // Readout: right-aligned on the row's own right edge.
                 pin_text(
                     312.0,
@@ -17151,10 +18031,10 @@ mod tests {
                 pin_panel(65.0, 33.0, 10.0, 177.0, TRACK, 5.0),
                 pin_panel(65.0, 143.625, 10.0, 66.375, FILL, 5.0),
                 pin_rect(65.0, 143.625, 10.0, 1.0, HI),
-                pin_panel(61.0, 140.125, 18.0, 7.0, HANDLE, 2.0),
+                pin_panel(61.0, 139.25, 18.0, 7.0, HANDLE, 2.0),
                 pin_text(
                     85.0,
-                    138.125,
+                    137.25,
                     "4",
                     11.0,
                     VALUE,
@@ -17183,6 +18063,50 @@ mod tests {
             ],
             "the upright slider draw is byte-stable"
         );
+    }
+
+    /// The handle stays WITHIN the rail at both extremes — at the minimum it does not hang
+    /// off the left (the bug Aaron caught in-window), and at the maximum it does not spill
+    /// off the right. Guards the inset positioning for every style/size.
+    #[test]
+    fn the_slider_handle_stays_within_the_rail() {
+        let props_of = |v: f64| {
+            serde_json::json!({
+                "style": pinned_slider_style(), "value_w": 40.0, "slider_h": 7.0,
+                "min": 0.0, "max": 1.0, "bind_value": v
+            })
+        };
+        let row = Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 200.0,
+            h: 24.0,
+        };
+        let track = slider_track(row, &props_of(0.0));
+        for v in [0.0_f64, 1.0] {
+            let mut out = Vec::new();
+            draw_slider(row, &props_of(v), &mut out);
+            // Track → fill → handle is the panel order, so the LAST panel is the handle.
+            let (hx, hw) = out
+                .iter()
+                .rev()
+                .find_map(|c| match c {
+                    HudCommand::Panel { x, w, .. } => Some((*x, *w)),
+                    _ => None,
+                })
+                .expect("a handle is drawn");
+            assert!(
+                hx >= track.x - 0.01,
+                "value {v}: handle left {hx} hangs off the rail (left {})",
+                track.x
+            );
+            assert!(
+                hx + hw <= track.x + track.w + 0.01,
+                "value {v}: handle right {} spills off the rail (right {})",
+                hx + hw,
+                track.x + track.w
+            );
+        }
     }
 
     #[test]

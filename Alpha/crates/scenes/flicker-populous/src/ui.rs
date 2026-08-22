@@ -6,8 +6,8 @@
 //! dispatcher so the three cannot drift apart.
 //!
 //! This module no longer BUILDS the tree. The surface is authored as data in
-//! `populous.scene.json` (`default_page` then `paged_menu`, `frame`, `multi_view`
-//! and its three panes) and its per-tab slices are lit by `populous.lua`'s
+//! `populous.scene.json` (a root `stack` → `paged_menu` → a `row` of the three
+//! panes) and its per-tab slices are lit by `populous.lua`'s
 //! `arrange()`. The former `ui::build` Rust tree builder — and its `Holds` /
 //! `PaneRow` pane vocabulary and template-name constants — were retired once that
 //! static tree landed and was verified in-window; only the DATA the scene still
@@ -19,7 +19,7 @@ pub const LEFT_PANE: &str = "pop_left";
 pub const VIEW_PANE: &str = "pop_view";
 pub const RIGHT_PANE: &str = "pop_right";
 /// The viewport node — the `rtt` whose rect the walker reserves and the scene fills
-/// with the globe (`VIEW_PANE` + the `rtt_panel` proto's `_rtt` suffix).
+/// with the globe (`VIEW_PANE` + the `_rtt` slot-id suffix).
 pub const VIEW_SLOT: &str = "pop_view_rtt";
 /// The `stages.<source>` block the globe is authored by — the default light source
 /// and backdrop the world is seen under.

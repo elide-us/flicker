@@ -26,10 +26,11 @@ use flicker_input_core::{
 use flicker_input_device::{DiscreteSource, GamepadSource, WindowSource};
 use flicker_input_router::{apply_context_requests, InputEvent, RouteCtx};
 use flicker_render::Renderer;
+use flicker_render::Vec2;
 use winit::application::ApplicationHandler;
-use winit::event::WindowEvent;
+use winit::event::{DeviceEvent, DeviceId, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
-use winit::window::{Window, WindowId};
+use winit::window::{CursorGrabMode, Window, WindowId};
 
 use crate::{App, FrameInput};
 
@@ -118,6 +119,18 @@ struct Runner<A: App> {
     gamepad: GamepadSource,
     /// The central signal pump — present when the app is run via [`run_with_input`].
     pump: Option<InputPump>,
+    /// Whether the mouse is currently CAPTURED — the OS cursor is grabbed + hidden and
+    /// relative motion feeds `mouse_delta` (the live-scene container's exclusive mode,
+    /// barrier §4e). Tracked so the grab is applied only on the edge, and so the raw
+    /// `DeviceEvent::MouseMotion` is ingested only while it holds. Driven each frame by
+    /// [`App::pointer_captured`].
+    pointer_captured: bool,
+    /// Whether the grab that IS held is `Locked` (relative, cursor pinned) rather than
+    /// the `Confined` fallback (the platform refused `Locked`): under `Locked` the
+    /// cursor stops moving so `DeviceEvent::MouseMotion` is the motion source; under
+    /// `Confined` the ordinary `CursorMoved` path still carries it, so the device event
+    /// is skipped to avoid double-counting.
+    pointer_locked: bool,
 }
 
 impl<A: App> ApplicationHandler for Runner<A> {
@@ -217,6 +230,14 @@ impl<A: App> ApplicationHandler for Runner<A> {
                 self.gamepad.drain_into(&mut self.input);
                 self.gamepad.tick_analog();
                 self.input.set_analog_latch(self.gamepad.analog().sample());
+                // Under a `Locked` grab the OS cursor is pinned, so `CursorMoved` no
+                // longer carries motion — the raw `DeviceEvent::MouseMotion` accumulated
+                // below into `mouse_delta` is the pointer-look delta this frame.
+                // Latch the last-used device family (kbm ⇄ pad, tagged with the pad's
+                // detected vendor) from the fully drained snapshot, BEFORE
+                // `clear_frame_edges` below wipes the KBM edges. Governs which bindings
+                // the UI shows (keycap vs pad glyph, and which vendor's glyph atlas).
+                flicker_input_device::note_frame(&self.input, self.gamepad.vendor());
 
                 let Some(renderer) = self.renderer.as_mut() else {
                     return;
@@ -252,6 +273,18 @@ impl<A: App> ApplicationHandler for Runner<A> {
                 if let Some(pump) = self.pump.as_mut() {
                     pump.apply(&route);
                 }
+                // Reconcile the OS cursor with the app's exclusive-mode request. Only the
+                // edge touches the window; while captured the cursor is grabbed (Locked
+                // if the platform allows, else Confined) and hidden — the mouse IS the
+                // camera (barrier §4e). Split-borrows the fields (the render arm holds a
+                // live `&mut self.renderer`), so this is a free fn, not a `&mut self` method.
+                reconcile_pointer_capture(
+                    self.app.pointer_captured(),
+                    window,
+                    &mut self.pointer_captured,
+                    &mut self.pointer_locked,
+                    &mut self.input.mouse_delta,
+                );
                 // Reset every per-frame edge (ordered transition log, text entry,
                 // mouse) in one call; held state survives.
                 self.input.clear_frame_edges();
@@ -270,6 +303,19 @@ impl<A: App> ApplicationHandler for Runner<A> {
                 window.request_redraw();
             }
             _ => {}
+        }
+    }
+
+    /// Raw pointer motion — the source of the look delta while the cursor is `Locked`
+    /// (pinned), where `WindowEvent::CursorMoved` stops firing. Accumulated into
+    /// `mouse_delta` exactly as `CursorMoved` would, and ONLY while a `Locked` grab
+    /// holds, so free-mouse frames (and the `Confined` fallback) keep their single
+    /// `CursorMoved` source and never double-count.
+    fn device_event(&mut self, _event_loop: &ActiveEventLoop, _id: DeviceId, event: DeviceEvent) {
+        if self.pointer_captured && self.pointer_locked {
+            if let DeviceEvent::MouseMotion { delta } = event {
+                self.input.mouse_delta += Vec2::new(delta.0 as f32, delta.1 as f32);
+            }
         }
     }
 
@@ -321,6 +367,41 @@ pub fn last_window_geometry() -> Option<WindowGeometry> {
 /// Run the application with NO central input pump — the app receives an empty event
 /// set each frame (the pre-Input-Standardization path, for apps that still poll the
 /// raw [`InputState`]). Blocks until the event loop exits.
+/// Apply the app's exclusive-mode request to the OS cursor on the change edge: grab +
+/// hide while captured, ungrab + show while free. Prefers `Locked` (relative, cursor
+/// pinned — true mouse-look); falls back to `Confined` when the platform refuses it
+/// (e.g. some X11/Wayland setups), which keeps the pointer in the window but leaves
+/// `CursorMoved` as the motion source. Idempotent per frame. A free fn (not a `&mut
+/// self` method) so the render arm can hold a live `&mut self.renderer` alongside.
+fn reconcile_pointer_capture(
+    want: bool,
+    window: &Window,
+    captured: &mut bool,
+    locked: &mut bool,
+    mouse_delta: &mut Vec2,
+) {
+    if want == *captured {
+        return;
+    }
+    *captured = want;
+    if want {
+        *locked = window.set_cursor_grab(CursorGrabMode::Locked).is_ok();
+        if !*locked && window.set_cursor_grab(CursorGrabMode::Confined).is_err() {
+            tracing::warn!(
+                "cursor grab refused (Locked and Confined) — exclusive mode is degraded"
+            );
+        }
+        window.set_cursor_visible(false);
+    } else {
+        let _ = window.set_cursor_grab(CursorGrabMode::None);
+        *locked = false;
+        window.set_cursor_visible(true);
+        // Drop any relative motion that arrived on the release edge so the freed cursor
+        // does not jump the camera one last frame.
+        *mouse_delta = Vec2::ZERO;
+    }
+}
+
 pub fn run<A: App>(app: A) -> Result<()> {
     run_inner(app, None)
 }
@@ -366,6 +447,8 @@ fn run_inner<A: App>(app: A, pump: Option<InputPump>) -> Result<()> {
         window_source: WindowSource::new(),
         gamepad: GamepadSource::new(),
         pump,
+        pointer_captured: false,
+        pointer_locked: false,
     };
 
     event_loop

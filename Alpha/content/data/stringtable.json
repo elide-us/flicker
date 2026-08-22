@@ -341,6 +341,9 @@
   "ap_collision": {
     "en-us": "Collision"
   },
+  "ap_display": {
+    "en-us": "DISPLAY"
+  },
   "ap_conform_has_not_run": {
     "en-us": "Conform has not run."
   },
@@ -617,6 +620,9 @@
   "ap_scabbard_back": {
     "en-us": "Scabbard · Back"
   },
+  "ap_scale_all": {
+    "en-us": "Scale all"
+  },
   "ap_scale": {
     "en-us": "SCALE"
   },
@@ -631,6 +637,39 @@
   },
   "ap_scale_z": {
     "en-us": "Scale Z"
+  },
+  "ap_prefer_staged": {
+    "en-us": "Load staged version first"
+  },
+  "ap_prefer_staged_hint": {
+    "en-us": "Re-open this asset's staged rig — or its promoted one if staging is empty — so you adjust the last committed fit instead of starting over from the source."
+  },
+  "ap_as_provided": {
+    "en-us": "Import rig as provided"
+  },
+  "wf_step_preview": {
+    "en-us": "Preview"
+  },
+  "ap_preview_title": {
+    "en-us": "Bake Preview"
+  },
+  "ap_preview_hint": {
+    "en-us": "The baked body playing the shared idle — exactly what Export will write."
+  },
+  "ap_preview_blurb": {
+    "en-us": "This is the smoke test: the body below was baked exactly as Export writes it, and is playing the shared idle animation through the runtime's own skinning."
+  },
+  "ap_preview_back_hint": {
+    "en-us": "Wrong? Go Back and adjust the joints — the preview rebakes every time you return here."
+  },
+  "ap_as_provided_hint": {
+    "en-us": "Edit against the vendor's rig exactly as imported — Meshy's joints and skin untouched, only the bone set completed. Commit translates every joint's orientation onto our skeleton, so the exported body plays the shared animations correctly."
+  },
+  "ap_reopened_from_staging": {
+    "en-us": "RE-OPENED — staged rig, joints as last committed."
+  },
+  "ap_reopened_from_package": {
+    "en-us": "RE-OPENED — promoted rig, joints as last committed."
   },
   "ap_select_a_workflow_to_begin": {
     "en-us": "SELECT A WORKFLOW TO BEGIN"
@@ -737,6 +776,573 @@
   "ap_worn_things_blades_circlets_loomsilk_bou": {
     "en-us": "Worn things — blades, circlets, loomsilk — bound to a bearer."
   },
+  "hab_air_ch4": {
+    "en-us": "reducing (CH₄)"
+  },
+  "hab_air_co2": {
+    "en-us": "carbon hotbox (CO₂)"
+  },
+  "hab_air_hcl": {
+    "en-us": "acidic (HCl)"
+  },
+  "hab_air_n2": {
+    "en-us": "temperate (N₂)"
+  },
+  "hab_air_nh3": {
+    "en-us": "reducing (NH₃)"
+  },
+  "hab_air_so2": {
+    "en-us": "volcanic (SO₂)"
+  },
+  "hab_air_steam": {
+    "en-us": "steam (H₂O)"
+  },
+  "hab_ax_atmosphere": {
+    "en-us": "Atmosphere"
+  },
+  "hab_ax_hydrosphere": {
+    "en-us": "Hydrosphere"
+  },
+  "hab_ax_interior": {
+    "en-us": "Interior"
+  },
+  "hab_ax_ocean_ph": {
+    "en-us": "Ocean pH"
+  },
+  "hab_ax_surface_temp": {
+    "en-us": "Surface temp"
+  },
+  "hab_hi_alkaline": {
+    "en-us": "alkaline"
+  },
+  "hab_hi_drowned": {
+    "en-us": "drowned"
+  },
+  "hab_hi_hothouse": {
+    "en-us": "hothouse"
+  },
+  "hab_hi_magma_ocean": {
+    "en-us": "magma ocean"
+  },
+  "hab_hi_runaway": {
+    "en-us": "runaway"
+  },
+  "hab_lo_acidic": {
+    "en-us": "acidic"
+  },
+  "hab_lo_dead_frozen": {
+    "en-us": "dead/frozen"
+  },
+  "hab_lo_desert": {
+    "en-us": "desert"
+  },
+  "hab_lo_frozen": {
+    "en-us": "frozen"
+  },
+  "hab_lo_too_thin": {
+    "en-us": "too thin"
+  },
+  "lf_added_state": {
+    "en-us": "Added state"
+  },
+  "lf_and_its_edges": {
+    "en-us": "(and its edges)"
+  },
+  "lf_attach_bone": {
+    "en-us": "Attach Bone"
+  },
+  "lf_blend": {
+    "en-us": "blend"
+  },
+  "lf_blend_default": {
+    "en-us": "default"
+  },
+  "lf_bound": {
+    "en-us": "Bound"
+  },
+  "lf_capsule": {
+    "en-us": "Capsule"
+  },
+  "lf_clip_lc": {
+    "en-us": "clip"
+  },
+  "lf_clips_lc": {
+    "en-us": "clips"
+  },
+  "lf_combat_windows": {
+    "en-us": "Combat windows"
+  },
+  "lf_commit_horizon": {
+    "en-us": "commit horizon"
+  },
+  "lf_could_not_add_state": {
+    "en-us": "Could not add a state."
+  },
+  "lf_could_not_bind": {
+    "en-us": "Could not bind"
+  },
+  "lf_could_not_load": {
+    "en-us": "Could not load the pack:"
+  },
+  "lf_creature_pending": {
+    "en-us": "Creature Composer — schema lands with this page."
+  },
+  "lf_damage": {
+    "en-us": "DAMAGE"
+  },
+  "lf_damage_word": {
+    "en-us": "Damage"
+  },
+  "lf_delete_transition": {
+    "en-us": "Delete Transition"
+  },
+  "lf_drag_hint": {
+    "en-us": "Drag a clip onto a state to bind it."
+  },
+  "lf_dropped_outside": {
+    "en-us": "dropped outside a state"
+  },
+  "lf_edge_exists_prefix": {
+    "en-us": "That"
+  },
+  "lf_edge_exists_suffix": {
+    "en-us": "edge already exists."
+  },
+  "lf_edge_hint": {
+    "en-us": "Click a state to return to the clip library."
+  },
+  "lf_edge_lc": {
+    "en-us": "edge."
+  },
+  "lf_editing_clip": {
+    "en-us": "EDITING CLIP"
+  },
+  "lf_editing_edge": {
+    "en-us": "Editing the"
+  },
+  "lf_end": {
+    "en-us": "End"
+  },
+  "lf_end_point": {
+    "en-us": "— (point)"
+  },
+  "lf_event": {
+    "en-us": "EVENT"
+  },
+  "lf_event_prompt": {
+    "en-us": "Click an event on the timeline."
+  },
+  "lf_event_tracks": {
+    "en-us": "EVENT TRACKS"
+  },
+  "lf_event_word": {
+    "en-us": "Event"
+  },
+  "lf_events_lc": {
+    "en-us": "event(s)"
+  },
+  "lf_feedback": {
+    "en-us": "FEEDBACK"
+  },
+  "lf_filter_packs": {
+    "en-us": "FILTER PACKS"
+  },
+  "lf_floor_word": {
+    "en-us": "floor"
+  },
+  "lf_format": {
+    "en-us": "Format"
+  },
+  "lf_frame_word": {
+    "en-us": "Frame"
+  },
+  "lf_frames_lc": {
+    "en-us": "frames"
+  },
+  "lf_hit_type": {
+    "en-us": "Hit Type:"
+  },
+  "lf_in_lc": {
+    "en-us": "in"
+  },
+  "lf_kind_ability": {
+    "en-us": "Ability"
+  },
+  "lf_kind_creature": {
+    "en-us": "Creature"
+  },
+  "lf_kind_locomotion": {
+    "en-us": "Locomotion"
+  },
+  "lf_kind_weapon": {
+    "en-us": "Weapon"
+  },
+  "lf_lane_cancel": {
+    "en-us": "CANCEL"
+  },
+  "lf_lane_hitbox": {
+    "en-us": "HITBOX"
+  },
+  "lf_lane_hyperarmor": {
+    "en-us": "HYPER ARMOR"
+  },
+  "lf_lane_iframe": {
+    "en-us": "I-FRAME"
+  },
+  "lf_lane_notify": {
+    "en-us": "NOTIFY"
+  },
+  "lf_lane_parry": {
+    "en-us": "PARRY"
+  },
+  "lf_lane_sfx": {
+    "en-us": "SFX"
+  },
+  "lf_lane_telegraph": {
+    "en-us": "TELEGRAPH"
+  },
+  "lf_lane_vfx": {
+    "en-us": "VFX"
+  },
+  "lf_link_on": {
+    "en-us": "link on:"
+  },
+  "lf_linked_on": {
+    "en-us": "Linked on"
+  },
+  "lf_load_pack": {
+    "en-us": "Load Pack"
+  },
+  "lf_loaded": {
+    "en-us": "Loaded"
+  },
+  "lf_loading": {
+    "en-us": "Loading…"
+  },
+  "lf_manifest": {
+    "en-us": "MANIFEST"
+  },
+  "lf_no_clips_for_state": {
+    "en-us": "No clips loaded — cannot add a state."
+  },
+  "lf_no_pack": {
+    "en-us": "no pack"
+  },
+  "lf_no_pack_loaded": {
+    "en-us": "no pack loaded"
+  },
+  "lf_no_packs_match": {
+    "en-us": "No packs match this filter."
+  },
+  "lf_no_self_link": {
+    "en-us": "A state cannot transition to itself here."
+  },
+  "lf_no_tier": {
+    "en-us": "no tier yet — entry rung"
+  },
+  "lf_note": {
+    "en-us": "NOTE"
+  },
+  "lf_nothing_to_save": {
+    "en-us": "Nothing to save."
+  },
+  "lf_nothing_to_validate": {
+    "en-us": "Nothing to validate."
+  },
+  "lf_of": {
+    "en-us": "of"
+  },
+  "lf_on": {
+    "en-us": "on:"
+  },
+  "lf_pack_lc": {
+    "en-us": "pack"
+  },
+  "lf_pack_library": {
+    "en-us": "Pack Library"
+  },
+  "lf_pack_manager": {
+    "en-us": "PACK MANAGER"
+  },
+  "lf_packs_lc": {
+    "en-us": "packs"
+  },
+  "lf_parry_scale": {
+    "en-us": "Parry scale"
+  },
+  "lf_parry_word": {
+    "en-us": "parry"
+  },
+  "lf_player_budget": {
+    "en-us": "PLAYER BUDGET"
+  },
+  "lf_poise": {
+    "en-us": "Poise"
+  },
+  "lf_priority": {
+    "en-us": "priority"
+  },
+  "lf_removed": {
+    "en-us": "Removed"
+  },
+  "lf_response": {
+    "en-us": "RESPONSE"
+  },
+  "lf_response_perilous": {
+    "en-us": "RESPONSE — PERILOUS"
+  },
+  "lf_save": {
+    "en-us": "Save"
+  },
+  "lf_save_dirty": {
+    "en-us": "Save *"
+  },
+  "lf_save_failed": {
+    "en-us": "Save failed:"
+  },
+  "lf_saved": {
+    "en-us": "Saved"
+  },
+  "lf_scroll_for_more": {
+    "en-us": "scroll for more"
+  },
+  "lf_select_state_events": {
+    "en-us": "select a state to see its event windows"
+  },
+  "lf_select_state_prompt": {
+    "en-us": "Select a state on the graph."
+  },
+  "lf_server_budget": {
+    "en-us": "SERVER BUDGET"
+  },
+  "lf_sfx": {
+    "en-us": "SFX"
+  },
+  "lf_shape": {
+    "en-us": "SHAPE"
+  },
+  "lf_skeleton": {
+    "en-us": "SKELETON"
+  },
+  "lf_skeleton_word": {
+    "en-us": "Skeleton"
+  },
+  "lf_start": {
+    "en-us": "Start"
+  },
+  "lf_states_lc": {
+    "en-us": "states"
+  },
+  "lf_states_word": {
+    "en-us": "States"
+  },
+  "lf_tab_creature": {
+    "en-us": "Creature Composer"
+  },
+  "lf_tab_pack": {
+    "en-us": "Pack Browser"
+  },
+  "lf_tab_sm": {
+    "en-us": "State Machine"
+  },
+  "lf_tab_tae": {
+    "en-us": "TAE Editor"
+  },
+  "lf_tae_events_word": {
+    "en-us": "TAE events"
+  },
+  "lf_tae_timeline": {
+    "en-us": "TAE TIMELINE"
+  },
+  "lf_telegraph_word": {
+    "en-us": "telegraph"
+  },
+  "lf_ticks": {
+    "en-us": "ticks"
+  },
+  "lf_tier": {
+    "en-us": "tier"
+  },
+  "lf_timeline": {
+    "en-us": "TIMELINE"
+  },
+  "lf_timing": {
+    "en-us": "TIMING"
+  },
+  "lf_title": {
+    "en-us": "Loomforge Bench"
+  },
+  "lf_to_lc": {
+    "en-us": "to"
+  },
+  "lf_tool_add": {
+    "en-us": "+St"
+  },
+  "lf_tool_delete": {
+    "en-us": "Del"
+  },
+  "lf_tool_link": {
+    "en-us": "Tr"
+  },
+  "lf_tool_select": {
+    "en-us": "Sel"
+  },
+  "lf_transition": {
+    "en-us": "TRANSITION"
+  },
+  "lf_transition_gone": {
+    "en-us": "That transition is gone."
+  },
+  "lf_transition_removed": {
+    "en-us": "Transition removed."
+  },
+  "lf_transitions_word": {
+    "en-us": "Transitions"
+  },
+  "lf_unknown_clip_or_state": {
+    "en-us": "— unknown clip or state"
+  },
+  "lf_validate": {
+    "en-us": "Validate Rig"
+  },
+  "lf_validate_ok": {
+    "en-us": "Validate: no warnings."
+  },
+  "lf_validate_prefix": {
+    "en-us": "Validate:"
+  },
+  "lf_version": {
+    "en-us": "Version"
+  },
+  "lf_vfx": {
+    "en-us": "VFX"
+  },
+  "lf_warnings_word": {
+    "en-us": "validation warning(s)"
+  },
+  "lf_window": {
+    "en-us": "window"
+  },
+  "pe_air": {
+    "en-us": "air:"
+  },
+  "pe_atm": {
+    "en-us": "atm"
+  },
+  "pe_axes_in_band": {
+    "en-us": "axes in band"
+  },
+  "pe_cells": {
+    "en-us": "cells"
+  },
+  "pe_core": {
+    "en-us": "core"
+  },
+  "pe_crust": {
+    "en-us": "crust"
+  },
+  "pe_element_distribution": {
+    "en-us": "ELEMENT DISTRIBUTION"
+  },
+  "pe_in_band": {
+    "en-us": "in band"
+  },
+  "pe_leg_al": {
+    "en-us": "Al aluminium"
+  },
+  "pe_leg_c": {
+    "en-us": "C carbon"
+  },
+  "pe_leg_ca": {
+    "en-us": "Ca calcium"
+  },
+  "pe_leg_cold": {
+    "en-us": "cold downwelling"
+  },
+  "pe_leg_fe": {
+    "en-us": "Fe iron"
+  },
+  "pe_leg_gas": {
+    "en-us": "gas (air)"
+  },
+  "pe_leg_hot": {
+    "en-us": "hot upwelling"
+  },
+  "pe_leg_liquid": {
+    "en-us": "liquid (water)"
+  },
+  "pe_leg_mg": {
+    "en-us": "Mg magnesium"
+  },
+  "pe_leg_molten": {
+    "en-us": "molten"
+  },
+  "pe_leg_neutral": {
+    "en-us": "neutral"
+  },
+  "pe_leg_o": {
+    "en-us": "O oxygen"
+  },
+  "pe_leg_si": {
+    "en-us": "Si silicate"
+  },
+  "pe_leg_solid": {
+    "en-us": "solid rock"
+  },
+  "pe_life_supporting": {
+    "en-us": "LIFE-SUPPORTING"
+  },
+  "pe_no_signal": {
+    "en-us": "no signal yet"
+  },
+  "pe_observed": {
+    "en-us": "observed"
+  },
+  "pe_ocean": {
+    "en-us": "ocean"
+  },
+  "pe_out_of_band": {
+    "en-us": "out of band"
+  },
+  "pe_pause": {
+    "en-us": "Pause"
+  },
+  "pe_paused": {
+    "en-us": "PAUSED"
+  },
+  "pe_play": {
+    "en-us": "Play"
+  },
+  "pe_playing": {
+    "en-us": "PLAYING"
+  },
+  "pe_reseed": {
+    "en-us": "Reseed"
+  },
+  "pe_reset": {
+    "en-us": "Reset"
+  },
+  "pe_size": {
+    "en-us": "size"
+  },
+  "pe_slice": {
+    "en-us": "Slice open"
+  },
+  "pe_tick": {
+    "en-us": "tick"
+  },
+  "pe_view": {
+    "en-us": "view"
+  },
+  "pe_view_heat": {
+    "en-us": "convection heat"
+  },
+  "pe_view_layers": {
+    "en-us": "layer stack"
+  },
+  "pe_view_material": {
+    "en-us": "material"
+  },
   "chem_air": {
     "en-us": "Air"
   },
@@ -808,6 +1414,9 @@
   },
   "chem_bulk_seed_btn": {
     "en-us": "BULK SEED"
+  },
+  "chem_bulk_seed_head": {
+    "en-us": "BULK ACCRETION SEED"
   },
   "chem_cells": {
     "en-us": "cells"
@@ -931,6 +1540,9 @@
   },
   "chem_greenhouse": {
     "en-us": "greenhouse"
+  },
+  "chem_hab_head": {
+    "en-us": "LIFE-SUPPORTING CONDITIONS"
   },
   "chem_grid": {
     "en-us": "Graticule"
@@ -1319,6 +1931,90 @@
   "ct_reset": {
     "en-us": "RESET"
   },
+  "ctt_title": {
+    "en-us": "CONTROLLER TESTER · LIVE BUS INSPECTOR"
+  },
+  "ctt_hint": {
+    "en-us": "WASD / left stick move the golem · Shift run · Ctrl crouch · Space jump · Tab / Back cycles context · Esc / Start = menu"
+  },
+  "ctt_ctx_world": {
+    "en-us": "World"
+  },
+  "ctt_ctx_menu": {
+    "en-us": "Menu"
+  },
+  "ctt_ctx_radial": {
+    "en-us": "Radial"
+  },
+  "ctt_ctx_textentry": {
+    "en-us": "TextEntry"
+  },
+  "ctt_gamepad0": {
+    "en-us": "gamepad 0:"
+  },
+  "ctt_connected": {
+    "en-us": "CONNECTED"
+  },
+  "ctt_not_detected": {
+    "en-us": "not detected"
+  },
+  "ctt_slots": {
+    "en-us": "slot(s)"
+  },
+  "ctt_tick": {
+    "en-us": "tick"
+  },
+  "ctt_mouse": {
+    "en-us": "mouse"
+  },
+  "ctt_golem_stage": {
+    "en-us": "GOLEM STAGE  ·  signals → motion"
+  },
+  "ctt_golem_failed": {
+    "en-us": "reference body failed to load:"
+  },
+  "ctt_analog_latch": {
+    "en-us": "ANALOG LATCH  ·  input.analog_latch() (volatile cache)"
+  },
+  "ctt_analog_note": {
+    "en-us": "120 Hz cache sampled off the discrete bus; seq climbs while live"
+  },
+  "ctt_analog_none": {
+    "en-us": "no analog latch this frame (device not sampling)"
+  },
+  "ctt_live": {
+    "en-us": "LIVE"
+  },
+  "ctt_stale": {
+    "en-us": "STALE"
+  },
+  "ctt_context_stack": {
+    "en-us": "CONTEXT STACK"
+  },
+  "ctt_focus_chain": {
+    "en-us": "FOCUS CHAIN  (owner = top of chain)"
+  },
+  "ctt_consumed": {
+    "en-us": "CONSUMED THIS FRAME"
+  },
+  "ctt_no_signals": {
+    "en-us": "— no signals this frame —"
+  },
+  "ctt_passed": {
+    "en-us": "passed"
+  },
+  "ctt_owns": {
+    "en-us": "◀ OWNS"
+  },
+  "ctt_active_tag": {
+    "en-us": "active"
+  },
+  "ctt_base_tag": {
+    "en-us": "base"
+  },
+  "ctt_keys": {
+    "en-us": "KEYS"
+  },
   "ctx_cut": {
     "en-us": "Cut"
   },
@@ -1406,6 +2102,9 @@
   "menu_the_seven_shards": {
     "en-us": "THE SEVEN SHARDS"
   },
+  "menu_update_available": {
+    "en-us": "UPDATE AVAILABLE"
+  },
   "pause_esc_to_return": {
     "en-us": "ESC TO RETURN"
   },
@@ -1436,11 +2135,29 @@
   "pc_cell": {
     "en-us": "Cell"
   },
+  "pc_chat_connected": {
+    "en-us": "connected"
+  },
+  "pc_chat_disconnected": {
+    "en-us": "disconnected"
+  },
+  "pc_chat_is_now": {
+    "en-us": "is now"
+  },
+  "pc_chat_joined": {
+    "en-us": "joined"
+  },
+  "pc_chat_left": {
+    "en-us": "left"
+  },
+  "pc_chat_you": {
+    "en-us": "You"
+  },
+  "pc_chat_you_are_now": {
+    "en-us": "you are now"
+  },
   "pc_cluster": {
     "en-us": "cluster"
-  },
-  "pc_cluster_editor": {
-    "en-us": "Cluster Editor"
   },
   "pc_cluster_field": {
     "en-us": "Cluster field"
@@ -1540,6 +2257,9 @@
   },
   "pc_press": {
     "en-us": "Press"
+  },
+  "pc_prism_test_room": {
+    "en-us": "Prism Test Room"
   },
   "pc_readout": {
     "en-us": "Readout"
@@ -1889,6 +2609,21 @@
   "sb_flicker_solarbirth": {
     "en-us": "flicker · solarbirth"
   },
+  "sb_menu": {
+    "en-us": "MENU"
+  },
+  "sb_orbit_hint": {
+    "en-us": "Orbit — right-drag"
+  },
+  "sb_replay": {
+    "en-us": "Replay"
+  },
+  "sb_restart_meta": {
+    "en-us": "restart the fly-in"
+  },
+  "sb_zoom_hint": {
+    "en-us": "Zoom — wheel"
+  },
   "sb_planets_inner_outer": {
     "en-us": "planets (inner → outer):"
   },
@@ -2234,6 +2969,48 @@
   "sw_ft_prev": {
     "en-us": "Prev"
   },
+  "sw_fx_billow": {
+    "en-us": "Rounded lobes"
+  },
+  "sw_fx2_billow": {
+    "en-us": "clumped soil & cloud swell"
+  },
+  "sw_fx_fbm": {
+    "en-us": "Layered octave cloud"
+  },
+  "sw_fx2_fbm": {
+    "en-us": "natural rock & cloud grain"
+  },
+  "sw_fx_off": {
+    "en-us": "Voice silent"
+  },
+  "sw_fx2_off": {
+    "en-us": "enable it to fold in"
+  },
+  "sw_fx_ridged": {
+    "en-us": "Folded crests"
+  },
+  "sw_fx2_ridged": {
+    "en-us": "ridges, cracks, vein filaments"
+  },
+  "sw_fx_stripe": {
+    "en-us": "Warped parallel bands"
+  },
+  "sw_fx2_stripe": {
+    "en-us": "strata, grain, brushed metal"
+  },
+  "sw_fx_value": {
+    "en-us": "Soft interpolated blotches"
+  },
+  "sw_fx2_value": {
+    "en-us": "the quiet bed to build on"
+  },
+  "sw_fx_worley": {
+    "en-us": "Swirling cellular plates"
+  },
+  "sw_fx2_worley": {
+    "en-us": "pebbles, cell walls, shell"
+  },
   "sw_gain": {
     "en-us": "Gain"
   },
@@ -2242,6 +3019,12 @@
   },
   "sw_glow_band": {
     "en-us": "Glow band"
+  },
+  "sw_glow_color": {
+    "en-us": "Glow color"
+  },
+  "sw_hue": {
+    "en-us": "Hue"
   },
   "sw_invert": {
     "en-us": "Invert"
@@ -2276,6 +3059,12 @@
   "sw_material": {
     "en-us": "Material"
   },
+  "sw_materials": {
+    "en-us": "Materials"
+  },
+  "sw_mat_pick_hint": {
+    "en-us": "Click a material to bind it to this recipe."
+  },
   "sw_metal_mod": {
     "en-us": "Metal mod"
   },
@@ -2291,6 +3080,12 @@
   "sw_output_stage": {
     "en-us": "Output Stage"
   },
+  "sw_page_bench": {
+    "en-us": "Bench"
+  },
+  "sw_page_materials": {
+    "en-us": "Materials"
+  },
   "sw_prev": {
     "en-us": "‹"
   },
@@ -2303,14 +3098,26 @@
   "sw_reseed": {
     "en-us": "Reseed"
   },
+  "sw_reseed_meta": {
+    "en-us": "reseed the noise"
+  },
   "sw_roll": {
     "en-us": "Roll"
+  },
+  "sw_roll_meta": {
+    "en-us": "reroll this patch"
+  },
+  "sw_commit_meta": {
+    "en-us": "bake to staging"
   },
   "sw_rough_mod": {
     "en-us": "Rough mod"
   },
   "sw_roughness": {
     "en-us": "Roughness"
+  },
+  "sw_saturation": {
+    "en-us": "Saturation"
   },
   "sw_scale": {
     "en-us": "scale"
@@ -2416,6 +3223,12 @@
   },
   "cat_nav_splash": {
     "en-us": "Splash"
+  },
+  "cat_nav_surface": {
+    "en-us": "Surface"
+  },
+  "cat_surface_note": {
+    "en-us": "3D surface (quad layout) — left-drag a panel to orbit"
   },
   "qm_menu_open": {
     "en-us": "Open"
@@ -2614,6 +3427,9 @@
   },
   "sig_zoom_out": {
     "en-us": "Zoom Out"
+  },
+  "sig_toggle_mouse_capture": {
+    "en-us": "Toggle Mouse Capture"
   },
   "sig_undo": {
     "en-us": "Undo"

@@ -3,7 +3,7 @@
   "behaviour": "populous",
   "params": {},
   "tree": {
-    "component": "screen",
+    "component": "surface",
     "id": "populous",
     "on_menu": "pause_open",
     "on_page_next": "page_next",
@@ -144,7 +144,7 @@
                             "aspect": 1.0,
                             "children": [
                               {
-                                "component": "rtt",
+                                "component": "surface",
                                 "id": "pop_view_rtt",
                                 "style": "rtt_holder",
                                 "grow": 1.0,
@@ -427,11 +427,21 @@
         "dpad_down": 12,
         "dpad_left": 13,
         "dpad_right": 14,
-        "stick": 15
+        "stick": 15,
+        "face_south": 4,
+        "face_east": 5,
+        "face_west": 6,
+        "face_north": 7,
+        "bumper_l": 2,
+        "bumper_r": 3,
+        "trigger_l": 0,
+        "trigger_r": 1,
+        "stick_l": 15,
+        "stick_r": 15
       }
     },
     "rtt_holder": {
-      "_comment": "The framed RTT HOLDER the `rtt_panel` proto defaults to, and every bench's RTT slot styles against — the template-tier namespace for an offscreen-view slot's chrome (replaced the per-scene assetpipeline holder block, same values).",
+      "_comment": "The framed RTT HOLDER every bench's rtt/viewport slot styles against — the shared chrome for an offscreen-view slot (replaced the per-scene assetpipeline holder block, same values).",
       "fill_top": "$well_top",
       "fill_bot": "$well_bot",
       "border": "$edge2",
@@ -470,17 +480,10 @@
       "stat_value": "$ink_bright"
     },
     "window": {
-      "w": 1180,
-      "h": 726,
-      "min_margin": 32,
       "radius": 4,
       "fill_top": "$stone3",
       "fill_bot": "$stone1",
-      "border": "$edge2",
-      "shadow": "$shadow",
-      "shadow_dy": 18,
-      "shadow_feather": 46,
-      "shadow_grow": 4
+      "border": "$edge2"
     }
   }
 }

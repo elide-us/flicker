@@ -55,6 +55,7 @@ use flicker_worker::WorkerPool;
 
 pub mod commit;
 pub mod lit;
+pub mod palette;
 pub mod route;
 
 /// The pair script — the scene's LOGIC half, by name (five-line architecture).
@@ -133,9 +134,14 @@ pub struct Sablework {
     /// The view the centre shows — an index into the tabs' bound number:
     /// `0..MAP_IDS.len()` are the flat maps, `MAP_IDS.len()` is the LIT view.
     sel_map: usize,
+    /// Which PAGE the bench shows: 0 = the synth bench, 1 = the materials browser.
+    page: usize,
     /// The 256-material index, for the binding picker's labels. Empty if the
     /// tables could not be read — the bench still runs unbound.
     materials: Vec<(MaterialId, String)>,
+    /// The emissive glow palette — prefab colours loaded from `palettes.json`. Empty if
+    /// the file could not be read (the swatch strip then shows nothing).
+    palette: palette::GlowPalette,
     /// Which OFFERED bake rung a Commit uses, an index into the offered list.
     size_rung: usize,
     /// The data dir the material index was read from — held so a rename writes the new name
@@ -264,6 +270,9 @@ impl Sablework {
                 Vec::new()
             }
         };
+        // The emissive colour palette — a sibling data file, loaded through the same
+        // roots seam. An unreadable file degrades to an empty strip (visibly wrong).
+        let palette = palette::GlowPalette::load(&data_dir);
         // Fill the header dropdown from the material index — the ratified "Rust fills the
         // static scene's container" pattern. Option 0 (Unbound) is authored; each material is
         // one more option whose label BINDS its name (`mat_opt_<i>`) from the Model, so the
@@ -286,6 +295,65 @@ impl Sablework {
                 sel.children.push(opt);
             }
         }
+        // Fill the emissive swatch strip from the palette — the same "Rust fills the
+        // static scene's container" pattern. Each swatch is a `button` whose colour rides
+        // an injected style block (`palette::inject_glow_styles`), whose selection wash is
+        // lua-derived (`glow_sw<n>_sty`), and which fires `glow_pick_<i>` to the dispatcher.
+        // Ordinals continue the sw_out ring (the fine knobs move to 51+ in the scene).
+        if let Some(strip) = authored
+            .as_mut()
+            .and_then(|t| find_by_id_mut(t, "sw_glow_swatches"))
+        {
+            for (i, c) in palette.iter().enumerate() {
+                let n = i + 1;
+                let mut b = UiNode {
+                    component: "button".to_string(),
+                    id: format!("glow_pick_{i}"),
+                    action: Some(format!("glow_pick_{i}")),
+                    grow: Some(1.0),
+                    tab_group: "sw_out".to_string(),
+                    nav_ordinal: 10 + n as u32,
+                    ..Default::default()
+                };
+                b.props.insert(
+                    "style".to_string(),
+                    Value::Text(format!("sablework.glowsw.{}", c.id)),
+                );
+                b.props.insert(
+                    "style_bind".to_string(),
+                    Value::Text(format!("glow_sw{n}_sty")),
+                );
+                strip.children.push(b);
+            }
+        }
+        // Fill the materials browse list — one row button per DEFINED material (the name
+        // via label_bind; a click binds the recipe to it via mat_pick_<i>). The header
+        // dropdown still binds too; this is the roomier browser on the Materials page.
+        if let Some(list) = authored
+            .as_mut()
+            .and_then(|t| find_by_id_mut(t, "sw_mat_list"))
+        {
+            for i in 0..materials.len() {
+                let mut b = UiNode {
+                    component: "button".to_string(),
+                    id: format!("mat_pick_{i}"),
+                    action: Some(format!("mat_pick_{i}")),
+                    tab_group: "sw_mat_panel".to_string(),
+                    nav_ordinal: (i + 1) as u32,
+                    size: Some(28.0),
+                    ..Default::default()
+                };
+                b.props.insert(
+                    "label_bind".to_string(),
+                    Value::Text(format!("mat_row_{i}")),
+                );
+                b.props.insert(
+                    "style".to_string(),
+                    Value::Text("sablework.button".to_string()),
+                );
+                list.children.push(b);
+            }
+        }
         // Open on the ratified baseline rung, so a Commit does what the spec says
         // without anyone touching the control.
         let size_rung = flicker_texture::size::offered()
@@ -301,7 +369,9 @@ impl Sablework {
             patch: 0,
             sel_ch: 0,
             sel_map: 0,
+            page: 0,
             materials,
+            palette,
             size_rung,
             data_dir,
             rename: None,
@@ -454,6 +524,7 @@ impl Sablework {
         // The two cursors, as NUMBERS — the tabs bind one, derive() reads both.
         m.set("sel_ch", self.sel_ch);
         m.set("sel_map", self.sel_map);
+        m.set("sel_page", self.page as f64);
 
         for (i, ch) in self.recipe.channels.iter().enumerate() {
             let n = i + 1;
@@ -461,6 +532,27 @@ impl Sablework {
             m.set(
                 format!("ch{n}_source_label"),
                 format!("$sw_src_{}", ch.source.id()),
+            );
+            // The card's LIVE effect blurb: what the CURRENT source does, or "silent"
+            // when the voice is off. Source-only (the blend pill already names the
+            // blend); the tree localises the $token at the draw boundary.
+            m.set(
+                format!("ch{n}_fx"),
+                if ch.enabled {
+                    format!("$sw_fx_{}", ch.source.id())
+                } else {
+                    "$sw_fx_off".to_string()
+                },
+            );
+            // The blurb's SECOND line — a short "comment" under the "status" above, split so
+            // neither line runs off the narrow card.
+            m.set(
+                format!("ch{n}_fx2"),
+                if ch.enabled {
+                    format!("$sw_fx2_{}", ch.source.id())
+                } else {
+                    "$sw_fx2_off".to_string()
+                },
             );
             m.set(
                 format!("ch{n}_blend_label"),
@@ -476,7 +568,14 @@ impl Sablework {
         m.set("lit_spin", self.lit.spinning);
 
         let out = &self.recipe.out;
+        // The base colour, as the two knobs that reach it: the ramp's representative
+        // hue and saturation. The ramp is the ONE representation of colour — these
+        // are a reading of it for the sliders, and turning either re-tints every
+        // stop (route::apply), so the knob and the swatch never disagree.
+        let (tint_hue, tint_sat) = out.ramp.tint();
         for (key, value) in [
+            ("tint_hue", tint_hue),
+            ("tint_sat", tint_sat),
             ("relief", out.relief),
             ("roughness", out.roughness),
             ("roughness_mod", out.roughness_mod),
@@ -487,6 +586,20 @@ impl Sablework {
             ("emissive_band", out.emissive_band),
         ] {
             m.set(key, value as f64);
+        }
+        // The emissive palette: the selected swatch (nearest match to the current glow
+        // colour — exact for a palette-written recipe, nearest for a factory/old one) and
+        // each swatch's id, so the pair script derives the selection wash. `glow_sel` is
+        // -1 for an empty palette.
+        m.set("glow_count", self.palette.len() as f64);
+        m.set(
+            "glow_sel",
+            self.palette
+                .nearest(out.emissive)
+                .map_or(-1.0, |i| i as f64),
+        );
+        for (i, c) in self.palette.iter().enumerate() {
+            m.set(format!("glow_sw{}_id", i + 1), c.id.clone());
         }
 
         let ch = self.selected_channel();
@@ -527,6 +640,7 @@ impl Sablework {
         // an index is a number everywhere — 1B64FF03).
         for (i, (_, name)) in self.materials.iter().enumerate() {
             m.set(format!("mat_opt_{}", i + 1), name.clone());
+            m.set(format!("mat_row_{i}"), name.clone());
         }
         m.set("sel_material", self.material_option() as f64);
         // The rename: whether one is open, the bound material's byte id made EXPLICIT
@@ -759,6 +873,9 @@ impl Scene for Sablework {
         // The theme, the shared satellites, and THIS scene's own style blocks
         // (`def.styles` — the five-line home for the bench's values).
         self.ui_styles = flicker::ui::load_shared_styles(self.scene_styles_json.as_ref());
+        // Inject the emissive swatch colours as literal-rgba style blocks (the godmode
+        // pattern) — AFTER token resolution, so they carry rgba, not $tokens.
+        palette::inject_glow_styles(&mut self.ui_styles, &self.palette);
         self.tiles = self
             .ui_styles
             .get("sablework")
@@ -828,17 +945,20 @@ impl Scene for Sablework {
             mouse: input.mouse_position,
             clicked: input.mouse_left_pressed,
             down: input.mouse_left,
+            right_down: input.mouse_right,
             screen,
             typed,
             backspace,
             wheel: input.mouse_wheel_delta,
+            exclusive: false,
+            motion: Default::default(),
         };
         let frame = run_ui(&tree, &model, &self.ui_styles, &snap, &mut self.ui_state);
         let over_hud = frame.results.is_on("hud_hit");
         // The `rtt` node reserved a rect for the lit sub-scene; `render` draws into
         // it. `None` when the Lit tab is not showing, which is also what stops the
         // offscreen pass from costing anything.
-        self.lit_rect = frame.rtt_rect("sw_lit");
+        self.lit_rect = frame.surface_rect("sw_lit");
         self.hud_commands = frame.commands;
         self.lit.tick(dt);
 
@@ -850,6 +970,9 @@ impl Scene for Sablework {
         // names — navigation never reads a raw key. ──
         let mut walker = WalkerHandler::hud(&mut self.ui_state, over_hud)
             .with_nav(&tree, &model)
+            // The resolved rects make the panel tier move GEOMETRICALLY — Left from
+            // the centre swatch lands on the channel beside it (flatten, 1A292918).
+            .with_rects(&frame.rects)
             .with_intents(&self.ui_intents);
         {
             let mut chain: [&mut dyn InputHandler; 1] = [&mut walker];

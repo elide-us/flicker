@@ -12,12 +12,13 @@ use flicker::render::MeshVertex;
 
 pub use flicker_orrery::*;
 
-/// Pack an RGB colour into the mesh shader's direct-RGB666 escape: low 12 bits =
-/// `0xFFF`, then 6-bit channels in bits 12-17 (R) / 18-23 (G) / 24-29 (B). Lets a
-/// mesh carry a literal colour instead of a material-table index.
+/// Pack an RGB colour into the mesh shader's direct-RGB escape (`mesh.wgsl`
+/// `material_color`, u8-catalog layout 2026-08-19): bit 31 set, then RGB888 in
+/// bits 0-7 (R) / 8-15 (G) / 16-23 (B). Lets a mesh carry a literal colour
+/// instead of a material-catalog id.
 pub fn pack_rgb(c: [f32; 3]) -> u32 {
-    let q = |x: f32| (((x.clamp(0.0, 1.0) * 63.0) + 0.5) as u32) & 0x3F;
-    0xFFFu32 | (q(c[0]) << 12) | (q(c[1]) << 18) | (q(c[2]) << 24)
+    let q = |x: f32| (((x.clamp(0.0, 1.0) * 255.0) + 0.5) as u32) & 0xFF;
+    0x8000_0000u32 | q(c[0]) | (q(c[1]) << 8) | (q(c[2]) << 16)
 }
 
 /// A unit UV sphere, every vertex carrying the flat surface colour `color` (unlit;
@@ -100,9 +101,9 @@ mod tests {
     #[test]
     fn direct_rgb_escape_round_trips() {
         let m = pack_rgb([1.0, 0.0, 0.5]);
-        assert_eq!(m & 0xFFF, 0xFFF, "direct-RGB escape marker set");
-        assert_eq!((m >> 12) & 0x3F, 63, "R = full");
-        assert_eq!((m >> 18) & 0x3F, 0, "G = none");
-        assert_eq!((m >> 24) & 0x3F, 32, "B ≈ half");
+        assert_ne!(m & 0x8000_0000, 0, "direct-RGB escape flag (bit 31) set");
+        assert_eq!(m & 0xFF, 255, "R = full");
+        assert_eq!((m >> 8) & 0xFF, 0, "G = none");
+        assert_eq!((m >> 16) & 0xFF, 128, "B ≈ half");
     }
 }

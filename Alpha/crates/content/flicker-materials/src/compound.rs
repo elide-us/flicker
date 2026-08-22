@@ -1,4 +1,5 @@
-//! One row of the **compound catalog** (`Alpha/content/data/compounds.json`) — the
+//! One row of the **compound catalog** (`Alpha/content/data/compounds.json` plus its
+//! sibling `crust_compounds.json`, merged at load) — the
 //! chemistry-facing vocabulary transcribed from Prism *BookIII* ("Common /
 //! Alloy / Biological / Mineral / Useful / Gemstone Compounds"). A compound is a
 //! named combination of elements (`SiO₂`, `CaCO₃`, `Fe₂O₃`, an alloy like

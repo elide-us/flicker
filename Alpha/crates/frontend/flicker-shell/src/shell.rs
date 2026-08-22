@@ -14,7 +14,7 @@ use flicker::render::{Renderer, TextureHandle};
 use flicker::scene::{GotoMode, Scene, SceneInput, SceneManager, Transition};
 use flicker::script::{parse_ui_json, HudCommand, ScriptHost, UiAnchor, UiNode, Value, ValueMap};
 use flicker::ui::{
-    focusables_of, render_hud, run_ui, SceneDef, SceneManifest, Surface, Surfaces, UiInput,
+    focusables_of, render_hud, run_ui, SceneDef, SceneManifest, Section, Sections, UiInput,
     UiIntents, UiState, WalkerHandler,
 };
 use flicker_input_core::{
@@ -160,6 +160,12 @@ pub struct ShellConfig {
     /// menu popup. `false` (the default via [`single`](ShellConfig::single)) keeps the
     /// plain-button menu every single-scene client uses.
     pub scene_select: bool,
+    /// The SHIPPED APP's version (`env!("CARGO_PKG_VERSION")` in the client crate —
+    /// prism-alpha's, not this library's). Non-empty ⇒ the menu shows it bottom-right
+    /// and a one-shot GitHub Releases check may light the UPDATE AVAILABLE chip.
+    /// Empty (the [`single`](ShellConfig::single) default) ⇒ no version line, no
+    /// network — dev/POC clients never phone home.
+    pub app_version: &'static str,
 }
 
 impl ShellConfig {
@@ -179,6 +185,7 @@ impl ShellConfig {
             })],
             settings_dir,
             scene_select: false,
+            app_version: "",
         }
     }
 }
@@ -201,6 +208,76 @@ fn set_scenes(scenes: Vec<SceneEntry>) {
 /// A cheap clone of the shared scene registry (the `Rc` is shared, not the data).
 fn scenes() -> Rc<[SceneEntry]> {
     SCENES.with(|s| s.borrow().clone())
+}
+
+/// The one-shot update check's lifecycle (ratified architecture 2026-08-18:
+/// in-app NOTIFY only — the launcher, arriving with the IdP work, owns actual
+/// patching). Same run()-installs / menu-reads shape as [`SCENES`].
+enum UpdateCheck {
+    /// No check runs: no `app_version` declared, or the check thread ended
+    /// without news (offline, current, or unparsable — all deliberately silent).
+    Off,
+    Pending(std::sync::mpsc::Receiver<flicker::net::update::UpdateInfo>),
+    Done(flicker::net::update::UpdateInfo),
+}
+
+thread_local! {
+    /// The shipped app's version + the update check's state. Set once by [`run`];
+    /// the menu polls per frame. `thread_local` beside [`SCENES`] for the same
+    /// reason — the whole shell lives on the winit thread.
+    static APP_VERSION: RefCell<&'static str> = const { RefCell::new("") };
+    static UPDATE: RefCell<UpdateCheck> = const { RefCell::new(UpdateCheck::Off) };
+}
+
+/// Where prism-alpha's releases live — the only repository the shell checks
+/// against and the only host [`open_url`] will launch.
+const RELEASES_OWNER: &str = "elide-us";
+const RELEASES_REPO: &str = "flicker";
+
+/// Advance the update check and hand back the latched result, if any. Drains
+/// the receiver at most once per call (the menu calls once per frame).
+fn poll_update() -> Option<flicker::net::update::UpdateInfo> {
+    use std::sync::mpsc::TryRecvError;
+    UPDATE.with(|u| {
+        let mut u = u.borrow_mut();
+        match &*u {
+            UpdateCheck::Off => None,
+            UpdateCheck::Done(info) => Some(info.clone()),
+            UpdateCheck::Pending(rx) => match rx.try_recv() {
+                Ok(info) => {
+                    *u = UpdateCheck::Done(info.clone());
+                    Some(info)
+                }
+                Err(TryRecvError::Empty) => None,
+                Err(TryRecvError::Disconnected) => {
+                    // The check finished with nothing to say — stop polling.
+                    *u = UpdateCheck::Off;
+                    None
+                }
+            },
+        }
+    })
+}
+
+/// Open a URL in the player's default browser — fire-and-forget, warn on
+/// failure. Guarded to our own release pages: the shell launches nothing else.
+fn open_url(url: &str) {
+    if !url.starts_with(concat!("https://github.com/", "elide-us/")) {
+        tracing::warn!("refusing to open non-release URL {url}");
+        return;
+    }
+    #[cfg(target_os = "macos")]
+    let spawned = std::process::Command::new("open").arg(url).spawn();
+    #[cfg(target_os = "windows")]
+    let spawned = std::process::Command::new("cmd")
+        .args(["/C", "start", "", url])
+        .spawn();
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let spawned = std::process::Command::new("xdg-open").arg(url).spawn();
+    match spawned {
+        Ok(_) => tracing::info!("opened release page {url}"),
+        Err(e) => tracing::warn!("could not open {url}: {e}"),
+    }
 }
 
 /// Restore the persisted display setting, install the scene registry, then run the
@@ -226,6 +303,17 @@ pub fn run(config: ShellConfig) -> anyhow::Result<()> {
     }
     SCENE_SELECT.with(|s| s.set(config.scene_select));
     set_scenes(config.scenes);
+    // Kick the one-shot update check for clients that declare a version (the
+    // shipped game). Background thread; the menu polls; silence on any failure.
+    APP_VERSION.with(|v| *v.borrow_mut() = config.app_version);
+    if !config.app_version.is_empty() {
+        let rx = flicker::net::update::check_github_latest(
+            RELEASES_OWNER,
+            RELEASES_REPO,
+            config.app_version,
+        );
+        UPDATE.with(|u| *u.borrow_mut() = UpdateCheck::Pending(rx));
+    }
     // Every shell client inherits the Prism pointer (theme-tinted hardware
     // cursor); when the pointer is hidden/captured elsewhere it simply isn't
     // shown — no visibility wiring here.
@@ -658,7 +746,7 @@ fn scene_rows_for(scenes: &[SceneEntry], realm: &str) -> Vec<SceneRow> {
 /// scene rows. `menu.lua`'s arrange() lights the page.
 fn main_menu_tree(scenes: &[SceneEntry], muse_id: Option<usize>) -> UiNode {
     let empty = || UiNode {
-        component: "screen".to_string(),
+        component: "surface".to_string(),
         ..Default::default()
     };
     let def: serde_json::Value = match serde_json::from_str(MAIN_SCENE_JSON) {
@@ -751,7 +839,29 @@ impl MainMenuScene {
         if results.is_on("quit") {
             return Transition::Quit;
         }
+        if results.is_on("open_update_page") {
+            // Inline side effect, no transition: the player stays in the menu
+            // while the release page opens in their browser.
+            if let Some(info) = poll_update() {
+                open_url(&info.url);
+            }
+        }
         Transition::None
+    }
+
+    /// The menu's per-frame model: the shipped version (bottom-right text) and
+    /// the update chip's visibility. Values only — every display STRING in the
+    /// tree is a `$token` (the chip's label lives in the stringtable).
+    fn model(&self) -> ValueMap {
+        let mut model = ValueMap::new();
+        let version = APP_VERSION.with(|v| *v.borrow());
+        if !version.is_empty() {
+            model.set("app_version", format!("v{version}"));
+        }
+        if poll_update().is_some() {
+            model.set("update_available", true);
+        }
+        model
     }
 }
 
@@ -783,8 +893,9 @@ impl Scene for MainMenuScene {
         signals: &mut SceneInput,
         renderer: &Renderer,
     ) -> Transition {
+        let model = self.model();
         let results = match self.view.as_mut() {
-            Some(view) => view.update(signals, input, renderer, &ValueMap::new()),
+            Some(view) => view.update(signals, input, renderer, &model),
             None => return Transition::None,
         };
         self.route(&results, renderer)
@@ -1045,7 +1156,7 @@ fn synthesized_splash_tree() -> UiNode {
     node.props
         .insert("height_frac".to_string(), Value::Number(1.0));
     let mut root = UiNode {
-        component: "screen".to_string(),
+        component: "surface".to_string(),
         anchor: UiAnchor::from_name("top_left"),
         children: vec![node],
         ..Default::default()
@@ -1171,10 +1282,13 @@ impl Scene for LogoScene {
                 mouse: input.mouse_position,
                 clicked: input.mouse_left_pressed,
                 down: input.mouse_left,
+                right_down: input.mouse_right,
                 screen: size,
                 typed: String::new(),
                 backspace: false,
                 wheel: 0.0,
+                exclusive: false,
+                motion: Default::default(),
             };
             let frame = run_ui(tree, &self.model(), &self.styles, &snap, &mut self.ui_state);
             self.hud_commands = frame.commands;
@@ -1348,7 +1462,7 @@ impl Scene for LoadingScene {
                 self.def.id
             );
             UiNode {
-                component: "screen".to_string(),
+                component: "surface".to_string(),
                 ..Default::default()
             }
         });
@@ -1370,7 +1484,7 @@ impl Scene for LoadingScene {
     }
 
     /// The loading screen runs in the **Menu** input context so the pump resolves
-    /// Cancel (B / Esc) for the back-out; there is nothing to confirm.
+    /// both Confirm (A / click — clicks through) and Cancel (B / Esc — backs out).
     fn input_context(&self) -> Option<InputContext> {
         Some(InputContext::Menu)
     }
@@ -1384,8 +1498,8 @@ impl Scene for LoadingScene {
     ) -> Transition {
         self.elapsed += dt;
         // Skip is a SIGNAL on the ONE bus, not a raw key (rule 37722F91): Cancel /
-        // Menu (B / Esc / Start) BACKS OUT; Confirm is reported but `Loading.lua`
-        // ignores it (a load must not be click-skipped). Same responder shape the
+        // Menu (B / Esc / Start) BACKS OUT; Confirm (A / click) CLICKS THROUGH —
+        // `Loading.lua` now routes both to a transition. Same responder shape the
         // splashes use, a one-layer chain.
         let mut root = SplashSkip::default();
         {
@@ -1406,10 +1520,13 @@ impl Scene for LoadingScene {
                 mouse: input.mouse_position,
                 clicked: input.mouse_left_pressed,
                 down: input.mouse_left,
+                right_down: input.mouse_right,
                 screen: size,
                 typed: String::new(),
                 backspace: false,
                 wheel: 0.0,
+                exclusive: false,
+                motion: Default::default(),
             };
             let frame = run_ui(
                 tree,
@@ -1447,9 +1564,9 @@ impl Scene for LoadingScene {
                     if intents.is_on(SPLASH_NEXT) {
                         return Transition::Fire(SPLASH_NEXT.to_string());
                     }
-                    // The script ignored the skip (a Confirm mid-load) — its call.
-                    // A completed timeline with no intent would strand the player, so
-                    // that advances loudly.
+                    // The script named no intent for this signal — its call (e.g. a
+                    // react-less or custom script). A completed timeline with no intent
+                    // would strand the player, so that advances loudly.
                     if !done {
                         return Transition::None;
                     }
@@ -1633,8 +1750,8 @@ const CONFIRM_SCRIPT: &str =
 /// orchestration host — a normal embedded const now.
 const MENU_SCRIPT: &str = include_str!("../../../../content/sensorium/scripts/Main.lua");
 
-/// The authored Main Menu scene-def (`Main.scene.json`) — a `frame` > `multi_view` > nav
-/// Menu panel + selector `paged_menu` PTT, all Rust components now (201F4F51).
+/// The authored Main Menu scene-def (`Main.scene.json`) — a two-column `row` workbench: the
+/// nav Menu `popup_panel` + the selector `paged_menu` PTT, all Rust components (201F4F51).
 /// `main_menu_tree` parses + expands it and fills the per-realm scene lists; `MainMenuScene`
 /// orchestrates it with `menu.lua`. (The manifest also loads + expands it at boot.)
 const MAIN_SCENE_JSON: &str = include_str!("../../../../content/sensorium/scenes/Main.scene.json");
@@ -1728,7 +1845,7 @@ struct SceneRow {
 fn parse_shared_modal(json: &str, id: &str, on_cancel: Option<&str>) -> UiNode {
     let fallback = || {
         let mut n = UiNode {
-            component: "screen".to_string(),
+            component: "surface".to_string(),
             id: id.to_string(),
             ..Default::default()
         };
@@ -1914,7 +2031,7 @@ mod menu_tree_tests {
     #[test]
     fn pause_and_confirm_build_from_scene_json() {
         let pause = shared_tree(PAUSE_SCENE_JSON);
-        assert_eq!(pause.component, "screen", "pause → full-bleed popup page");
+        assert_eq!(pause.component, "surface", "pause → full-bleed popup page");
         assert!(
             !pause.children.is_empty(),
             "pause popup filled with real content"
@@ -1927,7 +2044,7 @@ mod menu_tree_tests {
 
         let confirm = shared_tree(CONFIRM_SCENE_JSON);
         assert_eq!(
-            confirm.component, "screen",
+            confirm.component, "surface",
             "confirm → full-bleed popup page"
         );
         assert!(
@@ -2314,10 +2431,13 @@ impl MenuView {
             mouse: input.mouse_position,
             clicked: input.mouse_left_pressed,
             down: input.mouse_left,
+            right_down: input.mouse_right,
             screen: size,
             typed: String::new(),
             backspace: false,
             wheel: input.mouse_wheel_delta,
+            exclusive: false,
+            motion: Default::default(),
         };
         let frame = run_ui(tree, &eff, &self.styles, &snap, &mut self.ui_state);
         self.commands = frame.commands;
@@ -2400,8 +2520,8 @@ struct UnifiedSettingsScene {
     /// The screen's declared surface set (S8): the section rail + input sub-tab
     /// radio groups, the rebind banner + applied flash, and the two overlay
     /// dialogs. Owns every `visible_bind` gate `settings.lua` reads; published
-    /// into the Model once per frame ([`Surfaces::publish`] in `model`).
-    surfaces: Surfaces,
+    /// into the Model once per frame ([`Sections::publish`] in `model`).
+    surfaces: Sections,
     /// Active input sub-tab: "keyboard" / "mouse" / "controller" (two-way via the
     /// `input_subtab` pill bind; the `sub_*` gates mirror it through `surfaces`).
     input_subtab: String,
@@ -2446,23 +2566,23 @@ struct UnifiedSettingsScene {
 /// overlay dialogs — modal (the scene's update ladder processes only their
 /// actions while shown), carrying their S9 input-context as data (surfaced in
 /// `visibility_diff`, routed by nothing yet).
-fn settings_surfaces() -> Surfaces {
+fn settings_sections() -> Sections {
     let mut decls = vec![
-        Surface::new("sec_video").group("section").on(),
-        Surface::new("sec_audio").group("section"),
-        Surface::new("sec_input").group("section"),
+        Section::new("sec_video").group("section").on(),
+        Section::new("sec_audio").group("section"),
+        Section::new("sec_input").group("section"),
     ];
     for (i, name) in INPUT_SUBTABS.iter().enumerate() {
-        let s = Surface::new(format!("sub_{name}")).group("subtab");
+        let s = Section::new(format!("sub_{name}")).group("subtab");
         decls.push(if i == 0 { s.on() } else { s });
     }
     decls.extend([
-        Surface::new("rebinding"),
-        Surface::new("applied"),
-        Surface::new("confirm_close").context("Menu"),
-        Surface::new("restore_note").context("Menu"),
+        Section::new("rebinding"),
+        Section::new("applied"),
+        Section::new("confirm_close").context("Menu"),
+        Section::new("restore_note").context("Menu"),
     ]);
-    Surfaces::new(decls)
+    Sections::new(decls)
 }
 
 /// The input sub-tabs in STRIP ORDER. The `input_subtab` pill's option values are
@@ -2630,6 +2750,186 @@ fn binding_label(b: &InputBinding) -> String {
                 None => base,
             }
         }
+    }
+}
+
+/// The POSITIONAL `pad_glyphs` atlas cell name for a bound gamepad control — the
+/// vendor-NEUTRAL vocabulary (concept 0F5E0201): the mapping names a POSITION
+/// (`face_south`, `bumper_l`, …), and only the atlas ART speaks a vendor's dialect
+/// (Xbox Ⓐ vs PS ✕ live at the same `face_south` cell). `None` for a keyboard/mouse
+/// binding, or a pad control with no atlas cell (the system/vendor + Switch-style
+/// buttons). The names match the `pad_glyphs.cells` map authored in the scene
+/// styles; the walker turns a name into a sprite (an unknown/empty name draws
+/// nothing — the deliberate fail-quiet the glyph face already has).
+fn gamepad_glyph_name(b: &InputBinding) -> Option<&'static str> {
+    use flicker_input_core::{GamepadAxis, GamepadButton};
+    match b {
+        InputBinding::GamepadButton(gb) => Some(match gb {
+            GamepadButton::South => "face_south",
+            GamepadButton::East => "face_east",
+            GamepadButton::West => "face_west",
+            GamepadButton::North => "face_north",
+            GamepadButton::LeftBumper => "bumper_l",
+            GamepadButton::RightBumper => "bumper_r",
+            GamepadButton::LeftTrigger => "trigger_l",
+            GamepadButton::RightTrigger => "trigger_r",
+            GamepadButton::Start => "menu",
+            GamepadButton::Select => "view",
+            GamepadButton::DPadUp => "dpad_up",
+            GamepadButton::DPadDown => "dpad_down",
+            GamepadButton::DPadLeft => "dpad_left",
+            GamepadButton::DPadRight => "dpad_right",
+            GamepadButton::LeftStick => "stick_l",
+            GamepadButton::RightStick => "stick_r",
+            // No atlas cell: system/vendor buttons and the Switch-style extras.
+            GamepadButton::Guide
+            | GamepadButton::Mode
+            | GamepadButton::Touchpad
+            | GamepadButton::C
+            | GamepadButton::Z => return None,
+        }),
+        InputBinding::GamepadAxis { axis, .. } => Some(match axis {
+            GamepadAxis::LeftStickX | GamepadAxis::LeftStickY => "stick_l",
+            GamepadAxis::RightStickX | GamepadAxis::RightStickY => "stick_r",
+            GamepadAxis::LeftTrigger => "trigger_l",
+            GamepadAxis::RightTrigger => "trigger_r",
+        }),
+        // Keyboard / mouse / mouse-motion are not pad glyphs.
+        InputBinding::Key(_) | InputBinding::MouseButton(_) | InputBinding::MouseMotion { .. } => {
+            None
+        }
+    }
+}
+
+/// Publish the device-adaptive control display for `signals` into `model` — the ONE
+/// place a scene HUD turns an authored SIGNAL into the key/glyph the player will
+/// press. Per signal it sets:
+/// - `bind_<name>` — the localized text of the first keyboard/mouse binding (the
+///   keycap face), via [`binding_label`]; empty when the signal has no kbm binding.
+/// - `glyph_<name>` — the `pad_glyphs` atlas cell name of the first gamepad binding,
+///   via [`gamepad_glyph_name`]; empty when it has none.
+///
+/// and stamps `input_device` from the live last-used-device monitor, so a
+/// device-adaptive hint draws the keycap on kbm and the glyph on a pad. The scene
+/// authors the signal on the hint; the walker picks the face by `input_device`.
+/// (Settings' key-bindings page keeps its own slot-0 publish — it edits one specific
+/// slot, a different need — and shares only [`binding_label`] with this.)
+pub fn publish_signal_bindings(
+    model: &mut ValueMap,
+    map: &InputMap,
+    signals: impl IntoIterator<Item = ActionSignal>,
+) {
+    model.set(
+        "input_device",
+        flicker::input_device::last_input_context().token(),
+    );
+    for sig in signals {
+        let name = sig.name();
+        let binds = map.bindings_for(sig);
+        let cap = binds
+            .iter()
+            .copied()
+            .find(|b| matches!(b, InputBinding::Key(_) | InputBinding::MouseButton(_)))
+            .map(|b| binding_label(&b))
+            .unwrap_or_default();
+        model.set(format!("bind_{name}"), cap);
+        let glyph = binds
+            .iter()
+            .find_map(gamepad_glyph_name)
+            .unwrap_or_default();
+        model.set(format!("glyph_{name}"), glyph);
+    }
+}
+
+#[cfg(test)]
+mod signal_display_tests {
+    use super::*;
+    use flicker_input_core::{GamepadButton, Key};
+
+    #[test]
+    fn glyph_names_are_positional() {
+        // Vendor-NEUTRAL positions, not an Xbox dialect (concept 0F5E0201): West is
+        // `face_west` (Xbox X / PS Square live at the same cell, different art).
+        assert_eq!(
+            gamepad_glyph_name(&InputBinding::GamepadButton(GamepadButton::West)),
+            Some("face_west")
+        );
+        assert_eq!(
+            gamepad_glyph_name(&InputBinding::GamepadButton(GamepadButton::LeftBumper)),
+            Some("bumper_l")
+        );
+        assert_eq!(
+            gamepad_glyph_name(&InputBinding::GamepadButton(GamepadButton::Start)),
+            Some("menu")
+        );
+        // No atlas cell for the Guide button, and never for a keyboard key.
+        assert_eq!(
+            gamepad_glyph_name(&InputBinding::GamepadButton(GamepadButton::Guide)),
+            None
+        );
+        assert_eq!(gamepad_glyph_name(&InputBinding::Key(Key::E)), None);
+    }
+
+    #[test]
+    fn keycap_text_rides_the_stringtable_not_display() {
+        // The kbm keycap MUST resolve the key NAME through the stringtable (the locale
+        // axis, concept 0F5E0201) — never Rust Display/debug formatting. If someone
+        // swaps `binding_label`'s Key arm to `format!("{k}")`, it diverges from the
+        // token path and this fails. (P4 drift gate.)
+        let via_label = binding_label(&InputBinding::Key(Key::E));
+        let via_token = flicker::ui::strings::resolve(&Key::E.token()).into_owned();
+        assert_eq!(via_label, via_token);
+    }
+
+    // These assert the glyph face + device stamp, which are DETERMINISTIC. The
+    // keycap TEXT is `binding_label`'s concern — it resolves through the stringtable
+    // (absent in a bare unit test) and `ValueMap::text` reports an empty value as
+    // `None`, so `.unwrap_or("")` reads a missing/empty face as `""` either way.
+
+    #[test]
+    fn publish_sets_the_glyph_face_and_device() {
+        // A signal bound to a key (kbm face) AND a pad button (glyph face).
+        let mut map = InputMap::empty();
+        map.bind(ActionSignal::Interact, InputBinding::Key(Key::E));
+        map.bind(
+            ActionSignal::Interact,
+            InputBinding::GamepadButton(GamepadButton::West),
+        );
+
+        let mut m = ValueMap::new();
+        publish_signal_bindings(&mut m, &map, [ActionSignal::Interact]);
+
+        // Keys are `glyph_<name>` / `bind_<name>` where name is the stable PascalCase
+        // ActionSignal name (e.g. "Interact") — the SAME form scene trees author.
+        let gkey = format!("glyph_{}", ActionSignal::Interact.name());
+        // The pad face resolves to the West-button POSITIONAL cell …
+        assert_eq!(m.text(&gkey).unwrap_or(""), "face_west");
+        // … and the device family is always stamped (kbm is the resting default).
+        assert_eq!(m.text("input_device"), Some("kbm"));
+    }
+
+    #[test]
+    fn publish_reflects_which_family_is_bound() {
+        let gkey = format!("glyph_{}", ActionSignal::Interact.name());
+        let bkey = format!("bind_{}", ActionSignal::Interact.name());
+
+        // Pad only → glyph face set, keycap face empty.
+        let mut pad = InputMap::empty();
+        pad.bind(
+            ActionSignal::Interact,
+            InputBinding::GamepadButton(GamepadButton::South),
+        );
+        let mut m = ValueMap::new();
+        publish_signal_bindings(&mut m, &pad, [ActionSignal::Interact]);
+        assert_eq!(m.text(&gkey).unwrap_or(""), "face_south");
+        assert_eq!(m.text(&bkey).unwrap_or(""), "");
+
+        // Kbm only → glyph face empty (the keycap text is stringtable-resolved).
+        let mut kbm = InputMap::empty();
+        kbm.bind(ActionSignal::Interact, InputBinding::Key(Key::E));
+        let mut m = ValueMap::new();
+        publish_signal_bindings(&mut m, &kbm, [ActionSignal::Interact]);
+        assert_eq!(m.text(&gkey).unwrap_or(""), "");
     }
 }
 
@@ -3092,7 +3392,7 @@ fn settings_tree(resolutions: &[display::Resolution]) -> UiNode {
         // Even the degenerate no-scene root keeps its S9 input declaration so Esc → close
         // never depends on layout (the screen IS the declaration).
         let mut n = UiNode {
-            component: "screen".to_string(),
+            component: "surface".to_string(),
             id: "settings".to_string(),
             ..Default::default()
         };
@@ -3189,7 +3489,7 @@ impl UnifiedSettingsScene {
             settings,
             input_map: input_map.clone(),
             resolutions,
-            surfaces: settings_surfaces(),
+            surfaces: settings_sections(),
             input_subtab: "keyboard".to_string(),
             ctrl_profile: "xbox_souls".to_string(),
             scroll_off: 0.0,
@@ -3359,7 +3659,7 @@ impl UnifiedSettingsScene {
     /// bus-fired Esc/B `Cancel` intent — one name, one path) is INTERCEPTED by
     /// whichever dialog is up: it dismisses the restore ack, and it cancels the
     /// unsaved-changes confirm rather than closing the overlay underneath it.
-    fn modal_flow(surfaces: &mut Surfaces, results: &ValueMap) -> Option<ModalFlow> {
+    fn modal_flow(surfaces: &mut Sections, results: &ValueMap) -> Option<ModalFlow> {
         // Restore-defaults acknowledgement: OK / the close intent dismisses it.
         if surfaces.is_on("restore_note") {
             if results.is_on("restore_ok") || results.is_on("settings_close") {
@@ -3387,7 +3687,7 @@ impl UnifiedSettingsScene {
     /// declared `settings_close` result): confirm first when there are unsaved
     /// edits (the dialog surface goes up and the frame CONTINUES), else report
     /// `true` so `update` pops. Extracted for the same GPU-free tests.
-    fn close_requested(surfaces: &mut Surfaces, results: &ValueMap, dirty: bool) -> bool {
+    fn close_requested(surfaces: &mut Sections, results: &ValueMap, dirty: bool) -> bool {
         if results.is_on("settings_close") {
             if dirty {
                 surfaces.show("confirm_close");
@@ -3456,10 +3756,13 @@ impl Scene for UnifiedSettingsScene {
             mouse: input.mouse_position,
             clicked: input.mouse_left_pressed,
             down: input.mouse_left,
+            right_down: input.mouse_right,
             screen: size,
             typed: String::new(),
             backspace: false,
             wheel: input.mouse_wheel_delta,
+            exclusive: false,
+            motion: Default::default(),
         };
         // Fold the untrusted `settings.lua` `derive()` in BEFORE the walk (mirrors the
         // clicktrainer HUD fold): the engine publishes the RAW Model, then the Lua turns the
@@ -3505,11 +3808,11 @@ impl Scene for UnifiedSettingsScene {
             results.set(name.as_str(), true);
             self.fired_sigs.push(name);
         }
-        // Surface context wiring (S9): a dialog's show/hide edge (they carry context
+        // Section context wiring (S9): a dialog's show/hide edge (they carry context
         // "Menu") queues Push/PopContext into the pump's route, which the RUNNER reconciles
         // against the shared context stack after `update` — the scene no longer owns a
         // bindings stack. Focus stays the walker's, written directly during dispatch.
-        self.surfaces.apply_surface_contexts(signals.route);
+        self.surfaces.apply_section_contexts(signals.route);
 
         // ── Rebind capture (raw Esc or a click cancels; else grab the next input) ──
         // The walker still drew this frame (so the screen updates); its actions
@@ -3880,7 +4183,7 @@ mod script_smoke {
             serde_json::from_str(MAIN_SCENE_JSON).expect("Main.scene.json parses");
         let tree = parse_ui_json(&def["tree"]).expect("the menu tree parses");
 
-        assert_eq!(tree.component, "screen");
+        assert_eq!(tree.component, "surface");
         assert_eq!(tree.id, "main_menu");
         assert!(
             flicker::ui::unknown_kinds(&tree).is_empty(),
@@ -4015,10 +4318,13 @@ mod script_smoke {
             mouse: Vec2::new(-9.0, -9.0),
             clicked: false,
             down: false,
+            right_down: false,
             screen: Vec2::new(200.0, 60.0),
             typed: String::new(),
             backspace: false,
             wheel: 0.0,
+            exclusive: false,
+            motion: Default::default(),
         };
         let frame = run_ui(
             &tree,
@@ -4093,10 +4399,13 @@ mod script_smoke {
                 mouse,
                 clicked: false,
                 down: false,
+                right_down: false,
                 screen: Vec2::new(200.0, 60.0),
                 typed: String::new(),
                 backspace: false,
                 wheel: 0.0,
+                exclusive: false,
+                motion: Default::default(),
             };
             run_ui(&tree, &model, &styles, &input, &mut UiState::new())
                 .commands
@@ -4171,10 +4480,13 @@ mod script_smoke {
                 mouse: Vec2::new(-1.0, -1.0),
                 clicked: false,
                 down: false,
+                right_down: false,
                 screen: Vec2::new(1920.0, 1080.0),
                 typed: String::new(),
                 backspace: false,
                 wheel: 0.0,
+                exclusive: false,
+                motion: Default::default(),
             };
             let frame = run_ui(&tree, &model, &styles, &snap, &mut UiState::new());
             assert!(
@@ -4291,9 +4603,9 @@ mod script_smoke {
 
     /// The pre-load screen's pair script is a module like every other: `derive()`
     /// turns the engine's `loading_progress` into the percent readout the bar's
-    /// label binds, and `react()` maps the timeline completing to `next` and a
-    /// back-out to `exit` while REFUSING to let a Confirm skip a load in progress.
-    /// Its FILE routes both intents to authored scenes.
+    /// label binds, and `react()` maps the timeline completing — or a Confirm click-
+    /// through — to `next`, and a back-out to `exit`. Its FILE routes both intents to
+    /// authored scenes.
     #[test]
     fn loading_pair_script_derives_percent_and_routes() {
         let host = ScriptHost::new(LOADING_SCRIPT, "Loading.lua").expect("the pair script loads");
@@ -4327,11 +4639,14 @@ mod script_smoke {
             back.is_on(SPLASH_EXIT),
             "`{SIG_CANCEL}` yields `{SPLASH_EXIT}`"
         );
-        let skipped = host
+        let confirmed = host
             .react(&ValueMap::new().with(SIG_CONFIRM, true))
             .expect("react() runs")
-            .is_some_and(|m| m.is_on(SPLASH_NEXT) || m.is_on(SPLASH_EXIT));
-        assert!(!skipped, "a Confirm mid-load names no intent");
+            .expect("react() is exposed");
+        assert!(
+            confirmed.is_on(SPLASH_NEXT),
+            "`{SIG_CONFIRM}` clicks through to `{SPLASH_NEXT}`"
+        );
 
         // The FILE routes both intents, to authored scenes.
         let m = manifest();
@@ -4658,10 +4973,13 @@ mod script_smoke {
             mouse: Vec2::new(-1.0, -1.0),
             clicked: false,
             down: false,
+            right_down: false,
             screen: Vec2::new(1920.0, 1080.0),
             typed: String::new(),
             backspace: false,
             wheel: 0.0,
+            exclusive: false,
+            motion: Default::default(),
         };
         let has = |cmds: &[HudCommand], s: &str| {
             cmds.iter()
@@ -4867,10 +5185,13 @@ mod script_smoke {
             mouse: Vec2::new(x, y),
             clicked,
             down: clicked,
+            right_down: false,
             screen: Vec2::new(1920.0, 1080.0),
             typed: String::new(),
             backspace: false,
             wheel: 0.0,
+            exclusive: false,
+            motion: Default::default(),
         };
         let mut state = UiState::new();
 
@@ -5023,7 +5344,7 @@ mod script_smoke {
         use flicker_input_router::{apply_context_requests, RouteCtx};
 
         let close = ValueMap::new().with("settings_close", true);
-        let mut surfaces = settings_surfaces();
+        let mut surfaces = settings_sections();
 
         // Dirty close → the confirm dialog goes up, nothing pops.
         assert!(!UnifiedSettingsScene::close_requested(
@@ -5039,7 +5360,7 @@ mod script_smoke {
         // Its context flip routes through the S9 seam: Menu pushed while up.
         let mut route = RouteCtx::new();
         let mut bindings = ContextualBindings::new(InputMap::empty());
-        surfaces.apply_surface_contexts(&mut route);
+        surfaces.apply_section_contexts(&mut route);
         apply_context_requests(&mut bindings, &route.requests);
         route.requests.clear();
         assert_eq!(
@@ -5058,7 +5379,7 @@ mod script_smoke {
             !surfaces.is_on("confirm_close"),
             "the intent cancelled the dialog, not settings"
         );
-        surfaces.apply_surface_contexts(&mut route);
+        surfaces.apply_section_contexts(&mut route);
         apply_context_requests(&mut bindings, &route.requests);
         route.requests.clear();
         assert_eq!(
