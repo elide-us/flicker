@@ -797,3 +797,40 @@ fn the_pair_script_derives_the_state_words() {
         m.get("proc_1")
     );
 }
+
+/// **GATE — God Mode does not double-light its globe.** The bench's shells used to
+/// carry a half-lambert wrap baked into their vertex COLOUR
+/// (`dirs[i].dot(Vec3::new(0.4, 0.7, 0.55).normalize()) * 0.5 + 0.5`), applied on top of
+/// the real `studio` shading its own stage already asks for. Its light direction sat
+/// about 7° from `studio`'s sun, so the hack was squaring the same key light — a hard,
+/// doubled terminator instead of a correctly-soft one.
+///
+/// A shell colour is now a function of the CELL (its temperature, its rock, its gas),
+/// never of the cell's DIRECTION: the terminator across the globe has exactly ONE
+/// source, the stage rig (`the_authored_globe_stage_is_read` gates that it is lit).
+/// This reads the module's own source because the colour closures are built inside
+/// `render`, behind a `Renderer` no headless test can hold — the same
+/// `include_str!("../scene.rs")` seam the publish-literal gate above uses.
+#[test]
+fn godmode_does_not_double_light() {
+    let src = include_str!("../scene.rs");
+    for banned in [
+        // The hack's own light vector, and the closure that applied it.
+        "Vec3::new(0.4, 0.7, 0.55)",
+        "let lit =",
+        "lit(i,",
+        // Any resurrection of a per-cell lambert baked into a colour.
+        "dot(light)",
+    ] {
+        assert!(
+            !src.contains(banned),
+            "scene.rs lights its shell colours itself (`{banned}`) on top of the stage \
+             rig — the globe would take its terminator from two lights at once"
+        );
+    }
+    // And the direction table is used for GEOMETRY only: no colour closure reads it.
+    assert!(
+        !src.contains("dirs[i].dot("),
+        "a shell colour that reads the cell's direction is a second light"
+    );
+}

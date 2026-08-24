@@ -31,6 +31,10 @@ flicker-worker.workspace = true
 # voxel field renders with — resolved through the roots service.
 flicker-materials.workspace = true
 flicker-content.workspace = true
+# The island heightfield sampler (island_height) + the static-prop rig loader (load_mesh), used by
+# the POC grass scatter over the terrain.
+flicker-primitive.workspace = true
+flicker-skeletal.workspace = true
 glam.workspace = true
 # Resolves the walker's node `style` paths against `ui_theme.json` (styles Value).
 serde_json.workspace = true

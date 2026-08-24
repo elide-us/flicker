@@ -10,8 +10,10 @@
 //! what lets the paperdoll and the asset-pipeline editor share one viewport implementation
 //! while drawing different scenes into it.
 //!
-//! (Resize note: targets are created at the size the grid was built at; a live-resize refit
-//! is a follow-up — the same limitation the paperdoll carried before this was extracted.)
+//! [`QuadGrid::declare`] declares its passes + composites into the frame's shared
+//! [`FrameGraph`] (the manager executes it once), refitting each view's target to its live
+//! screen cell first — so a seated grid renders at its seat resolution rather than
+//! compositing a stale build-time image upscaled.
 
 use glam::{Vec2, Vec3};
 
@@ -178,8 +180,8 @@ impl QuadGrid {
     /// Confine the grid to a screen sub-rectangle (a laid-out holder), instead of tiling the whole
     /// window; `None` restores full-screen tiling. Every layout query (`cell`, `cell_at`,
     /// `local_cursor`, `label_rect`) and the composite honour it, so seating the 2×2 in a framed
-    /// panel beside a tool rail is one call a frame. Targets keep their build-time resolution — a
-    /// smaller viewport composites them downscaled (the same no-live-resize limitation noted above).
+    /// panel beside a tool rail is one call a frame. [`Self::declare`] refits each view's target to
+    /// its confined cell each frame, so a seated grid renders at seat resolution.
     pub fn set_viewport(&mut self, rect: Option<Rect>) {
         self.viewport = rect;
     }
@@ -292,32 +294,68 @@ impl QuadGrid {
             .then_some(local)
     }
 
-    /// Render every view into its target and composite them into their screen cells at `layer`,
-    /// with ONE shared camera — the perspective view uses `persp`, the ortho views are built around
-    /// its look-at (so they pan together). `draw` receives the renderer and the view index, with
-    /// that view's camera already set. For INDEPENDENT per-view cameras, use [`Self::render_with`].
-    pub fn render<F>(&self, r: &mut Renderer, layer: f32, radius: f32, persp: &Camera, draw: F)
-    where
-        F: Fn(&mut Renderer, usize) + Copy,
-    {
+    /// The pixel size each view's offscreen target should have this frame — its screen cell,
+    /// clamped to a 64px floor (the same rule [`Self::new`] sizes the initial targets by). A
+    /// seated grid computes it from its confined viewport, so [`Self::declare`] can refit the
+    /// targets to the seat instead of compositing a stale build-time image upscaled. Pure —
+    /// see the gate test.
+    fn cell_target_size(&self, screen: Vec2) -> (u32, u32) {
+        let area = self.area(screen);
+        let rows = self.views.len().div_ceil(self.cols);
+        (
+            (area.size.x / self.cols as f32).max(64.0) as u32,
+            (area.size.y / rows as f32).max(64.0) as u32,
+        )
+    }
+
+    /// Declare every view into `fg`: each renders into its own offscreen target and composites
+    /// back into its screen cell at `layer`, with ONE shared camera — the perspective view uses
+    /// `persp`, the ortho views are built around its look-at (so they pan together). `draw`
+    /// receives the renderer and the view index, with that view's camera already set. For
+    /// INDEPENDENT per-view cameras, use [`Self::declare_with`]. Declare-only: the manager owns
+    /// the one graph and executes it once.
+    pub fn declare<'f>(
+        &self,
+        r: &mut Renderer,
+        fg: &mut FrameGraph<'f>,
+        layer: f32,
+        radius: f32,
+        persp: &Camera,
+        draw: impl Fn(&mut Renderer, usize) + 'f,
+    ) {
         let cameras: Vec<Camera> = (0..self.targets.len())
             .map(|i| self.camera(i, radius, persp))
             .collect();
-        self.render_with(r, layer, &cameras, draw);
+        self.declare_with(r, fg, layer, &cameras, draw);
     }
 
-    /// Like [`Self::render`] but with an EXPLICIT camera per view: `cameras[i]` is view `i`'s camera.
-    /// This is what lets a caller drive each panel INDEPENDENTLY — the asset-pipeline editor gives
-    /// every quad its own pan/zoom so panning one leaves the others put. A view with no matching
-    /// camera (short slice) is skipped rather than panicking.
-    pub fn render_with<F>(&self, r: &mut Renderer, layer: f32, cameras: &[Camera], draw: F)
-    where
-        F: Fn(&mut Renderer, usize) + Copy,
-    {
+    /// Like [`Self::declare`] but with an EXPLICIT camera per view: `cameras[i]` is view `i`'s
+    /// camera. This is what lets a caller drive each panel INDEPENDENTLY — the asset-pipeline
+    /// editor gives every quad its own pan/zoom so panning one leaves the others put. A view with
+    /// no matching camera (short slice) is skipped rather than panicking.
+    ///
+    /// Each view's target is refit to its live screen cell before the pass, so a seated grid
+    /// renders at seat resolution rather than upscaling a stale build-time image
+    /// ([`Renderer::resize_render_target`] early-returns on an unchanged size — no cache field
+    /// needed). `draw` is wrapped once in an [`Rc`](std::rc::Rc) and a cheap clone handed to each
+    /// pass: the graph's draw closures are `FnOnce` and not `Send`, so `Rc` — not `Arc`, and not
+    /// the old `Copy` bound a `move` closure owning per-frame Vecs cannot satisfy — is the fit.
+    pub fn declare_with<'f>(
+        &self,
+        r: &mut Renderer,
+        fg: &mut FrameGraph<'f>,
+        layer: f32,
+        cameras: &[Camera],
+        draw: impl Fn(&mut Renderer, usize) + 'f,
+    ) {
         let screen = r.size();
-        let mut fg = FrameGraph::new();
+        // One cell size for the whole uniform grid — every view's target refits to it.
+        let (w, h) = self.cell_target_size(screen);
+        let draw = std::rc::Rc::new(draw);
         for (i, target) in self.targets.iter().copied().enumerate() {
             let Some(&cam) = cameras.get(i) else { continue };
+            r.resize_render_target(target, w, h);
+            let draw = draw.clone();
             fg.target(target, self.style.clear, move |rr| {
                 rr.set_camera(&cam);
                 draw(rr, i);
@@ -338,7 +376,6 @@ impl QuadGrid {
                 }),
             );
         }
-        fg.execute(r);
     }
 }
 
@@ -549,8 +586,8 @@ impl ViewportLayout {
 /// and the per-view pointer routing (Aaron 2026-08-20: *"you should not have to code a
 /// custom orbit view on every paperdoll — make a component"*).
 ///
-/// The split that keeps flicker-widgets 2D: the WALKER reserves the rect (a `viewport`
-/// node emits an `rtt`-family slot), the BEHAVIOUR — which owns the [`Renderer`] and the
+/// The split that keeps flicker-widgets 2D: the WALKER reserves the rect (a nested
+/// `surface` node reserves a `SurfaceSlot`), the BEHAVIOUR — which owns the [`Renderer`] and the
 /// frame graph — holds one of these keyed off the node id, seats it in the reserved rect
 /// each frame with [`Self::set_rect`], feeds it the pointer, and renders the model.
 pub struct ViewportFiller {
@@ -690,7 +727,7 @@ impl ViewportFiller {
     }
 
     /// The pick ray in the view under `cursor`, in the view's draw space, plus WHICH view —
-    /// built from that view's own camera exactly as [`Self::render`] frames it. `None` when the
+    /// built from that view's own camera exactly as [`Self::declare`] frames it. `None` when the
     /// cursor is outside every panel.
     pub fn pick_ray_at(
         &self,
@@ -706,35 +743,37 @@ impl ViewportFiller {
             .map(|ray| (i, ray))
     }
 
-    /// Render every view of `radius`-sized content into its target and composite into the
-    /// reserved rect at `layer`; `draw` draws view `i` with its camera already set. Each view
-    /// frames on its own orbit, so pan/zoom stay independent per panel.
+    /// Declare every view of `radius`-sized content into `fg` and composite into the reserved
+    /// rect at `layer`; `draw` draws view `i` with its camera already set. Each view frames on
+    /// its own orbit, so pan/zoom stay independent per panel. Declare-only — the manager owns the
+    /// one graph and executes it once, after the offscreen passes and before the scene's overlay
+    /// chrome, so the ordering the old immediate path hand-managed is now structural.
     ///
-    /// **ORDER: call this BEFORE the scene's `render_hud`.** The offscreen passes RESET the
-    /// renderer's per-frame draw queues, so anything queued earlier in the frame is DISCARDED
-    /// — a HUD drawn first vanishes (the Component Catalog shipped blank this way, 2026-08-21).
-    /// Composite one layer above the HUD (`base + 2` over a HUD at `base + 1`) so the views
-    /// land inside the well the walker drew rather than under it.
-    pub fn render<F>(&self, r: &mut Renderer, layer: f32, radius: f32, draw: F)
-    where
-        F: Fn(&mut Renderer, usize) + Copy,
-    {
-        self.render_framed(r, layer, |_| radius, draw);
-    }
-
-    /// [`Self::render`] with a PER-VIEW framing radius — for panels that show different
-    /// subjects (the clip pair's travelling vs in-place variants). Same ordering contract.
-    pub fn render_framed<F>(
+    /// Composite one layer above the HUD (`base + 2` over a HUD at `base + 1`) so the views land
+    /// inside the well the walker drew rather than under it.
+    pub fn declare<'f>(
         &self,
         r: &mut Renderer,
+        fg: &mut FrameGraph<'f>,
+        layer: f32,
+        radius: f32,
+        draw: impl Fn(&mut Renderer, usize) + 'f,
+    ) {
+        self.declare_framed(r, fg, layer, |_| radius, draw);
+    }
+
+    /// [`Self::declare`] with a PER-VIEW framing radius — for panels that show different
+    /// subjects (the clip pair's travelling vs in-place variants).
+    pub fn declare_framed<'f>(
+        &self,
+        r: &mut Renderer,
+        fg: &mut FrameGraph<'f>,
         layer: f32,
         radius_of: impl Fn(usize) -> f32,
-        draw: F,
-    ) where
-        F: Fn(&mut Renderer, usize) + Copy,
-    {
+        draw: impl Fn(&mut Renderer, usize) + 'f,
+    ) {
         let cameras = self.cameras_with(radius_of);
-        self.grid.render_with(r, layer, &cameras, draw);
+        self.grid.declare_with(r, fg, layer, &cameras, draw);
     }
 }
 
@@ -910,6 +949,30 @@ mod tests {
         // Each panel is its quadrant inset by the margin on both sides.
         let c = grid.cell(0, screen);
         assert_eq!((c.size.x, c.size.y), (496.0, 396.0));
+    }
+
+    /// The resize-fix's pure size math: a grid asks for targets sized to its live cells — the
+    /// whole window's quadrants when full-bleed, the HOLDER's quadrants when seated — so the
+    /// targets track the seat instead of upscaling a stale build-time image. A collapsed seat
+    /// clamps to the 64px floor rather than a zero-area target.
+    #[test]
+    fn a_seated_grid_asks_for_cell_sized_targets() {
+        let mut grid = bare_grid();
+        let screen = Vec2::new(1600.0, 1200.0);
+        // Full-window: each 2×2 cell is a quadrant of the screen.
+        assert_eq!(grid.cell_target_size(screen), (800, 600));
+        // Seated in a 600×400 holder: each cell is a quadrant of the HOLDER, not the window.
+        grid.set_viewport(Some(Rect {
+            pos: Vec2::new(200.0, 100.0),
+            size: Vec2::new(600.0, 400.0),
+        }));
+        assert_eq!(grid.cell_target_size(screen), (300, 200));
+        // A collapsed seat clamps to the floor rather than asking for a zero-area target.
+        grid.set_viewport(Some(Rect {
+            pos: Vec2::ZERO,
+            size: Vec2::new(10.0, 10.0),
+        }));
+        assert_eq!(grid.cell_target_size(screen), (64, 64));
     }
 
     #[test]

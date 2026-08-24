@@ -6,7 +6,7 @@
 // all in one combined material bind group (group 1): a tangent-space normal map
 // (perturbs the world normal via a TBN built from the interpolated normal + tangent),
 // roughness, metalness, AO, and self-illumination (`Emit`).
-// Lighting keeps the SAME sun/moon/point Lambertian diffuse as mesh.wgsl, then:
+// Lighting keeps the SAME light-list Lambertian diffuse as mesh.wgsl, then:
 //   * diffuse is scaled by (1 - metalness) and by AO (metal has no diffuse; AO darkens);
 //   * a pragmatic GGX-lite specular is added per light — its lobe sharpens with
 //     smoothness (1 - roughness) and its colour is white for dielectrics, tinted by
@@ -21,40 +21,37 @@ struct Camera {
 struct PerDraw {
     model: mat4x4<f32>,
     tint: vec4<f32>,
-    flags: vec4<f32>, // flags.y = gloss (sheen strength); rest reserved.
+    flags: vec4<f32>, // flags.y = gloss (sheen strength), flags.z = soft-alpha blend.
 };
 
-// Frame-global lighting / atmosphere — identical layout to mesh.wgsl's `Scene`
-// (mirrored CPU-side by `SceneUniform`, shared here via the same uniform buffer shape).
-struct Scene {
-    sun_dir: vec4<f32>,
-    sun_color: vec4<f32>,
-    moon_dir: vec4<f32>,
-    moon_color: vec4<f32>,
-    ambient: vec4<f32>,
-    camera_pos: vec4<f32>,
-    fog_color: vec4<f32>,   // rgb = fog colour; w = density
-    grade: vec4<f32>,       // rgb = grade tint; w = strength (reserved)
-    point_pos: vec4<f32>,
-    point_color: vec4<f32>,
-};
+// The frame prelude (struct Light / Scene / ShadowUniform / light_sample / shadow_factor)
+// is PREPENDED from `shaders/frame_prelude.wgsl` at module build — the ONE shared text, not
+// a copy pasted here. See that file and `compose_lit` in `pipeline_mesh.rs`.
 
 @group(0) @binding(0) var<uniform> camera: Camera;
-@group(0) @binding(1) var<uniform> per_draw: PerDraw;
-@group(0) @binding(2) var<uniform> scene: Scene;
+@group(0) @binding(1) var<uniform> scene: Scene;
 
-// Combined material group: 5 textures + one shared sampler. Packed into a single bind
-// group to stay within the default `max_bind_groups` limit of 4 (group 0 = uniforms).
-@group(1) @binding(0) var albedo_tex: texture_2d<f32>;
-@group(1) @binding(1) var normal_tex: texture_2d<f32>;
-@group(1) @binding(2) var rough_tex: texture_2d<f32>;
-@group(1) @binding(3) var metal_tex: texture_2d<f32>;
-@group(1) @binding(4) var ao_tex: texture_2d<f32>;
+@group(1) @binding(0) var<uniform> per_draw: PerDraw;
+
+// Combined material group: 6 textures + one shared sampler. Packed into a single bind
+// group to stay within the default `max_bind_groups` limit of 4 (0 = frame, 1 = per-draw).
+@group(2) @binding(0) var albedo_tex: texture_2d<f32>;
+@group(2) @binding(1) var normal_tex: texture_2d<f32>;
+@group(2) @binding(2) var rough_tex: texture_2d<f32>;
+@group(2) @binding(3) var metal_tex: texture_2d<f32>;
+@group(2) @binding(4) var ao_tex: texture_2d<f32>;
 // Self-illumination. sRGB colour data per the content standard's `Emit` map, so it
 // is a COLOUR (a rune glows blue while the metal beside it stays dark), not a
 // scalar mask. Default 1x1 BLACK ⇒ a draw that omits it emits nothing.
-@group(1) @binding(5) var emit_tex: texture_2d<f32>;
-@group(1) @binding(6) var mat_sampler: sampler;
+@group(2) @binding(5) var emit_tex: texture_2d<f32>;
+@group(2) @binding(6) var mat_sampler: sampler;
+
+// The sun/light shadow map at group 3 (group 2 is the material set above). The prelude's
+// `shadow_factor` reads these by name; a non-shadow surface binds a default with
+// `enabled = 0`, so it returns 1.0 and this shader is byte-identical to the no-shadow path.
+@group(3) @binding(0) var<uniform> shadow_uni: ShadowUniform;
+@group(3) @binding(1) var shadow_tex: texture_depth_2d;
+@group(3) @binding(2) var shadow_samp: sampler_comparison;
 
 struct VertexIn {
     @location(0) position: vec3<f32>,
@@ -144,42 +141,54 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 
     let view_dir = normalize(scene.camera_pos.xyz - in.world_position);
 
-    // Diffuse Lambertian from the three lights (same as mesh.wgsl).
-    let sun_d = scene.sun_color.rgb * max(dot(n, scene.sun_dir.xyz), 0.0);
-    let moon_d = scene.moon_color.rgb * max(dot(n, scene.moon_dir.xyz), 0.0);
-    let to_point = scene.point_pos.xyz - in.world_position;
-    let point_dir = to_point / max(length(to_point), 1e-4);
-    let point_d = scene.point_color.rgb * max(dot(n, point_dir), 0.0);
-
-    // Metal has (almost) no diffuse; AO attenuates the ambient + diffuse floor.
-    let diffuse_amt = (1.0 - metal);
-    let ambient = scene.ambient.rgb * ao;
-    let diffuse = base * (ambient + (sun_d + moon_d + point_d) * diffuse_amt);
-
     // Pragmatic specular. F0 = 0.04 for dielectric, albedo for metal. Smoothness →
     // shininess exponent (rougher = broader/dimmer).
     let f0 = mix(vec3<f32>(0.04), base, metal);
     let smoothness = 1.0 - rough;
     let shininess = exp2(1.0 + smoothness * 10.0); // ~2 (rough) .. ~2048 (mirror)
+    let gloss = per_draw.flags.y;
+
+    // ONE pass over the frame's LIGHT LIST, accumulating diffuse and specular. BOTH
+    // accumulators are seeded with zero and the ambient stays OUTSIDE — which is what
+    // keeps every sum's order, and so its exact f32 result, identical to the
+    // sun→moon→point math this replaced. Every `textureSample` is already done ABOVE
+    // this loop: sampling inside it would put a derivative in non-uniform control flow.
+    var direct = vec3<f32>(0.0);
     var spec = vec3<f32>(0.0);
-    spec = spec + light_contrib(n, scene.sun_dir.xyz, view_dir, scene.sun_color.rgb, f0, shininess);
-    spec = spec + light_contrib(n, scene.moon_dir.xyz, view_dir, scene.moon_color.rgb, f0, shininess);
-    spec = spec + light_contrib(n, point_dir, view_dir, scene.point_color.rgb, f0, shininess);
+    var sheen = vec3<f32>(0.0);
+    var sheen_taken = false;
+    for (var i = 0u; i < scene.counts.x; i = i + 1u) {
+        let li = scene.lights[i];
+        let s = light_sample(li, in.world_position);
+        let radiance = li.color_intensity.rgb * li.color_intensity.w;
+        let ndl = max(dot(n, s.xyz), 0.0);
+        // Shadow darkens BOTH diffuse and specular for the one light this map is cast for;
+        // vis = 1.0 exactly otherwise (and for every non-shadow surface), so both sums are
+        // bit-identical then.
+        var vis = 1.0;
+        if (shadow_uni.params.y > 0.5 && u32(shadow_uni.params.w) == i) {
+            vis = shadow_factor(in.world_position);
+        }
+        direct = direct + radiance * (ndl * s.w) * vis;
+        spec = spec + light_contrib(n, s.xyz, view_dir, radiance, f0, shininess) * s.w * vis;
+        // The gloss sheen (flags.y) follows the FIRST non-directional light — subtle and
+        // additive on top of the PBR specular.
+        if (gloss > 0.001 && !sheen_taken && li.position_kind.w >= 0.5) {
+            sheen_taken = true;
+            let ndv = max(dot(n, view_dir), 0.0);
+            let fresnel = pow(1.0 - ndv, 3.0);
+            let half_vec = normalize(s.xyz + view_dir);
+            let broad = pow(max(dot(n, half_vec), 0.0), 3.0);
+            sheen = radiance * (0.35 * fresnel + 0.10 * broad) * ndl * gloss;
+        }
+    }
+
+    // Metal has (almost) no diffuse; AO attenuates the ambient + diffuse floor.
+    let diffuse_amt = (1.0 - metal);
+    let ambient = scene.ambient.rgb * ao;
+    let diffuse = base * (ambient + direct * diffuse_amt);
     // A small ambient specular so metal reads reflective even away from a direct highlight.
     spec = spec + f0 * ambient * smoothness;
-
-    // Existing gloss sheen term (flags.y), preserved for callers that used it. Kept
-    // subtle and additive on top of the PBR specular.
-    let gloss = per_draw.flags.y;
-    var sheen = vec3<f32>(0.0);
-    if (gloss > 0.001) {
-        let ndv = max(dot(n, view_dir), 0.0);
-        let fresnel = pow(1.0 - ndv, 3.0);
-        let half_vec = normalize(point_dir + view_dir);
-        let broad = pow(max(dot(n, half_vec), 0.0), 3.0);
-        let ndl = max(dot(n, point_dir), 0.0);
-        sheen = scene.point_color.rgb * (0.35 * fresnel + 0.10 * broad) * ndl * gloss;
-    }
 
     let shaded = diffuse + spec + sheen;
     // EMISSION is added AFTER the tint and BEFORE fog. After the tint because a

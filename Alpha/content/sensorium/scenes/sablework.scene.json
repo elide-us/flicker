@@ -2,6 +2,35 @@
   "_comment": "Sablework Bench SCENE DEFINITION (201F4F51 template-free). The texture SYNTHESIZER console: LEFT the 6-voice channel rack (each voice row is authored DATA — arrangement, not a template), CENTRE the tiled-swatch preview under an 8-tab view selector (7 flat maps + the LIT turntable; the tabs bind `sel_map`, a NUMBER), RIGHT the output stage over the selected voice's fine knobs. Header: material dropdown (Rust-filled from the index, binds `sel_material`) + patch stepper + Roll/Reseed. Footer: bake rung · Commit · status. The `sablework` behaviour plays it (flicker-sablework); sablework.lua derives the row washes + view-cell visibility. Styles were folded in from the crate's quarantined scene_styles.json (its layout block described the deleted workbench template and did not move).",
   "behaviour": "sablework",
   "params": {},
+  "stages": {
+    "sablework_lit": {
+      "_comment": "The Sablework LIT PREVIEW — the material shown on a turning sample under a fixed light, which is the only way roughness/metalness/normal relief actually read. The `material` layer IS the sample body, drawn by the bench's lit module in the six preview maps it already holds; the target clears TRANSPARENT so the node's panel supplies the backdrop, matching `portrait`.",
+      "lighting": "studio",
+      "clear": "$stage_void",
+      "camera": {
+        "kind": "orbit",
+        "yaw": 0.6,
+        "pitch": 0.28,
+        "dist": 2.6,
+        "target_y": 0.0
+      },
+      "layers": [
+        {
+          "draw": "material"
+        }
+      ],
+      "_hdr": "HDR: the `scene` pass (the lit material sample) renders into the LINEAR rgba16f `hdr` working attachment and `tonemap_grade` resolves it (ACES roll-off) into the sRGB `color` last, so specular highlights on metal/low-roughness roll off instead of clipping. grade_strength 0 = tonemap only, no invented tint — an art grade is Aaron's to author in-window. Alpha passes through, so the transparent clear the panel shows through survives.",
+      "attachments": {
+        "hdr": { "format": "rgba16f" },
+        "color": { "format": "surface" },
+        "depth": { "format": "depth32" }
+      },
+      "passes": [
+        { "pass": "scene", "writes": ["hdr", "depth"] },
+        { "pass": "tonemap_grade" }
+      ]
+    }
+  },
   "styles": {
     "window": {
       "_comment": "This bench's root slab — scene-owned like populous's (a shared file would fork the look; duplication is the pattern). Only draw-read keys: no dead w/h.",

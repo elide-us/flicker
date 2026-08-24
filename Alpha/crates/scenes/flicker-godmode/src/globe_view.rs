@@ -1,21 +1,23 @@
 //! God Mode's globe view — **the shared one**, plus the stage this bench is
 //! authored by.
 //!
-//! The offscreen plumbing (target sizing, the FrameGraph pass, the composite,
-//! and reading `stages.<source>`) moved to `flicker-globe` when the Populous
-//! bench needed exactly the same thing. What stays here is the only part that is
-//! actually God Mode's: WHICH stage block it is drawn by.
+//! The offscreen plumbing (target sizing, the FrameGraph pass, the composite)
+//! moved to `flicker-globe` when the Populous bench needed exactly the same thing,
+//! and reading `stages.<source>` moved to the one stage compiler in
+//! `flicker-widgets`. What stays here is the only part that is actually God
+//! Mode's: WHICH stage block it is drawn by.
 
 pub use flicker_globe::view::Arrows;
 
 /// The `stages.<source>` block this view is authored by, and the `source` the
-/// bench's `rtt` node names. One string, both sides.
+/// bench's `surface` node names. One string, both sides.
 pub const STAGE_SOURCE: &str = "godmode_globe";
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flicker_globe::{GlobeStage, StageLayer};
+    use flicker::render::StageLayer;
+    use flicker_globe::GlobeWorld;
 
     fn styles() -> serde_json::Value {
         // The PRODUCTION loader over the SHIPPED scene file's style blocks (the
@@ -40,33 +42,28 @@ mod tests {
     /// `stages.godmode_globe`, and a declaration nothing consumes is a name
     /// that resolves to nothing — which is how Sablework's lit view once
     /// shipped lit by a constant while its own `"lighting": "studio"` sat
-    /// unused. So: the parsed stage must differ from the bare default, and it
-    /// must emit light.
+    /// unused. So: the stage must compile (it exists), and it must emit light.
     #[test]
     fn the_authored_globe_stage_is_read() {
-        let s = GlobeStage::from_styles(&styles(), STAGE_SOURCE);
-        let bare = GlobeStage::default();
+        let s = flicker::ui::stage_def(&styles(), STAGE_SOURCE)
+            .unwrap_or_else(|| panic!("stages.{STAGE_SOURCE} is not authored"));
         assert!(
-            s.lighting.sun_dir != bare.lighting.sun_dir
-                || s.lighting.sun_color != bare.lighting.sun_color
-                || s.lighting.ambient != bare.lighting.ambient,
-            "stages.{STAGE_SOURCE} is authored but nothing in it reached the view"
-        );
-        assert!(
-            s.lighting.sun_color.length_squared() > 0.0
+            s.lighting.sky_sun().color.length_squared() > 0.0
                 || s.lighting.ambient.length_squared() > 0.0,
             "the globe would render black"
         );
+        assert!(
+            s.camera.is_none(),
+            "a globe stage authors no camera — the maintainer flies the planet"
+        );
     }
 
-    /// An unknown source must fall back LIT, not black: a typo in a style file
-    /// should cost the authored look, never the picture.
     /// The bench's own layer list is authored too: God Mode's shells come from
     /// a running simulation, so its stage says exactly that and nothing else —
     /// no authored shell, no authored frame (the grid is a key it toggles).
     #[test]
     fn the_stage_declares_the_simulated_shells() {
-        let s = GlobeStage::from_styles(&styles(), STAGE_SOURCE);
+        let s = flicker::ui::stage_def(&styles(), STAGE_SOURCE).expect("authored");
         assert_eq!(
             s.layers,
             vec![StageLayer::Shells],
@@ -74,13 +71,18 @@ mod tests {
         );
     }
 
+    /// An unknown source must fall back LIT, not black: a typo in a style file
+    /// should cost the authored look, never the picture — the world shows the
+    /// scene's own shells under the default light.
     #[test]
     fn an_unknown_source_still_lights_the_globe() {
-        let s = GlobeStage::from_styles(&styles(), "no_such_stage");
+        let world = GlobeWorld::new("no_such_stage", &styles(), None);
+        let s = world.stage();
         assert!(
-            s.lighting.sun_color.length_squared() > 0.0
+            s.lighting.sky_sun().color.length_squared() > 0.0
                 || s.lighting.ambient.length_squared() > 0.0,
             "the fallback must still light the globe"
         );
+        assert_eq!(s.layers, vec![StageLayer::Shells]);
     }
 }

@@ -17,7 +17,7 @@
 
 use clayengine::CLUSTER_DIM;
 
-use crate::heightmap::{world_height_seeded, DEFAULT_SEED};
+use crate::heightmap::{island_height, world_height_seeded, DEFAULT_SEED};
 
 /// Surface height of the flat stub field, in voxel units: the cluster's
 /// vertical midpoint (`CLUSTER_DIM / 2` = 128 for a 256³ cluster), i.e.
@@ -109,21 +109,44 @@ impl Primitive for FlatField {
     }
 }
 
-/// The foundation-layer terrain primitive: a 2D heightmap sampled from
-/// [`crate::heightmap`]. Solid below the surface, empty above. This is
-/// the first sloped (non-flat) primitive — the test input that flushes
-/// out per-cell-vs-per-solid-voxel storage bugs (heights vary smoothly,
-/// so most cells have empty min-corner voxels carrying meaningful
-/// vertices).
+/// Which global surface function a [`HeightField`] samples. The field caches
+/// one cluster's column grid from this and answers out-of-cache border queries
+/// through it too, so the source alone decides the terrain — and both the
+/// cache and the seam-shell fallback stay consistent.
+#[derive(Copy, Clone, Debug)]
+enum HeightSource {
+    /// The seeded wave field ([`world_height_seeded`]).
+    Wave(u64),
+    /// The Prism island dome ([`island_height`]).
+    Island,
+}
+
+impl HeightSource {
+    /// Surface height at world column `(x, z)` for this source.
+    #[inline]
+    fn height(self, x: f32, z: f32) -> f32 {
+        match self {
+            HeightSource::Wave(seed) => world_height_seeded(x, z, seed),
+            HeightSource::Island => island_height(x, z),
+        }
+    }
+}
+
+/// The foundation-layer terrain primitive: a 2D heightmap sampled from a
+/// [`HeightSource`] (the seeded wave field, or the island dome). Solid below
+/// the surface, empty above. This is the first sloped (non-flat) primitive —
+/// the test input that flushes out per-cell-vs-per-solid-voxel storage bugs
+/// (heights vary smoothly, so most cells have empty min-corner voxels carrying
+/// meaningful vertices).
 ///
-/// The cluster's `CLUSTER_DIM × CLUSTER_DIM` column of heights is cached
-/// at construction (~65K samples). Coordinates outside that footprint are
-/// resolved on the fly through [`world_height_seeded`] — the heightmap
-/// is globally continuous, so neighbor-cluster border faces aren't
-/// spuriously exposed.
+/// The cluster's `CLUSTER_DIM × CLUSTER_DIM` column of heights is cached at
+/// construction (~65K samples). Coordinates outside that footprint are
+/// resolved on the fly through the field's source function — the surface is
+/// globally continuous, so neighbor-cluster border faces aren't spuriously
+/// exposed.
 #[derive(Clone, Debug)]
 pub struct HeightField {
-    seed: u64,
+    source: HeightSource,
     offset: [f32; 3],
     /// Row-major `[CLUSTER_DIM × CLUSTER_DIM]` column heights at the
     /// cluster's local `(x, z)` origins (world `(offset.x + x, offset.z + z)`).
@@ -132,23 +155,27 @@ pub struct HeightField {
 
 impl HeightField {
     /// Sample the cluster's surface column at every cluster-local `(x, z)`
-    /// origin with the given `seed`, storing world coordinates relative to
-    /// `offset` (only the `x` and `z` components are used).
-    #[must_use]
-    pub fn new(seed: u64, offset: [f32; 3]) -> Self {
+    /// origin from `source`, storing world coordinates relative to `offset`
+    /// (only the `x` and `z` components are used).
+    fn from_source(source: HeightSource, offset: [f32; 3]) -> Self {
         let dim = CLUSTER_DIM as usize;
         let mut heights = vec![0.0_f32; dim * dim];
         for z in 0..dim {
             for x in 0..dim {
-                heights[z * dim + x] =
-                    world_height_seeded(offset[0] + x as f32, offset[2] + z as f32, seed);
+                heights[z * dim + x] = source.height(offset[0] + x as f32, offset[2] + z as f32);
             }
         }
         Self {
-            seed,
+            source,
             offset,
             heights,
         }
+    }
+
+    /// Sample the cluster's wave-field surface column with the given `seed`.
+    #[must_use]
+    pub fn new(seed: u64, offset: [f32; 3]) -> Self {
+        Self::from_source(HeightSource::Wave(seed), offset)
     }
 
     /// Construct with the heightmap's [`DEFAULT_SEED`].
@@ -157,10 +184,18 @@ impl HeightField {
         Self::new(DEFAULT_SEED, offset)
     }
 
+    /// The Prism island dome ([`island_height`]) sampled into the cluster at
+    /// `offset`. The one primitive both the bake tool and the pocclusters
+    /// live-contour fallback build, so the terrain is identical either way.
+    #[must_use]
+    pub fn island(offset: [f32; 3]) -> Self {
+        Self::from_source(HeightSource::Island, offset)
+    }
+
     /// Surface height at **world**-coord column `(x, z)`. Translates by
     /// the field's `offset` to find the local cache index; cache hits
     /// return the cached value (origin-grid lookup), cache misses fall
-    /// through to [`world_height_seeded`] at the same world coords —
+    /// through to the field's source function at the same world coords —
     /// slow per call but continuous across cluster boundaries.
     #[must_use]
     pub fn height_at(&self, x: i32, z: i32) -> f32 {
@@ -171,15 +206,15 @@ impl HeightField {
             let stride = CLUSTER_DIM as usize;
             self.heights[lz as usize * stride + lx as usize]
         } else {
-            world_height_seeded(x as f32, z as f32, self.seed)
+            self.source.height(x as f32, z as f32)
         }
     }
 
     /// Bilinearly-interpolated surface height at fractional **world**-
     /// coord `(x, z)`. Translates by `offset` to read the cached 256²
     /// column grid (cheap); outside the cluster footprint, falls back
-    /// to [`world_height_seeded`] at world coords (per-call wave-field
-    /// rebuild — slow, but only the seam-shell boundary hits it).
+    /// to the field's source function at world coords (a per-call
+    /// resample — slow, but only the seam-shell boundary hits it).
     ///
     /// The bilinear surface is `C0`-continuous and `C1`-discontinuous
     /// at column boundaries — terrain normals will look bilinearly
@@ -190,7 +225,7 @@ impl HeightField {
         let lz = z - self.offset[2];
         let max = (CLUSTER_DIM - 1) as f32;
         if !(lx >= 0.0 && lx <= max && lz >= 0.0 && lz <= max) {
-            return world_height_seeded(x, z, self.seed);
+            return self.source.height(x, z);
         }
         let x0 = lx.floor() as i32;
         let z0 = lz.floor() as i32;

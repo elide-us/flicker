@@ -927,7 +927,7 @@ impl Scene for ControllerTester {
         Transition::None
     }
 
-    fn render(&mut self, renderer: &mut Renderer) {
+    fn render<'f>(&'f mut self, renderer: &mut Renderer, fg: &mut FrameGraph<'f>) {
         let size = renderer.size();
         let margin = 18.0;
 
@@ -951,491 +951,485 @@ impl Scene for ControllerTester {
 
         // The golem is the ROOT surface's element: declared as the frame graph's root
         // pass, straight into the swapchain (no target, no blit). Meshes draw under the
-        // 2D pass, so the chrome below frames the centre hole rather than covering the body.
-        {
-            let mut fg = FrameGraph::new();
-            let stage = &mut self.stage;
-            fg.root(move |r| stage.render(r, view));
-            fg.execute(renderer);
-        }
+        // 2D pass, so the chrome below frames the centre hole rather than covering the
+        // body. The scene's 2D chrome rides ONE overlay after it. The stage's caption /
+        // error are taken as owned first, so the root can hold `&mut stage` while the
+        // chrome — which no longer reads `stage` — captures the disjoint fields.
+        let stage_error = self.stage.error.clone();
+        let stage_caption = self.stage.caption();
+        let Self {
+            stage,
+            snap,
+            latch,
+            prev_latch,
+            stack,
+            bus,
+            white,
+            hud_commands,
+            ..
+        } = self;
+        let latch = *latch;
+        let prev_latch = *prev_latch;
+        let white = *white;
+        fg.root(move |r| stage.render(r, view));
 
-        // Hole-punch background: four opaque bands around the stage viewport (the
-        // old full-screen backdrop would sit OVER the 3D and hide the golem).
-        let mut band = |x0: f32, y0: f32, x1: f32, y1: f32| {
-            if x1 > x0 && y1 > y0 {
-                renderer.draw_ui_panel(
-                    Vec2::new(x0, y0),
-                    Vec2::new(x1 - x0, y1 - y0),
-                    BG,
-                    BG,
-                    0.0,
-                    0.0,
-                    0.0,
-                    BG,
-                    0.0,
-                );
-            }
-        };
-        band(0.0, 0.0, size.x, content_top);
-        band(0.0, content_bottom, size.x, size.y);
-        band(0.0, content_top, view_x0, content_bottom);
-        band(view_x1, content_top, size.x, content_bottom);
-
-        // The stage's frame + live caption (state · clip · tick), or the load error.
-        renderer.draw_ui_panel(
-            view.pos,
-            view.size,
-            [0.0; 4],
-            [0.0; 4],
-            0.0,
-            8.0,
-            1.5,
-            PANEL_BORDER,
-            0.0,
-        );
-        renderer.draw_text(
-            &strings::resolve("$ctt_golem_stage"),
-            Vec2::new(view.pos.x + 12.0, view.pos.y + 8.0),
-            12.0,
-            ACCENT,
-        );
-        match (self.stage.error.clone(), self.stage.caption()) {
-            (Some(e), _) => {
-                renderer.draw_text(
-                    &strings::resolve("$ctt_golem_failed"),
-                    Vec2::new(view.pos.x + 12.0, view.pos.y + 30.0),
-                    12.0,
-                    AMBER,
-                );
-                renderer.draw_text(
-                    &e,
-                    Vec2::new(view.pos.x + 12.0, view.pos.y + 48.0),
-                    11.0,
-                    AMBER,
-                );
-            }
-            (None, Some(c)) => {
-                renderer.draw_text(
-                    &c,
-                    Vec2::new(view.pos.x + 12.0, view.pos.y + view.size.y - 22.0),
-                    12.0,
-                    GREENV,
-                );
-            }
-            _ => {}
-        }
-
-        let snap = self.snap.as_ref();
-
-        // (The header, mouse readout and context tab bar are the WALKER's now —
-        // the authored chrome blits over the feed at the end of this pass.)
-
-        // (Columns were laid out above — the stage owns the centre.) The diagram
-        // occupies the top ~58% of the LEFT column; the analog panel the rest. Scale
-        // so it always fits the narrower side column and its vertical share.
-        const DIAG_HALF_W: f32 = 320.0;
-        const DIAG_HALF_H: f32 = 170.0;
-        let diagram_h = content_h * 0.58;
-        let s = (left_w / (2.0 * DIAG_HALF_W))
-            .min(diagram_h / (2.0 * DIAG_HALF_H))
-            .clamp(0.38, 1.2);
-        let dcx = left_x0 + left_w * 0.5;
-        let dcy = content_top + diagram_h * 0.5;
-
-        // ── the controller diagram (discrete snapshot) ──
-        let bd = |b: GamepadButton| {
-            snap.and_then(|s| s.gamepad(0))
-                .is_some_and(|gp| gp.button_down(b))
-        };
-        let av = |a: GamepadAxis| {
-            snap.and_then(|s| s.gamepad(0))
-                .map_or(0.0, |gp| gp.axis_value(a))
-        };
-        let at = |dx: f32, dy: f32| Vec2::new(dcx + dx * s, dcy + dy * s);
-        let u = 44.0 * s;
-        let meta_side = 32.0 * s;
-
-        // shoulders + triggers
-        trigger(
-            renderer,
-            at(-300.0, -112.0),
-            38.0 * s,
-            60.0 * s,
-            av(GamepadAxis::LeftTrigger),
-            "LT",
-        );
-        cell(
-            renderer,
-            at(-220.0, -104.0),
-            u,
-            "LB",
-            bd(GamepadButton::LeftBumper),
-        );
-        cell(
-            renderer,
-            at(220.0, -104.0),
-            u,
-            "RB",
-            bd(GamepadButton::RightBumper),
-        );
-        trigger(
-            renderer,
-            at(300.0, -112.0),
-            38.0 * s,
-            60.0 * s,
-            av(GamepadAxis::RightTrigger),
-            "RT",
-        );
-        // d-pad (centred at -250, 6; spacing 56)
-        cell(
-            renderer,
-            at(-250.0, -50.0),
-            u,
-            "Up",
-            bd(GamepadButton::DPadUp),
-        );
-        cell(
-            renderer,
-            at(-250.0, 62.0),
-            u,
-            "Dn",
-            bd(GamepadButton::DPadDown),
-        );
-        cell(
-            renderer,
-            at(-306.0, 6.0),
-            u,
-            "Lt",
-            bd(GamepadButton::DPadLeft),
-        );
-        cell(
-            renderer,
-            at(-194.0, 6.0),
-            u,
-            "Rt",
-            bd(GamepadButton::DPadRight),
-        );
-        // face buttons (A=South, B=East, X=West, Y=North)
-        cell(renderer, at(250.0, -50.0), u, "Y", bd(GamepadButton::North));
-        cell(renderer, at(250.0, 62.0), u, "A", bd(GamepadButton::South));
-        cell(renderer, at(194.0, 6.0), u, "X", bd(GamepadButton::West));
-        cell(renderer, at(306.0, 6.0), u, "B", bd(GamepadButton::East));
-        // meta
-        cell(
-            renderer,
-            at(-44.0, -10.0),
-            meta_side,
-            "Bk",
-            bd(GamepadButton::Select),
-        );
-        cell(
-            renderer,
-            at(0.0, -10.0),
-            meta_side,
-            "Xb",
-            bd(GamepadButton::Guide),
-        );
-        cell(
-            renderer,
-            at(44.0, -10.0),
-            meta_side,
-            "St",
-            bd(GamepadButton::Start),
-        );
-        // sticks
-        stick(
-            renderer,
-            at(-108.0, 104.0),
-            50.0 * s,
-            av(GamepadAxis::LeftStickX),
-            av(GamepadAxis::LeftStickY),
-            bd(GamepadButton::LeftStick),
-            "L3",
-        );
-        stick(
-            renderer,
-            at(108.0, 104.0),
-            50.0 * s,
-            av(GamepadAxis::RightStickX),
-            av(GamepadAxis::RightStickY),
-            bd(GamepadButton::RightStick),
-            "R3",
-        );
-
-        // ── analog channel panel (the volatile latch, alongside the discrete bus) ──
-        let analog_top = content_top + diagram_h + 8.0;
-        let analog_h = content_bottom - analog_top;
-        let mut ay = panel(
-            renderer,
-            left_x0,
-            analog_top,
-            left_w,
-            analog_h,
-            &strings::resolve("$ctt_analog_latch"),
-        );
-        match self.latch {
-            Some(f) => {
-                let age_ms = Instant::now()
-                    .saturating_duration_since(f.captured)
-                    .as_secs_f32()
-                    * 1000.0;
-                let stale = age_ms > 100.0;
-                let dseq = self.prev_latch.map_or(0, |p| f.seq.saturating_sub(p.seq));
-                renderer.draw_text(
-                    &format!(
-                        "seq {}  (\u{0394}+{})    age {:.1} ms    {}",
-                        f.seq,
-                        dseq,
-                        age_ms,
-                        strings::resolve(if stale { "$ctt_stale" } else { "$ctt_live" })
-                    ),
-                    Vec2::new(left_x0 + 14.0, ay),
-                    12.0,
-                    if stale { AMBER } else { GREENV },
-                );
-                ay += 20.0;
-                // Current sample + current-vs-previous-frame delta (sticks + triggers).
-                let p = self.prev_latch.unwrap_or(f);
-                let dl = f.left_stick - p.left_stick;
-                let dr = f.right_stick - p.right_stick;
-                renderer.draw_text(
-                    &format!(
-                        "L stick  ({:+.2}, {:+.2})    \u{0394}({:+.2}, {:+.2})",
-                        f.left_stick.x, f.left_stick.y, dl.x, dl.y
-                    ),
-                    Vec2::new(left_x0 + 14.0, ay),
-                    12.0,
-                    TXT,
-                );
-                ay += 18.0;
-                renderer.draw_text(
-                    &format!(
-                        "R stick  ({:+.2}, {:+.2})    \u{0394}({:+.2}, {:+.2})",
-                        f.right_stick.x, f.right_stick.y, dr.x, dr.y
-                    ),
-                    Vec2::new(left_x0 + 14.0, ay),
-                    12.0,
-                    TXT,
-                );
-                ay += 18.0;
-                renderer.draw_text(
-                    &format!(
-                        "L trig   {:.2}         \u{0394}{:+.2}",
-                        f.left_trigger,
-                        f.left_trigger - p.left_trigger
-                    ),
-                    Vec2::new(left_x0 + 14.0, ay),
-                    12.0,
-                    TXT,
-                );
-                ay += 18.0;
-                renderer.draw_text(
-                    &format!(
-                        "R trig   {:.2}         \u{0394}{:+.2}",
-                        f.right_trigger,
-                        f.right_trigger - p.right_trigger
-                    ),
-                    Vec2::new(left_x0 + 14.0, ay),
-                    12.0,
-                    TXT,
-                );
-                ay += 18.0;
-                renderer.draw_text(
-                    &strings::resolve("$ctt_analog_note"),
-                    Vec2::new(left_x0 + 14.0, ay),
-                    10.0,
-                    DIM,
-                );
-            }
-            None => {
-                renderer.draw_text(
-                    &strings::resolve("$ctt_analog_none"),
-                    Vec2::new(left_x0 + 14.0, ay),
-                    12.0,
-                    DIM,
-                );
-            }
-        }
-
-        // ── right column: the three bus panels ──
-        let gap = 8.0;
-        let ph = (content_h - 2.0 * gap) / 3.0;
-        let p1_y = content_top;
-        let p2_y = content_top + ph + gap;
-        let p3_y = content_top + 2.0 * (ph + gap);
-
-        // (1) the active ContextualBindings stack (top of stack first, base = World).
-        let mut cy = panel(
-            renderer,
-            panel_x,
-            p1_y,
-            panel_w,
-            ph,
-            &strings::resolve("$ctt_context_stack"),
-        );
-        let depth = self.stack.len();
-        for (i, ctx) in self.stack.iter().enumerate().rev() {
-            let is_top = i == depth - 1;
-            let (marker, col) = if is_top {
-                ("\u{25b8} ", ACCENT)
-            } else {
-                ("  ", TXT)
+        fg.overlay(move |r| {
+            // LEGACY (banked): Controller Tester frames its golem with four opaque hole-punch
+            // bands (below) because a `FrameGraph::root` element fills the window and cannot be
+            // clipped to a rect. The structural fix is a nested `surface` node in
+            // `controllertester.scene.json` + a `SurfaceSlot` seat, i.e. the scene joins the
+            // reserve-and-fill seam like populous/sablework — a scene-migration slice, not a
+            // renderer one. Until then the bands are LEGACY and are the only reason the scene's
+            // chrome order matters.
+            //
+            // Hole-punch background: four opaque bands around the stage viewport (the
+            // old full-screen backdrop would sit OVER the 3D and hide the golem).
+            let mut band = |x0: f32, y0: f32, x1: f32, y1: f32| {
+                if x1 > x0 && y1 > y0 {
+                    r.draw_ui_panel(
+                        Vec2::new(x0, y0),
+                        Vec2::new(x1 - x0, y1 - y0),
+                        BG,
+                        BG,
+                        0.0,
+                        0.0,
+                        0.0,
+                        BG,
+                        0.0,
+                    );
+                }
             };
-            renderer.draw_text(
-                &format!("{marker}{}", ctx_label(*ctx)),
-                Vec2::new(panel_x + 14.0, cy),
-                14.0,
-                col,
-            );
-            let tag = if is_top {
-                strings::resolve("$ctt_active_tag")
-            } else if i == 0 {
-                strings::resolve("$ctt_base_tag")
-            } else {
-                "".into()
-            };
-            if !tag.is_empty() {
-                let tw = renderer.measure_text(&tag, 11.0).x;
-                renderer.draw_text(
-                    &tag,
-                    Vec2::new(panel_x + panel_w - 14.0 - tw, cy + 2.0),
-                    11.0,
-                    DIM,
-                );
-            }
-            cy += 22.0;
-        }
+            band(0.0, 0.0, size.x, content_top);
+            band(0.0, content_bottom, size.x, size.y);
+            band(0.0, content_top, view_x0, content_bottom);
+            band(view_x1, content_top, size.x, content_bottom);
 
-        // (2) the focus chain — which layer owns input (declares the active context).
-        let mut cy = panel(
-            renderer,
-            panel_x,
-            p2_y,
-            panel_w,
-            ph,
-            &strings::resolve("$ctt_focus_chain"),
-        );
-        for (i, layer) in self.bus.layers.iter().enumerate() {
-            let col = if layer.owns { GREENV } else { TXT };
-            renderer.draw_text(
-                &format!("{i} {}", layer.name),
-                Vec2::new(panel_x + 14.0, cy),
-                13.0,
-                col,
+            // The stage's frame + live caption (state · clip · tick), or the load error.
+            r.draw_ui_panel(
+                view.pos,
+                view.size,
+                [0.0; 4],
+                [0.0; 4],
+                0.0,
+                8.0,
+                1.5,
+                PANEL_BORDER,
+                0.0,
             );
-            let mid = match layer.declares {
-                Some(c) => format!("ctx {}", ctx_label(c)),
-                None => layer.note.to_string(),
-            };
-            renderer.draw_text(
-                &mid,
-                Vec2::new(panel_x + panel_w * 0.40, cy),
-                11.0,
-                if layer.owns { GREENV } else { DIM },
-            );
-            if layer.owns {
-                let tag = strings::resolve("$ctt_owns");
-                let tw = renderer.measure_text(&tag, 11.0).x;
-                renderer.draw_text(
-                    &tag,
-                    Vec2::new(panel_x + panel_w - 12.0 - tw, cy),
-                    11.0,
-                    GREENV,
-                );
-            }
-            cy += 20.0;
-        }
-
-        // (3) which handler consumed each fired signal this frame (DispatchReport).
-        let mut cy = panel(
-            renderer,
-            panel_x,
-            p3_y,
-            panel_w,
-            ph,
-            &strings::resolve("$ctt_consumed"),
-        );
-        if self.bus.consumed.is_empty() {
-            renderer.draw_text(
-                &strings::resolve("$ctt_no_signals"),
-                Vec2::new(panel_x + 14.0, cy),
+            r.draw_text(
+                &strings::resolve("$ctt_golem_stage"),
+                Vec2::new(view.pos.x + 12.0, view.pos.y + 8.0),
                 12.0,
-                DIM,
+                ACCENT,
             );
-        } else {
-            let max_rows = (((ph - 34.0) / 20.0).max(1.0)) as usize;
-            for row in self.bus.consumed.iter().take(max_rows) {
-                let kindc = match row.kind {
-                    EventKind::Press => "press",
-                    EventKind::Release => "rel",
-                    EventKind::Hold => "hold",
-                    EventKind::Chord => "chord",
-                };
-                renderer.draw_text(
-                    &format!("{kindc:<5} {}", row.label),
-                    Vec2::new(panel_x + 14.0, cy),
-                    12.0,
-                    TXT,
-                );
-                let (dest, col) = match row.consumer {
-                    Some(name) => (format!("\u{2192} {name}"), GREENV),
-                    None => (
-                        format!("\u{2192} {}", strings::resolve("$ctt_passed")),
+            match (stage_error, stage_caption) {
+                (Some(e), _) => {
+                    r.draw_text(
+                        &strings::resolve("$ctt_golem_failed"),
+                        Vec2::new(view.pos.x + 12.0, view.pos.y + 30.0),
+                        12.0,
                         AMBER,
-                    ),
+                    );
+                    r.draw_text(
+                        &e,
+                        Vec2::new(view.pos.x + 12.0, view.pos.y + 48.0),
+                        11.0,
+                        AMBER,
+                    );
+                }
+                (None, Some(c)) => {
+                    r.draw_text(
+                        &c,
+                        Vec2::new(view.pos.x + 12.0, view.pos.y + view.size.y - 22.0),
+                        12.0,
+                        GREENV,
+                    );
+                }
+                _ => {}
+            }
+
+            let snap = snap.as_ref();
+
+            // (The header, mouse readout and context tab bar are the WALKER's now —
+            // the authored chrome blits over the feed at the end of this pass.)
+
+            // (Columns were laid out above — the stage owns the centre.) The diagram
+            // occupies the top ~58% of the LEFT column; the analog panel the rest. Scale
+            // so it always fits the narrower side column and its vertical share.
+            const DIAG_HALF_W: f32 = 320.0;
+            const DIAG_HALF_H: f32 = 170.0;
+            let diagram_h = content_h * 0.58;
+            let s = (left_w / (2.0 * DIAG_HALF_W))
+                .min(diagram_h / (2.0 * DIAG_HALF_H))
+                .clamp(0.38, 1.2);
+            let dcx = left_x0 + left_w * 0.5;
+            let dcy = content_top + diagram_h * 0.5;
+
+            // ── the controller diagram (discrete snapshot) ──
+            let bd = |b: GamepadButton| {
+                snap.and_then(|s| s.gamepad(0))
+                    .is_some_and(|gp| gp.button_down(b))
+            };
+            let av = |a: GamepadAxis| {
+                snap.and_then(|s| s.gamepad(0))
+                    .map_or(0.0, |gp| gp.axis_value(a))
+            };
+            let at = |dx: f32, dy: f32| Vec2::new(dcx + dx * s, dcy + dy * s);
+            let u = 44.0 * s;
+            let meta_side = 32.0 * s;
+
+            // shoulders + triggers
+            trigger(
+                r,
+                at(-300.0, -112.0),
+                38.0 * s,
+                60.0 * s,
+                av(GamepadAxis::LeftTrigger),
+                "LT",
+            );
+            cell(
+                r,
+                at(-220.0, -104.0),
+                u,
+                "LB",
+                bd(GamepadButton::LeftBumper),
+            );
+            cell(
+                r,
+                at(220.0, -104.0),
+                u,
+                "RB",
+                bd(GamepadButton::RightBumper),
+            );
+            trigger(
+                r,
+                at(300.0, -112.0),
+                38.0 * s,
+                60.0 * s,
+                av(GamepadAxis::RightTrigger),
+                "RT",
+            );
+            // d-pad (centred at -250, 6; spacing 56)
+            cell(r, at(-250.0, -50.0), u, "Up", bd(GamepadButton::DPadUp));
+            cell(r, at(-250.0, 62.0), u, "Dn", bd(GamepadButton::DPadDown));
+            cell(r, at(-306.0, 6.0), u, "Lt", bd(GamepadButton::DPadLeft));
+            cell(r, at(-194.0, 6.0), u, "Rt", bd(GamepadButton::DPadRight));
+            // face buttons (A=South, B=East, X=West, Y=North)
+            cell(r, at(250.0, -50.0), u, "Y", bd(GamepadButton::North));
+            cell(r, at(250.0, 62.0), u, "A", bd(GamepadButton::South));
+            cell(r, at(194.0, 6.0), u, "X", bd(GamepadButton::West));
+            cell(r, at(306.0, 6.0), u, "B", bd(GamepadButton::East));
+            // meta
+            cell(
+                r,
+                at(-44.0, -10.0),
+                meta_side,
+                "Bk",
+                bd(GamepadButton::Select),
+            );
+            cell(r, at(0.0, -10.0), meta_side, "Xb", bd(GamepadButton::Guide));
+            cell(
+                r,
+                at(44.0, -10.0),
+                meta_side,
+                "St",
+                bd(GamepadButton::Start),
+            );
+            // sticks
+            stick(
+                r,
+                at(-108.0, 104.0),
+                50.0 * s,
+                av(GamepadAxis::LeftStickX),
+                av(GamepadAxis::LeftStickY),
+                bd(GamepadButton::LeftStick),
+                "L3",
+            );
+            stick(
+                r,
+                at(108.0, 104.0),
+                50.0 * s,
+                av(GamepadAxis::RightStickX),
+                av(GamepadAxis::RightStickY),
+                bd(GamepadButton::RightStick),
+                "R3",
+            );
+
+            // ── analog channel panel (the volatile latch, alongside the discrete bus) ──
+            let analog_top = content_top + diagram_h + 8.0;
+            let analog_h = content_bottom - analog_top;
+            let mut ay = panel(
+                r,
+                left_x0,
+                analog_top,
+                left_w,
+                analog_h,
+                &strings::resolve("$ctt_analog_latch"),
+            );
+            match latch {
+                Some(f) => {
+                    let age_ms = Instant::now()
+                        .saturating_duration_since(f.captured)
+                        .as_secs_f32()
+                        * 1000.0;
+                    let stale = age_ms > 100.0;
+                    let dseq = prev_latch.map_or(0, |p| f.seq.saturating_sub(p.seq));
+                    r.draw_text(
+                        &format!(
+                            "seq {}  (\u{0394}+{})    age {:.1} ms    {}",
+                            f.seq,
+                            dseq,
+                            age_ms,
+                            strings::resolve(if stale { "$ctt_stale" } else { "$ctt_live" })
+                        ),
+                        Vec2::new(left_x0 + 14.0, ay),
+                        12.0,
+                        if stale { AMBER } else { GREENV },
+                    );
+                    ay += 20.0;
+                    // Current sample + current-vs-previous-frame delta (sticks + triggers).
+                    let p = prev_latch.unwrap_or(f);
+                    let dl = f.left_stick - p.left_stick;
+                    let dr = f.right_stick - p.right_stick;
+                    r.draw_text(
+                        &format!(
+                            "L stick  ({:+.2}, {:+.2})    \u{0394}({:+.2}, {:+.2})",
+                            f.left_stick.x, f.left_stick.y, dl.x, dl.y
+                        ),
+                        Vec2::new(left_x0 + 14.0, ay),
+                        12.0,
+                        TXT,
+                    );
+                    ay += 18.0;
+                    r.draw_text(
+                        &format!(
+                            "R stick  ({:+.2}, {:+.2})    \u{0394}({:+.2}, {:+.2})",
+                            f.right_stick.x, f.right_stick.y, dr.x, dr.y
+                        ),
+                        Vec2::new(left_x0 + 14.0, ay),
+                        12.0,
+                        TXT,
+                    );
+                    ay += 18.0;
+                    r.draw_text(
+                        &format!(
+                            "L trig   {:.2}         \u{0394}{:+.2}",
+                            f.left_trigger,
+                            f.left_trigger - p.left_trigger
+                        ),
+                        Vec2::new(left_x0 + 14.0, ay),
+                        12.0,
+                        TXT,
+                    );
+                    ay += 18.0;
+                    r.draw_text(
+                        &format!(
+                            "R trig   {:.2}         \u{0394}{:+.2}",
+                            f.right_trigger,
+                            f.right_trigger - p.right_trigger
+                        ),
+                        Vec2::new(left_x0 + 14.0, ay),
+                        12.0,
+                        TXT,
+                    );
+                    ay += 18.0;
+                    r.draw_text(
+                        &strings::resolve("$ctt_analog_note"),
+                        Vec2::new(left_x0 + 14.0, ay),
+                        10.0,
+                        DIM,
+                    );
+                }
+                None => {
+                    r.draw_text(
+                        &strings::resolve("$ctt_analog_none"),
+                        Vec2::new(left_x0 + 14.0, ay),
+                        12.0,
+                        DIM,
+                    );
+                }
+            }
+
+            // ── right column: the three bus panels ──
+            let gap = 8.0;
+            let ph = (content_h - 2.0 * gap) / 3.0;
+            let p1_y = content_top;
+            let p2_y = content_top + ph + gap;
+            let p3_y = content_top + 2.0 * (ph + gap);
+
+            // (1) the active ContextualBindings stack (top of stack first, base = World).
+            let mut cy = panel(
+                r,
+                panel_x,
+                p1_y,
+                panel_w,
+                ph,
+                &strings::resolve("$ctt_context_stack"),
+            );
+            let depth = stack.len();
+            for (i, ctx) in stack.iter().enumerate().rev() {
+                let is_top = i == depth - 1;
+                let (marker, col) = if is_top {
+                    ("\u{25b8} ", ACCENT)
+                } else {
+                    ("  ", TXT)
                 };
-                let tw = renderer.measure_text(&dest, 12.0).x;
-                renderer.draw_text(
-                    &dest,
-                    Vec2::new(panel_x + panel_w - 12.0 - tw, cy),
-                    12.0,
+                r.draw_text(
+                    &format!("{marker}{}", ctx_label(*ctx)),
+                    Vec2::new(panel_x + 14.0, cy),
+                    14.0,
                     col,
                 );
+                let tag = if is_top {
+                    strings::resolve("$ctt_active_tag")
+                } else if i == 0 {
+                    strings::resolve("$ctt_base_tag")
+                } else {
+                    "".into()
+                };
+                if !tag.is_empty() {
+                    let tw = r.measure_text(&tag, 11.0).x;
+                    r.draw_text(
+                        &tag,
+                        Vec2::new(panel_x + panel_w - 14.0 - tw, cy + 2.0),
+                        11.0,
+                        DIM,
+                    );
+                }
+                cy += 22.0;
+            }
+
+            // (2) the focus chain — which layer owns input (declares the active context).
+            let mut cy = panel(
+                r,
+                panel_x,
+                p2_y,
+                panel_w,
+                ph,
+                &strings::resolve("$ctt_focus_chain"),
+            );
+            for (i, layer) in bus.layers.iter().enumerate() {
+                let col = if layer.owns { GREENV } else { TXT };
+                r.draw_text(
+                    &format!("{i} {}", layer.name),
+                    Vec2::new(panel_x + 14.0, cy),
+                    13.0,
+                    col,
+                );
+                let mid = match layer.declares {
+                    Some(c) => format!("ctx {}", ctx_label(c)),
+                    None => layer.note.to_string(),
+                };
+                r.draw_text(
+                    &mid,
+                    Vec2::new(panel_x + panel_w * 0.40, cy),
+                    11.0,
+                    if layer.owns { GREENV } else { DIM },
+                );
+                if layer.owns {
+                    let tag = strings::resolve("$ctt_owns");
+                    let tw = r.measure_text(&tag, 11.0).x;
+                    r.draw_text(
+                        &tag,
+                        Vec2::new(panel_x + panel_w - 12.0 - tw, cy),
+                        11.0,
+                        GREENV,
+                    );
+                }
                 cy += 20.0;
             }
-        }
 
-        // ── keyboard pills (bottom strip, below both columns) ──
-        let ky = size.y - 24.0;
-        renderer.draw_text(
-            &strings::resolve("$ctt_keys"),
-            Vec2::new(margin, ky),
-            11.0,
-            DIM,
-        );
-        let mut x = 84.0;
-        for k in KEYS {
-            let on = snap.is_some_and(|s| s.key_down(k));
-            let lbl = format!("{k}");
-            let w = renderer.measure_text(&lbl, 11.0).x + 12.0;
-            let (fill, border, txt) = if on {
-                (ON_FILL, ON_BORDER, ON_CELL_TXT)
-            } else {
-                (IDLE_FILL, IDLE_BORDER, DIM)
-            };
-            renderer.draw_ui_panel(
-                Vec2::new(x, ky - 3.0),
-                Vec2::new(w, 18.0),
-                fill,
-                fill,
-                0.0,
-                5.0,
-                1.0,
-                border,
-                0.0,
+            // (3) which handler consumed each fired signal this frame (DispatchReport).
+            let mut cy = panel(
+                r,
+                panel_x,
+                p3_y,
+                panel_w,
+                ph,
+                &strings::resolve("$ctt_consumed"),
             );
-            renderer.draw_text(&lbl, Vec2::new(x + 6.0, ky), 11.0, txt);
-            x += w + 5.0;
-            if x > size.x - 56.0 {
-                break;
+            if bus.consumed.is_empty() {
+                r.draw_text(
+                    &strings::resolve("$ctt_no_signals"),
+                    Vec2::new(panel_x + 14.0, cy),
+                    12.0,
+                    DIM,
+                );
+            } else {
+                let max_rows = (((ph - 34.0) / 20.0).max(1.0)) as usize;
+                for row in bus.consumed.iter().take(max_rows) {
+                    let kindc = match row.kind {
+                        EventKind::Press => "press",
+                        EventKind::Release => "rel",
+                        EventKind::Hold => "hold",
+                        EventKind::Chord => "chord",
+                    };
+                    r.draw_text(
+                        &format!("{kindc:<5} {}", row.label),
+                        Vec2::new(panel_x + 14.0, cy),
+                        12.0,
+                        TXT,
+                    );
+                    let (dest, col) = match row.consumer {
+                        Some(name) => (format!("\u{2192} {name}"), GREENV),
+                        None => (
+                            format!("\u{2192} {}", strings::resolve("$ctt_passed")),
+                            AMBER,
+                        ),
+                    };
+                    let tw = r.measure_text(&dest, 12.0).x;
+                    r.draw_text(
+                        &dest,
+                        Vec2::new(panel_x + panel_w - 12.0 - tw, cy),
+                        12.0,
+                        col,
+                    );
+                    cy += 20.0;
+                }
             }
-        }
 
-        // ── the walker CHROME (header · mouse readout · tab bar) — last, so it
-        // draws over the hole-punch bands framing the stage. ──
-        if let Some(white) = self.white {
-            render_hud(renderer, &self.hud_commands, white, &[]);
-        }
+            // ── keyboard pills (bottom strip, below both columns) ──
+            let ky = size.y - 24.0;
+            r.draw_text(
+                &strings::resolve("$ctt_keys"),
+                Vec2::new(margin, ky),
+                11.0,
+                DIM,
+            );
+            let mut x = 84.0;
+            for k in KEYS {
+                let on = snap.is_some_and(|s| s.key_down(k));
+                let lbl = format!("{k}");
+                let w = r.measure_text(&lbl, 11.0).x + 12.0;
+                let (fill, border, txt) = if on {
+                    (ON_FILL, ON_BORDER, ON_CELL_TXT)
+                } else {
+                    (IDLE_FILL, IDLE_BORDER, DIM)
+                };
+                r.draw_ui_panel(
+                    Vec2::new(x, ky - 3.0),
+                    Vec2::new(w, 18.0),
+                    fill,
+                    fill,
+                    0.0,
+                    5.0,
+                    1.0,
+                    border,
+                    0.0,
+                );
+                r.draw_text(&lbl, Vec2::new(x + 6.0, ky), 11.0, txt);
+                x += w + 5.0;
+                if x > size.x - 56.0 {
+                    break;
+                }
+            }
+
+            // ── the walker CHROME (header · mouse readout · tab bar) — last, so it
+            // draws over the hole-punch bands framing the stage. ──
+            if let Some(white) = white {
+                render_hud(r, hud_commands, white, &[]);
+            }
+        });
     }
 }
 

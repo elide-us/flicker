@@ -40,6 +40,7 @@ members = [
     "Alpha/crates/scenes/flicker-pocepochs",
     "Alpha/crates/scenes/flicker-quartermaster",
     "Alpha/crates/scenes/flicker-sablework",
+    "Alpha/crates/scenes/flicker-jiggle",
     # The Prism-Alpha client (the app that hosts the scenes).
     "Alpha/prism-alpha",
     # World-sim / standalone POC crates — root crates/.

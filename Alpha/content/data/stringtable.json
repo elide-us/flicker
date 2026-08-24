@@ -3221,6 +3221,42 @@
   "wf_step_task": {
     "en-us": "Workflow"
   },
+  "wf_step_prep": {
+    "en-us": "Prep"
+  },
+  "ap_prep_title": {
+    "en-us": "Prep Mesh"
+  },
+  "ap_prep_hint": {
+    "en-us": "Set the height and trim triangles before rigging"
+  },
+  "ap_prep_head": {
+    "en-us": "Condition the mesh"
+  },
+  "ap_prep_blurb": {
+    "en-us": "Raw meshes arrive at any size and triangle count. Set the real-world height and trim the triangle budget, then rig."
+  },
+  "ap_stature": {
+    "en-us": "Height"
+  },
+  "ap_height_cm": {
+    "en-us": "cm"
+  },
+  "ap_decimate": {
+    "en-us": "Decimate"
+  },
+  "ap_keep_pct": {
+    "en-us": "Keep %"
+  },
+  "ap_prep_keep": {
+    "en-us": "Keeping"
+  },
+  "ap_prep_rigged": {
+    "en-us": "Already rigged — game-ready, no prep needed"
+  },
+  "ap_wireframe": {
+    "en-us": "Wireframe"
+  },
   "cat_nav_splash": {
     "en-us": "Splash"
   },
@@ -3493,6 +3529,36 @@
   },
   "siggroup_text": {
     "en-us": "TEXT ENTRY"
+  },
+  "jiggle_title": {
+    "en-us": "BUCKET O' SUDS"
+  },
+  "jiggle_subtitle": {
+    "en-us": "drop · squish · merge"
+  },
+  "jiggle_score": {
+    "en-us": "Score"
+  },
+  "jiggle_best": {
+    "en-us": "Best"
+  },
+  "jiggle_combo": {
+    "en-us": "Combo"
+  },
+  "jiggle_cash_out": {
+    "en-us": "CASH OUT"
+  },
+  "jiggle_high_scores": {
+    "en-us": "High Scores"
+  },
+  "jiggle_new_game": {
+    "en-us": "NEW GAME"
+  },
+  "jiggle_next_ball": {
+    "en-us": "Next Bubble"
+  },
+  "jiggle_esc_menu": {
+    "en-us": "Esc  ·  menu"
   },
   "key_a": {
     "en-us": "A"

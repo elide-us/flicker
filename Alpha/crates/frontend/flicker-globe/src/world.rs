@@ -30,13 +30,14 @@
 //! settings panel reaches the globe.
 
 use flicker::render::{
-    Camera, FrameGraph, MeshHandle, MeshIndices, MeshVertex, Rect, Renderer, Vec3,
+    Camera, FrameGraph, MeshHandle, MeshIndices, MeshVertex, Rect, Renderer, StageDef, StageLayer,
+    Vec3,
 };
 use flicker::ui::{SurfacePointer, SurfaceSlot};
 use flicker_input_core::{AbstractControls, ActionSignal};
 use flicker_input_router::{Flow, InputEvent, InputHandler, RouteCtx};
 
-use crate::view::{Arrows, GlobeStage, GlobeView, Seat, StageLayer};
+use crate::view::{Arrows, GlobeView, Seat, GLOBE_LAYERS};
 use crate::{build, graticule, OrbitCam, RADIUS};
 
 /// One shell of a world: what it is drawn over, how far out, how far its tiles
@@ -64,7 +65,7 @@ pub struct ShellSpec<'a> {
 pub struct GlobeWorld {
     view: GlobeView,
     cam: OrbitCam,
-    stage: GlobeStage,
+    stage: StageDef,
     /// Uploaded shells, in draw order. Freed and replaced when a new list lands.
     meshes: Vec<MeshHandle>,
     /// The CPU meshes of the newest list, waiting for a renderer to upload them.
@@ -96,11 +97,23 @@ pub struct GlobeWorld {
 }
 
 impl GlobeWorld {
-    /// A world authored by `stages.<source>` in the shared style file, opening
-    /// with the planet filling `fill` of the viewport's height (`None` keeps the
-    /// camera's plain three-radii framing).
+    /// A world authored by `stages.<source>` in the loaded styles, opening with the
+    /// planet filling `fill` of the viewport's height (`None` keeps the camera's plain
+    /// three-radii framing). An unauthored source still shows a picture — the scene's
+    /// own shells, default-lit — because a typo in a style file should cost the
+    /// authored look, never the planet (the compiler has already warned).
     pub fn new(source: &str, styles: &serde_json::Value, fill: Option<f32>) -> Self {
-        let stage = GlobeStage::from_styles(styles, source);
+        let stage = flicker::ui::stage_def(styles, source).unwrap_or_else(|| {
+            tracing::warn!("stages.{source}: the globe shows the scene's own shells instead");
+            StageDef {
+                layers: vec![StageLayer::Shells],
+                ..StageDef::default()
+            }
+        });
+        let undrawn = stage.layers_outside(GLOBE_LAYERS);
+        if !undrawn.is_empty() {
+            tracing::warn!("stages.{source} authors {undrawn:?} layers a globe does not draw");
+        }
         let mut cam = OrbitCam::new(RADIUS);
         if let Some(fill) = fill {
             cam = cam.with_fill(fill);
@@ -140,7 +153,7 @@ impl GlobeWorld {
 
     /// The authored look this world was built from — what a bench reads instead
     /// of writing its own colours down.
-    pub fn stage(&self) -> &GlobeStage {
+    pub fn stage(&self) -> &StageDef {
         &self.stage
     }
 
@@ -445,7 +458,8 @@ mod tests {
         }));
         let world = GlobeWorld::new("test_globe", &s, None);
         let stage = world.stage();
-        for (got, want) in stage.clear.iter().zip([0.1, 0.2, 0.3, 1.0]) {
+        let clear = stage.clear.expect("the stage authors a clear");
+        for (got, want) in clear.iter().zip([0.1, 0.2, 0.3, 1.0]) {
             assert!(
                 (got - want).abs() < 1e-6,
                 "the authored clear is read: {got} vs {want}"

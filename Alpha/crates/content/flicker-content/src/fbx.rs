@@ -187,6 +187,31 @@ pub fn parse_fbx(path: &Path) -> Result<RawModel> {
     })
 }
 
+/// POC — read the first material's flat base colour (linear RGB) from an FBX. For untextured,
+/// flat-shaded props (Synty foliage) the colour lives in the material itself, not a texture map, so
+/// the normal texture-wiring path yields nothing and the prop bakes as the placeholder "steel".
+/// TEMPORARY: see the note in [`crate::bake::bake_prop`] — the durable home for prop colour is the
+/// Materials-Unification project, not the rig's per-material `color`. Re-loads the file (cheap for
+/// these tiny FBX) so the hot [`parse_fbx`] path and its `RawModel` stay untouched.
+pub fn first_material_color(path: &Path) -> Option<[f32; 3]> {
+    let scene = ufbx::load_file(path.to_str()?, ufbx::LoadOpts::default()).ok()?;
+    for m in &scene.materials {
+        let map = if m.pbr.base_color.has_value {
+            &m.pbr.base_color
+        } else if m.fbx.diffuse_color.has_value {
+            &m.fbx.diffuse_color
+        } else {
+            continue;
+        };
+        return Some([
+            map.value_vec4.x as f32,
+            map.value_vec4.y as f32,
+            map.value_vec4.z as f32,
+        ]);
+    }
+    None
+}
+
 /// The skeleton = every node that is a bone (has a Bone attribute) OR is bound by a skin cluster,
 /// parent-indexed. A bone whose parent isn't itself a bone becomes a root (`-1`) — the canonical-rig
 /// slice restructures the hierarchy anyway.

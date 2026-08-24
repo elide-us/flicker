@@ -55,7 +55,8 @@ world-sim crates under `crates/` are standalone libraries exercised by their own
 ## The Prism Alpha client
 
 `prism-alpha` is the single launcher binary; it hosts every scene. Scenes are **data**:
-each is a `*.scene.json` layout under `Alpha/content/sensorium/scenes/`, driven by a Rust
+each is a `*.scene.json` layout under `Alpha/content/sensorium/scenes/` (authoring guide:
+[Alpha/content/sensorium/README.md](Alpha/content/sensorium/README.md)), driven by a Rust
 behaviour crate under `Alpha/crates/scenes/`, with runtime behaviour scripted through a
 strict data-only Luau boundary. The launcher presents them across realms — **Adventurer**,
 **Developer**, and **Game Master** — with a manifest↔roster gate that keeps the shipped
@@ -83,7 +84,7 @@ Crates are organized as `Alpha/crates/<cluster>/<crate>` (the application) plus 
 - **core** — `clayengine` (world-defining constants), `flicker` (umbrella), `flicker-core`,
   `flicker-worker`.
 - **platform / render / input** — `flicker-app`, `flicker-render`, `flicker-2d`,
-  `flicker-input-core` / `-router` / `-device`.
+  [`flicker-input-core`](Alpha/crates/input/flicker-input-core/README.md) / `-router` / `-device`.
 - **scripting / frontend** — `flicker-script` (Luau host), `flicker-scene`, `flicker-shell`,
   `flicker-widgets`, `flicker-globe`.
 - **animation / content / mechanics / world** — `flicker-flight`, `flicker-skeletal`,
@@ -92,7 +93,7 @@ Crates are organized as `Alpha/crates/<cluster>/<crate>` (the application) plus 
 - **net** — `flicker-net` (the `clay-chat` client + the release-update checker).
 - **scenes** — the scene behaviour crates (`flicker-populous`, `flicker-quartermaster`,
   `flicker-sablework`, `flicker-componentcatalog`, `flicker-solarbirth`,
-  `flicker-clicktrainer`, and the developer/bench scenes folding in for v0.2.0).
+  [`flicker-clicktrainer`](Alpha/crates/scenes/flicker-clicktrainer/README.md), and the developer/bench scenes folding in for v0.2.0).
 - **prism-alpha** — the launcher application.
 - **root `crates/`** — world-sim / standalone POCs (`flicker-worldgrid`, `flicker-worldstate`,
   `flicker-worldgen`, `flicker-worldengine`, `flicker-poc-chemistry`, `flicker-celestial`,

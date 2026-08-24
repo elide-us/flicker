@@ -5,7 +5,7 @@
 //! main pass (before the 3D mesh) so the terrain, lines, billboards, and 2D
 //! UI all layer on top. It carries one frame-global [`SkyUniform`] (the
 //! inverse view-projection + camera + sun/moon + sky palette) that the
-//! renderer fills each frame from the same [`crate::SceneLighting`] that
+//! renderer fills each frame from the same [`crate::LightRig`] that
 //! drives the mesh shading, so the sky and the lit terrain stay coherent.
 //!
 //! Depth: shares the main pass's `Depth32Float` attachment but neither writes
@@ -58,8 +58,12 @@ impl Default for SkyUniform {
 
 /// The procedural-sky pipeline. One uniform, one bind group, no vertex
 /// buffer — the fullscreen triangle is generated from `@builtin(vertex_index)`.
+///
+/// The render pipeline is baked for BOTH colour formats (swapchain `surface_format` and
+/// [`crate::HDR_FORMAT`]) over the one shared bind group; [`Self::render`] selects the
+/// variant by [`crate::TargetColor`]. The bind group / uniform are format-independent.
 pub struct SkyPipeline {
-    pipeline: wgpu::RenderPipeline,
+    pipeline: [wgpu::RenderPipeline; 2],
     bind_group: wgpu::BindGroup,
     uniform_buf: wgpu::Buffer,
 }
@@ -91,48 +95,53 @@ impl SkyPipeline {
             push_constant_ranges: &[],
         });
 
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("flicker.sky.pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: "vs_main",
-                buffers: &[],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: "fs_main",
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: surface_format,
-                    // Opaque background fill — replace, no blend.
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                unclipped_depth: false,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                conservative: false,
-            },
-            // Background: never write depth, always pass. The mesh draws after
-            // and paints over wherever geometry exists.
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::Always,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
+        // Bake the pipeline for both colour formats over the one shared layout — only the
+        // colour-target format differs. `render` picks the variant by `TargetColor`.
+        let make = |fmt: wgpu::TextureFormat| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("flicker.sky.pipeline"),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: "vs_main",
+                    buffers: &[],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: "fs_main",
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: fmt,
+                        // Opaque background fill — replace, no blend.
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    cull_mode: None,
+                    unclipped_depth: false,
+                    polygon_mode: wgpu::PolygonMode::Fill,
+                    conservative: false,
+                },
+                // Background: never write depth, always pass. The mesh draws after
+                // and paints over wherever geometry exists.
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: false,
+                    depth_compare: wgpu::CompareFunction::Always,
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+                multisample: wgpu::MultisampleState::default(),
+                multiview: None,
+                cache: None,
+            })
+        };
+        let pipeline = [make(surface_format), make(crate::HDR_FORMAT)];
 
         let uniform_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("flicker.sky.uniform"),
@@ -163,9 +172,10 @@ impl SkyPipeline {
     }
 
     /// Emit the fullscreen sky triangle. The renderer calls this first in the
-    /// main pass, only on frames that requested a sky.
-    pub fn render<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {
-        pass.set_pipeline(&self.pipeline);
+    /// main pass, only on frames that requested a sky. `target` selects the colour-format
+    /// variant of the pipeline (sRGB or HDR) for the surface being encoded.
+    pub fn render<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, target: crate::TargetColor) {
+        pass.set_pipeline(&self.pipeline[target as usize]);
         pass.set_bind_group(0, &self.bind_group, &[]);
         pass.draw(0..3, 0..1);
     }

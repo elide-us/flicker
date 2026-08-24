@@ -21,7 +21,7 @@ pub mod camera;
 pub mod view;
 pub mod world;
 pub use camera::OrbitCam;
-pub use view::{Arrows, GlobeStage, GlobeView, StageLayer, NO_ARROWS};
+pub use view::{Arrows, GlobeView, GLOBE_LAYERS, NO_ARROWS};
 pub use world::{GlobeWorld, ShellSpec};
 
 use flicker::render::{MeshVertex, Vec3};

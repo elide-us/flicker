@@ -267,6 +267,41 @@
     ]
   },
   "exits": {},
+  "stages": {
+    "populous_globe": {
+      "_comment": "The POPULOUS hex ledger globe — the authored world drawn into the multi-view's centre viewport. Like `godmode_globe` it deliberately has NO `camera` block: the map is flown by the game master, so the scene's own orbit camera owns the view and the stage authors only the light it is seen by (the default light source). `clear` is transparent so the node's holder panel shows through. Unlike God Mode, this world has NO simulation publishing shells, so its whole appearance is authored here: the near-black under-shell, the inset tile shell over it (the seams between the tiles show the shell beneath, and those seams ARE the outlines — two static shells, no per-edge line geometry), and the shared reference frame above both.",
+      "lighting": "studio",
+      "clear": "$stage_void",
+      "layers": [
+        {
+          "draw": "shell",
+          "radius_scale": 0.998,
+          "inset": 0.0,
+          "color": "$world_seam"
+        },
+        {
+          "draw": "shell",
+          "radius_scale": 1.0,
+          "inset": 0.12,
+          "color": "$world_tile"
+        },
+        {
+          "draw": "graticule",
+          "radius_scale": 1.022
+        }
+      ],
+      "_hdr": "HDR: the `scene` pass (the globe's two shells + graticule, the layers above) renders into the LINEAR rgba16f `hdr` working attachment and `tonemap_grade` resolves it (ACES roll-off) into the sRGB `color` last. grade_strength 0 = tonemap only, no invented tint — an art grade is Aaron's to author in-window. Alpha passes through, so the transparent clear the holder panel shows through survives.",
+      "attachments": {
+        "hdr": { "format": "rgba16f" },
+        "color": { "format": "surface" },
+        "depth": { "format": "depth32" }
+      },
+      "passes": [
+        { "pass": "scene", "writes": ["hdr", "depth"] },
+        { "pass": "tonemap_grade" }
+      ]
+    }
+  },
   "styles": {
     "paged_menu": {
       "frame": {

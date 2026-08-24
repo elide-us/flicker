@@ -359,9 +359,8 @@ impl Scene for PopulousBench {
             &mut self.ui_state,
         );
         let over_hud = frame.results.is_on("hud_hit");
-        // The walker RESERVES the viewport's rect and never fills it (it runs
-        // late; offscreen passes must run first) — hand it to the world here,
-        // which draws into it at the top of `render`.
+        // The walker RESERVES the viewport's rect and never fills it — hand it to the
+        // world here, which declares its surface into that rect in `render`.
         self.world.seat(frame.surface(ui::VIEW_SLOT));
         // The pointer SAMPLE for the globe's surface — the walker's barrier (A8C9F02B
         // §4b): present while the cursor is over the planet with no UI over it, or while
@@ -439,20 +438,21 @@ impl Scene for PopulousBench {
         Transition::None
     }
 
-    fn render(&mut self, renderer: &mut Renderer) {
-        // The globe goes into the rect the walker reserved — FIRST.
-        // `FrameGraph::execute` resets the shared per-frame draw queues, so an
-        // offscreen pass declared after a main-frame draw would throw that
-        // draw away.
-        {
-            let mut fg = FrameGraph::new();
-            let layer = renderer.layer();
-            self.world.render(renderer, &mut fg, layer);
-            fg.execute(renderer);
-        }
-
-        if let Some(&white) = self.textures.first() {
-            render_hud(renderer, &self.hud_commands, white, &self.textures);
+    fn render<'f>(&'f mut self, renderer: &mut Renderer, fg: &mut FrameGraph<'f>) {
+        // Declare-only: the globe goes into the rect the walker reserved, and the HUD
+        // replay is the screen surface's final 2D — one overlay, run after the composites.
+        // The destructure splits the disjoint borrows (`world` &mut, `hud_commands` /
+        // `textures` shared) so both survive into the graph until the manager's `execute`.
+        let Self {
+            world,
+            hud_commands,
+            textures,
+            ..
+        } = self;
+        let layer = fg.base_layer();
+        world.render(renderer, fg, layer);
+        if let Some(&white) = textures.first() {
+            fg.overlay(move |r| render_hud(r, hud_commands, white, textures));
         }
     }
 }
@@ -1403,7 +1403,7 @@ mod tests {
     /// and `the_world_draws_the_shared_graticule`.)
     #[test]
     fn the_worlds_appearance_comes_from_the_authored_stage() {
-        use flicker_globe::StageLayer;
+        use flicker::render::StageLayer;
 
         let bench = test_bench();
         let layers = &bench.world.stage().layers;

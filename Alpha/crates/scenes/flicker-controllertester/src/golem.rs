@@ -20,8 +20,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use flicker::render::{
-    grid_segments, Camera, Mat4, MeshDrawOptions, MeshHandle, MeshIndices, MeshVertex, Rect,
-    Renderer, SceneLighting, Vec2, Vec3,
+    grid_segments, Camera, LightRig, Mat4, MeshDrawOptions, MeshHandle, MeshIndices, MeshVertex,
+    Rect, Renderer, Vec2, Vec3,
 };
 use flicker_input_core::{ActionSignal, AnalogFrame, EventKind};
 use flicker_input_router::{DispatchReport, InputEvent};
@@ -266,7 +266,7 @@ impl GolemStage {
             far: dist * 10.0,
             ortho_height: None,
         });
-        r.set_scene(SceneLighting::default());
+        r.set_scene(LightRig::default());
 
         // Ground lattice at the body's feet (the Y-up stage helper).
         let ground = grid_segments(self.radius * 0.25, self.radius * 2.5, self.floor);

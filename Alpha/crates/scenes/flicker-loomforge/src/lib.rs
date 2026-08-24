@@ -36,7 +36,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use canvas::{CanvasArea, CardRect};
-use flicker::render::{FrameGraph, Rect as StageRect, Renderer, TextureHandle, Vec2};
+use flicker::render::{FrameGraph, Rate, Rect as StageRect, Renderer, TextureHandle, Vec2};
 use flicker::scene::{Scene, SceneInput, Transition};
 use flicker::script::{HudCommand, ScriptHost, UiNode, Value, ValueMap};
 use flicker::ui::{
@@ -1276,6 +1276,17 @@ impl LoomforgeBench {
     }
 
     fn build_stage_reqs(&self, slots: Vec<flicker::ui::SurfaceSlot>) -> Vec<StageReq> {
+        /// A doll the bench has decided is not the one being watched is a POSTER: its
+        /// target keeps the last image and costs no submit. The bench's own selection
+        /// rules are booleans, and this is the ONE place they become a rate.
+        fn poster_unless(live: bool) -> Rate {
+            if live {
+                Rate::Live
+            } else {
+                Rate::Poster
+            }
+        }
+
         let Some(doc) = &self.doc else {
             return Vec::new();
         };
@@ -1288,19 +1299,22 @@ impl LoomforgeBench {
             .into_iter()
             .filter_map(|s| {
                 // A clip row's id carries the clip NAME; a pack card's carries its index.
-                let (clip, live) = if let Some(name) = s.id.strip_prefix(STAGE_PREFIX) {
-                    (doc.clip_index(name), s.live)
+                let (clip, rate) = if let Some(name) = s.id.strip_prefix(STAGE_PREFIX) {
+                    (doc.clip_index(name), s.rate)
                 } else if let Some(i) = s.id.strip_prefix(PACK_STAGE_PREFIX) {
                     let i: usize = i.parse().ok()?;
                     // Only the selected card animates — a live target is a GPU submit.
-                    (self.pack_card_clip(i, doc), i == self.pack_sel)
+                    (
+                        self.pack_card_clip(i, doc),
+                        poster_unless(i == self.pack_sel),
+                    )
                 } else if s.id == TAE_STAGE_ID {
                     // The TAE preview poses from the clip being edited, and re-renders
                     // only while the transport is running — a parked playhead is a poster.
                     let clip = self
                         .tae_axis()
                         .and_then(|(_, name, _, _)| doc.clip_index(&name));
-                    (clip, self.tae_playing)
+                    (clip, poster_unless(self.tae_playing))
                 } else {
                     return None;
                 };
@@ -1312,8 +1326,10 @@ impl LoomforgeBench {
                     // Walker chrome sits one layer above the scene-drawn canvas.
                     layer: s.layer + 1.0,
                     tint: s.tint,
-                    live,
-                    active: live,
+                    rate,
+                    // A still doll is a still doll: the ground ring lights on the same
+                    // condition that makes the slot animate.
+                    active: rate != Rate::Poster,
                     clip,
                     time: self.time,
                     source: s.source,
@@ -1340,7 +1356,7 @@ impl LoomforgeBench {
                     },
                     layer: 0.0,
                     tint: [1.0; 4],
-                    live: sel,
+                    rate: poster_unless(sel),
                     clip: doc.clip_index(&st.clip),
                     time: self.time,
                     active: sel,
@@ -1932,49 +1948,53 @@ impl Scene for LoomforgeBench {
         Transition::None
     }
 
-    fn render(&mut self, renderer: &mut Renderer) {
-        let base = renderer.layer();
+    fn render<'f>(&'f mut self, renderer: &mut Renderer, fg: &mut FrameGraph<'f>) {
+        let base = fg.base_layer();
 
-        // Offscreen doll passes FIRST — `FrameGraph::execute` must lead `render()`,
-        // because an offscreen pass resets the shared draw queues and would otherwise
-        // discard main-frame geometry queued before it.
+        // Offscreen doll passes — declared into the frame's graph; the manager runs every
+        // offscreen pass before the overlay, so the doll composites land under the chrome.
         if !self.stage_reqs.is_empty() {
             if let Some(doc) = &self.doc {
-                let mut fg = FrameGraph::new();
                 self.stage_rig
-                    .stage(renderer, &mut fg, doc.model(), base, &self.stage_reqs);
-                fg.execute(renderer);
+                    .stage(renderer, fg, doc.model(), base, &self.stage_reqs);
             }
         }
         // Amortised cleanup: a page change strands the previous page's targets, but a
         // steady page never trips this, so the common frame does no bookkeeping at all.
+        // Runs BEFORE the overlay is declared, so its `&mut stage_rig` never overlaps the
+        // overlay's shared `&self`.
         if self.stage_rig.slot_count() > self.stage_reqs.len() + STALE_SLOT_SLACK {
             let shown: Vec<&str> = self.stage_reqs.iter().map(|r| r.id.as_str()).collect();
             self.stage_rig
                 .retain_slots(renderer, &|id| shown.contains(&id));
         }
 
-        // The scene-owned canvas paints on the base layer, UNDER the walker chrome —
-        // otherwise the rails' panels and the cards would interleave by submission
-        // order within one layer (the paperdoll HUD-behind-panels trap). The dolls
-        // composited above ride the sprite pass, which runs after ui-panels within a
-        // layer, so each lands over its own backdrop without a layer of its own.
-        if self.tab == Tab::StateMachine {
-            self.draw_canvas(renderer);
-            if let Some(rect) = self.sm_strip_rect {
-                self.draw_tae(renderer, rect);
+        // The scene's 2D chrome — the canvas, the TAE strips, and the walker HUD — as the
+        // screen surface's final overlay, run after the doll composites. The scene-owned
+        // canvas paints on the base layer, UNDER the walker chrome — otherwise the rails'
+        // panels and the cards would interleave by submission order within one layer (the
+        // paperdoll HUD-behind-panels trap). The dolls composited above ride the sprite
+        // pass, which runs after ui-panels within a layer, so each lands over its own
+        // backdrop without a layer of its own.
+        let me = &*self;
+        fg.overlay(move |r| {
+            if me.tab == Tab::StateMachine {
+                me.draw_canvas(r);
+                if let Some(rect) = me.sm_strip_rect {
+                    me.draw_tae(r, rect);
+                }
             }
-        }
-        if self.tab == Tab::TaeEditor {
-            if let Some(rect) = self.page_strip_rect {
-                self.draw_tae_page(renderer, rect);
+            if me.tab == Tab::TaeEditor {
+                if let Some(rect) = me.page_strip_rect {
+                    me.draw_tae_page(r, rect);
+                }
             }
-        }
-        if let Some(white) = self.hud_white {
-            renderer.set_layer(base + 1.0);
-            render_hud(renderer, &self.hud_commands, white, &[]);
-            renderer.set_layer(base);
-        }
+            if let Some(white) = me.hud_white {
+                r.set_layer(base + 1.0);
+                render_hud(r, &me.hud_commands, white, &[]);
+                r.set_layer(base);
+            }
+        });
     }
 }
 
@@ -2932,7 +2952,7 @@ mod tests {
         let def = SceneDef::parse("loomforge", LF_SCENE).expect("scene file parses");
         let styles = flicker::ui::load_shared_styles(def.styles.as_ref());
         assert!(
-            stage::parse_sources(&styles).contains_key(DOLL_SOURCE),
+            flicker::ui::stage_def(&styles, DOLL_SOURCE).is_some(),
             "`{DOLL_SOURCE}` must exist in the shared `stages` block"
         );
     }

@@ -7,6 +7,8 @@
 //! order-independent-transparency problem the billboard/quad approach has, avoided by
 //! construction. A reusable ground-fog / atmospheric-layer effect.
 
+use std::collections::HashMap;
+
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Vec2, Vec3};
 
@@ -14,7 +16,7 @@ use crate::pipeline_mesh::DEPTH_FORMAT;
 
 /// Per-frame parameters for the ground fog — the public API input (the renderer turns this + the
 /// camera into the GPU uniform). Distances are world units.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GroundFog {
     /// Fog colour (linear RGB) — e.g. cool moonlit blue-white.
     pub color: Vec3,
@@ -116,12 +118,22 @@ impl GroundFogUniform {
     }
 }
 
-/// The ground-fog pipeline. A uniform + the scene depth texture, no vertex buffer. The bind group
-/// depends on the depth view (recreated on resize), so it's (re)built via [`set_depth`].
+/// The ground-fog pipeline. A uniform + the depth texture of the SURFACE being drawn, no vertex
+/// buffer. Every surface has its own depth (the window's, recreated on resize; each offscreen
+/// target's), so the bind groups are built on demand and cached per depth id via
+/// [`bind_depth`](GroundFogPipeline::bind_depth) — the renderer selects the one for the pass it
+/// is encoding.
 pub struct GroundFogPipeline {
-    pipeline: wgpu::RenderPipeline,
+    /// Baked for both colour formats (swapchain + [`crate::HDR_FORMAT`]) over the one
+    /// shared uniform + per-depth-id bind cache; [`Self::render`] selects by
+    /// [`crate::TargetColor`].
+    pipeline: [wgpu::RenderPipeline; 2],
     bind_group_layout: wgpu::BindGroupLayout,
-    bind_group: Option<wgpu::BindGroup>,
+    /// One bind group per depth texture the pass has sampled, keyed by the renderer's
+    /// depth id; dropped through [`forget`](Self::forget) when that texture goes away.
+    bind_groups: HashMap<u64, wgpu::BindGroup>,
+    /// The depth id the next `render` samples — the surface currently being encoded.
+    active: Option<u64>,
     uniform_buf: wgpu::Buffer,
 }
 
@@ -164,47 +176,52 @@ impl GroundFogPipeline {
             push_constant_ranges: &[],
         });
 
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("flicker.ground_fog.pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: "vs_main",
-                buffers: &[],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: "fs_main",
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: surface_format,
-                    // Premultiplied "over": `out = src.rgb + dst·(1−src.a)`.
-                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                unclipped_depth: false,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                conservative: false,
-            },
-            // A volume: never write depth, always pass (depth read via the bound depth texture).
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::Always,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
+        // Bake for both colour formats over the one shared layout; only the colour-target
+        // format differs. `render` picks the variant by `TargetColor`.
+        let make = |fmt: wgpu::TextureFormat| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("flicker.ground_fog.pipeline"),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: "vs_main",
+                    buffers: &[],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: "fs_main",
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: fmt,
+                        // Premultiplied "over": `out = src.rgb + dst·(1−src.a)`.
+                        blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    cull_mode: None,
+                    unclipped_depth: false,
+                    polygon_mode: wgpu::PolygonMode::Fill,
+                    conservative: false,
+                },
+                // A volume: never write depth, always pass (depth read via the bound texture).
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: false,
+                    depth_compare: wgpu::CompareFunction::Always,
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+                multisample: wgpu::MultisampleState::default(),
+                multiview: None,
+                cache: None,
+            })
+        };
+        let pipeline = [make(surface_format), make(crate::HDR_FORMAT)];
 
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("flicker.ground_fog.uniform"),
@@ -216,39 +233,58 @@ impl GroundFogPipeline {
         Self {
             pipeline,
             bind_group_layout,
-            bind_group: None,
+            bind_groups: HashMap::new(),
+            active: None,
             uniform_buf,
         }
     }
 
-    /// (Re)build the bind group against the current scene **depth view**. Call after the depth
-    /// texture is created and again whenever it's recreated (resize).
-    pub fn set_depth(&mut self, device: &wgpu::Device, depth_view: &wgpu::TextureView) {
-        self.bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("flicker.ground_fog.bind_group"),
-            layout: &self.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: self.uniform_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(depth_view),
-                },
-            ],
-        }));
+    /// Select the depth the next `render` samples: the depth attachment of the SURFACE being
+    /// drawn — the window's, or an offscreen target's own — keyed by the renderer's depth id.
+    /// Built once per depth texture and cached, so a steady frame allocates nothing.
+    pub fn bind_depth(
+        &mut self,
+        device: &wgpu::Device,
+        depth_id: u64,
+        depth_view: &wgpu::TextureView,
+    ) {
+        self.bind_groups.entry(depth_id).or_insert_with(|| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("flicker.ground_fog.bind_group"),
+                layout: &self.bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: self.uniform_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(depth_view),
+                    },
+                ],
+            })
+        });
+        self.active = Some(depth_id);
+    }
+
+    /// Drop the bind group of a depth texture that no longer exists — a freed or resized
+    /// target, or the window's depth after a resize.
+    pub fn forget(&mut self, depth_id: u64) {
+        self.bind_groups.remove(&depth_id);
+        if self.active == Some(depth_id) {
+            self.active = None;
+        }
     }
 
     pub fn set_uniform(&self, queue: &wgpu::Queue, uniform: GroundFogUniform) {
         queue.write_buffer(&self.uniform_buf, 0, bytemuck::bytes_of(&uniform));
     }
 
-    pub fn render<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {
-        let Some(bind_group) = &self.bind_group else {
-            return; // depth not bound yet
+    pub fn render<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, target: crate::TargetColor) {
+        let Some(bind_group) = self.active.and_then(|id| self.bind_groups.get(&id)) else {
+            return; // no surface depth bound yet
         };
-        pass.set_pipeline(&self.pipeline);
+        pass.set_pipeline(&self.pipeline[target as usize]);
         pass.set_bind_group(0, bind_group, &[]);
         pass.draw(0..3, 0..1);
     }

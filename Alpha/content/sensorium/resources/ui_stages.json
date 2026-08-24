@@ -1,5 +1,5 @@
 {
-  "_comment": "STAGE SOURCES for the flicker walker — named offscreen RTT sub-scenes a `stage`/`rtt` node composites into its rect (split out of ui_theme.json, Aaron 2026-08-12). A source says WHAT to render (lighting preset, camera, content layers); the NODE says WHERE it lands. Draw ORDER is derived topologically by flicker-render::FrameGraph, never expressed here. Layers carry scalars, $token colours and *_bind Model keys — never geometry. Colours are $token refs resolved against ui_theme.json's theme.tokens at load (the loader merges this file into the theme root — the palette NEVER lives here; a `theme` key in this file is refused as a fork). The `lighting` presets are salvaged from the retired packeditor (pip_scene / night_scene).",
+  "_comment": "THE SHARED STAGE LIBRARY — what more than one scene's `surface` nodes draw from. Today that is the `lighting` presets (studio / night / deep_space) every stage NAMES; a stage source that only one scene uses is that scene's data and lives in its .scene.json `stages` section (ruling 8DE71FB0, 2026-08-22). A source says WHAT to render (lighting preset, clear, camera, content layers); the NODE says WHERE it lands. Draw ORDER is derived topologically by flicker-render::FrameGraph, never expressed here. Layers carry scalars and $token colours — never geometry. Colours are $token refs resolved against ui_theme.json's theme.tokens at load (the loader merges this file into the theme root, then each scene's `stages` INTO this block — a scene stage may not reuse a library name; the palette NEVER lives here; a `theme` key in this file is refused as a fork). Every source is compiled by the ONE stage compiler (flicker-widgets stages.rs): an unknown key, draw kind or preset fails the build gate `every_shipped_stage_compiles_clean`. The `lighting` presets are salvaged from the retired packeditor (pip_scene / night_scene).",
   "stages": {
     "lighting": {
       "studio": {
@@ -65,128 +65,110 @@
           0.03,
           0.06
         ]
+      },
+      "deep_space": {
+        "_comment": "ONE STAR, lit from where it actually is: the Solar Birth cinematic's system is shaded by a POINT light at the world origin (`point_pos` + `point`, a warm starlight), so every body takes its terminator from its own direction to the centre — which is the only way a fly-through of a fixed system reads as lit rather than as a flat directional wash. The directional sun and moon are therefore BLACK, and their `*_dir` are inert (kept so the rig states every term rather than leaving three to a default nobody chose). `ambient` is a faint floor that keeps night sides off pure black, and the sky palette is a near-black deep space — the `sky` pass of `solarbirth_sky` rides it.",
+        "sun_dir": [
+          0.0,
+          -1.0,
+          0.0
+        ],
+        "sun": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "moon_dir": [
+          0.0,
+          -1.0,
+          0.0
+        ],
+        "moon": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ambient": [
+          0.07,
+          0.07,
+          0.07
+        ],
+        "point_pos": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "point": [
+          1.0,
+          0.94,
+          0.84
+        ],
+        "sky_zenith": [
+          0.004,
+          0.006,
+          0.014
+        ],
+        "sky_horizon": [
+          0.007,
+          0.01,
+          0.022
+        ]
+      },
+      "hearth": {
+        "_comment": "THE FIREPLACE-CLASS RIG — the first shipped preset whose light has real FALLOFF and a DRIVER, authored for the Prism Test Room's root surface (`pocclusters_world` in pocclusters.scene.json) and for nothing else. It is the general `lights` form, and the SLOT ORDER is load-bearing: the Celestial Cycle composes over this rig every frame (`CelestialState::over`, flicker-pocclusters/src/celestial.rs) and overwrites lights 0 and 1 BY INDEX — the sun and the moon — together with `ambient`, the sky palette and the fog. Those same two slots are what the sky pass reads back (`sky_sun()`/`sky_moon()` ARE slots 0/1, one addressing scheme), so a non-`dir` light authored into either is REPORTED by the preset compiler rather than silently eaten — fixed lights belong at slot 2+. Those two slots are therefore RESERVED, not lit: their colour is black and their `dir` points below the horizon (the deep_space idiom — inert, but stated, so the rig names every term rather than leaving it to a default nobody chose). Black is the honest placeholder: a studio-ish sun here would be a light nobody authored for this room, seen only if the compose path were bypassed — and in that case a dark sky is the failure worth seeing. `ambient` / `sky_zenith` / `sky_horizon` / fog are deliberately UNAUTHORED for the same reason the scene's `ground_fog` authors no `density`: the cycle owns them, so a number here would be dead data. Slot 2 is the hearth itself.",
+        "lights": [
+          {
+            "_comment": "SLOT 0 — the sun. Reserved by index; the Celestial Cycle overwrites colour AND direction every frame.",
+            "kind": "dir",
+            "dir": [
+              0.0,
+              -1.0,
+              0.0
+            ],
+            "color": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          {
+            "_comment": "SLOT 1 — the moon. Reserved by index, same as slot 0.",
+            "kind": "dir",
+            "dir": [
+              0.0,
+              -1.0,
+              0.0
+            ],
+            "color": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          {
+            "_comment": "THE HEARTH — every number here is ART, Aaron's to tune in THIS file, never in Rust. `color` is firelight HUE only (a warm orange); the magnitude rides `intensity`. `pos` is world VOXELS in the 3×3 field of 256-voxel clusters (bounds 0..768): the player spawns at the field centre (384, 384) facing +Z, so the fire sits 20 voxels ahead of that walk line and 4 to the right of it, and y=120 is ~3 voxels above the terrain there (the world heightmap reads ~116.7 at 388/404) — on the nav floor and in the spawn view, neither buried nor floating. `intensity` 36 is in the TENS on purpose: a light with a `radius` takes true windowed inverse-square falloff, the one place the engine's colour-carries-the-magnitude convention stops holding — at 36 the pool reads about half of albedo some 8 voxels out and is gone at 16. `radius` 16 voxels IS that edge (~2.3 m at this scene's 12-voxel eye height). The `driver` is seeded value noise that only ever DIMS a fire and never overshoots it, evaluated once per frame by FrameGraph::surface against the clock this scene publishes: `speed` 7 noise samples a second, `depth` 0.35 = at most a 35% cut, `seed` 1 so a second fire in this room can differ by its seed alone.",
+            "kind": "point",
+            "pos": [
+              388.0,
+              120.0,
+              404.0
+            ],
+            "color": [
+              1.0,
+              0.55,
+              0.18
+            ],
+            "intensity": 36.0,
+            "radius": 16.0,
+            "driver": {
+              "kind": "flicker",
+              "speed": 7.0,
+              "depth": 0.35,
+              "seed": 1
+            }
+          }
+        ]
       }
-    },
-    "portrait": {
-      "_comment": "One character on a dark void — the Loomforge Stage doll (pack cards, clip rows, creature roster + hero). The node's panel style supplies the backdrop gradient, so the target clears TRANSPARENT and the doll composites over it.",
-      "lighting": "studio",
-      "clear": "$stage_void",
-      "camera": {
-        "kind": "orbit",
-        "yaw": 0.55,
-        "pitch": 0.18,
-        "dist": 2.6,
-        "target_y": 0.95
-      },
-      "layers": [
-        {
-          "draw": "skinned",
-          "model_bind": "stage_model",
-          "pose_bind": "stage_pose"
-        },
-        {
-          "draw": "ring",
-          "radius": 0.45,
-          "y": 0.0,
-          "segments": 24,
-          "color": "$bronze",
-          "color_active": "$rune_glow"
-        }
-      ]
-    },
-    "turntable": {
-      "_comment": "Wider framing over a ground grid — the TAE editor preview (300px) and any full-body review shot.",
-      "lighting": "studio",
-      "clear": "$stage_void",
-      "camera": {
-        "kind": "orbit",
-        "yaw_bind": "stage_spin",
-        "pitch": 0.22,
-        "dist": 3.2,
-        "target_y": 1.0
-      },
-      "layers": [
-        {
-          "draw": "grid",
-          "spacing": 0.5,
-          "extent": 6,
-          "y": 0.0,
-          "color": "$grid_line"
-        },
-        {
-          "draw": "skinned",
-          "model_bind": "stage_model",
-          "pose_bind": "stage_pose"
-        },
-        {
-          "draw": "ring",
-          "radius": 0.5,
-          "y": 0.0,
-          "segments": 24,
-          "color": "$bronze",
-          "color_active": "$rune_glow"
-        }
-      ]
-    },
-    "sablework_lit": {
-      "_comment": "The Sablework LIT PREVIEW — the material shown on a turning sample under a fixed light, which is the only way roughness/metalness/normal relief actually read. The `material` layer is drawn by the bench's own lit module (it binds the six preview maps it already holds); the target clears TRANSPARENT so the node's panel supplies the backdrop, matching `portrait`.",
-      "lighting": "studio",
-      "clear": "$stage_void",
-      "camera": {
-        "kind": "orbit",
-        "yaw": 0.6,
-        "pitch": 0.28,
-        "dist": 2.6,
-        "target_y": 0.0
-      },
-      "layers": [
-        {
-          "draw": "material"
-        }
-      ]
-    },
-    "godmode_globe": {
-      "_comment": "The God Mode GLOBE — the forming planet, drawn into the bench's centre viewport. Deliberately has NO `camera` block, and that absence is a decision rather than an omission: every other stage frames a fixed subject, but this one is flown by the maintainer, so the scene's own orbit camera owns the view and the stage authors only the light it is seen by and the backdrop it sits on. `clear` is transparent so the node's `rtt_holder` panel shows through, matching `sablework_lit`.",
-      "lighting": "studio",
-      "clear": "$stage_void",
-      "layers": [
-        {
-          "draw": "shells"
-        }
-      ]
-    },
-    "pocepochs_globe": {
-      "_comment": "The PLANET SIMULATION globe — the forward-regenerative epoch sim's world. Like `godmode_globe` it publishes its own shells (the surface shell, or the classified per-column layer stack) and authors no `camera`, because the planet is flown by the maintainer. `clear` is transparent so the scene's own deep-space backdrop shows through the composited viewport.",
-      "lighting": "studio",
-      "clear": "$stage_void",
-      "layers": [
-        {
-          "draw": "shells"
-        }
-      ]
-    },
-    "populous_globe": {
-      "_comment": "The POPULOUS hex ledger globe — the authored world drawn into the multi-view's centre viewport. Like `godmode_globe` it deliberately has NO `camera` block: the map is flown by the game master, so the scene's own orbit camera owns the view and the stage authors only the light it is seen by (the default light source). `clear` is transparent so the node's holder panel shows through. Unlike God Mode, this world has NO simulation publishing shells, so its whole appearance is authored here: the near-black under-shell, the inset tile shell over it (the seams between the tiles show the shell beneath, and those seams ARE the outlines — two static shells, no per-edge line geometry), and the shared reference frame above both.",
-      "lighting": "studio",
-      "clear": "$stage_void",
-      "layers": [
-        {
-          "draw": "shell",
-          "radius_scale": 0.998,
-          "inset": 0.0,
-          "color": "$world_seam"
-        },
-        {
-          "draw": "shell",
-          "radius_scale": 1.0,
-          "inset": 0.12,
-          "color": "$world_tile"
-        },
-        {
-          "draw": "graticule",
-          "radius_scale": 1.022
-        }
-      ]
     }
   }
 }

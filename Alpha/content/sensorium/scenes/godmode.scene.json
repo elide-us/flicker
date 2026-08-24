@@ -2,6 +2,28 @@
   "_comment": "God Mode SCENE DEFINITION (201F4F51 template-free). The world-simulation console: a full-window frame — header (title · tick readout · run state · the processes chip), the transport + view-toggle row, the ten-field tab strip (style_bind picks primary/secondary/ghost per era), then the body: left readout/ledger/events column, the centre viewport pane holding the rtt globe + the generated legend card + the tile inspector, and the right column (life-supporting gauges REFILLED by the behaviour from habitability::BANDS · boundary water inputs · the twelve-lever rate rack). Three centre popups: the gate pause summary, the gate console (24 headroom rows), and the Starter. The `godmode` behaviour plays it (flicker-godmode); godmode.lua derives the style/colour paths from the RAW state words. Styles folded from the crate's quarantined scene_styles.json; chemistry.hab.* mirrors the pocepochs hab look (same observer, same read); the legend.* swatch block is GENERATED at enter from the paint functions — never authored here.",
   "behaviour": "godmode",
   "params": {},
+  "stages": {
+    "godmode_globe": {
+      "_comment": "The God Mode GLOBE — the forming planet, drawn into the bench's centre viewport. Deliberately has NO `camera` block, and that absence is a decision rather than an omission: every other stage frames a fixed subject, but this one is flown by the maintainer, so the scene's own orbit camera owns the view and the stage authors only the light it is seen by and the backdrop it sits on. `clear` is transparent so the node's holder panel shows through, matching `sablework_lit`.",
+      "lighting": "studio",
+      "clear": "$stage_void",
+      "layers": [
+        {
+          "draw": "shells"
+        }
+      ],
+      "_hdr": "HDR: the `scene` pass (the forming planet's published shells) renders into the LINEAR rgba16f `hdr` working attachment and `tonemap_grade` resolves it (ACES roll-off) into the sRGB `color` last. grade_strength 0 = tonemap only, no invented tint — an art grade is Aaron's to author in-window. Alpha passes through, so the transparent clear the holder panel shows through survives.",
+      "attachments": {
+        "hdr": { "format": "rgba16f" },
+        "color": { "format": "surface" },
+        "depth": { "format": "depth32" }
+      },
+      "passes": [
+        { "pass": "scene", "writes": ["hdr", "depth"] },
+        { "pass": "tonemap_grade" }
+      ]
+    }
+  },
   "styles": {
     "window": {
       "_comment": "This bench's root slab (`gm_root`) — scene-owned like every migrated bench's (a shared file would fork the look; duplication is the pattern). Only draw-read keys: no dead w/h.",

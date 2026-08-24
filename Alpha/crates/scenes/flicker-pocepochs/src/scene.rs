@@ -790,17 +790,26 @@ impl Scene for WorldScene {
         Transition::None
     }
 
-    fn render(&mut self, renderer: &mut Renderer) {
-        let base = renderer.layer();
+    fn render<'f>(&'f mut self, renderer: &mut Renderer, fg: &mut FrameGraph<'f>) {
+        let base = fg.base_layer();
         // The planet is the ROOT surface's element: declared as the frame graph's root
-        // pass, straight into the swapchain — no full-window target, no blit. `execute`
-        // orders it after any offscreen pass, so the shared draw queues are never reset
-        // under it. Everything the planet needs — camera, stage, meshes — is inside it.
-        {
-            let mut fg = FrameGraph::new();
-            self.world.render_root(renderer, &mut fg);
-            fg.execute(renderer);
-        }
+        // pass, straight into the swapchain — no full-window target, no blit (roots run
+        // after every offscreen pass). Everything the planet needs — camera, stage, meshes
+        // — is inside it. The scene's 2D chrome rides the overlay after it, so the
+        // destructure splits `world` (&mut) from the HUD fields (shared / Copy).
+        let Self {
+            world,
+            white,
+            hud_commands,
+            mode,
+            element_dist,
+            ..
+        } = self;
+        world.render_root(renderer, fg);
+        let white = *white;
+        let mode = *mode;
+        let hud_commands = &*hud_commands;
+        let element_dist = &*element_dist;
 
         // ── The HUD: the walker commands stashed by `update` (readout text +
         // the life-supporting gauge panel), then the two panels still
@@ -808,77 +817,41 @@ impl Scene for WorldScene {
         // element-distribution readout — their per-row swatch colours are DATA
         // (legend entries / element_rgb), and the walker's colour channel is
         // dotted style paths by design. One layer above the root element, RELATIVE to
-        // the scene's band — never an absolute layer. ──
-        renderer.set_layer(base + 1.0);
-        if let Some(white) = self.white {
-            render_hud(renderer, &self.hud_commands, white, &[]);
-        }
-        let gold = [0.722, 0.592, 0.353, 1.0]; // Prism bronze (structural accent)
-        let text = [0.85, 0.87, 0.92, 1.0];
-
-        // Surface-view legend (top-right) — display only, no controls.
-        if let Some(white) = self.white {
-            let entries = appearance::legend_entries(self.mode);
-            let (pad, sw, row_h, panel_w) = (10.0f32, 14.0f32, 20.0f32, 210.0f32);
-            let panel_h = pad + 22.0 + entries.len() as f32 * row_h + pad;
-            let px = renderer.size().x - panel_w - 16.0;
-            let py = 20.0;
-            renderer.draw_sprite(
-                white,
-                Vec2::new(px, py),
-                Vec2::new(panel_w, panel_h),
-                [0.05, 0.06, 0.08, 0.85],
-            );
-            let title = strings::resolve(self.mode.label()).to_uppercase();
-            renderer.draw_text(&title, Vec2::new(px + pad, py + pad), 14.0, gold);
-            let mut ry = py + pad + 24.0;
-            for (label, c) in &entries {
-                renderer.draw_sprite(
-                    white,
-                    Vec2::new(px + pad, ry + 2.0),
-                    Vec2::new(sw, sw),
-                    [c[0], c[1], c[2], 1.0],
-                );
-                renderer.draw_text(
-                    &strings::resolve(label),
-                    Vec2::new(px + pad + sw + 8.0, ry),
-                    13.0,
-                    text,
-                );
-                ry += row_h;
+        // the scene's band — never an absolute layer. Declared as the screen surface's
+        // final 2D — one overlay, run after the composites. ──
+        fg.overlay(move |r| {
+            r.set_layer(base + 1.0);
+            if let Some(white) = white {
+                render_hud(r, hud_commands, white, &[]);
             }
-        }
+            let gold = [0.722, 0.592, 0.353, 1.0]; // Prism bronze (structural accent)
+            let text = [0.85, 0.87, 0.92, 1.0];
 
-        // Element-distribution readout (left) — the Epoch-1 seed composition (relevant,
-        // non-default elements), each with its material swatch + share.
-        if let Some(white) = self.white {
-            if !self.element_dist.is_empty() {
-                let (pad, sw, row_h, panel_w) = (10.0f32, 12.0f32, 18.0f32, 200.0f32);
-                let panel_h = pad + 22.0 + self.element_dist.len() as f32 * row_h + pad;
-                let (px, py) = (16.0f32, 120.0f32);
-                renderer.draw_sprite(
+            // Surface-view legend (top-right) — display only, no controls.
+            if let Some(white) = white {
+                let entries = appearance::legend_entries(mode);
+                let (pad, sw, row_h, panel_w) = (10.0f32, 14.0f32, 20.0f32, 210.0f32);
+                let panel_h = pad + 22.0 + entries.len() as f32 * row_h + pad;
+                let px = r.size().x - panel_w - 16.0;
+                let py = 20.0;
+                r.draw_sprite(
                     white,
                     Vec2::new(px, py),
                     Vec2::new(panel_w, panel_h),
                     [0.05, 0.06, 0.08, 0.85],
                 );
-                renderer.draw_text(
-                    &strings::resolve("$pe_element_distribution"),
-                    Vec2::new(px + pad, py + pad),
-                    14.0,
-                    gold,
-                );
+                let title = strings::resolve(mode.label()).to_uppercase();
+                r.draw_text(&title, Vec2::new(px + pad, py + pad), 14.0, gold);
                 let mut ry = py + pad + 24.0;
-                for (num, sym, pct) in &self.element_dist {
-                    let c = appearance::element_rgb(*num);
-                    renderer.draw_sprite(
+                for (label, c) in &entries {
+                    r.draw_sprite(
                         white,
                         Vec2::new(px + pad, ry + 2.0),
                         Vec2::new(sw, sw),
                         [c[0], c[1], c[2], 1.0],
                     );
-                    renderer.draw_text(
-                        &format!("{sym}   {pct:.1}%"),
+                    r.draw_text(
+                        &strings::resolve(label),
                         Vec2::new(px + pad + sw + 8.0, ry),
                         13.0,
                         text,
@@ -886,7 +859,46 @@ impl Scene for WorldScene {
                     ry += row_h;
                 }
             }
-        }
+
+            // Element-distribution readout (left) — the Epoch-1 seed composition (relevant,
+            // non-default elements), each with its material swatch + share.
+            if let Some(white) = white {
+                if !element_dist.is_empty() {
+                    let (pad, sw, row_h, panel_w) = (10.0f32, 12.0f32, 18.0f32, 200.0f32);
+                    let panel_h = pad + 22.0 + element_dist.len() as f32 * row_h + pad;
+                    let (px, py) = (16.0f32, 120.0f32);
+                    r.draw_sprite(
+                        white,
+                        Vec2::new(px, py),
+                        Vec2::new(panel_w, panel_h),
+                        [0.05, 0.06, 0.08, 0.85],
+                    );
+                    r.draw_text(
+                        &strings::resolve("$pe_element_distribution"),
+                        Vec2::new(px + pad, py + pad),
+                        14.0,
+                        gold,
+                    );
+                    let mut ry = py + pad + 24.0;
+                    for (num, sym, pct) in element_dist {
+                        let c = appearance::element_rgb(*num);
+                        r.draw_sprite(
+                            white,
+                            Vec2::new(px + pad, ry + 2.0),
+                            Vec2::new(sw, sw),
+                            [c[0], c[1], c[2], 1.0],
+                        );
+                        r.draw_text(
+                            &format!("{sym}   {pct:.1}%"),
+                            Vec2::new(px + pad + sw + 8.0, ry),
+                            13.0,
+                            text,
+                        );
+                        ry += row_h;
+                    }
+                }
+            }
+        });
     }
 }
 
@@ -1148,7 +1160,8 @@ mod tests {
     ///   means when it cannot be verified by eye.
     #[test]
     fn the_planet_is_the_shared_world_and_the_stack_rides_a_per_cell_radius() {
-        use flicker_globe::{build, StageLayer};
+        use flicker::render::StageLayer;
+        use flicker_globe::build;
 
         let scene = WorldScene::shipped();
         assert_eq!(

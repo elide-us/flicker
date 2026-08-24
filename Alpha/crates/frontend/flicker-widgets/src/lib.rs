@@ -90,6 +90,14 @@ pub use sections::{Section, SectionChange, Sections};
 
 pub mod strings;
 
+/// The **one stage compiler** — `stages.<source>` JSON → the typed
+/// [`StageDef`](flicker_render::StageDef) every surface filler consumes, with every
+/// authoring problem reported as data (and gated on the shipped content). See [`stages`].
+pub mod stages;
+pub use stages::{
+    compile_rate, compile_stage, is_source_key, lighting_preset, stage_def, stage_defs,
+};
+
 /// The **structural** component kinds — the ones the walker itself lays out and
 /// draws. Every other legal kind is an interactive Component, owned by the engine
 /// ([`RUST_COMPONENT_KINDS`]); `option` is neither — it is pure data an option strip
@@ -588,19 +596,58 @@ pub fn load_styles_for(
         }
     }
     if let (Some(obj), Some(serde_json::Value::Object(scene))) = (ui.as_object_mut(), scene) {
-        for (k, v) in scene {
-            if k == "theme" {
-                tracing::error!(
-                    "scene styles carry a `theme` key — the palette lives ONLY in \
-                     ui_theme.json (one-palette law); refusing the fork"
-                );
-                continue;
-            }
-            obj.insert(k.clone(), v.clone());
-        }
+        merge_scene_blocks(obj, scene);
     }
     resolve_tokens(&mut ui);
     ui
+}
+
+/// Merge a scene file's own blocks ([`SceneDef::styles`]) over the shared root. A
+/// style block is the scene's to override wholesale (its own file wins); `theme` is
+/// refused (the palette-fork guard); and `stages` merges INTO the shared stage block —
+/// a scene's stages land beside the library's `lighting` presets, and a scene stage
+/// that collides with a library source is refused loudly (the library wins), because
+/// two definitions of one name is exactly the drift the one compiler exists to end.
+fn merge_scene_blocks(
+    root: &mut serde_json::Map<String, serde_json::Value>,
+    scene: &serde_json::Map<String, serde_json::Value>,
+) {
+    for (k, v) in scene {
+        match k.as_str() {
+            "theme" => tracing::error!(
+                "scene styles carry a `theme` key — the palette lives ONLY in \
+                 ui_theme.json (one-palette law); refusing the fork"
+            ),
+            "stages" => {
+                let Some(scene_stages) = v.as_object() else {
+                    tracing::error!("scene `stages` is not an object — ignored");
+                    continue;
+                };
+                let shared = root
+                    .entry("stages")
+                    .or_insert_with(|| serde_json::Value::Object(Default::default()));
+                let Some(shared) = shared.as_object_mut() else {
+                    tracing::error!(
+                        "the shared `stages` block is not an object — scene stages dropped"
+                    );
+                    continue;
+                };
+                for (name, stage) in scene_stages {
+                    if shared.contains_key(name) {
+                        tracing::error!(
+                            "scene stage `{name}` collides with the shared stage library \
+                             (ui_stages.json) — the library wins; rename the scene's stage"
+                        );
+                        continue;
+                    }
+                    shared.insert(name.clone(), stage.clone());
+                }
+            }
+            _ => {
+                root.insert(k.clone(), v.clone());
+            }
+        }
+    }
 }
 
 /// Like [`load_styles`] but from an already-in-memory `ui_theme.json` string
@@ -645,16 +692,7 @@ pub fn load_styles_strs_for(
         }
     }
     if let (Some(obj), Some(serde_json::Value::Object(scene))) = (ui.as_object_mut(), scene) {
-        for (k, v) in scene {
-            if k == "theme" {
-                tracing::error!(
-                    "scene styles carry a `theme` key — the palette lives ONLY in \
-                     ui_theme.json (one-palette law); refusing the fork"
-                );
-                continue;
-            }
-            obj.insert(k.clone(), v.clone());
-        }
+        merge_scene_blocks(obj, scene);
     }
     resolve_tokens(&mut ui);
     ui

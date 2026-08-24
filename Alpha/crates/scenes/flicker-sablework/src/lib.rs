@@ -39,7 +39,7 @@
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
 
-use flicker::render::{Renderer, TextureHandle};
+use flicker::render::{FrameGraph, Renderer, TextureHandle};
 use flicker::scene::{Scene, SceneInput, Transition};
 use flicker::script::{HudCommand, ScriptHost, UiNode, Value, ValueMap};
 use flicker::ui::{render_hud, run_ui, SceneDef, UiInput, UiIntents, UiState, WalkerHandler};
@@ -184,7 +184,12 @@ pub struct Sablework {
     /// The rect the walker RESERVED for the lit view this frame, if it is showing.
     /// The tree owns the layout, so the sub-scene is placed by the same walk that
     /// draws everything else rather than by a second set of constants.
-    lit_rect: Option<flicker::render::Rect>,
+    /// The walker's seat for the lit sample's `surface` node this frame (rect, layer,
+    /// tint, liveness); `None` while the Lit tab is not showing.
+    lit_slot: Option<flicker::ui::SurfaceSlot>,
+    /// The authored lit stage, compiled ONCE when the styles load — never re-read
+    /// per frame.
+    lit_stage: Option<flicker::render::StageDef>,
 
     /// The AUTHORED tree off the manifest's def, walked every frame. `take`n
     /// around the walk so the walker can borrow it beside the mutable UI state.
@@ -391,7 +396,8 @@ impl Sablework {
             commit_tx,
             commit_rx,
             lit: lit::LitPreview::default(),
-            lit_rect: None,
+            lit_slot: None,
+            lit_stage: None,
             authored,
             scene_styles_json,
             script,
@@ -876,6 +882,8 @@ impl Scene for Sablework {
         // Inject the emissive swatch colours as literal-rgba style blocks (the godmode
         // pattern) — AFTER token resolution, so they carry rgba, not $tokens.
         palette::inject_glow_styles(&mut self.ui_styles, &self.palette);
+        // The lit stage is compiled once here, not re-parsed every frame in `render`.
+        self.lit_stage = flicker::ui::stage_def(&self.ui_styles, lit::STAGE_SOURCE);
         self.tiles = self
             .ui_styles
             .get("sablework")
@@ -955,10 +963,10 @@ impl Scene for Sablework {
         };
         let frame = run_ui(&tree, &model, &self.ui_styles, &snap, &mut self.ui_state);
         let over_hud = frame.results.is_on("hud_hit");
-        // The `rtt` node reserved a rect for the lit sub-scene; `render` draws into
+        // The `surface` node reserved a seat for the lit sub-scene; `render` draws into
         // it. `None` when the Lit tab is not showing, which is also what stops the
         // offscreen pass from costing anything.
-        self.lit_rect = frame.surface_rect("sw_lit");
+        self.lit_slot = frame.surface("sw_lit").cloned();
         self.hud_commands = frame.commands;
         self.lit.tick(dt);
 
@@ -1029,29 +1037,33 @@ impl Scene for Sablework {
         Transition::None
     }
 
-    fn render(&mut self, renderer: &mut Renderer) {
+    fn render<'f>(&'f mut self, renderer: &mut Renderer, fg: &mut FrameGraph<'f>) {
         self.upload_shown(renderer);
-        // The lit sample is an offscreen pass, so it runs BEFORE the 2D HUD — the
-        // FrameGraph composites its result into the rect the walk reserved, under
-        // the chrome the HUD then draws over.
-        if let Some(rect) = self.lit_rect {
+        // The lit sample is an offscreen surface composited into the rect the walk
+        // reserved; the HUD replay is the screen surface's final 2D, declared as one
+        // overlay that runs after the composite so its chrome lands over it.
+        if self.lit_slot.is_some() && self.lit_stage.is_some() {
             // The lit view wears every map at once, so all of them must be
             // current — not just the one a flat swatch would be showing.
             self.upload_all(renderer);
-            let mut fg = flicker::render::FrameGraph::new();
-            self.lit.render(
-                renderer,
-                &mut fg,
-                rect,
-                renderer.layer(),
-                &self.tex,
-                lit::Stage::from_styles(&self.ui_styles, lit::STAGE_SOURCE),
-            );
-            fg.execute(renderer);
+            let base = fg.base_layer();
+            // Split the borrow: the preview is written while the seat, the stage and
+            // the maps are read into the same graph.
+            let Self {
+                lit,
+                lit_slot,
+                lit_stage,
+                tex,
+                ..
+            } = self;
+            if let (Some(slot), Some(stage)) = (lit_slot.as_ref(), lit_stage.as_ref()) {
+                lit.render(renderer, fg, slot, base, tex.as_slice(), stage);
+            }
         }
         if let Some(white) = self.white {
             let tex = self.tex.clone();
-            render_hud(renderer, &self.hud_commands, white, &tex);
+            let hud_commands = &self.hud_commands;
+            fg.overlay(move |r| render_hud(r, hud_commands, white, &tex));
         }
     }
 }

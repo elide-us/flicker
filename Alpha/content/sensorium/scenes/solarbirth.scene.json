@@ -1,5 +1,5 @@
 {
-  "_comment": "SOLAR BIRTH — the intro cinematic on the NEW graphical-scene pattern (Option A, 201F4F51 + the RTT decision): a full-screen nested `surface` carries the 3D (sun · 8 planets · Home's moon · dust cloud), and the readout is a TEXT-OVERLAY PANEL in the tree above it. The `solarbirth` behaviour renders its bespoke 3D into the rect the walker reserves for `solarbirth_view` (the surface authors NO `source` — this scene renders BESPOKE, not from a stage; offscreen pass composited in via the FrameGraph), then the walker draws this readout panel over it. Camera drag/zoom is gated to the viewport (and blocked over the readout panel). `phase` + the legend's `roster_<i>` lines are Model binds; `roster_legend` is the CONTAINER the scene fills with one row per planet (mechanism 6). Esc fires `on_menu = pause_open` → the shared pause popup.",
+  "_comment": "SOLAR BIRTH — the intro cinematic on the NEW graphical-scene pattern (Option A, 201F4F51 + the RTT decision): a full-screen nested `surface` carries the 3D (sun · 8 planets · Home's moon · dust cloud), and the readout is a TEXT-OVERLAY PANEL in the tree above it. The `solarbirth` behaviour renders its bespoke 3D into the rect the walker reserves for `solarbirth_view` (the surface NAMES its `source` — `solarbirth_sky` in the `stages` section below — and that stage is the RECIPE: the deep-space sky behind, the scene's own bodies, the dust cloud over them; the behaviour draws only the bodies and publishes the two numbers the simulation owns, and the offscreen pass is composited in via the FrameGraph), then the walker draws this readout panel over it. Camera drag/zoom is gated to the viewport (and blocked over the readout panel). `phase` + the legend's `roster_<i>` lines are Model binds; `roster_legend` is the CONTAINER the scene fills with one row per planet (mechanism 6). Esc fires `on_menu = pause_open` → the shared pause popup.",
   "behaviour": "solarbirth",
   "params": {},
   "exits": {},
@@ -11,6 +11,7 @@
       {
         "component": "surface",
         "id": "solarbirth_view",
+        "source": "solarbirth_sky",
         "anchor": "top_left",
         "width_frac": 1.0,
         "height_frac": 1.0,
@@ -121,6 +122,67 @@
         ]
       }
     ]
+  },
+  "stages": {
+    "solarbirth_sky": {
+      "_comment": "THE INTRO CINEMATIC'S SKY — the RECIPE the full-window `solarbirth_view` surface renders, three passes deep: the procedural deep-space `sky` behind everything, the `scene` (the behaviour's own orbit rings and bodies — the star is drawn INSIDE the cloud so the dust occludes it), and the `volumetric_disk` over them, which READS the depth the scene wrote. That read is the whole ordering statement: draw order is derived from what each pass reads and writes, never authored as a number. The cloud is DRAMA, not accretion — the planets already exist — so it is bigger and denser than a thin protoplanetary ring and engulfs the system with a halo margin: `outer` is 1.4× the outermost orbit (SYSTEM_OUTER 15.5), `inner` is SYSTEM_INNER, `scale_height` billows rather than pancakes, and `density` is high enough to darken and occlude so starlight breaks through the gaps as god-rays. `snow_line` is a VISUAL density feature (the Earth→Light gap), not a physics boundary. Art numbers, tunable freely (the art-vs-reality rule: only the roster/bodies are ruled reality) — except the two radii, which are DERIVED from the orrery and gated on it: retune the system's extent and these must follow, or the scene's gate fails. The two numbers the SIMULATION owns are BOUND and never authored — `dust_formation` is the flight's progress (inside-out dissipation) and `dust_time` its swirl clock; a bind REPLACES the field, so a `formation` or `time` number beside its bind would be dead data (the compiler refuses it) and the disk's own defaults are what it shows before the scene publishes anything. The annular lanes the giants carve are simulation output too and ride the typed gaps channel, which no file can author. NOTE ON `clear`: this surface is HDR, so the clear below is a LINEAR working-space value written into the `hdr` attachment and it passes through the tonemap like everything else \u2014 the ACES curve rolls it off, so the same numbers read DARKER on screen than they did on the pre-HDR sRGB path. Tune the backdrop here, not in the tonemap.",
+      "lighting": "deep_space",
+      "clear": [
+        0.006,
+        0.008,
+        0.014,
+        1.0
+      ],
+      "attachments": {
+        "hdr": { "format": "rgba16f" },
+        "color": { "format": "surface" },
+        "depth": { "format": "depth32" }
+      },
+      "passes": [
+        {
+          "pass": "sky",
+          "writes": ["hdr"]
+        },
+        {
+          "pass": "scene",
+          "writes": ["hdr", "depth"]
+        },
+        {
+          "pass": "volumetric_disk",
+          "reads": [
+            "depth"
+          ],
+          "writes": [
+            "hdr"
+          ],
+          "inner": 0.4,
+          "outer": 21.7,
+          "snow_line": 4.6,
+          "scale_height": 0.1,
+          "density": 3.5,
+          "tint": [
+            0.038,
+            0.033,
+            0.052,
+            1.0
+          ],
+          "glow": [
+            0.85,
+            0.44,
+            0.22,
+            1.0
+          ],
+          "formation_bind": "dust_formation",
+          "time_bind": "dust_time"
+        },
+        {
+          "_comment": "PLACEHOLDER art grade — a SUBTLE warm tint for Aaron to tune (or clear) in-window. The ACES tonemap is now ACTIVE on this cinematic: the sky/scene/volumetric_disk passes render into the LINEAR rgba16f `hdr` working attachment and this pass resolves it (ACES roll-off) into the sRGB `color` last. `grade` is [warm R, neutral G, cooler B] lerped in at strength 0.12 — faint on purpose; exposure stays neutral (1.0). Not a ruled value: retune freely.",
+          "pass": "tonemap_grade",
+          "grade": [1.06, 1.0, 0.92, 1.0],
+          "grade_strength": 0.12
+        }
+      ]
+    }
   },
   "styles": {
     "tooltip": {

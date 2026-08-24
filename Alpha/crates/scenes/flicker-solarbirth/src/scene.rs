@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use flicker::render::{
     CompositeTarget, FrameGraph, Mat4, MeshDrawOptions, MeshHandle, MeshIndices, Rect,
-    RenderTargetHandle, Renderer, SceneLighting, TextureHandle, Vec3, VolumetricDisk,
+    RenderTargetHandle, Renderer, StageDef, StageInputs, TextureHandle, Vec3,
     MAX_VOLUMETRIC_BODIES,
 };
 use flicker::scene::{Scene, SceneInput, Transition};
@@ -24,7 +24,7 @@ use flicker_shell::{PauseScene, Theme};
 
 use crate::camera::{LookDelta, OrbitCam};
 use crate::route::RootHandler;
-use crate::system::{self, BodyKind, Planet, SYSTEM_INNER, SYSTEM_OUTER};
+use crate::system::{self, BodyKind, Planet, SYSTEM_OUTER};
 
 /// The bundled intro cinematic (an authored `.flight`), loaded at runtime so it
 /// can be retuned in the file without recompiling.
@@ -54,13 +54,6 @@ const MOON_OMEGA: f32 = 0.9;
 const MOON_INCL: f32 = 0.45;
 const MOON_RADIUS: f32 = 0.11;
 const MOON_COLOR: [f32; 3] = [0.66, 0.68, 0.72];
-
-/// The dust cloud reaches well past the outermost planet, so the *formed* system
-/// sits inside a big enveloping nebula — bigger and denser than a thin
-/// protoplanetary ring (the planets already exist, so the cloud is drama, not
-/// accretion). A cinematic (art) choice, tunable freely — see the art-vs-reality
-/// rule; only the roster/bodies are ruled reality.
-const DUST_OUTER: f32 = SYSTEM_OUTER * 1.4;
 
 pub struct Sim {
     cam: OrbitCam,
@@ -117,6 +110,11 @@ pub struct Sim {
     /// The offscreen target the 3D renders into (sized to `viewport`); freed in `exit`.
     sky_target: Option<RenderTargetHandle>,
     sky_size: (u32, u32),
+    /// The RECIPE the viewport renders — `stages.<source>` for the source the view node
+    /// names, compiled ONCE at enter. It says what is drawn around this scene's own
+    /// content: the deep-space sky behind, the dust cloud over. `None` = the source
+    /// named nothing that compiles (warned there), and the 3D is not drawn.
+    stage: Option<StageDef>,
 }
 
 impl Sim {
@@ -157,6 +155,7 @@ impl Sim {
             viewport: None,
             sky_target: None,
             sky_size: (0, 0),
+            stage: None,
         }
     }
 
@@ -243,15 +242,12 @@ impl Sim {
         m
     }
 
-    /// Configure the volumetric dust cloud for this frame: the disk geometry, the
-    /// formation clock (inside-out dissipation), and annular lanes carved **only at
-    /// the giants' orbits** (the "clearing" — cosmetic, no accounting). Bigger and
-    /// denser than a thin accretion ring: the planets are already formed, so the
-    /// cloud reads as one billowing nebula they sit inside, not a stack of rings.
-    fn dust(&self) -> VolumetricDisk {
-        // Only the giants (gas + ice) part the dust into lanes; the inner worlds no
-        // longer clear rings, so the dense cloud stays continuous but for a few
-        // dramatic gaps that let starlight break through as god-rays.
+    /// Annular lanes carved **only at the giants' orbits** — the "clearing" (cosmetic,
+    /// no accounting). Simulation OUTPUT, so no file authors it: the recipe owns the
+    /// cloud's geometry and colour, this owns what the forming bodies cut out of it.
+    /// The inner worlds no longer clear rings, so the dense cloud stays continuous but
+    /// for a few dramatic gaps that let starlight break through as god-rays.
+    fn dust_gaps(&self) -> Vec<(f32, f32)> {
         let mut gaps: Vec<(f32, f32)> = self
             .planets
             .iter()
@@ -262,18 +258,21 @@ impl Sim {
             })
             .collect();
         gaps.truncate(MAX_VOLUMETRIC_BODIES);
-        VolumetricDisk {
-            inner: SYSTEM_INNER,
-            outer: DUST_OUTER,  // engulf the system with a halo margin
-            snow_line: 4.6, // a visual density feature (the Earth→Light gap), not a physics boundary here
-            scale_height: 0.10, // taller billows — a cloud, not a pancake
-            density: 3.5,   // denser → darker, more occluding, stronger god-rays
-            formation: self.flight.progress(),
-            time: self.flight.progress() * 10.0, // a few inner-disk rotations of swirl over the fly-in
-            tint: Vec3::new(0.038, 0.033, 0.052), // dark dust
-            glow: Vec3::new(0.85, 0.44, 0.22),   // warm heart, seen through the denser dust
-            gaps,
-        }
+        gaps
+    }
+
+    /// **The per-frame channel into the recipe.** The `solarbirth_sky` stage authors the
+    /// dust cloud whole and BINDS the two numbers only the simulation knows: the
+    /// formation clock (the fly-in's progress, driving inside-out dissipation) and the
+    /// swirl clock (a few inner-disk rotations over the fly-in). Published under the
+    /// keys the recipe's `*_bind`s name — the gate below proves the two halves agree.
+    fn dust_inputs(&self) -> StageInputs {
+        let mut inputs = StageInputs::default();
+        inputs
+            .set("dust_formation", self.flight.progress())
+            .set("dust_time", self.flight.progress() * 10.0)
+            .gaps(self.dust_gaps());
+        inputs
     }
 
     /// The Home planet (and its live world position at `anim_time`), for the moon.
@@ -341,6 +340,20 @@ fn legend_rows(planets: &[Planet]) -> Vec<UiNode> {
         .collect()
 }
 
+/// The stage SOURCE the 3D view node names (`solarbirth_view`'s `source`). The scene
+/// FILE is the one spelling of the recipe's name — the node that reserves the viewport
+/// also says what renders into it — so this reads the same string the walker does
+/// instead of a Rust constant that could drift from it. The root of the tree is a
+/// `surface` too, and authors no source, so this finds the nested view.
+fn view_source(node: &UiNode) -> Option<&str> {
+    if node.component == "surface" {
+        if let Some(Value::Text(source)) = node.props.get("source") {
+            return Some(source.as_str());
+        }
+    }
+    node.children.iter().find_map(view_source)
+}
+
 /// Find the first descendant (or self) whose `id` matches, mutably — the seam the
 /// scene fills its authored `roster_legend` container through.
 fn find_by_id_mut<'a>(node: &'a mut UiNode, id: &str) -> Option<&'a mut UiNode> {
@@ -383,6 +396,26 @@ impl Scene for Sim {
         self.ui_styles = flicker::ui::load_shared_styles(self.scene_styles.as_ref());
         self.ui_tree = hud_tree(self.authored.as_ref(), &self.planets);
         self.ui_intents = self.ui_tree.as_ref().map(UiIntents::of).unwrap_or_default();
+
+        // The RECIPE, compiled ONCE: the view node names a stage source and the one
+        // stage compiler turns it into the passes that run around this scene's drawing
+        // (the deep-space sky behind, the dust cloud over). `stage_def` warns every
+        // authoring problem it finds; a source that resolves to nothing costs the whole
+        // viewport, so say so here rather than rendering an empty rect in silence.
+        let stage = match self.ui_tree.as_ref().and_then(|t| view_source(t)) {
+            Some(source) => flicker::ui::stage_def(&self.ui_styles, source),
+            None => {
+                tracing::error!(
+                    "solarbirth: no `surface` node names a stage `source` — nothing says \
+                     what the viewport renders"
+                );
+                None
+            }
+        };
+        if stage.is_none() {
+            tracing::error!("solarbirth: the viewport's stage did not compile — no 3D is drawn");
+        }
+        self.stage = stage;
     }
 
     /// The live input context (input-P3): the scene DECLARES its flight-camera mode so
@@ -553,13 +586,17 @@ impl Scene for Sim {
         Transition::None
     }
 
-    fn render(&mut self, renderer: &mut Renderer) {
+    fn render<'f>(&'f mut self, renderer: &mut Renderer, fg: &mut FrameGraph<'f>) {
         // Option-A graphical scene: the 3D goes into the rtt viewport the walker
         // reserved — an offscreen pass composited into that rect — and the readout
-        // panels (walker commands stashed in `update`) draw over it.
-        if let Some(rect) = self.viewport {
-            let w = (rect.size.x.round() as u32).max(1);
-            let h = (rect.size.y.round() as u32).max(1);
+        // panels (walker commands stashed in `update`) draw over it. The RECIPE sizes
+        // its own surface (its colour attachment carries the scale), so ask it before
+        // the target is touched — and no stage means no 3D at all.
+        let sized = match (self.viewport, self.stage.as_ref()) {
+            (Some(rect), Some(stage)) => Some((rect, stage.attachments.pixels(rect.size))),
+            _ => None,
+        };
+        if let Some((rect, (w, h))) = sized {
             match self.sky_target {
                 Some(_) if self.sky_size == (w, h) => {}
                 Some(t) => {
@@ -571,25 +608,10 @@ impl Scene for Sim {
                     self.sky_size = (w, h);
                 }
             }
-            if let Some(target) = self.sky_target {
+            if let (Some(target), Some(stage)) = (self.sky_target, self.stage.as_ref()) {
                 // Precompute the whole sub-scene as OWNED data; the frame-graph closure
                 // captures it by move, so no borrow of `self` survives into `execute`.
                 let camera = self.cam.camera();
-                let lighting = SceneLighting {
-                    sun_dir: Vec3::new(0.0, -1.0, 0.0),
-                    sun_color: Vec3::ZERO,
-                    moon_dir: Vec3::new(0.0, -1.0, 0.0),
-                    moon_color: Vec3::ZERO,
-                    // Sun = a point light at the origin; a faint ambient floor keeps
-                    // night sides off pure black.
-                    ambient: Vec3::splat(0.07),
-                    point_pos: Vec3::ZERO,
-                    point_color: Vec3::new(1.0, 0.94, 0.84), // warm starlight
-                    sky_zenith: Vec3::new(0.004, 0.006, 0.014),
-                    sky_horizon: Vec3::new(0.007, 0.010, 0.022),
-                    ..SceneLighting::default()
-                };
-                let disk = self.dust();
                 let anim = self.anim_time;
                 let orbits: Vec<Vec<(Vec3, Vec3)>> = self
                     .planets
@@ -637,22 +659,28 @@ impl Scene for Sim {
                     ));
                 }
 
-                let mut fg = FrameGraph::new();
-                let layer = renderer.layer();
-                // The offscreen sub-scene: deep-space sky, the dust cloud (the sun is
-                // rendered inside it so the dust occludes it), orbit rings, then bodies.
-                fg.target(target, [0.006, 0.008, 0.014, 1.0], move |r| {
-                    r.set_camera(&camera);
-                    r.draw_sky();
-                    r.set_scene(lighting);
-                    r.set_volumetric_disk(disk);
-                    for pts in &orbits {
-                        r.draw_lines(pts, [0.30, 0.36, 0.52, 0.16]);
-                    }
-                    for (mesh, model, opts) in &draws {
-                        r.draw_mesh(*mesh, *model, *opts);
-                    }
-                });
+                let layer = fg.base_layer();
+                // The offscreen sub-scene. The RECIPE draws everything around this
+                // closure — the deep-space sky behind, the dust cloud over it (whose warm
+                // inner glow IS the star, so the dust occludes it) — under the stage's own
+                // lighting rig; the scene contributes its orbit rings and bodies, plus the
+                // per-frame numbers the recipe binds. The camera stays the scene's, because
+                // the maintainer flies it: the stage deliberately authors no framing.
+                fg.surface(
+                    CompositeTarget::Target(target),
+                    stage,
+                    self.dust_inputs(),
+                    stage.rate,
+                    move |r| {
+                        r.set_camera(&camera);
+                        for pts in &orbits {
+                            r.draw_lines(pts, [0.30, 0.36, 0.52, 0.16]);
+                        }
+                        for (mesh, model, opts) in &draws {
+                            r.draw_mesh(*mesh, *model, *opts);
+                        }
+                    },
+                );
                 fg.composite_panel(
                     target,
                     CompositeTarget::Screen,
@@ -662,13 +690,14 @@ impl Scene for Sim {
                     None,
                     None,
                 );
-                fg.execute(renderer);
             }
         }
 
-        // The readout panels, over the composited viewport.
+        // The readout panels, over the composited viewport — the screen surface's final
+        // 2D, declared as one overlay that runs after the composite.
         if let Some(white) = self.white {
-            render_hud(renderer, &self.hud_commands, white, &[]);
+            let hud_commands = &self.hud_commands;
+            fg.overlay(move |r| render_hud(r, hud_commands, white, &[]));
         }
     }
 
@@ -684,7 +713,138 @@ impl Scene for Sim {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flicker::render::PassKind;
     use flicker_input_core::ActionSignal;
+
+    /// The styles root the runtime builds for THIS scene: the shared theme, its
+    /// satellites (`ui_stages.json`, where the `deep_space` rig lives) and the scene
+    /// file's own blocks — including its `stages` section, merged into the shared stage
+    /// library exactly as `enter` merges them.
+    fn shipped_styles(def: &SceneDef) -> serde_json::Value {
+        flicker::ui::load_styles_for(
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../../content/sensorium/resources/ui_theme.json"
+            ),
+            def.styles.as_ref(),
+        )
+    }
+
+    fn shipped_def() -> SceneDef {
+        SceneDef::parse(
+            "solarbirth",
+            include_str!("../../../../content/sensorium/scenes/solarbirth.scene.json"),
+        )
+        .expect("solarbirth.scene.json loads")
+    }
+
+    /// **GATE — the view names a stage whose recipe draws the sky and the dust.**
+    /// The cinematic used to hand-write its whole sub-scene in Rust behind a `surface`
+    /// node that named NO source, which put it outside every gate that inspects authored
+    /// stages. Now the node names `solarbirth_sky` and the recipe IS the picture, so
+    /// this walks the real channel end to end: the shipped scene file parses, the source
+    /// the node names compiles with no problems, the order derived from what each pass
+    /// reads and writes is sky → scene → dust (the disk after the depth the scene
+    /// writes), and every `*_bind` the recipe spells is a key the scene actually
+    /// publishes — built through the same `dust_inputs` that `render` hands the graph,
+    /// so a rename on either side fails here instead of silently freezing the cloud.
+    #[test]
+    fn the_view_names_a_stage_whose_recipe_draws_the_sky_and_the_dust() {
+        let def = shipped_def();
+        let styles = shipped_styles(&def);
+        let tree = def.tree.clone().expect("it declares a tree");
+        let source = view_source(&tree).expect("the 3D view node names a stage `source`");
+
+        let (stage, problems) = flicker::ui::compile_stage(&styles, source)
+            .unwrap_or_else(|| panic!("stages.{source} is authored"));
+        assert!(
+            problems.is_empty(),
+            "stages.{source} has authoring problems:\n  {}",
+            problems.join("\n  ")
+        );
+
+        // The EXECUTED order, derived from reads/writes — no file spells a pass number.
+        let (order, cyclic) = stage.pass_order();
+        assert!(!cyclic, "stages.{source}: the recipe's passes cycle");
+        let kinds: Vec<&str> = order
+            .iter()
+            .map(|&i| stage.recipe()[i].kind.kind())
+            .collect();
+        assert_eq!(
+            kinds,
+            ["sky", "scene", "volumetric_disk", "tonemap_grade"],
+            "stages.{source} must draw the sky behind the bodies and the dust over them, \
+             then resolve the HDR working colour through the tonemap last"
+        );
+
+        // The dust's radii are ART numbers living in the scene file, but they are not
+        // free numbers: they are DERIVED from the orrery's system extent (the file's
+        // `_comment` states the derivation). Retuning the roster's outermost orbit
+        // without retuning the cloud leaves a halo that no longer wraps the system, so
+        // the drift fails HERE rather than showing up as a cloud edge inside the orbits.
+        let PassKind::VolumetricDisk(dust) = &stage.recipe()[order[2]].kind else {
+            unreachable!("pass 2 (of sky, scene, dust, tonemap) is the dust")
+        };
+        assert_eq!(
+            dust.disk.inner,
+            system::SYSTEM_INNER,
+            "stages.{source} `inner` must track the orrery's SYSTEM_INNER"
+        );
+        assert!(
+            (dust.disk.outer - SYSTEM_OUTER * 1.4).abs() < 1e-3,
+            "stages.{source} `outer` must stay 1.4× the orrery's SYSTEM_OUTER \
+             ({} vs {})",
+            dust.disk.outer,
+            SYSTEM_OUTER * 1.4
+        );
+
+        // The cinematic's grade is STATIC — an authored tint at an authored strength, with NO
+        // `*_bind`. Now that the tonemap CAN be bound (the Prism Test Room's grade rides a
+        // golden-hour warmth), "no binds = today's behaviour" is a claim worth pinning: this
+        // resolves the shipped pass against the scene's own inputs and proves it comes back as
+        // the numbers the file authors, whatever is published.
+        let PassKind::TonemapGrade(grade) = &stage.recipe()[order[3]].kind else {
+            unreachable!("pass 3 (of sky, scene, dust, tonemap) is the tonemap")
+        };
+        assert!(
+            grade.binds.is_empty(),
+            "the cinematic's grade is authored art, not a per-frame bind"
+        );
+        assert_eq!(
+            grade.resolve(&Sim::new(&def).dust_inputs()),
+            (Vec3::new(1.06, 1.0, 0.92), 0.12, 1.0),
+            "a tonemap with no binds resolves to exactly its authored grade"
+        );
+
+        // Every per-frame value the recipe BINDS must be one the scene publishes.
+        let mut bound: Vec<&str> = Vec::new();
+        for pass in stage.recipe() {
+            match &pass.kind {
+                PassKind::VolumetricDisk(v) => {
+                    bound.extend(v.binds.iter().map(|(_, key)| key.as_str()))
+                }
+                PassKind::GroundFog(f) => bound.extend(f.binds.iter().map(|(_, key)| key.as_str())),
+                PassKind::TonemapGrade(t) => {
+                    bound.extend(t.binds.iter().map(|(_, key)| key.as_str()))
+                }
+                _ => {}
+            }
+        }
+        assert!(
+            !bound.is_empty(),
+            "stages.{source} binds nothing — the dust would never dissipate"
+        );
+        let sim = Sim::new(&def);
+        let inputs = sim.dust_inputs();
+        let published: Vec<&str> = inputs.keys().collect();
+        for key in bound {
+            assert!(
+                published.contains(&key),
+                "stages.{source} binds `{key}`, which the scene never publishes \
+                 (it publishes {published:?})"
+            );
+        }
+    }
 
     /// The bundled intro cinematic must parse — guards the asset at test time so a
     /// typo doesn't surface only as a runtime panic when the scene starts.
@@ -706,11 +866,7 @@ mod tests {
     /// display keys, which is exactly the silent in-window text breakage.
     #[test]
     fn the_pair_script_derives_the_phase_line() {
-        let def = SceneDef::parse(
-            "solarbirth",
-            include_str!("../../../../content/sensorium/scenes/solarbirth.scene.json"),
-        )
-        .expect("solarbirth.scene.json loads");
+        let def = shipped_def();
         let sim = Sim::new(&def);
         assert!(
             sim.script.is_some(),
@@ -732,11 +888,7 @@ mod tests {
         use flicker::ui::run_ui;
 
         let planets = system::roster();
-        let def = SceneDef::parse(
-            "solarbirth",
-            include_str!("../../../../content/sensorium/scenes/solarbirth.scene.json"),
-        )
-        .expect("solarbirth.scene.json loads");
+        let def = shipped_def();
         let authored = def.tree.clone().expect("it declares a tree");
         let tree =
             hud_tree(Some(&authored), &planets).expect("solarbirth.scene.json builds the HUD");

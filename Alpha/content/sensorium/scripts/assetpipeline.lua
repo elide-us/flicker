@@ -16,7 +16,7 @@
 
 local M = {}
 
-local CHIPS = { "task", "conform", "preview", "attach", "review" }
+local CHIPS = { "task", "prep", "conform", "preview", "attach", "review" }
 
 local ROWSEL = "assetpipeline.rowsel"
 local ROWSEL_OFF = "assetpipeline.rowsel_off"

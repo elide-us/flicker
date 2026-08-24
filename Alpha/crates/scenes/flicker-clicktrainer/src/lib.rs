@@ -384,7 +384,7 @@ impl Scene for ClickTrainer {
         Transition::None
     }
 
-    fn render(&mut self, renderer: &mut Renderer) {
+    fn render<'f>(&'f mut self, _renderer: &mut Renderer, fg: &mut FrameGraph<'f>) {
         let Some(white) = self.white else {
             return;
         };
@@ -403,22 +403,20 @@ impl Scene for ClickTrainer {
         // Thin lifetime bar beneath the target (width tracks time remaining).
         let frac = (self.time_remaining / TARGET_LIFETIME).clamp(0.0, 1.0);
         let (target_pos, target_size) = (self.target_pos, self.target_size);
-        {
-            let mut fg = FrameGraph::new();
-            fg.root(move |r| {
-                r.draw_sprite(white, target_pos, Vec2::splat(target_size), color);
-                r.draw_sprite(
-                    white,
-                    Vec2::new(target_pos.x, target_pos.y + target_size + 4.0),
-                    Vec2::new(target_size * frac, 4.0),
-                    [0.85, 0.85, 0.90, 0.9],
-                );
-            });
-            fg.execute(renderer);
-        }
+        fg.root(move |r| {
+            r.draw_sprite(white, target_pos, Vec2::splat(target_size), color);
+            r.draw_sprite(
+                white,
+                Vec2::new(target_pos.x, target_pos.y + target_size + 4.0),
+                Vec2::new(target_size * frac, 4.0),
+                [0.85, 0.85, 0.90, 0.9],
+            );
+        });
 
         // ── Vector UI (walker commands stashed by `update`), above the game ──
-        render_hud(renderer, &self.hud_commands, white, &[]);
+        // The screen surface's final 2D, as one overlay after the composites.
+        let hud_commands = &self.hud_commands;
+        fg.overlay(move |r| render_hud(r, hud_commands, white, &[]));
     }
 }
 

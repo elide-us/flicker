@@ -1,0 +1,115 @@
+{
+  "_comment": "JIGGLE BUCKET — scene definition on the canonical system (491BD9BB). The `jiggle` behaviour (flicker-jiggle) plays it: a 2D pressurized SOFT-BODY merge game (balls fall into a trapezoid bucket, squish/jostle, and equal tiers merge) drawn UNDER this vector HUD. The walker reports `hud_hit` so a click on the panel is a UI click (Cash Out / New Game), never a grab on the play field. Score/best/combo flow from the behaviour via Model as pre-formatted text (`text_bind`). Esc fires the declared `on_menu = pause_open` intent → the behaviour pushes the shared pause popup, exactly like clicktrainer.",
+  "behaviour": "jiggle",
+  "params": {},
+  "exits": {},
+  "tree": {
+    "component": "surface",
+    "id": "jiggle",
+    "on_menu": "pause_open",
+    "children": [
+      {
+        "component": "cell",
+        "id": "hud_panel",
+        "anchor": "top_left",
+        "offset": [16, 16],
+        "width": 264,
+        "pad": 16,
+        "gap": 0,
+        "style": "jiggle.panel",
+        "children": [
+          {
+            "component": "text",
+            "text": "$jiggle_title",
+            "size": 26,
+            "text_size": 22,
+            "color": "jiggle.title.color",
+            "font": "display"
+          },
+          {
+            "component": "text",
+            "text": "$jiggle_subtitle",
+            "size": 23,
+            "text_size": 13,
+            "color": "jiggle.subtitle.color"
+          },
+          { "component": "cell", "size": 1, "style": "jiggle.divider" },
+          { "component": "stack", "size": 12 },
+          {
+            "component": "row",
+            "size": 26,
+            "children": [
+              { "component": "text", "text": "$jiggle_score", "grow": 1.0, "text_size": 14, "color": "jiggle.label_color" },
+              { "component": "text", "text_bind": "score", "grow": 1.0, "align": "right", "text_size": 16, "color": "jiggle.value_color", "font": "label" }
+            ]
+          },
+          {
+            "component": "row",
+            "size": 24,
+            "children": [
+              { "component": "text", "text": "$jiggle_best", "grow": 1.0, "text_size": 14, "color": "jiggle.label_color" },
+              { "component": "text", "text_bind": "best", "grow": 1.0, "align": "right", "text_size": 14, "color": "jiggle.value_color", "font": "label" }
+            ]
+          },
+          {
+            "component": "row",
+            "size": 24,
+            "children": [
+              { "component": "text", "text": "$jiggle_combo", "grow": 1.0, "text_size": 14, "color": "jiggle.label_color" },
+              { "component": "text", "text_bind": "combo", "grow": 1.0, "align": "right", "text_size": 14, "color": "jiggle.accent", "font": "label" }
+            ]
+          },
+          { "component": "stack", "size": 14 },
+          {
+            "component": "button",
+            "id": "cashout",
+            "action": "cashout",
+            "label": "$jiggle_cash_out",
+            "size_class": "md",
+            "variant": "primary"
+          },
+          { "component": "stack", "size": 8 },
+          {
+            "component": "button",
+            "id": "newgame",
+            "action": "newgame",
+            "label": "$jiggle_new_game",
+            "size_class": "md",
+            "variant": "secondary"
+          },
+          { "component": "stack", "size": 10 },
+          {
+            "component": "text",
+            "text": "$jiggle_esc_menu",
+            "size": 12,
+            "text_size": 12,
+            "color": "jiggle.hint.color",
+            "font": "label"
+          }
+        ]
+      }
+    ]
+  },
+  "styles": {
+    "jiggle": {
+      "_comment": "flicker-jiggle in-game HUD — a vector stats panel over the 2D soft-body game (the clicktrainer blend of VECTOR UI + 2D GAME + CLICK ROUTING). Score/best/combo flow from the scene via Model as pre-formatted text; colours are palette tokens.",
+      "margin": 16,
+      "panel": {
+        "w": 264,
+        "pad": 16,
+        "radius": 4,
+        "border_w": 1,
+        "fill_top": "$stone3",
+        "fill_bot": "$stone1",
+        "border": "$edge2"
+      },
+      "title": { "color": "$ink_bright" },
+      "subtitle": { "color": "$dim_soft" },
+      "divider": { "color": "$bronze" },
+      "label_color": "$dim",
+      "value_color": "$ink_bright",
+      "accent": "$rune_glow_hi",
+      "hint": { "color": "$faint" }
+    }
+  }
+}

@@ -1651,9 +1651,9 @@ impl Scene for GodModeScene {
         };
         let frame = run_ui(&tree, &model, &self.ui_styles, &snap, &mut self.ui_state);
         let over_hud = frame.results.is_on("hud_hit");
-        // Where the globe landed. The walker RESERVES this rect and never
-        // fills it (it runs late; offscreen passes must run first), so the
-        // hand-off is: read it here, draw into it at the top of `render`.
+        // Where the globe landed. The walker RESERVES this rect and never fills it (its
+        // HUD is the screen surface's final 2D, an overlay), so the hand-off is: read it
+        // here, declare the globe's surface into that rect in `render`.
         self.world.seat(frame.surface(GLOBE_SLOT));
         // The pointer SAMPLE for the globe's surface — the walker's barrier (A8C9F02B
         // §4b); the scene reads no device for the camera.
@@ -1767,11 +1767,30 @@ impl Scene for GodModeScene {
         Transition::None
     }
 
-    fn render(&mut self, renderer: &mut Renderer) {
+    fn render<'f>(&'f mut self, renderer: &mut Renderer, fg: &mut FrameGraph<'f>) {
         self.collect_tile(renderer);
+        let base = fg.base_layer();
         if !self.ready {
             // The loading banner rides the walker tree (`loading` visible_bind).
-            self.draw_hud(renderer);
+            let Self {
+                white,
+                tile,
+                hud_commands,
+                seed_shown,
+                budget_dist,
+                ..
+            } = self;
+            fg.overlay(move |r| {
+                Self::draw_hud(
+                    r,
+                    base,
+                    *white,
+                    tile.as_ref(),
+                    hud_commands,
+                    *seed_shown,
+                    budget_dist,
+                )
+            });
             return;
         }
 
@@ -1829,11 +1848,11 @@ impl Scene for GodModeScene {
                     (lo.min(c.temp_k), hi.max(c.temp_k))
                 });
                 let tspan = (tmax - tmin).max(1.0);
-                let light = Vec3::new(0.4, 0.7, 0.55).normalize();
-                let lit = move |i: usize, base: [f32; 3]| {
-                    let l = (dirs[i].dot(light) * 0.5 + 0.5).clamp(0.25, 1.0);
-                    [base[0] * l, base[1] * l, base[2] * l]
-                };
+                // NOTE: the shell colours are the CELL's own reading, unshaded. The
+                // terminator across the globe is the `studio` rig's, applied by the mesh
+                // shader — a half-lambert wrap baked in here as well used to SQUARE that
+                // same key light (its direction sat ~7° off `studio`'s sun), which is why
+                // the sphere read with a hard, doubled terminator.
                 // Every shell above the core drops the wedge, so the cut reveals the
                 // whole stack in section rather than one layer at a time.
                 let cut = *cut;
@@ -1866,7 +1885,7 @@ impl Scene for GodModeScene {
                     } else {
                         BARE_MANTLE_COLOR
                     };
-                    Some(lit(i, base))
+                    Some(base)
                 };
                 shells.push(ShellSpec {
                     dirs,
@@ -1914,8 +1933,7 @@ impl Scene for GodModeScene {
                         radius,
                         inset: 0.0,
                         color: Box::new(move |i: usize| {
-                            (!sliced(i) && cells[i].beds & bed != 0)
-                                .then(|| lit(i, crust_color(i, base)))
+                            (!sliced(i) && cells[i].beds & bed != 0).then(|| crust_color(i, base))
                         }),
                         cell_radius: None,
                     });
@@ -1962,7 +1980,7 @@ impl Scene for GodModeScene {
                             radius,
                             inset: 0.0,
                             color: Box::new(move |i: usize| {
-                                (!sliced(i) && stippled(i, k, coverage)).then(|| lit(i, tint))
+                                (!sliced(i) && stippled(i, k, coverage)).then_some(tint)
                             }),
                             cell_radius: None,
                         });
@@ -1973,18 +1991,32 @@ impl Scene for GodModeScene {
             world.set_arrows(arrows);
         }
 
-        // The globe goes into the rect the walker reserved for it — FIRST.
-        // `FrameGraph::execute` resets the shared per-frame draw queues, so an
-        // offscreen pass declared after a main-frame draw would throw that draw
-        // away. The world's rect is `None` whenever the viewport is not on
-        // screen, and then the pass simply does not happen.
-        {
-            let mut fg = FrameGraph::new();
-            let layer = renderer.layer();
-            self.world.render(renderer, &mut fg, layer);
-            fg.execute(renderer);
-        }
-        self.draw_hud(renderer);
+        // The globe goes into the rect the walker reserved for it; its rect is `None`
+        // whenever the viewport is not on screen, and then the pass simply does not
+        // happen. The scene's 2D chrome rides the overlay after it — the destructure
+        // splits the disjoint borrows (`world` &mut, the HUD fields shared) so both
+        // survive into the one graph until the manager's `execute`.
+        let Self {
+            world,
+            white,
+            tile,
+            hud_commands,
+            seed_shown,
+            budget_dist,
+            ..
+        } = self;
+        world.render(renderer, fg, base);
+        fg.overlay(move |r| {
+            Self::draw_hud(
+                r,
+                base,
+                *white,
+                tile.as_ref(),
+                hud_commands,
+                *seed_shown,
+                budget_dist,
+            )
+        });
     }
 }
 
@@ -2370,26 +2402,37 @@ impl GodModeScene {
     /// The tile preview rides `render_hud`'s texture slice as slot 0, so the
     /// inspector's picture is a `sprite` in the tree rather than a fourth
     /// hand-placed panel.
-    fn draw_hud(&self, renderer: &mut Renderer) {
-        if let Some(white) = self.white {
-            let tex: Vec<TextureHandle> = self
-                .tile
-                .as_ref()
-                .map(|(t, _, _)| vec![*t])
-                .unwrap_or_default();
-            render_hud(renderer, &self.hud_commands, white, &tex);
+    /// The scene's 2D chrome — the walker HUD plus the one immediate bulk-seed panel —
+    /// as the screen surface's final overlay. Self-less (it takes only the fields it
+    /// draws) so it never borrows `world`, which `world.render` holds `&mut` for the
+    /// graph's lifetime. `base` is the scene's band, captured by value: the bulk-seed
+    /// panel sits at `base + 3` (above the HUD's popups) rather than reading the ambient
+    /// layer render_hud left behind, which fixes the old +3 leak.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_hud(
+        renderer: &mut Renderer,
+        base: f32,
+        white: Option<TextureHandle>,
+        tile: Option<&(TextureHandle, u32, String)>,
+        hud_commands: &[HudCommand],
+        seed_shown: bool,
+        budget_dist: &[(u8, String, f64)],
+    ) {
+        if let Some(white) = white {
+            let tex: Vec<TextureHandle> = tile.map(|(t, _, _)| vec![*t]).unwrap_or_default();
+            render_hud(renderer, hud_commands, white, &tex);
         }
 
         // ── Bulk-seed element distribution — the one immediate panel left. ──
-        let Some(white) = self.white else { return };
-        if self.seed_shown && !self.budget_dist.is_empty() {
+        let Some(white) = white else { return };
+        if seed_shown && !budget_dist.is_empty() {
             // Above the HUD's popups (authored `layer: 2`) — RELATIVE to the scene's band,
             // never an absolute layer (the band stride is 100).
-            renderer.set_layer(renderer.layer() + 3.0);
+            renderer.set_layer(base + 3.0);
             let gold = [0.722, 0.592, 0.353, 1.0]; // Prism bronze (structural accent)
             let text = [0.85, 0.87, 0.92, 1.0];
             let (pad, sw, row_h, panel_w) = (12.0f32, 12.0f32, 18.0f32, 210.0f32);
-            let panel_h = pad + 24.0 + self.budget_dist.len() as f32 * row_h + pad;
+            let panel_h = pad + 24.0 + budget_dist.len() as f32 * row_h + pad;
             let (px, py) = (16.0f32, 158.0f32);
             renderer.draw_sprite(
                 white,
@@ -2404,7 +2447,7 @@ impl GodModeScene {
                 gold,
             );
             let mut ry = py + pad + 24.0;
-            for (num, sym, pct) in &self.budget_dist {
+            for (num, sym, pct) in budget_dist {
                 let c = element_rgb(*num);
                 renderer.draw_sprite(
                     white,

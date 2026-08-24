@@ -2,6 +2,28 @@
   "_comment": "Epoch Simulation SCENE DEFINITION (201F4F51 template-free). The forward-regenerative epoch sim viewer: the fullscreen planet is the ROOT surface's element (the shared GlobeWorld declared as a FrameGraph root pass — no nested rtt, no offscreen target), the HUD drawn over it, a top-left readout block with the TRANSPORT row (play/reset/reseed · size − + · view cycle · the Layers slice toggle — the seven raw keyboard verbs became these controls + the declared on_mode_* view-cycle intents), and the LIFE-SUPPORTING CONDITIONS panel bottom-right, whose per-axis rows are REFILLED by the behaviour at construction (the observer's bands are runtime data — authoring them here would fork the observer's numbers). The `pocepochs` behaviour plays it (flicker-pocepochs); pocepochs.lua derives every display string from the RAW numbers + resolved words. Styles folded from the crate's quarantined scene_styles.json (the dead flicker-sol2 `readout` block did not move).",
   "behaviour": "pocepochs",
   "params": {},
+  "stages": {
+    "pocepochs_globe": {
+      "_comment": "The PLANET SIMULATION globe — the forward-regenerative epoch sim's world. Like `godmode_globe` it publishes its own shells (the surface shell, or the classified per-column layer stack) and authors no `camera`, because the planet is flown by the maintainer. `clear` is transparent so the scene's own deep-space backdrop shows through the composited surface.",
+      "lighting": "studio",
+      "clear": "$stage_void",
+      "layers": [
+        {
+          "draw": "shells"
+        }
+      ],
+      "_hdr": "HDR: the `scene` pass (the planet's published shells) renders into the LINEAR rgba16f `hdr` working attachment and `tonemap_grade` resolves it (ACES roll-off) into the sRGB `color` last. grade_strength 0 = tonemap only, no invented tint — an art grade is Aaron's to author in-window. Alpha passes through, so the transparent clear the deep-space backdrop shows through survives.",
+      "attachments": {
+        "hdr": { "format": "rgba16f" },
+        "color": { "format": "surface" },
+        "depth": { "format": "depth32" }
+      },
+      "passes": [
+        { "pass": "scene", "writes": ["hdr", "depth"] },
+        { "pass": "tonemap_grade" }
+      ]
+    }
+  },
   "styles": {
     "pocepochs": {
       "title": {
