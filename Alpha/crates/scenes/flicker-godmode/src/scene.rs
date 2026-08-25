@@ -36,7 +36,7 @@ use crate::sim_thread::{
     CellView, SeedSpec, SimCommand, SimHandle, Snapshot, TilePreview, BED_CONTINENTAL, BED_OCEANIC,
     SHELF_BED, SHELF_CLASS, SHELF_EDGE, SHELF_EXPOSED, SHELF_LAND, SHELF_NONE, SHELF_SHELF,
 };
-use flicker_globe::{self as globe, GlobeWorld, ShellSpec, RADIUS};
+use flicker_globe::{self as globe, lerp3, temp_color, GlobeWorld, ShellSpec, RADIUS};
 use flicker_poc_chemistry::{ProcessDef, PLANET_FREQ};
 
 /// The Starter's one-click input bundles — see
@@ -1837,6 +1837,7 @@ impl Scene for GodModeScene {
                     inset: 0.0,
                     color: Box::new(|_| Some(CORE_COLOR)),
                     cell_radius: None, // every simulated shell is a sphere
+                    depth: None,
                 });
             }
             if let Some(snap) = snap.as_ref() {
@@ -1894,6 +1895,7 @@ impl Scene for GodModeScene {
                     inset: 0.0,
                     color: Box::new(mantle),
                     cell_radius: None,
+                    depth: None,
                 });
 
                 // What a crust cell is painted with: its own rock colour normally,
@@ -1936,6 +1938,7 @@ impl Scene for GodModeScene {
                             (!sliced(i) && cells[i].beds & bed != 0).then(|| crust_color(i, base))
                         }),
                         cell_radius: None,
+                        depth: None,
                     });
                 }
 
@@ -1983,6 +1986,7 @@ impl Scene for GodModeScene {
                                 (!sliced(i) && stippled(i, k, coverage)).then_some(tint)
                             }),
                             cell_radius: None,
+                            depth: None,
                         });
                     }
                 }
@@ -2545,33 +2549,6 @@ fn ore_color(enrichment: f32, richest: f32) -> [f32; 3] {
     lerp3([0.20, 0.22, 0.30], [1.0, 0.84, 0.35], t)
 }
 
-/// Linear blend of two RGB triples.
-fn lerp3(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
-    let t = t.clamp(0.0, 1.0);
-    [
-        a[0] + (b[0] - a[0]) * t,
-        a[1] + (b[1] - a[1]) * t,
-        a[2] + (b[2] - a[2]) * t,
-    ]
-}
-
-/// Temperature ramp over a normalised value: cool deep-blue → red → white-hot.
-///
-/// **Relative to the frame's own min/max, and that is the point.** The heat
-/// view's job is to show WHERE the heat is — the plumes and downwellings the
-/// convection field carries and volcanism feeds on — and the interesting
-/// structure is ±350 K riding on a 4000 K ball: an absolute scale painted the
-/// whole magma era one flat colour and told the maintainer nothing (the white
-/// ball, 2026-08-06 — an era of uniform colour is an instrument reading
-/// blank).
-fn temp_color(x: f32) -> [f32; 3] {
-    let x = x.clamp(0.0, 1.0);
-    if x < 0.5 {
-        lerp3([0.10, 0.16, 0.55], [0.90, 0.35, 0.12], x * 2.0)
-    } else {
-        lerp3([0.90, 0.35, 0.12], [1.0, 0.95, 0.85], (x - 0.5) * 2.0)
-    }
-}
 
 /// Core-formation progress: undifferentiated slate → differentiated gold.
 fn diff_color(d: f32) -> [f32; 3] {

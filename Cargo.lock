@@ -1139,21 +1139,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "flicker-jiggle"
-version = "0.1.0"
-dependencies = [
- "fastrand",
- "flicker",
- "flicker-input-core",
- "flicker-input-router",
- "flicker-mechanics",
- "flicker-shell",
- "glam",
- "serde_json",
- "tracing",
-]
-
-[[package]]
 name = "flicker-loomforge"
 version = "0.1.1"
 dependencies = [
@@ -1261,6 +1246,7 @@ dependencies = [
 name = "flicker-populous"
 version = "0.1.1"
 dependencies = [
+ "fastrand",
  "flicker",
  "flicker-globe",
  "flicker-input-core",
@@ -3100,7 +3086,6 @@ dependencies = [
  "flicker-content",
  "flicker-controllertester",
  "flicker-godmode",
- "flicker-jiggle",
  "flicker-loomforge",
  "flicker-pocclusters",
  "flicker-pocepochs",

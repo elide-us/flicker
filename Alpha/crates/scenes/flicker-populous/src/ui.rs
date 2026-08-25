@@ -15,6 +15,8 @@
 
 /// The three panes' ids — each is ALSO its `tab_group` in the static tree, which is
 /// what makes it a panel for the walker's panel cursor (the left stick cycles these).
+/// ONE three-pane arrangement, shared by every page and tab: a page owns its VIEW —
+/// the gated slices inside each pane — never a second set of panes.
 pub const LEFT_PANE: &str = "pop_left";
 pub const VIEW_PANE: &str = "pop_view";
 pub const RIGHT_PANE: &str = "pop_right";
@@ -24,6 +26,12 @@ pub const VIEW_SLOT: &str = "pop_view_rtt";
 /// The `stages.<source>` block the globe is authored by — the default light source
 /// and backdrop the world is seen under.
 pub const STAGE_SOURCE: &str = "populous_globe";
+/// The HEX page's viewport node — the centre pane's second gated `surface`, where
+/// the centre cell's column stack stands (molten below, bedrock above, more to come).
+pub const HEX_SLOT: &str = "pop_hex_rtt";
+/// The stage the hex-stack view is lit by. Authors NO shells and no graticule:
+/// the column is published data, alone under the stage's light.
+pub const HEX_STAGE_SOURCE: &str = "populous_hex";
 
 /// The size dial's two-way bind — the frequency the map is rebuilt at. Stated once
 /// so the tree, the Model and the dispatcher cannot drift apart.
@@ -33,10 +41,13 @@ pub const FREQ_BIND: &str = "pop_freq";
 pub const HEXES_BIND: &str = "pop_hexes";
 pub const DIAMETER_BIND: &str = "pop_diameter";
 pub const TILE_BIND: &str = "pop_tile";
-/// The seams tab's one action. Nothing is built behind it yet — the scene answers
-/// it with a loud warn, so the authored name fails LOUD instead of to nothing
-/// (rule 4BB12A75).
+/// The seams tab's re-roll action: a new random set of convection cells.
 pub const SEAMS_ACTION: &str = "pop_seams_randomize";
+/// The seams tab's cell-count dial — how many convection cells the molten heat
+/// field is rolled with (two-way bind, like the size dial).
+pub const CELLS_BIND: &str = "pop_cells";
+/// The seams tab's hot-spot dial — how many mantle plumes the field rolls.
+pub const SPOTS_BIND: &str = "pop_spots";
 
 /// Model keys the rails bind to. The `paged_menu` proto names these as its
 /// `@page_bind` / `@tab_bind` / `@tabs_shown` defaults; stated once here so the
@@ -59,25 +70,40 @@ pub struct Page {
     pub tabs: &'static [Tab],
 }
 
-/// **The bench's page/tab roster.** One page, two tabs — the MAP view and the SEAMS
-/// view. The scene reads only COUNTS from this (the rail bounds + the dispatch
-/// clamp); each tab's actual panes are authored in `populous.scene.json` and gated
-/// by `arrange()`. The code that reads this never learns the counts, so the next
-/// page or tab costs exactly one row here.
-pub static PAGES: &[Page] = &[Page {
-    id: "world",
-    label: "$pop_page_world",
-    tabs: &[
-        Tab {
-            id: "map",
-            label: "$pop_tab_map",
-        },
-        Tab {
-            id: "seams",
-            label: "$pop_tab_seams",
-        },
-    ],
-}];
+/// **The bench's page/tab roster.** Two pages — the WORLD (the globe, with its
+/// MAP, SEAMS and CRUST tabs) and the HEX stack (the centre cell's column
+/// inspected up close, layer by layer). The scene reads only COUNTS from this (the
+/// rail bounds + the dispatch clamp); each tab's actual panes are authored in
+/// `populous.scene.json` and gated by `arrange()`. The code that reads this
+/// never learns the counts, so the next page or tab costs exactly one row here.
+pub static PAGES: &[Page] = &[
+    Page {
+        id: "world",
+        label: "$pop_page_world",
+        tabs: &[
+            Tab {
+                id: "map",
+                label: "$pop_tab_map",
+            },
+            Tab {
+                id: "seams",
+                label: "$pop_tab_seams",
+            },
+            Tab {
+                id: "crust",
+                label: "$pop_tab_crust",
+            },
+        ],
+    },
+    Page {
+        id: "hex",
+        label: "$pop_page_hex",
+        tabs: &[Tab {
+            id: "stack",
+            label: "$pop_tab_stack",
+        }],
+    },
+];
 
 /// The page at `sel`, clamped — the roster is the authority on what exists, so an
 /// out-of-range selection reads as the last page rather than panicking.

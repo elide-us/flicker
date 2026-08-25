@@ -72,8 +72,8 @@
         "radius": 3
       },
       "frame": {
-        "fill_top": [0, 0, 0, 0],
-        "fill_bot": [0, 0, 0, 0],
+        "fill_top": "$stage_void",
+        "fill_bot": "$stage_void",
         "border": "$bronze_deep",
         "border_w": 1,
         "radius": 3

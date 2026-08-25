@@ -16,7 +16,7 @@
 //! the walker's colour channel is dotted style paths, and a per-datum colour has
 //! no path.
 
-use flicker_globe::RADIUS;
+use flicker_globe::{lerp3, RADIUS};
 use flicker_worldengine::{classify, HexState, LayerKind, Phase, Tables};
 
 /// How the planet is coloured. `V` cycles them.
@@ -139,15 +139,6 @@ pub fn phase_color(phase: Phase) -> [f32; 3] {
         Phase::Liquid => [0.15, 0.40, 0.78],
         Phase::Gas => [0.70, 0.76, 0.86],
     }
-}
-
-fn lerp3(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
-    let t = t.clamp(0.0, 1.0);
-    [
-        a[0] + (b[0] - a[0]) * t,
-        a[1] + (b[1] - a[1]) * t,
-        a[2] + (b[2] - a[2]) * t,
-    ]
 }
 
 /// Muted colour per dominant surface element (atomic number).

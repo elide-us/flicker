@@ -578,6 +578,7 @@ fn shells_for(sim: &Simulation, tick: u64, mode: ViewMode, cut: bool) -> Vec<She
             inset: 0.0,
             color,
             cell_radius: None,
+                    depth: None,
         }
     }
     match mode {
@@ -636,6 +637,7 @@ fn shells_for(sim: &Simulation, tick: u64, mode: ViewMode, cut: bool) -> Vec<She
                     inset: 0.0,
                     color: Box::new(move |i| rows[i].1),
                     cell_radius: Some(Box::new(move |i| radii[i].0)),
+                    depth: None,
                 }
             })
             .collect()

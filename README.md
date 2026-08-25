@@ -81,23 +81,35 @@ and [WARRANTY.md](WARRANTY.md).
 Crates are organized as `Alpha/crates/<cluster>/<crate>` (the application) plus a root
 `crates/` group (standalone world-sim POCs):
 
-- **core** — `clayengine` (world-defining constants), `flicker` (umbrella), `flicker-core`,
-  `flicker-worker`.
-- **platform / render / input** — `flicker-app`, `flicker-render`, `flicker-2d`,
-  [`flicker-input-core`](Alpha/crates/input/flicker-input-core/README.md) / `-router` / `-device`.
-- **scripting / frontend** — `flicker-script` (Luau host), `flicker-scene`, `flicker-shell`,
-  `flicker-widgets`, `flicker-globe`.
-- **animation / content / mechanics / world** — `flicker-flight`, `flicker-skeletal`,
-  `flicker-content`, `flicker-materials`, `flicker-primitive`, `flicker-texture`,
-  `flicker-mechanics`, `flicker-voxel`.
-- **net** — `flicker-net` (the `clay-chat` client + the release-update checker).
-- **scenes** — the scene behaviour crates (`flicker-populous`, `flicker-quartermaster`,
-  `flicker-sablework`, `flicker-componentcatalog`, `flicker-solarbirth`,
-  [`flicker-clicktrainer`](Alpha/crates/scenes/flicker-clicktrainer/README.md), and the developer/bench scenes folding in for v0.2.0).
+- **core** — [`clayengine`](Alpha/crates/core/clayengine/README.md) (world-defining constants), [`flicker`](Alpha/crates/core/flicker/README.md) (umbrella),
+  [`flicker-core`](Alpha/crates/core/flicker-core/README.md),
+  [`flicker-worker`](Alpha/crates/core/flicker-worker/README.md).
+- **platform / render / input** — [`flicker-app`](Alpha/crates/platform/flicker-app/README.md),
+  [`flicker-render`](Alpha/crates/render/flicker-render/README.md), [`flicker-2d`](Alpha/crates/render/flicker-2d/README.md),
+  [`flicker-input-core`](Alpha/crates/input/flicker-input-core/README.md) /
+  [`-router`](Alpha/crates/input/flicker-input-router/README.md) /
+  [`-device`](Alpha/crates/input/flicker-input-device/README.md).
+- **scripting / frontend** — [`flicker-script`](Alpha/crates/scripting/flicker-script/README.md) (Luau host),
+  [`flicker-scene`](Alpha/crates/frontend/flicker-scene/README.md), [`flicker-shell`](Alpha/crates/frontend/flicker-shell/README.md),
+  [`flicker-widgets`](Alpha/crates/frontend/flicker-widgets/README.md),
+  [`flicker-globe`](Alpha/crates/frontend/flicker-globe/README.md).
+- **animation / content / mechanics** — [`flicker-flight`](Alpha/crates/animation/flicker-flight/README.md),
+  [`flicker-skeletal`](Alpha/crates/animation/flicker-skeletal/README.md),
+  [`flicker-content`](Alpha/crates/content/flicker-content/README.md),
+  [`flicker-materials`](Alpha/crates/content/flicker-materials/README.md),
+  [`flicker-primitive`](Alpha/crates/content/flicker-primitive/README.md), [`flicker-texture`](Alpha/crates/content/flicker-texture/README.md),
+  [`flicker-mechanics`](Alpha/crates/mechanics/flicker-mechanics/README.md).
+- **world** (`Alpha/crates/world/`) — [`flicker-voxel`](Alpha/crates/world/flicker-voxel/README.md),
+  [`flicker-worldgen`](Alpha/crates/world/flicker-worldgen/README.md),
+  [`flicker-worldengine`](Alpha/crates/world/flicker-worldengine/README.md),
+  [`flicker-worldstate`](Alpha/crates/world/flicker-worldstate/README.md), [`flicker-worldgrid`](Alpha/crates/world/flicker-worldgrid/README.md), [`flicker-worldtile`](Alpha/crates/world/flicker-worldtile/README.md),
+  [`flicker-poc-chemistry`](Alpha/crates/world/flicker-poc-chemistry/README.md),
+  [`flicker-orrery`](Alpha/crates/world/flicker-orrery/README.md).
+- **net** — [`flicker-net`](Alpha/crates/net/flicker-net/README.md) (the `clay-chat` client + the release-update checker).
+- **scenes** — the scene behaviour crates: [`flicker-clicktrainer`](Alpha/crates/scenes/flicker-clicktrainer/README.md), [`flicker-componentcatalog`](Alpha/crates/scenes/flicker-componentcatalog/README.md), [`flicker-controllertester`](Alpha/crates/scenes/flicker-controllertester/README.md), [`flicker-godmode`](Alpha/crates/scenes/flicker-godmode/README.md), [`flicker-solarbirth`](Alpha/crates/scenes/flicker-solarbirth/README.md), [`flicker-loomforge`](Alpha/crates/scenes/flicker-loomforge/README.md), [`flicker-assetpipeline`](Alpha/crates/scenes/flicker-assetpipeline/README.md), [`flicker-pocclusters`](Alpha/crates/scenes/flicker-pocclusters/README.md), [`flicker-populous`](Alpha/crates/scenes/flicker-populous/README.md), [`flicker-pocepochs`](Alpha/crates/scenes/flicker-pocepochs/README.md), [`flicker-quartermaster`](Alpha/crates/scenes/flicker-quartermaster/README.md), [`flicker-sablework`](Alpha/crates/scenes/flicker-sablework/README.md).
 - **prism-alpha** — the launcher application.
-- **root `crates/`** — world-sim / standalone POCs (`flicker-worldgrid`, `flicker-worldstate`,
-  `flicker-worldgen`, `flicker-worldengine`, `flicker-poc-chemistry`, `flicker-celestial`,
-  `flicker-orrery`, and more).
+- **root `crates/`** — standalone POC libraries ([`flicker-celestial`](crates/flicker-celestial/README.md), [`flicker-system`](crates/flicker-system/README.md),
+  [`flicker-greed`](crates/flicker-greed/README.md)).
 
 ## Status
 

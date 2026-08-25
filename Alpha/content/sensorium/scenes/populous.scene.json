@@ -47,12 +47,19 @@
                         "component": "option",
                         "value": 0,
                         "label": "$pop_page_world"
+                      },
+                      {
+                        "component": "option",
+                        "value": 1,
+                        "label": "$pop_page_hex"
                       }
                     ]
                   },
                   {
+                    "_comment": "One tab rail PER PAGE, each gated on its page's arrange() key and all binding the one `tab` value — the catalog's ratified per-page PTT pattern. An unplaced rail neither draws nor steps, so the shared step names never double-fire.",
                     "component": "pill_toggle",
                     "id": "paged_tabs",
+                    "visible_bind": "shown_page0",
                     "bind": "tab",
                     "next_action": "tab_next",
                     "prev_action": "tab_prev",
@@ -70,6 +77,30 @@
                         "component": "option",
                         "value": 1,
                         "label": "$pop_tab_seams"
+                      },
+                      {
+                        "component": "option",
+                        "value": 2,
+                        "label": "$pop_tab_crust"
+                      }
+                    ]
+                  },
+                  {
+                    "component": "pill_toggle",
+                    "id": "paged_tabs_p1",
+                    "visible_bind": "shown_page1",
+                    "bind": "tab",
+                    "next_action": "tab_next",
+                    "prev_action": "tab_prev",
+                    "size": 520,
+                    "style": "paged_menu.tab_track",
+                    "tab_active": "paged_menu.tab_active",
+                    "tab_idle": "paged_menu.tab_idle",
+                    "children": [
+                      {
+                        "component": "option",
+                        "value": 0,
+                        "label": "$pop_tab_stack"
                       }
                     ]
                   },
@@ -121,14 +152,80 @@
                                 "component": "cell",
                                 "visible_bind": "shown_p0_t1",
                                 "grow": 1.0,
+                                "gap": 10,
                                 "children": [
+                                  {
+                                    "component": "row",
+                                    "grow": 1.0,
+                                    "gap": 10,
+                                    "children": [
+                                      {
+                                        "component": "slider",
+                                        "id": "pop_cells",
+                                        "style": "slider",
+                                        "bind": "pop_cells",
+                                        "label": "$pop_cells",
+                                        "vertical": true,
+                                        "min": 2,
+                                        "max": 12,
+                                        "step": 1,
+                                        "step_coarse": 2,
+                                        "decimals": 0,
+                                        "slider_h": 10,
+                                        "value_w": 44,
+                                        "grow": 1.0,
+                                        "tab_group": "pop_left",
+                                        "nav_ordinal": 1
+                                      },
+                                      {
+                                        "component": "slider",
+                                        "id": "pop_spots",
+                                        "style": "slider",
+                                        "bind": "pop_spots",
+                                        "label": "$pop_spots",
+                                        "vertical": true,
+                                        "min": 0,
+                                        "max": 12,
+                                        "step": 1,
+                                        "step_coarse": 2,
+                                        "decimals": 0,
+                                        "slider_h": 10,
+                                        "value_w": 44,
+                                        "grow": 1.0,
+                                        "tab_group": "pop_left",
+                                        "nav_ordinal": 2
+                                      }
+                                    ]
+                                  },
                                   {
                                     "component": "button",
                                     "action": "pop_seams_randomize",
                                     "tab_group": "pop_left",
-                                    "nav_ordinal": 1,
+                                    "nav_ordinal": 3,
                                     "size_class": "md",
                                     "label": "$pop_seams_randomize"
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "cell",
+                                "visible_bind": "shown_p0_t2",
+                                "grow": 1.0,
+                                "children": [
+                                  {
+                                    "component": "text",
+                                    "text": "$ui_pane_empty"
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "cell",
+                                "visible_bind": "shown_p1_t0",
+                                "grow": 1.0,
+                                "children": [
+                                  {
+                                    "component": "text",
+                                    "text": "$ui_pane_empty"
                                   }
                                 ]
                               }
@@ -144,11 +241,32 @@
                             "aspect": 1.0,
                             "children": [
                               {
-                                "component": "surface",
-                                "id": "pop_view_rtt",
-                                "style": "rtt_holder",
+                                "component": "cell",
+                                "visible_bind": "shown_page0",
                                 "grow": 1.0,
-                                "source": "populous_globe"
+                                "children": [
+                                  {
+                                    "component": "surface",
+                                    "id": "pop_view_rtt",
+                                    "style": "rtt_holder",
+                                    "grow": 1.0,
+                                    "source": "populous_globe"
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "cell",
+                                "visible_bind": "shown_page1",
+                                "grow": 1.0,
+                                "children": [
+                                  {
+                                    "component": "surface",
+                                    "id": "pop_hex_rtt",
+                                    "style": "rtt_holder",
+                                    "grow": 1.0,
+                                    "source": "populous_hex"
+                                  }
+                                ]
                               }
                             ]
                           },
@@ -251,6 +369,28 @@
                                     "text": "$ui_pane_empty"
                                   }
                                 ]
+                              },
+                              {
+                                "component": "cell",
+                                "visible_bind": "shown_p0_t2",
+                                "grow": 1.0,
+                                "children": [
+                                  {
+                                    "component": "text",
+                                    "text": "$ui_pane_empty"
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "cell",
+                                "visible_bind": "shown_p1_t0",
+                                "grow": 1.0,
+                                "children": [
+                                  {
+                                    "component": "text",
+                                    "text": "$ui_pane_empty"
+                                  }
+                                ]
                               }
                             ]
                           }
@@ -300,6 +440,21 @@
         { "pass": "scene", "writes": ["hdr", "depth"] },
         { "pass": "tonemap_grade" }
       ]
+    },
+    "populous_hex": {
+      "_comment": "The HEX-STACK inspector — one column of the world, up close. Authors NO shell layers and no graticule: the column is published data (the scene's own shells), alone under the stage's light; the camera is the scene's orbit, aimed at the stack. Same HDR resolve as the globe so the heat ramp reads identically in both panes.",
+      "lighting": "studio",
+      "clear": "$stage_void",
+      "layers": [{ "draw": "shells" }],
+      "attachments": {
+        "hdr": { "format": "rgba16f" },
+        "color": { "format": "surface" },
+        "depth": { "format": "depth32" }
+      },
+      "passes": [
+        { "pass": "scene", "writes": ["hdr", "depth"] },
+        { "pass": "tonemap_grade" }
+      ]
     }
   },
   "styles": {
@@ -322,24 +477,9 @@
       "title": "$ink_bright",
       "rule": "$seam",
       "page_active": {
-        "fill_top": [
-          0,
-          0,
-          0,
-          0
-        ],
-        "fill_bot": [
-          0,
-          0,
-          0,
-          0
-        ],
-        "border": [
-          0,
-          0,
-          0,
-          0
-        ],
+        "fill_top": "$stage_void",
+        "fill_bot": "$stage_void",
+        "border": "$stage_void",
         "border_w": 0,
         "radius": 0,
         "label": "$ink_bright",
@@ -348,24 +488,9 @@
         "underline_w": 2
       },
       "page_idle": {
-        "fill_top": [
-          0,
-          0,
-          0,
-          0
-        ],
-        "fill_bot": [
-          0,
-          0,
-          0,
-          0
-        ],
-        "border": [
-          0,
-          0,
-          0,
-          0
-        ],
+        "fill_top": "$stage_void",
+        "fill_bot": "$stage_void",
+        "border": "$stage_void",
         "border_w": 0,
         "radius": 0,
         "label": "$dim",
@@ -387,24 +512,9 @@
         "label": "$ink_sapphire"
       },
       "tab_idle": {
-        "fill_top": [
-          0,
-          0,
-          0,
-          0
-        ],
-        "fill_bot": [
-          0,
-          0,
-          0,
-          0
-        ],
-        "border": [
-          0,
-          0,
-          0,
-          0
-        ],
+        "fill_top": "$stage_void",
+        "fill_bot": "$stage_void",
+        "border": "$stage_void",
         "border_w": 0,
         "radius": 12,
         "label": "$dim"
@@ -422,18 +532,8 @@
       "row_seam": "$seam",
       "row_focus": {
         "fill_top": "$accent_wash",
-        "fill_bot": [
-          0,
-          0,
-          0,
-          0
-        ],
-        "border": [
-          0,
-          0,
-          0,
-          0
-        ],
+        "fill_bot": "$stage_void",
+        "border": "$stage_void",
         "border_w": 0,
         "radius": 0
       },

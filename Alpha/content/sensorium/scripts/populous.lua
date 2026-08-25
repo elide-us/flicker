@@ -21,8 +21,15 @@ function M.arrange()
   local page = (Model and Model.page) or 0
   local tab = (Model and Model.tab) or 0
   return {
+    -- Page-level keys: which tab RAIL shows (one rail per page — the catalog's
+    -- per-page PTT pattern) and which centre-pane view is lit.
+    ["shown_page0"] = { on = (page == 0) },              -- the WORLD page (the globe)
+    ["shown_page1"] = { on = (page == 1) },              -- the HEX page (one column)
+    -- Slice keys: one per (page, tab), lighting that tab's pane interiors.
     ["shown_p0_t0"] = { on = (page == 0 and tab == 0) }, -- the MAP tab's slice
     ["shown_p0_t1"] = { on = (page == 0 and tab == 1) }, -- the SEAMS tab's slice
+    ["shown_p0_t2"] = { on = (page == 0 and tab == 2) }, -- the CRUST tab's slice
+    ["shown_p1_t0"] = { on = (page == 1 and tab == 0) }, -- the STACK tab's slice
   }
 end
 

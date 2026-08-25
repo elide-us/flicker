@@ -30,16 +30,16 @@
         "color": "$bronze"
       },
       "text": {
-        "color": [0.85, 0.87, 0.92, 1.0]
+        "color": "$ink_sapphire"
       },
       "dim": {
-        "color": [0.6, 0.63, 0.68, 1.0]
+        "color": "$dim"
       },
       "playing": {
-        "color": [0.55, 0.85, 0.55, 1.0]
+        "color": "$sig_green"
       },
       "paused": {
-        "color": [0.92, 0.78, 0.42, 1.0]
+        "color": "$stam_hi"
       },
       "button": {
         "fill_top": "$stone4",
@@ -57,8 +57,8 @@
       },
       "hab": {
         "panel": {
-          "fill": [0.055, 0.063, 0.086, 0.9],
-          "border": [0.227, 0.353, 0.627, 0.8],
+          "fill": "$panel_bg",
+          "border": "$sap_border",
           "border_w": 1
         },
         "header": {
@@ -73,19 +73,19 @@
           "color": "$dim"
         },
         "gauge": {
-          "track": [0.078, 0.09, 0.122, 0.95],
-          "band": [0.184, 0.616, 0.357, 0.55],
+          "track": "$stone2",
+          "band": "$sig_green_glow",
           "marker": "$stam_hi",
           "marker_in": "$sig_green",
-          "no_signal": [0.055, 0.063, 0.086, 0.72],
-          "sheen": [0.9, 0.94, 1.0, 0.1],
+          "no_signal": "$cd_veil",
+          "sheen": "$sheen",
           "marker_w": 5
         },
         "light_on": {
           "fill": "$sig_green"
         },
         "light_off": {
-          "fill": [0.24, 0.1, 0.1, 1.0]
+          "fill": "$danger_bg"
         },
         "verdict_life": "$sig_green",
         "verdict_count": "$ink",

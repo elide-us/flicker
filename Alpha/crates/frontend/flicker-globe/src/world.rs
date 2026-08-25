@@ -58,6 +58,15 @@ pub struct ShellSpec<'a> {
     /// until it was absorbed; the second framing lives on the ONE shell spec so
     /// there is nothing left to fork.
     pub cell_radius: Option<Box<dyn Fn(usize) -> f32 + 'a>>,
+    /// **Column depth**, making the shell VOLUMETRIC: each cell becomes a
+    /// CLOSED solid — top face at the cell's radius, bottom face `depth(i)`
+    /// beneath it, side walls between, their edges along the corner directions
+    /// (straight lines out from the centre of the world, so the top hex is
+    /// naturally a little wider than the bottom). `None` — the ordinary case —
+    /// is the cap-only shell every planet view draws. Per-cell like
+    /// `cell_radius`, because a layer's THICKNESS is per-column physics: this
+    /// is the hex-stack ledger's drawing form.
+    pub depth: Option<Box<dyn Fn(usize) -> f32 + 'a>>,
 }
 
 /// **A globe, whole.** The mesh stack, the offscreen target, the authored stage,
@@ -181,6 +190,7 @@ impl GlobeWorld {
                     inset,
                     color: Box::new(move |_| Some(color)),
                     cell_radius: None, // an authored shell is a sphere
+                    depth: None,       // …and a cap, not a column
                 }),
                 _ => None,
             })
@@ -202,17 +212,17 @@ impl GlobeWorld {
                         inset,
                         color,
                         cell_radius,
+                        depth,
                     } = s;
                     // The sphere and the per-column stack are the SAME builder:
                     // one answers `radius` for every cell, the other answers the
-                    // column's own height.
-                    build(
-                        dirs,
-                        outlines,
-                        move |i| cell_radius.as_ref().map_or(radius, |f| f(i)),
-                        inset,
-                        color,
-                    )
+                    // column's own height. A shell with DEPTH is the volumetric
+                    // framing — closed columns instead of caps.
+                    let top = move |i: usize| cell_radius.as_ref().map_or(radius, |f| f(i));
+                    match depth {
+                        Some(d) => crate::build_columns(dirs, outlines, top, d, inset, color),
+                        None => build(dirs, outlines, top, inset, color),
+                    }
                 })
                 .filter(|(_, i)| !i.is_empty())
                 .collect(),
@@ -258,6 +268,25 @@ impl GlobeWorld {
     /// `look` tuple handed to [`update`](GlobeWorld::update).
     pub fn set_controls(&mut self, controls: AbstractControls) {
         self.cam.set_controls(controls);
+    }
+
+    /// Aim the orbit at `target` — what an INSPECTOR world does: a column shown
+    /// at its true radius is orbited about its own region, not the far-away
+    /// centre of the planet it came from. A whole-planet world never calls this
+    /// (the default target is the origin the planet is centred on).
+    pub fn aim(&mut self, target: Vec3) {
+        self.cam.look_at(target);
+    }
+
+    /// Re-frame the camera around a region of `radius`, optionally opening with
+    /// the region filling `fill` of the viewport (same meaning as `new`'s
+    /// fill). Pose, target and the player's controls are kept — this is what a
+    /// view calls when the thing it frames changes size, not a reset.
+    pub fn set_frame(&mut self, radius: f32, fill: Option<f32>) {
+        self.cam.set_frame(radius);
+        if let Some(fill) = fill {
+            self.cam.refill(fill);
+        }
     }
 
     /// One frame of camera motion. `pointer` is the walker's sample for this globe's

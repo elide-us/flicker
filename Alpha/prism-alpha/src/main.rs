@@ -153,15 +153,6 @@ fn roster() -> Vec<SceneEntry> {
             "The live input-bus inspector — the controller diagram and analog latch beside a real resolver→router exhibit, with the golem stage acting out whatever the gameplay layer consumes.",
             "Clay 0.1 · Bench · bus inspector",
         )),
-        SceneEntry::new("jiggle", "Bucket o' Suds", "primary", flicker_jiggle::scene)
-            .with_realm(REALM_ADVENTURER)
-            .with_info(SceneInfo::new(
-                "Bucket o' Suds",
-                "Toy",
-                "Merge / 2D",
-                "Drag a squishy bubble along the rail and drop it in — jostle equal bubbles together to merge them up the ladder, chain combos, and cash out before the bucket overflows.",
-                "Clay 0.1 · Bench · 2D soft-body",
-            )),
     ]
 }
 
@@ -246,11 +237,10 @@ mod tests {
                 "solarbirth",
                 "clicktrainer",
                 "pocclusters",
-                "controllertester",
-                "jiggle"
+                "controllertester"
             ],
             "Solar Birth + Click Trainer + the Prism Test Room + the Controller Tester \
-             + Bucket o' Suds are the Adventurer benches"
+             are the Adventurer benches"
         );
         assert!(
             realm_ids(REALM_DM).is_empty(),

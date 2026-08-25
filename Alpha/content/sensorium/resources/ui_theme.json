@@ -1,7 +1,7 @@
 {
   "_comment": "THE PRISM THEME — the default UI theme COLORS and nothing else (five-line architecture, Aaron 2026-08-12): `theme.tokens` is the ONE palette every $token ref in every style source (ui_style.json, ui_stages.json, scene-file `styles`, vendored bench styles) resolves against. Weights/effects live in ui_style.json; a scene's own values live in its .scene.json; component structure is Rust drawing code. Adding ANY other node to this file is the violation the theme-only gate exists to catch.",
   "theme": {
-    "_comment": "The Prism palette — the ONE source of UI colour (imported from the 'Prism UI Design Language': cold carved stone lit by sapphire rune-light, aged bronze the only structural metal, the 7-colour Septisigil for stats). Every colour elsewhere in this file is a `$name` reference resolved against this map. Stone ramp = surfaces (dark→light); edge = borders; ink/dim/faint = text; bronze = structural metal; sap_* = the interactive/live accent (base/hover/pressed + border + glow); rune_glow = lit text/focus; hp/mana/stam = resource ramps; sig_* = the seven stat colours. Derived translucent tokens (sheen/scrim/wash/panel_bg/hairline/cell_hot) are alpha variants of the same palette.",
+    "_comment": "The Prism palette — the ONE source of UI colour (imported from the 'Prism UI Design Language': cold carved stone lit by sapphire rune-light, aged bronze the only structural metal, the 7-colour Septisigil for stats). Every colour elsewhere in this file is a `$name` reference resolved against this map. Stone ramp = surfaces (dark→light); edge = borders; ink/dim/faint = text; bronze = structural metal; sap_* = the interactive/live accent (base/hover/pressed + border + glow); rune_glow = lit text/focus; hp/mana/stam = resource ramps; sig_* = the seven stat colours. Derived translucent tokens (sheen/scrim/wash/panel_bg/hairline/cell_hot) are alpha variants of the same palette. stage_black = the one opaque black, the splash-letterbox plate behind baked-background logo images (TegLogo's plate is pure 0,0,0 — a stone backdrop would seam); status/state colours are NOT separate tokens: statuses speak Septisigil (sig_*) and the resource/danger ramps.",
     "tokens": {
       "stone0": [
         0.031,
@@ -626,6 +626,12 @@
         0.031,
         0.047,
         0.72
+      ],
+      "stage_black": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
       ]
     }
   }

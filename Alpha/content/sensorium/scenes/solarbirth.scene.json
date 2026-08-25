@@ -187,9 +187,9 @@
   "styles": {
     "tooltip": {
       "pad": 2,
-      "name_color": [0.9, 0.92, 0.97, 1.0],
+      "name_color": "$ink_sapphire",
       "name_size": 13,
-      "meta_color": [0.62, 0.66, 0.78, 1.0],
+      "meta_color": "$dim",
       "meta_size": 11,
       "cap": {
         "fill_top": "$stone_btn_hi",
@@ -257,59 +257,24 @@
     "solarbirth": {
       "_comment": "flicker-solarbirth HUD (SolarBirth.scene.json): the walker readout — title, flight-phase line, controls hint, and the fixed 8-planet roster legend. Roster row colours are the scene's HUD tints: each school colour with every channel floored at 0.35 (the legacy `p.color[i].max(0.35)` lightening), authored here because the walker's colour channel is dotted style paths. The ruled school colours themselves stay in flicker-orrery.",
       "readout": {
-        "fill_top": [
-          0.02,
-          0.03,
-          0.06,
-          0.62
-        ],
-        "fill_bot": [
-          0.01,
-          0.015,
-          0.03,
-          0.62
-        ],
+        "fill_top": "$scrim",
+        "fill_bot": "$scrim",
         "grad": 2,
         "radius": 4,
         "border_w": 1,
-        "border": [
-          0.3,
-          0.36,
-          0.52,
-          0.35
-        ]
+        "border": "$ghost_ring_lo"
       },
       "title": {
-        "color": [
-          0.9,
-          0.92,
-          0.97,
-          1.0
-        ]
+        "color": "$ink_sapphire"
       },
       "phase": {
-        "color": [
-          0.78,
-          0.74,
-          0.92,
-          1.0
-        ]
+        "color": "$rune_glow_hi"
       },
       "hint": {
-        "color": [
-          0.62,
-          0.66,
-          0.78,
-          1.0
-        ]
+        "color": "$dim"
       },
       "roster_header": {
-        "color": [
-          0.9,
-          0.92,
-          0.97,
-          1.0
-        ]
+        "color": "$ink_sapphire"
       },
       "roster": {
         "chaos": [

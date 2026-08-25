@@ -48,17 +48,62 @@
 
 use std::time::Duration;
 
-use flicker::render::{FrameGraph, Renderer, TextureHandle};
+use flicker::render::{FrameGraph, Renderer, TextureHandle, Vec3};
 use flicker::scene::{Scene, SceneInput, Transition};
 use flicker::script::{HudCommand, ScriptHost, UiNode, ValueMap};
 use flicker::ui::{render_hud, run_ui, SceneDef, UiInput, UiIntents, UiState, WalkerHandler};
-use flicker_globe::GlobeWorld;
+use flicker_globe::{column_frame, temp_color, tile_width, GlobeWorld, ShellSpec, RADIUS};
 use flicker_input_core::{AbstractControls, GamepadConfig, InputMap, InputState};
 use flicker_input_router::{InputHandler, Router};
 use flicker_shell::{PauseScene, Theme};
 
-use crate::map::{HexMap, DEFAULT_FREQ, MAX_FREQ, MIN_FREQ};
+use crate::crust::CrustField;
+use crate::map::{HexMap, TileId, DEFAULT_FREQ, MAX_FREQ, MIN_FREQ};
+use crate::seams::{SeamField, DEFAULT_CELLS, DEFAULT_SPOTS};
 use crate::ui;
+
+/// The hex-stack view's opening framing — the framed region fills this share of
+/// the viewport, which puts the stack's columns at about a tenth of the panel's
+/// width: small at the bottom, with the room the ~50-cell stack above will need.
+const HEX_FILL: f32 = 0.85;
+/// How many tile-widths across the hex view frames. Five tiles across ⇒ the
+/// column is ~1/10 of the viewport at the opening fill.
+const HEX_FRAME_TILES: f32 = 5.0;
+/// The centre-cell reticle's ink — the bold outline on the cell the camera
+/// faces. Instrument ink like the graticule's, not UI chrome.
+const RETICLE_INK: [f32; 4] = [1.0, 0.85, 0.30, 1.0];
+/// The reticle's two rings' radii, as radius scales: both above the tile shell
+/// (1.0) and below the graticule (1.022), doubled because two strokes read BOLD
+/// where one reads like a stray grid line.
+const RETICLE_RINGS: [f32; 2] = [1.008, 1.016];
+
+// ── the stack's provisional layer proportions (per cell width `w`) ──
+/// The molten cell's height (Aaron 2026-08-25: "significantly shorter,
+/// 1/6th height perhaps" — the as-tall-as-wide first cut read as too thick).
+const MOLTEN_H_FRAC: f32 = 1.0 / 6.0;
+/// The deep-crust bedrock cell's height — the THICK layer: as tall as the
+/// cell is wide (the height the molten cell used to have).
+const BEDROCK_H_FRAC: f32 = 1.0;
+/// A hair of daylight between stacked cells, so the shared face between two
+/// closed columns never z-fights and the stack reads as CELLS, not one slab.
+const STACK_GAP_FRAC: f32 = 0.04;
+
+// ── the crust map's inks (instrument data colours, like godmode's rock) ──
+/// Bedrock — the deep crust's lid: most of the crust map is this brown.
+const BEDROCK_COLOR: [f32; 3] = [0.36, 0.28, 0.19];
+/// Lava — a vent where the molten heat pushed through the bedrock: the dots
+/// on the crust map, and the whole bedrock cell of a vented column.
+const LAVA_COLOR: [f32; 3] = [0.88, 0.16, 0.05];
+
+/// Which data the world's tile shell is painted with — one latch per view so
+/// a selection change repaints the 92k-tile mesh exactly once, never per
+/// frame. `Authored` is the stage's own look (the MAP tab).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WorldView {
+    Authored,
+    Heat,
+    Crust,
+}
 
 /// The bench's Lua ORCHESTRATION script — `arrange()` decides which tab-specific
 /// components are shown from the two-way-bound page/tab selection. Embedded (the
@@ -103,6 +148,30 @@ pub struct PopulousBench {
     /// the rect the walker reserved, and nothing else. No colour, no radius, no
     /// mesh, no camera state, no device read.
     world: GlobeWorld,
+
+    // ── the molten heat field, and the two views of it ──
+    /// **The molten layer's first fact** — N convection cells and the per-tile
+    /// heat their boundaries induce. SHARED world state like the map itself
+    /// (Aaron's ruling): the seams tab paints it and the hex page reads a
+    /// column from it; neither owns a copy.
+    seams: SeamField,
+    /// **The deep crust's consequence of it** — the vents where that heat
+    /// pushes through the bedrock. Derived from `seams`, re-derived whenever
+    /// it changes; the crust tab's lava dots and the stack's lava columns.
+    crust: CrustField,
+    /// **One column of the world, up close** — the HEX page's view: the same
+    /// component as `world`, framing the centre cell's molten column instead of
+    /// the planet. A second VIEW, never a second world.
+    hex: GlobeWorld,
+    /// The CENTRE cell — the fixed reticle: on the seams tab, whichever tile
+    /// faces the camera; the hex page shows this cell's column.
+    focus_tile: TileId,
+    /// The reticle ring currently drawn over the globe (`None` off the seams
+    /// tab) — kept so the outline is rebuilt only when the faced cell changes.
+    highlight: Option<TileId>,
+    /// Which data the published tile shell is painted with — kept so a tab
+    /// change rebuilds the world's colours exactly once, not per frame.
+    shown_view: WorldView,
 }
 
 impl PopulousBench {
@@ -130,6 +199,13 @@ impl PopulousBench {
         let script = ScriptHost::new(POPULOUS_SCRIPT, "populous.lua")
             .expect("populous.lua loads (it ships with the crate)");
 
+        // The hex-stack view: the SAME component as the planet view, told to
+        // frame one column instead of one world. It shares the viewport pane's
+        // camera gate — only one of the two is ever on screen at a time.
+        let hex = GlobeWorld::new(ui::HEX_STAGE_SOURCE, &ui_styles, None).in_panel(ui::VIEW_PANE);
+        let seams = SeamField::new(&map, DEFAULT_CELLS, DEFAULT_SPOTS, fastrand::u64(..));
+        let crust = CrustField::derive(&map, &seams);
+
         let mut bench = Self {
             sel_page: 0,
             sel_tab: 0,
@@ -143,23 +219,205 @@ impl PopulousBench {
             textures: Vec::new(),
             map,
             world,
+            seams,
+            crust,
+            hex,
+            focus_tile: 0,
+            highlight: None,
+            shown_view: WorldView::Authored,
         };
+        // The opening reticle: whatever the default camera faces.
+        bench.focus_tile = bench
+            .world
+            .facing(&bench.map.grid().dirs)
+            .unwrap_or(0) as TileId;
         bench.publish_world();
+        bench.publish_hex();
         bench
+    }
+
+    /// Which data the world's tile shell wears for the CURRENT selection: the
+    /// SEAMS tab paints the molten heat field, the CRUST tab paints bedrock
+    /// with the lava vents, every other selection shows the authored look. A
+    /// tab owns its VIEW — the fields are shared state either way.
+    fn world_view(&self) -> WorldView {
+        let page = ui::page(self.sel_page);
+        if page.id != "world" {
+            return WorldView::Authored;
+        }
+        match page.tabs[self.sel_tab.min(page.tabs.len() - 1)].id {
+            "seams" => WorldView::Heat,
+            "crust" => WorldView::Crust,
+            _ => WorldView::Authored,
+        }
+    }
+
+    /// Whether the current tab carries the centre-cell reticle — the two
+    /// LAYER tabs, where which cell you are aimed at is the question.
+    fn reticle_view(&self) -> bool {
+        matches!(self.world_view(), WorldView::Heat | WorldView::Crust)
+    }
+
+    /// Whether the HEX page is the selected one — which of the two centre-pane
+    /// views (the planet or the column) owns the camera and the pointer.
+    fn hex_view(&self) -> bool {
+        ui::page(self.sel_page).id == "hex"
     }
 
     /// Hand the world this map's tiling. WHAT it looks like — the two static
     /// shells' radii, insets and colours — is authored in `stages.populous_globe`
-    /// and read by the world itself; the bench supplies only the geometry.
+    /// and read by the world itself; the bench supplies only the geometry. On a
+    /// LAYER tab the ONE data override: the topmost (tile) shell is painted with
+    /// that layer's field — the molten heat through the shared ramp, or the
+    /// crust's bedrock dotted with its lava vents — the same pattern God Mode
+    /// paints its fields with, radii and insets still the stage's.
     fn publish_world(&mut self) {
-        let Self { map, world, .. } = self;
-        let shells = world.authored_shells(&map.grid().dirs, map.outlines());
+        self.shown_view = self.world_view();
+        let Self {
+            map,
+            world,
+            seams,
+            crust,
+            shown_view,
+            ..
+        } = self;
+        let mut shells = world.authored_shells(&map.grid().dirs, map.outlines());
+        if let Some(top) = shells.last_mut() {
+            match shown_view {
+                WorldView::Authored => {}
+                WorldView::Heat => {
+                    top.color = Box::new(|i| Some(temp_color(seams.heat(i as TileId))));
+                }
+                WorldView::Crust => {
+                    top.color = Box::new(|i| {
+                        Some(if crust.is_vent(i as TileId) {
+                            LAVA_COLOR
+                        } else {
+                            BEDROCK_COLOR
+                        })
+                    });
+                }
+            }
+        }
         world.set_shells(shells);
+    }
+
+    /// The selection moved — repaint the world only if its VIEW actually
+    /// changed. A 92k-tile mesh is not rebuilt to stand still.
+    fn refresh_world_view(&mut self) {
+        if self.world_view() != self.shown_view {
+            self.publish_world();
+        }
+    }
+
+    /// **One column of the shared world, standing on the hex page — now two
+    /// cells of it.** The centre cell's outline rotated upright
+    /// ([`column_frame`]), each layer a CLOSED column (`ShellSpec::depth`) at
+    /// the planet's true radii so the side walls keep the true radial taper,
+    /// framed small and low: the bottom of the ~50-cell stack the view leaves
+    /// room for. Bottom to top: the thin MOLTEN cell (its own heat on the
+    /// shared ramp), then the thick BEDROCK cell of the deep crust — bedrock
+    /// brown, or a red LAVA column where this cell is one of the crust's
+    /// vents. Layer heights are the provisional fractions above until the
+    /// ledger authors real depths.
+    fn publish_hex(&mut self) {
+        let Self {
+            map,
+            hex,
+            seams,
+            crust,
+            focus_tile,
+            ..
+        } = self;
+        let tile = (*focus_tile).min(map.len().saturating_sub(1) as TileId);
+        let dir = map.direction(tile);
+        let ring = column_frame(dir, map.outline(tile));
+        let w = tile_width(dir, map.outline(tile), RADIUS);
+        let h_bed = w * BEDROCK_H_FRAC;
+        let h_molten = w * MOLTEN_H_FRAC;
+        let gap = w * STACK_GAP_FRAC;
+        let frame = HEX_FRAME_TILES * w;
+        hex.set_frame(frame, Some(HEX_FILL));
+        // The stack's base sits at the BOTTOM of the framed region: the orbit
+        // goes around the point one frame-radius above it — where the rest of
+        // the stack will stand.
+        let base = RADIUS - h_bed - gap - h_molten;
+        hex.aim(Vec3::Y * (base + frame));
+        let molten = temp_color(seams.heat(tile));
+        let bedrock = if crust.is_vent(tile) {
+            LAVA_COLOR
+        } else {
+            BEDROCK_COLOR
+        };
+        let dirs = [Vec3::Y];
+        let outlines = [ring];
+        hex.set_shells(vec![
+            ShellSpec {
+                dirs: &dirs,
+                outlines: &outlines,
+                radius: RADIUS - h_bed - gap,
+                inset: 0.0,
+                color: Box::new(move |_| Some(molten)),
+                cell_radius: None,
+                depth: Some(Box::new(move |_| h_molten)),
+            },
+            ShellSpec {
+                dirs: &dirs,
+                outlines: &outlines,
+                radius: RADIUS,
+                inset: 0.0,
+                color: Box::new(move |_| Some(bedrock)),
+                cell_radius: None,
+                depth: Some(Box::new(move |_| h_bed)),
+            },
+        ]);
+    }
+
+    /// The reticle over the globe: the centre cell's outline, twice, slightly
+    /// raised — a BOLD ring on the cell the camera faces. Drawn over the stage's
+    /// own reference frame (set_arrows re-lays the graticule under it).
+    fn apply_highlight(&mut self) {
+        let Self {
+            map,
+            world,
+            highlight,
+            ..
+        } = self;
+        let Some(tile) = *highlight else {
+            world.set_arrows(Vec::new());
+            return;
+        };
+        let ring = map.outline(tile);
+        let n = ring.len();
+        let mut segs = Vec::with_capacity(n * RETICLE_RINGS.len());
+        for scale in RETICLE_RINGS {
+            for k in 0..n {
+                segs.push((ring[k] * RADIUS * scale, ring[(k + 1) % n] * RADIUS * scale));
+            }
+        }
+        world.set_arrows(vec![(RETICLE_INK, segs)]);
     }
 
     /// The map in the viewport.
     pub fn map(&self) -> &HexMap {
         &self.map
+    }
+
+    /// The molten heat field — the seams tab's data, for tests and future
+    /// layers.
+    pub fn seams(&self) -> &SeamField {
+        &self.seams
+    }
+
+    /// The deep crust's vent set — the crust tab's data, derived from the
+    /// seam field.
+    pub fn crust(&self) -> &CrustField {
+        &self.crust
+    }
+
+    /// The centre cell — the reticle's tile, whose column the hex page shows.
+    pub fn focus_tile(&self) -> TileId {
+        self.focus_tile
     }
 
     /// The scene's static component tree — a clone for a gate or a test to walk. It is
@@ -207,6 +465,8 @@ impl PopulousBench {
         m.set(ui::TAB_BIND, self.sel_tab as f64);
         m.set(ui::TABS_SHOWN, !ui::page(self.sel_page).tabs.is_empty());
         m.set(ui::FREQ_BIND, f64::from(self.map.freq()));
+        m.set(ui::CELLS_BIND, f64::from(self.seams.cells()));
+        m.set(ui::SPOTS_BIND, f64::from(self.seams.spots()));
         m.set(ui::HEXES_BIND, group_thousands(self.map.len() as u64));
         m.set(
             ui::DIAMETER_BIND,
@@ -217,14 +477,25 @@ impl PopulousBench {
     }
 
     /// Rebuild the ONE shared world at a new size, clamped by the offered range.
-    /// A no-op at the current size.
+    /// A no-op at the current size. The heat field re-derives over the new
+    /// tiling from the SAME roll — the world's seams do not move when its map
+    /// does — and both views republish.
     fn resize(&mut self, freq: u32) {
         let freq = freq.clamp(MIN_FREQ, MAX_FREQ);
         if freq == self.map.freq() {
             return;
         }
         self.map = HexMap::new(freq);
+        self.seams.rebuild(&self.map);
+        self.crust = CrustField::derive(&self.map, &self.seams);
+        // The centre cell is SHARED state — keep it a tile the new map has;
+        // the old reticle outlined tiles that no longer exist, so it comes
+        // down and the next frame on the seams tab re-faces it.
+        self.focus_tile = self.focus_tile.min(self.map.len().saturating_sub(1) as TileId);
+        self.highlight = None;
+        self.apply_highlight();
         self.publish_world();
+        self.publish_hex();
         tracing::info!(
             "populous: {} tiles at freq {}",
             self.map.len(),
@@ -255,6 +526,7 @@ impl PopulousBench {
             if want != self.sel_page {
                 self.sel_page = want;
                 self.sel_tab = 0; // a new page's tabs are its own
+                self.refresh_world_view();
             }
         }
         if let Some(v) = results.number(ui::TAB_BIND) {
@@ -262,6 +534,7 @@ impl PopulousBench {
             let want = (v.round().max(0.0) as usize).min(tabs.saturating_sub(1));
             if want != self.sel_tab {
                 self.sel_tab = want;
+                self.refresh_world_view();
             }
         }
         // The dial's ONE write: the number it committed on release (or on a pad
@@ -270,11 +543,42 @@ impl PopulousBench {
         if let Some(v) = results.number(ui::FREQ_BIND) {
             self.resize(v.round() as u32);
         }
-        // The seams button's action resolves to an ARM — a loud one. The
-        // feature is not built; an authored name that failed to NOTHING is the
-        // difference between authorable and not (rule 4BB12A75).
+        // The cells dial: how many convection cells the heat field is rolled
+        // with. `set_cells` is a no-op at the current count, so the resting
+        // echo re-rolls nothing.
+        if let Some(v) = results.number(ui::CELLS_BIND) {
+            let before = self.seams.cells();
+            self.seams.set_cells(&self.map, v.round().max(0.0) as u32);
+            if self.seams.cells() != before {
+                self.crust = CrustField::derive(&self.map, &self.seams);
+                if self.shown_view != WorldView::Authored {
+                    self.publish_world(); // repaint only a view that shows a field
+                }
+                self.publish_hex();
+            }
+        }
+        // The spots dial: how many mantle plumes burn through. Same contract
+        // as the cells dial, on the spots' own stream.
+        if let Some(v) = results.number(ui::SPOTS_BIND) {
+            let before = self.seams.spots();
+            self.seams.set_spots(&self.map, v.round().max(0.0) as u32);
+            if self.seams.spots() != before {
+                self.crust = CrustField::derive(&self.map, &self.seams);
+                if self.shown_view != WorldView::Authored {
+                    self.publish_world(); // repaint only a view that shows a field
+                }
+                self.publish_hex();
+            }
+        }
+        // The randomize button: a new roll of the same count — the seams move,
+        // both views repaint.
         if results.is_on(ui::SEAMS_ACTION) {
-            tracing::warn!("seams randomize is not built yet");
+            self.seams.randomize(&self.map);
+            self.crust = CrustField::derive(&self.map, &self.seams);
+            if self.shown_view != WorldView::Authored {
+                self.publish_world(); // repaint only a view that shows a field
+            }
+            self.publish_hex();
         }
     }
 }
@@ -308,6 +612,7 @@ impl Scene for PopulousBench {
 
     fn exit(&mut self, renderer: &mut Renderer) {
         self.world.free(renderer);
+        self.hex.free(renderer);
     }
 
     fn update(
@@ -323,6 +628,7 @@ impl Scene for PopulousBench {
             // used to be discarded here while the globe turned at a private rate. The pad
             // deadzone rides the pump's `signals.axis`, so the gamepad is no longer ours.
             self.world.set_controls(look);
+            self.hex.set_controls(look);
         }
 
         let screen = renderer.size();
@@ -360,12 +666,16 @@ impl Scene for PopulousBench {
         );
         let over_hud = frame.results.is_on("hud_hit");
         // The walker RESERVES the viewport's rect and never fills it — hand it to the
-        // world here, which declares its surface into that rect in `render`.
+        // world here, which declares its surface into that rect in `render`. The two
+        // centre-pane views seat from their own gated surfaces: the page that is dark
+        // reserved nothing, so its world seats `None` and costs nothing.
         self.world.seat(frame.surface(ui::VIEW_SLOT));
+        self.hex.seat(frame.surface(ui::HEX_SLOT));
         // The pointer SAMPLE for the globe's surface — the walker's barrier (A8C9F02B
         // §4b): present while the cursor is over the planet with no UI over it, or while
         // a press that began there is still held. The scene reads no device for it.
         let pointer = frame.surface_pointer(ui::VIEW_SLOT).cloned();
+        let hex_pointer = frame.surface_pointer(ui::HEX_SLOT).cloned();
         self.hud_commands = frame.commands;
 
         // ── The input seam (input-P3, 0569DA9B): the PUMP resolved this frame's
@@ -385,10 +695,12 @@ impl Scene for PopulousBench {
             .with_nav(&self.tree, &model)
             .with_intents(&self.ui_intents);
         {
-            // The world sits BELOW the walker: navigation is decided first, and
-            // what is left of the look/zoom signals belongs to the globe while
-            // its panel holds the cursor.
-            let mut chain: [&mut dyn InputHandler; 2] = [&mut walker, &mut self.world];
+            // The worlds sit BELOW the walker: navigation is decided first, and
+            // what is left of the look/zoom signals belongs to whichever view is
+            // on screen while its panel holds the cursor (the dark page's view
+            // never owns the camera, so it passes).
+            let mut chain: [&mut dyn InputHandler; 3] =
+                [&mut walker, &mut self.world, &mut self.hex];
             Router::dispatch(signals.events, &mut chain, signals.route);
         }
 
@@ -412,9 +724,37 @@ impl Scene for PopulousBench {
         // Confirm locks into it, Cancel backs out. The LOCKED pane's `tab_group` IS the
         // gate the globe matches against (`in_panel`); the walker owns it, the scene only
         // reads it, never a second focus system (F2). Entering a DIFFERENT pane yields that
-        // pane's group, so the globe correctly stays quiet.
+        // pane's group, so the globe correctly stays quiet. Both centre-pane views name
+        // the same pane — the SELECTED PAGE decides which of the two the entered pane
+        // hands the camera to, and the dark one holds still.
         let look_gate = self.ui_state.entered_group();
-        self.world.update(dtf, pointer.as_ref(), look, look_gate);
+        let still = ((0.0, 0.0, 0.0), None::<&str>);
+        let ((w_look, w_gate), (h_look, h_gate)) = if self.hex_view() {
+            (still, (look, look_gate))
+        } else {
+            ((look, look_gate), still)
+        };
+        self.world
+            .update(dtf, pointer.as_ref(), w_look, w_gate);
+        self.hex.update(dtf, hex_pointer.as_ref(), h_look, h_gate);
+
+        // The fixed reticle: on the LAYER tabs (seams + crust), the cell
+        // facing the camera is the CENTRE cell — outlined bold on the globe,
+        // and the hex page's column follows it. Off those tabs the ring comes
+        // down.
+        if self.reticle_view() {
+            if let Some(f) = self.world.facing(&self.map.grid().dirs) {
+                let f = f as TileId;
+                if self.highlight != Some(f) {
+                    self.highlight = Some(f);
+                    self.focus_tile = f;
+                    self.apply_highlight();
+                    self.publish_hex();
+                }
+            }
+        } else if self.highlight.take().is_some() {
+            self.apply_highlight();
+        }
 
         // Menu opens the shell's pause overlay — quit, settings, back to the
         // menu. The screen DECLARED `on_menu`; the arm lives here rather than in
@@ -445,12 +785,14 @@ impl Scene for PopulousBench {
         // `textures` shared) so both survive into the graph until the manager's `execute`.
         let Self {
             world,
+            hex,
             hud_commands,
             textures,
             ..
         } = self;
         let layer = fg.base_layer();
         world.render(renderer, fg, layer);
+        hex.render(renderer, fg, layer);
         if let Some(&white) = textures.first() {
             fg.overlay(move |r| render_hud(r, hud_commands, white, textures));
         }
@@ -566,14 +908,22 @@ mod tests {
         let count = |kind: &str| all.iter().filter(|n| n.component == kind).count();
         assert_eq!(count("paged_menu"), 1, "the PTT is ONE Component");
         assert_eq!(count("tabs"), 1, "the PTT's page rail");
-        assert_eq!(count("pill_toggle"), 1, "the PTT's tab rail");
+        assert_eq!(
+            count("pill_toggle"),
+            ui::PAGES.len(),
+            "one tab rail per page, gated apart (the catalog's per-page pattern)"
+        );
         assert_eq!(count("panel"), 3, "two UI Panels and one RTT Panel");
         assert_eq!(
             count("surface"),
-            2,
-            "the root surface + the hex world's nested surface"
+            3,
+            "the root surface + the globe's viewport + the hex stack's viewport"
         );
-        assert_eq!(count("slider"), 1, "the size dial");
+        assert_eq!(
+            count("slider"),
+            3,
+            "the size, cells and spots dials"
+        );
         // The rail hints (lt/rt/lb/rb) and the rule are now drawn BY the `paged_menu`
         // Component, not authored tree nodes — so NOTHING on the surface wears a glyph.
         // The hint→step behaviour is gated in flicker-widgets (`draw_paged_menu` /
@@ -770,7 +1120,12 @@ mod tests {
         assert_eq!(
             rail("paged_tabs"),
             ui::PAGES[0].tabs.len(),
-            "one entry per tab"
+            "one entry per world tab"
+        );
+        assert_eq!(
+            rail("paged_tabs_p1"),
+            ui::PAGES[1].tabs.len(),
+            "one entry per hex tab, on that page's own gated rail"
         );
     }
 
@@ -818,22 +1173,24 @@ mod tests {
         );
     }
 
-    /// **Both tab slices live in ONE static tree, over the SAME panes, gated apart.**
-    /// A tab no longer rebuilds structure — `build_tree` is identical whatever the
-    /// selection; the MAP slice (the size dial + stats) and the SEAMS slice (the
-    /// randomize button + the pane's `$ui_pane_empty` placeholder) coexist, each gated
-    /// on its `shown_p0_t*` key over the SAME viewport + three panes. WHICH slice shows
-    /// is `arrange()`'s job (`arrange_lights_the_selected_tabs_slice`), never the
-    /// tree's — the point of the shared-panes arrangement.
+    /// **Every page and tab's slices live in ONE static tree, over the SAME panes,
+    /// gated apart.** A selection no longer rebuilds structure — `build_tree` is
+    /// identical whatever the selection; the MAP slice (the size dial + stats), the
+    /// SEAMS slice (the cells dial + randomize button), and the HEX page (its column
+    /// viewport + placeholder panes) coexist, each gated on its `shown_*` key over
+    /// the SAME three panes. WHICH slice shows is `arrange()`'s job
+    /// (`arrange_lights_the_selected_tabs_slice`), never the tree's — the point of
+    /// the shared-panes arrangement.
     #[test]
-    fn both_tab_slices_share_the_panes_and_are_gated_apart() {
+    fn every_slice_shares_the_panes_and_is_gated_apart() {
         let bench = test_bench();
         let tree = bench.build_tree();
         let all = flatten(&tree);
         assert!(flicker::ui::unknown_kinds(&tree).is_empty());
         assert!(flicker::ui::raw_display_literals(&tree).is_empty());
 
-        // The one viewport, wired to the one stage — shared by both tabs, ungated.
+        // The WORLD page's viewport, wired to its stage — shared by that page's
+        // two tabs, gated at PAGE level (the hex page shows its own view there).
         let view = all
             .iter()
             .find(|n| n.id == ui::VIEW_SLOT)
@@ -844,13 +1201,24 @@ mod tests {
             Some(&Value::Text(ui::STAGE_SOURCE.to_string())),
             "the one authored stage lights it"
         );
+        // The HEX page's viewport beside it, wired to the hex stage.
+        let hex = all
+            .iter()
+            .find(|n| n.id == ui::HEX_SLOT)
+            .expect("the hex viewport is placed");
+        assert_eq!(hex.component, "surface", "the hex view is a surface too");
+        assert_eq!(
+            hex.props.get("source"),
+            Some(&Value::Text(ui::HEX_STAGE_SOURCE.to_string())),
+            "the hex stage lights it"
+        );
 
         // The one three-pane arrangement, all the `panel` component, left/view/right.
         let panes: Vec<&&UiNode> = all.iter().filter(|n| n.component == "panel").collect();
         assert_eq!(
             panes.len(),
             3,
-            "one three-pane arrangement, shared by both tabs"
+            "one three-pane arrangement, shared by every page and tab"
         );
         for (i, id) in [ui::LEFT_PANE, ui::VIEW_PANE, ui::RIGHT_PANE]
             .iter()
@@ -859,12 +1227,18 @@ mod tests {
             assert_eq!(&panes[i].id, id, "the panes keep left/view/right order");
         }
 
-        // BOTH slices are DECLARED in the one tree — the tab lights one, never adds or
-        // removes structure. The map slice's dial and the seams slice's button coexist.
+        // ALL slices are DECLARED in the one tree — the selection lights one, never
+        // adds or removes structure. The map slice's dial, the seams slice's dial +
+        // button, and the hex page's placeholders coexist.
         assert!(
             all.iter()
                 .any(|n| n.component == "slider" && n.bind.as_deref() == Some(ui::FREQ_BIND)),
             "the map slice's size dial is declared"
+        );
+        assert!(
+            all.iter()
+                .any(|n| n.component == "slider" && n.bind.as_deref() == Some(ui::CELLS_BIND)),
+            "the seams slice's cells dial is declared"
         );
         assert!(
             all.iter()
@@ -878,19 +1252,26 @@ mod tests {
             )
             .count();
         assert_eq!(
-            placeholders, 1,
-            "the seams pane declares one empty placeholder"
+            placeholders, 5,
+            "the seams stats pane, both crust panes and the hex page's two side panes rest on placeholders"
         );
 
-        // Both slices are gated, on DIFFERENT keys, so a selection lights exactly one.
+        // The slices are gated on DIFFERENT keys, so a selection lights exactly one
+        // of each pane's interiors — and the two centre views split at page level.
         let gates: std::collections::HashSet<&str> = all
             .iter()
             .filter_map(|n| n.visible_bind.as_deref())
             .collect();
-        assert!(
-            gates.contains("shown_p0_t0") && gates.contains("shown_p0_t1"),
-            "the map and seams slices are gated apart"
-        );
+        for key in [
+            "shown_page0",
+            "shown_page1",
+            "shown_p0_t0",
+            "shown_p0_t1",
+            "shown_p0_t2",
+            "shown_p1_t0",
+        ] {
+            assert!(gates.contains(key), "`{key}` gates its slice");
+        }
     }
 
     /// **The planet size is ONE world, shared by every tab** (Aaron's ruling).
@@ -968,22 +1349,40 @@ mod tests {
         let mut wild = ValueMap::default();
         wild.set(ui::TAB_BIND, 9.0);
         bench.apply_results(&wild);
+        let last = ui::PAGES[0].tabs.len() - 1;
         assert_eq!(
             bench.selection(),
-            (0, 1),
+            (0, last),
             "clamped into the roster and applied"
         );
         // The resting echo (both binds, current values) changes nothing.
         let mut echo = ValueMap::default();
         echo.set(ui::PAGE_BIND, 0.0);
-        echo.set(ui::TAB_BIND, 1.0);
+        echo.set(ui::TAB_BIND, last as f64);
         bench.apply_results(&echo);
-        assert_eq!(bench.selection(), (0, 1), "echoes are inert");
+        assert_eq!(bench.selection(), (0, last), "echoes are inert");
         // A clamp-equal page write is NOT a page change — the tab survives.
         let mut pw = ValueMap::default();
-        pw.set(ui::PAGE_BIND, 3.0);
+        pw.set(ui::PAGE_BIND, 0.0);
         bench.apply_results(&pw);
-        assert_eq!(bench.selection(), (0, 1), "no page change, no tab reset");
+        assert_eq!(bench.selection(), (0, last), "no page change, no tab reset");
+        // A wild page write clamps into the roster and LANDS — and a real page
+        // change resets the tab, because a new page's tabs are its own.
+        let mut wild_page = ValueMap::default();
+        wild_page.set(ui::PAGE_BIND, 9.0);
+        bench.apply_results(&wild_page);
+        assert_eq!(
+            bench.selection(),
+            (ui::PAGES.len() - 1, 0),
+            "clamped to the last page, tab reset"
+        );
+        let mut home = ValueMap::default();
+        home.set(ui::PAGE_BIND, 0.0);
+        bench.apply_results(&home);
+        assert_eq!(bench.selection(), (0, 0), "back on the world page");
+        let mut seams_tab = ValueMap::default();
+        seams_tab.set(ui::TAB_BIND, 1.0);
+        bench.apply_results(&seams_tab);
         // A real click on the first pill jumps back.
         let mut back = ValueMap::default();
         back.set(ui::TAB_BIND, 0.0);
@@ -1019,6 +1418,10 @@ mod tests {
             motion: Default::default(),
         };
 
+        // The rail is PAGE-gated now (one rail per page): light the world
+        // page's, as arrange() does on page 0.
+        let mut model = model;
+        model.set("shown_page0", true);
         // Resolve the rail's rect, then click the centre of its SECOND pill.
         let idle = run_ui(
             &tree,
@@ -1028,8 +1431,9 @@ mod tests {
             &mut state,
         );
         let rail = idle.rect("paged_tabs").expect("the tab rail resolves");
+        // Three pills now — the SEAMS pill is the middle third.
         let click = Vec2::new(
-            rail.pos.x + rail.size.x * 0.75,
+            rail.pos.x + rail.size.x * 0.5,
             rail.pos.y + rail.size.y * 0.5,
         );
         let f = run_ui(&tree, &model, &styles, &snap(click, true, true), &mut state);
@@ -1135,10 +1539,10 @@ mod tests {
         }
     }
 
-    /// **The seams button's authored name reaches an ARM.** The feature is not
-    /// built; what IS built is that the name resolves — the button fires it, the
-    /// dispatcher answers it with a loud warn, and the size the world is at does
-    /// not move underneath it. An authored name that failed to NOTHING is the
+    /// **The seams button's authored name reaches its ARM: a re-roll.** The
+    /// button fires the name, the dispatcher answers it by re-rolling the
+    /// molten heat field — the seams MOVE — while the world's size and the
+    /// selection stand still. An authored name that failed to NOTHING is the
     /// difference between authorable and not (rule 4BB12A75).
     #[test]
     fn the_seams_button_fires_a_name_the_dispatcher_answers() {
@@ -1163,22 +1567,143 @@ mod tests {
             "it lives in the left pane's focus group"
         );
 
-        // …and the dispatcher has an arm for it: it consumes the name without
-        // disturbing the world (there is nothing behind it yet).
-        let before = bench.map().freq();
+        // …and the dispatcher's arm re-rolls the field: a new seed, moved
+        // seams — and NOTHING else moves underneath it.
+        let before_freq = bench.map().freq();
+        let before_seed = bench.seams().seed();
+        let before_heat = bench.seams().heats().to_vec();
+        let before_vents = bench.crust().vents().to_vec();
         let mut fired = ValueMap::default();
         fired.set(ui::SEAMS_ACTION, true);
         bench.apply_results(&fired);
+        assert_ne!(bench.seams().seed(), before_seed, "a new roll");
+        assert_ne!(
+            bench.seams().heats(),
+            &before_heat[..],
+            "and the seams moved"
+        );
+        assert_ne!(
+            bench.crust().vents(),
+            &before_vents[..],
+            "and the crust's vents moved with them"
+        );
+        assert_eq!(bench.map().freq(), before_freq, "the world's size held");
+        assert_eq!(bench.selection(), (0, 1), "…and it is not a navigation");
+    }
+
+    /// **The cells dial is the field's second control, and both are SHARED
+    /// state.** Its committed number re-rolls the field at the new count (the
+    /// same seed — dialing up grows the same world), the resting echo re-rolls
+    /// nothing, and a wild number clamps into the offered 2..12 range. The
+    /// field itself is one object every view reads: the hex page's column
+    /// colour comes from the same heats the seams tab paints.
+    #[test]
+    fn the_cells_dial_rerolls_the_shared_field_and_echoes_are_inert() {
+        let mut bench = test_bench();
+        let seed = bench.seams().seed();
         assert_eq!(
-            bench.map().freq(),
-            before,
-            "not built yet — and it changes nothing"
+            bench.seams().cells(),
+            crate::seams::DEFAULT_CELLS,
+            "opens at the default count"
+        );
+
+        let write = |n: f64| {
+            let mut r = ValueMap::default();
+            r.set(ui::CELLS_BIND, n);
+            r
+        };
+        bench.apply_results(&write(9.0));
+        assert_eq!(bench.seams().cells(), 9, "the committed number lands");
+        assert_eq!(bench.seams().seed(), seed, "same roll, more cells");
+        let heats = bench.seams().heats().to_vec();
+        bench.apply_results(&write(9.0));
+        assert_eq!(
+            bench.seams().heats(),
+            &heats[..],
+            "the resting echo re-rolls nothing"
+        );
+        bench.apply_results(&write(99.0));
+        assert_eq!(
+            bench.seams().cells(),
+            crate::seams::MAX_CELLS,
+            "a wild number clamps into the dial's range"
+        );
+        // …and the dial's own declaration carries the same range.
+        let tree = bench.build_tree();
+        let dial = flatten(&tree)
+            .into_iter()
+            .find(|n| n.bind.as_deref() == Some(ui::CELLS_BIND))
+            .expect("the cells dial is declared");
+        assert_eq!(
+            dial.props.get("min"),
+            Some(&Value::Number(f64::from(crate::seams::MIN_CELLS)))
         );
         assert_eq!(
-            bench.selection(),
-            (0, 1),
-            "…and it is not a navigation either"
+            dial.props.get("max"),
+            Some(&Value::Number(f64::from(crate::seams::MAX_CELLS)))
         );
+        assert_eq!(dial.tab_group, ui::LEFT_PANE, "walker-focusable");
+    }
+
+    /// **The spots dial is the field's third control, on the same contract.**
+    /// Its committed number re-rolls the plumes at the new count (same roll —
+    /// the shared prefix survives), the resting echo re-rolls nothing, a wild
+    /// number clamps into the offered range, the crust's vents follow the
+    /// change — and the AUTHORED min/max are pinned to the code's own
+    /// constants, so the two sides of the range cannot drift apart unnoticed
+    /// (the cells dial carries the identical pin).
+    #[test]
+    fn the_spots_dial_rerolls_the_plumes_and_its_range_is_pinned() {
+        let mut bench = test_bench();
+        let seed = bench.seams().seed();
+        assert_eq!(
+            bench.seams().spots(),
+            crate::seams::DEFAULT_SPOTS,
+            "opens at the default count"
+        );
+
+        let write = |n: f64| {
+            let mut r = ValueMap::default();
+            r.set(ui::SPOTS_BIND, n);
+            r
+        };
+        let before_vents = bench.crust().vents().to_vec();
+        bench.apply_results(&write(9.0));
+        assert_eq!(bench.seams().spots(), 9, "the committed number lands");
+        assert_eq!(bench.seams().seed(), seed, "same roll, more plumes");
+        assert_ne!(
+            bench.crust().vents(),
+            &before_vents[..],
+            "the crust's vents follow the plumes"
+        );
+        let heats = bench.seams().heats().to_vec();
+        bench.apply_results(&write(9.0));
+        assert_eq!(
+            bench.seams().heats(),
+            &heats[..],
+            "the resting echo re-rolls nothing"
+        );
+        bench.apply_results(&write(99.0));
+        assert_eq!(
+            bench.seams().spots(),
+            crate::seams::MAX_SPOTS,
+            "a wild number clamps into the dial's range"
+        );
+        // …and the dial's own declaration carries the same range.
+        let tree = bench.build_tree();
+        let dial = flatten(&tree)
+            .into_iter()
+            .find(|n| n.bind.as_deref() == Some(ui::SPOTS_BIND))
+            .expect("the spots dial is declared");
+        assert_eq!(
+            dial.props.get("min"),
+            Some(&Value::Number(f64::from(crate::seams::MIN_SPOTS)))
+        );
+        assert_eq!(
+            dial.props.get("max"),
+            Some(&Value::Number(f64::from(crate::seams::MAX_SPOTS)))
+        );
+        assert_eq!(dial.tab_group, ui::LEFT_PANE, "walker-focusable");
     }
 
     /// **The PTT rails fire results this screen dispatches.** The glyph hints are now
@@ -1238,9 +1763,11 @@ mod tests {
 
         let bench = test_bench();
         let tree = bench.build_tree();
-        // Light the MAP slice (what arrange() publishes on tab 0) so the gated size
-        // dial is placed — it is dark until the selection lights `shown_p0_t0`.
+        // Light the WORLD page + MAP slice (what arrange() publishes on page 0,
+        // tab 0) so the gated viewport and size dial are placed — both are dark
+        // until the selection lights their keys.
         let mut model = ValueMap::default();
+        model.set("shown_page0", true);
         model.set("shown_p0_t0", true);
         let styles = load_shared_styles(None);
         let snap = UiInput {
@@ -1373,6 +1900,33 @@ mod tests {
         assert!(
             (v - 48.0).abs() < 1.0,
             "a press at the track's bottom lands the minimum, got {v}"
+        );
+    }
+
+    /// **A resize re-derives the heat field over the new tiling from the SAME
+    /// roll.** The seam field is shared world state beside the map: the size
+    /// dial rebuilds the tiling, the field follows it tile for tile, and the
+    /// world's seams do not move — same seed, same cells, new derivation. The
+    /// centre cell survives as a CLAMPED read, so the hex view cannot index a
+    /// tile the smaller map no longer has.
+    #[test]
+    fn a_resize_rederives_the_field_from_the_same_roll() {
+        let mut bench = test_bench();
+        let seed = bench.seams().seed();
+        let cells = bench.seams().cells();
+        let mut shrink = ValueMap::default();
+        shrink.set(ui::FREQ_BIND, f64::from(MIN_FREQ));
+        bench.apply_results(&shrink);
+        assert_eq!(
+            bench.seams().heats().len(),
+            bench.map().len(),
+            "one heat per tile of the NEW tiling"
+        );
+        assert_eq!(bench.seams().seed(), seed, "the roll survives the resize");
+        assert_eq!(bench.seams().cells(), cells, "and so does the count");
+        assert!(
+            (bench.focus_tile() as usize) < bench.map().len(),
+            "the centre cell reads inside the new map"
         );
     }
 
@@ -1624,6 +2178,25 @@ mod tests {
         assert!(
             !seams.is_on("shown_p0_t0"),
             "the seams tab darkens the map slice"
+        );
+        // …and the PAGE keys light the world page's rail + viewport, not the hex's.
+        assert!(seams.is_on("shown_page0") && !seams.is_on("shown_page1"));
+
+        // CRUST tab (page 0, tab 2): its slice alone.
+        let crust = arrange_at(0.0, 2.0);
+        assert!(crust.is_on("shown_p0_t2"), "the crust tab lights its slice");
+        assert!(
+            !crust.is_on("shown_p0_t0") && !crust.is_on("shown_p0_t1"),
+            "the other world slices are dark"
+        );
+
+        // HEX page (page 1, tab 0): its page + slice light, the world page darkens.
+        let hex = arrange_at(1.0, 0.0);
+        assert!(hex.is_on("shown_page1"), "the hex page lights its view");
+        assert!(hex.is_on("shown_p1_t0"), "and its molten tab's slice");
+        assert!(
+            !hex.is_on("shown_page0") && !hex.is_on("shown_p0_t0") && !hex.is_on("shown_p0_t1"),
+            "the world page and both its slices are dark"
         );
     }
 

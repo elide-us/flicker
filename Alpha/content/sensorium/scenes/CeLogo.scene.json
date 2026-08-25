@@ -13,12 +13,7 @@
   },
   "styles": {
     "logo": {
-      "backdrop": [
-        0.0,
-        0.0,
-        0.0,
-        1.0
-      ]
+      "backdrop": "$stage_black"
     }
   },
   "tree": {

@@ -23,7 +23,6 @@ flicker-shell.workspace = true
 # The lib-ified scenes this launcher hosts (one `SceneEntry` each). Pack Editor is a
 # raw `impl App`, not a `Scene` yet, so it is NOT here until it is converted.
 flicker-clicktrainer = { version = "0.1.0", path = "../crates/scenes/flicker-clicktrainer" }
-flicker-jiggle = { version = "0.1.0", path = "../crates/scenes/flicker-jiggle" }
 flicker-componentcatalog = { version = "0.1.0", path = "../crates/scenes/flicker-componentcatalog" }
 flicker-controllertester = { version = "0.1.0", path = "../crates/scenes/flicker-controllertester" }
 flicker-solarbirth = { version = "0.1.0", path = "../crates/scenes/flicker-solarbirth" }

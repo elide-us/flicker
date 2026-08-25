@@ -97,7 +97,7 @@ impl PropSet {
 
     /// Pick a variant's prop name by weight. `r` is a uniform sample in `[0, 1)` — `fastrand::f32()`
     /// at runtime, or a deterministic per-cell hash (`flicker-render`'s `hash01`) for reproducible
-    /// placement. Walks the weighted variants the way `flicker-jiggle`'s `rand_tier` does; never
+    /// placement. Walks the weighted variants with a cumulative-weight scan; never
     /// panics for a set that passed [`validate`](Self::validate) (non-empty, positive weights).
     pub fn pick(&self, r: f32) -> &str {
         let mut acc = self.total_weight() * r.clamp(0.0, 1.0);

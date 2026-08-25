@@ -1505,24 +1505,9 @@
       "title": "$ink_bright",
       "rule": "$seam",
       "page_active": {
-        "fill_top": [
-          0,
-          0,
-          0,
-          0
-        ],
-        "fill_bot": [
-          0,
-          0,
-          0,
-          0
-        ],
-        "border": [
-          0,
-          0,
-          0,
-          0
-        ],
+        "fill_top": "$stage_void",
+        "fill_bot": "$stage_void",
+        "border": "$stage_void",
         "border_w": 0,
         "radius": 0,
         "label": "$ink_bright",
@@ -1531,24 +1516,9 @@
         "underline_w": 2
       },
       "page_idle": {
-        "fill_top": [
-          0,
-          0,
-          0,
-          0
-        ],
-        "fill_bot": [
-          0,
-          0,
-          0,
-          0
-        ],
-        "border": [
-          0,
-          0,
-          0,
-          0
-        ],
+        "fill_top": "$stage_void",
+        "fill_bot": "$stage_void",
+        "border": "$stage_void",
         "border_w": 0,
         "radius": 0,
         "label": "$dim",
@@ -1570,24 +1540,9 @@
         "label": "$ink_sapphire"
       },
       "tab_idle": {
-        "fill_top": [
-          0,
-          0,
-          0,
-          0
-        ],
-        "fill_bot": [
-          0,
-          0,
-          0,
-          0
-        ],
-        "border": [
-          0,
-          0,
-          0,
-          0
-        ],
+        "fill_top": "$stage_void",
+        "fill_bot": "$stage_void",
+        "border": "$stage_void",
         "border_w": 0,
         "radius": 12,
         "label": "$dim"
@@ -1605,18 +1560,8 @@
       "row_seam": "$seam",
       "row_focus": {
         "fill_top": "$accent_wash",
-        "fill_bot": [
-          0,
-          0,
-          0,
-          0
-        ],
-        "border": [
-          0,
-          0,
-          0,
-          0
-        ],
+        "fill_bot": "$stage_void",
+        "border": "$stage_void",
         "border_w": 0,
         "radius": 0
       },
@@ -1928,12 +1873,7 @@
       }
     },
     "logo": {
-      "backdrop": [
-        0.0,
-        0.0,
-        0.0,
-        1.0
-      ]
+      "backdrop": "$stage_black"
     }
   }
 }

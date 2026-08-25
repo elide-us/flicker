@@ -5,7 +5,6 @@ and its lifetime bar) drawn on the screen surface, with a declarative vector HUD
 over it, and the pointer routed correctly between the two. It is the smallest complete
 example of a *scene crate* — a library that supplies one `Scene` behaviour, paired with an
 authored scene file and a Lua pair script, launched by name from the `prism-alpha` roster.
-`flicker-jiggle` was built by copying its shape.
 
 > Design of record — why it is shaped this way, decisions, history — lives in the project's
 > MCP memory, not here. This file documents how to use the crate.
