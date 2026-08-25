@@ -82,6 +82,11 @@
                         "component": "option",
                         "value": 2,
                         "label": "$pop_tab_crust"
+                      },
+                      {
+                        "component": "option",
+                        "value": 3,
+                        "label": "$pop_tab_plates"
                       }
                     ]
                   },
@@ -215,6 +220,40 @@
                                   {
                                     "component": "text",
                                     "text": "$ui_pane_empty"
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "cell",
+                                "visible_bind": "shown_p0_t3",
+                                "grow": 1.0,
+                                "gap": 10,
+                                "children": [
+                                  {
+                                    "component": "slider",
+                                    "id": "pop_plates",
+                                    "style": "slider",
+                                    "bind": "pop_plates",
+                                    "label": "$pop_plates",
+                                    "vertical": true,
+                                    "min": 4,
+                                    "max": 24,
+                                    "step": 1,
+                                    "step_coarse": 4,
+                                    "decimals": 0,
+                                    "slider_h": 10,
+                                    "value_w": 44,
+                                    "grow": 1.0,
+                                    "tab_group": "pop_left",
+                                    "nav_ordinal": 1
+                                  },
+                                  {
+                                    "component": "button",
+                                    "action": "pop_plates_randomize",
+                                    "tab_group": "pop_left",
+                                    "nav_ordinal": 2,
+                                    "size_class": "md",
+                                    "label": "$pop_plates_randomize"
                                   }
                                 ]
                               },
@@ -373,6 +412,17 @@
                               {
                                 "component": "cell",
                                 "visible_bind": "shown_p0_t2",
+                                "grow": 1.0,
+                                "children": [
+                                  {
+                                    "component": "text",
+                                    "text": "$ui_pane_empty"
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "cell",
+                                "visible_bind": "shown_p0_t3",
                                 "grow": 1.0,
                                 "children": [
                                   {

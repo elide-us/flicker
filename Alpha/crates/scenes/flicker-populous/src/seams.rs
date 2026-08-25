@@ -52,6 +52,31 @@ const SPOT_PEAK: f32 = 0.92;
 /// the spots stand still, and vice versa.
 const SPOT_STREAM: u64 = 0x5851_F42D_4C95_7F2D;
 
+// ── the RIFTS (Aaron 2026-08-25: "not all seams have to join — a seam can
+// split and dive back into the crust before it joins another spot"; these
+// splits will cut plates and drive the motion layer) ──
+/// How many rifts per convection cell the field grows — each a crack that
+/// BRANCHES off a seam and dies out inside a cell instead of joining.
+const RIFTS_PER_CELL: u32 = 1;
+/// A rift's heat where it leaves its parent seam — hot enough to vent near
+/// the root, cooling to NOTHING at the dead end.
+const RIFT_ROOT_PEAK: f32 = 0.8;
+/// A rift's lateral half-width, as a fraction of a cell's angular radius —
+/// a crack, visibly narrower than the parent seam's glow.
+const RIFT_BAND_FRAC: f32 = 0.12;
+/// A rift's length range, as fractions of the cell radius — long enough to
+/// cut visibly into a cell, short enough to die before the far seam.
+const RIFT_LEN_MIN: f32 = 0.35;
+const RIFT_LEN_SPAN: f32 = 0.45;
+/// Sample points along a rift's arc — the polyline its heat falls off from.
+const RIFT_SAMPLES: usize = 12;
+/// The total turn a rift may curve through over its length, radians either
+/// way — an organic crack, not a ruled line.
+const RIFT_CURVE: f32 = 1.2;
+/// The rift stream's offset off the one roll — independent of the spot draws;
+/// the ROOTS ride the current seeds, so rifts move with their seams.
+const RIFT_STREAM: u64 = 0x94D0_49BB_1331_11EB;
+
 /// How far from a boundary the heat glow reaches, as a fraction of a cell's own
 /// characteristic angular radius (`√(4π/cells)/2`). Scale-free on purpose: two
 /// huge cells get a broad seam, twelve small ones get tight seams, and the
@@ -79,6 +104,10 @@ pub struct SeamField {
     /// The hot-spot centres: unit directions, an independent stream of the
     /// same roll.
     spot_dirs: Vec<Vec3>,
+    /// The rifts: each a sampled arc branching off a seam, `(point, peak)` per
+    /// sample with the peak tapering to zero at the dead end. DATA for the
+    /// coming motion layer as much as heat for this one.
+    rifts: Vec<Vec<(Vec3, f32)>>,
     /// Per-tile heat, `0..1` — cool bubble interiors at 0, seams hot, triple
     /// junctions hotter, spot cores hottest. Indexed by `TileId` like every
     /// per-tile layer.
@@ -95,6 +124,7 @@ impl SeamField {
             seed,
             seeds: Vec::new(),
             spot_dirs: Vec::new(),
+            rifts: Vec::new(),
             heat: Vec::new(),
         };
         field.rebuild(map);
@@ -114,6 +144,13 @@ impl SeamField {
     /// The hot-spot centres — for a view that marks them, and for tests.
     pub fn spot_dirs(&self) -> &[Vec3] {
         &self.spot_dirs
+    }
+
+    /// The rifts — each an arc of `(point, peak)` samples branching off a
+    /// seam and tapering to nothing. The coming motion layer reads these; the
+    /// heat map already shows them.
+    pub fn rifts(&self) -> &[Vec<(Vec3, f32)>] {
+        &self.rifts
     }
 
     /// The roll that placed the seeds.
@@ -192,6 +229,67 @@ impl SeamField {
             (4.0 * std::f32::consts::PI / self.cells as f32).sqrt() * 0.5;
         let band = SEAM_BAND * cell_radius;
 
+        // The RIFTS: their own stream of the roll, their ROOTS on the current
+        // seams — so they move with the seams and stand still under the spots
+        // dial. Each rift: a root projected onto the bisector of its two
+        // nearest seeds (a point ON a seam), marched perpendicularly INTO one
+        // of the two cells as a gently curving arc that dies out — a split
+        // that never joins another seam.
+        let mut rr = fastrand::Rng::with_seed(self.seed.wrapping_add(RIFT_STREAM));
+        self.rifts.clear();
+        if self.seeds.len() >= 2 {
+            for _ in 0..(self.cells * RIFTS_PER_CELL) {
+                let z = rr.f32() * 2.0 - 1.0;
+                let a = rr.f32() * std::f32::consts::TAU;
+                let rad = (1.0 - z * z).max(0.0).sqrt();
+                let q = Vec3::new(rad * a.cos(), z, rad * a.sin());
+                // The two nearest seeds, and the projection onto their
+                // bisector plane — the local seam.
+                let mut n1 = (f32::MIN, 0usize);
+                let mut n2 = (f32::MIN, 0usize);
+                for (i, sd) in self.seeds.iter().enumerate() {
+                    let d = q.dot(*sd);
+                    if d > n1.0 {
+                        n2 = n1;
+                        n1 = (d, i);
+                    } else if d > n2.0 {
+                        n2 = (d, i);
+                    }
+                }
+                let axis = self.seeds[n1.1] - self.seeds[n2.1];
+                let root = (q - axis * (q.dot(axis) / axis.length_squared().max(1e-6)))
+                    .normalize_or_zero();
+                // Perpendicular to the seam, into a random one of the two cells.
+                let mut t = (axis - root * root.dot(axis)).normalize_or_zero();
+                if rr.bool() {
+                    t = -t;
+                }
+                let len = (RIFT_LEN_MIN + rr.f32() * RIFT_LEN_SPAN) * cell_radius;
+                let step = len / RIFT_SAMPLES as f32;
+                let turn = (rr.f32() * 2.0 - 1.0) * RIFT_CURVE / RIFT_SAMPLES as f32;
+                let mut p = root;
+                let mut samples = Vec::with_capacity(RIFT_SAMPLES);
+                for k in 0..RIFT_SAMPLES {
+                    // The peak fades along the arc: hot where it left the
+                    // seam, NOTHING at the dead end.
+                    let along = k as f32 / (RIFT_SAMPLES - 1) as f32;
+                    samples.push((p, RIFT_ROOT_PEAK * (1.0 - along)));
+                    // March the geodesic, then curve the heading a little.
+                    let (sn, cs) = step.sin_cos();
+                    let np = (p * cs + t * sn).normalize_or_zero();
+                    t = (t * cs - p * sn).normalize_or_zero();
+                    let (tsn, tcs) = turn.sin_cos();
+                    t = (t * tcs + np.cross(t) * tsn).normalize_or_zero();
+                    t = (t - np * np.dot(t)).normalize_or_zero();
+                    p = np;
+                }
+                self.rifts.push(samples);
+            }
+        }
+        let rift_band = RIFT_BAND_FRAC * cell_radius;
+        // Skip the exp for tiles clearly outside a rift's glow.
+        let rift_near = (rift_band * 3.0).cos();
+
         let dirs = &map.grid().dirs;
         self.heat = dirs
             .iter()
@@ -229,7 +327,19 @@ impl SeamField {
                         SPOT_PEAK * (-a * a).exp()
                     })
                     .fold(0.0f32, f32::max);
-                boundary.max(plume)
+                // A rift is a narrow crack: its samples' peaks, laterally
+                // faded — hottest at the seam it left, dead at its far end.
+                let mut rift = 0.0f32;
+                for arc in &self.rifts {
+                    for (sp, peak) in arc {
+                        let dot = d.dot(*sp);
+                        if dot > rift_near {
+                            let a = dot.clamp(-1.0, 1.0).acos() / rift_band;
+                            rift = rift.max(peak * (-a * a).exp());
+                        }
+                    }
+                }
+                boundary.max(plume).max(rift)
             })
             .collect();
     }
@@ -324,6 +434,77 @@ mod tests {
             a.spot_dirs(),
             "the spots dial keeps the shared prefix"
         );
+    }
+
+    /// **A rift SPLITS off a seam and dies before joining anything.** Every
+    /// rift's root lies ON a seam (equidistant to its two nearest seeds), its
+    /// peak fades monotonically to ZERO at the far end (the dead end — it
+    /// never carries seam-grade heat into a junction), its length stays
+    /// inside a cell's radius, and the field is deterministic from the roll —
+    /// while the SPOTS dial, an independent stream, moves no rift.
+    #[test]
+    fn rifts_split_off_seams_and_die_out() {
+        let map = HexMap::new(MIN_FREQ);
+        let field = SeamField::new(&map, DEFAULT_CELLS, 0, 42);
+        let cell_radius =
+            (4.0 * std::f32::consts::PI / field.cells() as f32).sqrt() * 0.5;
+        assert_eq!(
+            field.rifts().len(),
+            (field.cells() * RIFTS_PER_CELL) as usize,
+            "one rift per cell"
+        );
+        for (r, arc) in field.rifts().iter().enumerate() {
+            assert_eq!(arc.len(), RIFT_SAMPLES);
+            // The ROOT sits on a seam: its two nearest seeds are equidistant.
+            let (root, first_peak) = arc[0];
+            let mut dists: Vec<f32> = field
+                .seeds
+                .iter()
+                .map(|sd| root.dot(*sd).clamp(-1.0, 1.0).acos())
+                .collect();
+            dists.sort_by(f32::total_cmp);
+            assert!(
+                dists[1] - dists[0] < 0.02,
+                "rift {r}'s root stands on a seam: Δ={}",
+                dists[1] - dists[0]
+            );
+            assert!((first_peak - RIFT_ROOT_PEAK).abs() < 1e-6);
+            // The peak fades monotonically to a DEAD END…
+            for w in arc.windows(2) {
+                assert!(w[1].1 < w[0].1, "rift {r} only cools along its run");
+            }
+            assert_eq!(arc[RIFT_SAMPLES - 1].1, 0.0, "…to nothing at the tip");
+            // …inside the cell: the arc never runs past the cell radius.
+            let tip = arc[RIFT_SAMPLES - 1].0;
+            let run = root.dot(tip).clamp(-1.0, 1.0).acos();
+            assert!(
+                run <= (RIFT_LEN_MIN + RIFT_LEN_SPAN) * cell_radius + 1e-3,
+                "rift {r} dies inside the cell, ran {run}"
+            );
+        }
+        // Determinism + spot independence: the same roll grows the same
+        // rifts, and the spots dial (its own stream) moves none of them.
+        let again = SeamField::new(&map, DEFAULT_CELLS, 0, 42);
+        assert_eq!(field.rifts(), again.rifts());
+        let mut spotted = SeamField::new(&map, DEFAULT_CELLS, 0, 42);
+        spotted.set_spots(&map, 6);
+        assert_eq!(field.rifts(), spotted.rifts(), "spots move no rift");
+
+        // And the rifts REACH THE MAP: some tile outside every seam's glow
+        // (boundary heat ~0, no spots in this field) still reads hot — the
+        // crack cutting into a cool bubble interior.
+        let cut = map.tiles().any(|t| {
+            let d = map.direction(t);
+            let mut dd: Vec<f32> = field
+                .seeds
+                .iter()
+                .map(|sd| d.dot(*sd).clamp(-1.0, 1.0).acos())
+                .collect();
+            dd.sort_by(f32::total_cmp);
+            let off_seam = (dd[1] - dd[0]) > SEAM_BAND * cell_radius;
+            off_seam && field.heat(t) > 0.35
+        });
+        assert!(cut, "a rift carries heat into a bubble interior");
     }
 
     /// **A hot spot is a white-hot core, seam or no seam.** The tile nearest a

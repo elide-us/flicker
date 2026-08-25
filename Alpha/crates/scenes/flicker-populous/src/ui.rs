@@ -48,6 +48,11 @@ pub const SEAMS_ACTION: &str = "pop_seams_randomize";
 pub const CELLS_BIND: &str = "pop_cells";
 /// The seams tab's hot-spot dial — how many mantle plumes the field rolls.
 pub const SPOTS_BIND: &str = "pop_spots";
+/// The plates tab's re-roll action — the tectonic shell's OWN roll, unrelated
+/// to the molten randomize.
+pub const PLATES_ACTION: &str = "pop_plates_randomize";
+/// The plates tab's count dial — how many plates the shell is tiled into.
+pub const PLATES_BIND: &str = "pop_plates";
 
 /// Model keys the rails bind to. The `paged_menu` proto names these as its
 /// `@page_bind` / `@tab_bind` / `@tabs_shown` defaults; stated once here so the
@@ -71,7 +76,7 @@ pub struct Page {
 }
 
 /// **The bench's page/tab roster.** Two pages — the WORLD (the globe, with its
-/// MAP, SEAMS and CRUST tabs) and the HEX stack (the centre cell's column
+/// MAP, SEAMS, CRUST and PLATES tabs) and the HEX stack (the centre cell's column
 /// inspected up close, layer by layer). The scene reads only COUNTS from this (the
 /// rail bounds + the dispatch clamp); each tab's actual panes are authored in
 /// `populous.scene.json` and gated by `arrange()`. The code that reads this
@@ -92,6 +97,10 @@ pub static PAGES: &[Page] = &[
             Tab {
                 id: "crust",
                 label: "$pop_tab_crust",
+            },
+            Tab {
+                id: "plates",
+                label: "$pop_tab_plates",
             },
         ],
     },

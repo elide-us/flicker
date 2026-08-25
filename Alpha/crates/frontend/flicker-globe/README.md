@@ -71,6 +71,21 @@ caller needs no renderer to publish and the old shells stay on screen until thei
 replacements exist. GPU memory is freed manually — a scene that leaves its viewport
 without freeing holds memory for a picture nobody sees.
 
+### Several views of one planet
+
+A bench that shows the same world several ways — one tab per data layer — can hold each
+as a **named shell set**: *bake* a set to build it without changing what is on screen,
+and *show* a key to swap which set draws. Showing is free: nothing is rebuilt, so
+switching views never stalls a frame.
+
+The point is that meshes follow **data, not selection**. Bake each view when the data
+behind it changes; on a tab switch, just show. The alternative — building a view when
+its tab is entered — puts a multi-million-vertex build inside the frame the user is
+waiting on, and the previous view stays on screen through the hitch.
+
+Publishing a single unnamed shell list still works and is still the right call for a
+world with one view; it is the same mechanism aimed at one well-known key.
+
 ### Framing one cell up close
 
 The same component can show *one cell of the planet* instead of the planet: rotate that
@@ -162,6 +177,10 @@ own shell builder or orbit camera again.
   opening framing the world was constructed with.
 - **New shells appear next frame** — publishing is CPU-only; the upload is at the next
   render.
+- **Showing a set that was never baked draws an EMPTY globe.** It warns loudly and the
+  result is visibly wrong rather than a stale other view quietly standing in — the
+  deliberate choice (rule 4BB12A75), but it means a typo'd or not-yet-baked key costs
+  you the whole picture, not one layer of it.
 - **The look deflection is a bare tuple.** Build it with the crate's own resolver rather
   than hand-assembling it; the axis order lives in that one function.
 

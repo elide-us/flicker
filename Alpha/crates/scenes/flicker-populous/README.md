@@ -25,16 +25,22 @@ layer each, painted over the same globe:
 | **World · Map** | the planet: grey tiles, near-black under-shell, the seams reading as outlines | the **size** dial — and the right pane shows the world's numbers |
 | **World · Seams** *(molten)* | the same planet painted with the **molten heat field**: cool convection-cell interiors, hot seams between them, white-hot **hot spots** (mantle plumes) wherever they stand | the **cells** and **spots** dials, and a **randomize** button |
 | **World · Crust** *(deep crust)* | the same planet painted **bedrock brown** with **red lava** at the vents, which come out as lumpy **volcanic fields** — dense chains with clear bedrock between them | (placeholder) |
-| **Hex · Stack** | the centre cell alone, as a stack of true CSG columns: a thin **molten** cell below, a thick **bedrock** cell above — red when that cell is a vent | (placeholder) |
+| **World · Plates** *(tectonic)* | the same planet split into **plates**: tan continents, deep blue-slate ocean beds, near-black seams where two plates meet | the **plates** dial, and a **randomize plates** button |
+| **Hex · Stack** | the centre cell alone, as a stack of true CSG columns, bottom to top: a thin **molten** cell, a thick **bedrock** cell (red when that cell is a vent), and the **plate** cell on top — thick where it is continental crust, a thin veneer where it is ocean bed | (placeholder) |
 
-Both layer tabs carry a gold **reticle** on the cell the camera faces. That cell is the
+Every layer tab carries a gold **reticle** on the cell the camera faces. That cell is the
 one the Hex page inspects — so you aim on a layer tab, then page across to Hex.
 
-The world is **three objects, one each**, shared by every page, in a chain: the tiling
-(`HexMap`), the molten heat field derived over it (`SeamField`), and the crust's vents
-derived from *that* (`CrustField`). Each is re-derived, never edited, and nothing
-downstream has a control of its own — the lava moves only because the heat under it
-moved. How each derivation works is in MCP, not here.
+The world is **four objects, one each**, shared by every page. Three of them form a
+chain: the tiling (`HexMap`), the molten heat field derived over it (`SeamField`), and
+the crust's vents derived from *that* (`CrustField`). Each is re-derived, never edited,
+and neither downstream link has a control of its own — the lava moves only because the
+heat under it moved.
+
+The plates (`PlateField`) are **deliberately not in that chain**. They carry their own
+roll, so re-rolling the molten seams leaves the continents exactly where they were and
+vice versa. That independence is the point: the tectonic layer is a defined starting
+scheme, not a consequence of the mantle. How each derivation works is in MCP, not here.
 
 ## Using it
 
@@ -49,7 +55,9 @@ what makes the stack's bedrock cell render red.
 
 Every control writes the **one** shared world, whichever tab it is shown on. A size
 change on the Map tab is the size every other tab renders; a re-roll on the Seams tab
-moves the vents on the Crust tab and the colours in the stack.
+moves the vents on the Crust tab and the colours in the stack. The exception is
+**randomize plates**, which re-rolls the tectonic layer alone and leaves the molten
+seams and vents untouched.
 
 ## Where it sits
 
@@ -88,6 +96,7 @@ are contract.
 | `pop_freq` | number, two-way | the **size** dial (48–120) |
 | `pop_cells` | number, two-way | the **cells** dial (2–12) |
 | `pop_spots` | number, two-way | the **spots** dial (0–12) |
+| `pop_plates` | number, two-way | the **plates** dial (4–24) |
 | `pop_hexes` / `pop_diameter` / `pop_tile` | pre-formatted string | the three readout rows (`text_bind`) |
 
 Formatting happens in Rust and rides a bind — a node carries a `$token` caption or a
@@ -98,9 +107,10 @@ bind name, never a composed number.
 | Key | Gates |
 |---|---|
 | `shown_page0` / `shown_page1` | that page's tab rail **and** its centre-pane viewport |
-| `shown_p0_t0` / `shown_p0_t1` / `shown_p0_t2` / `shown_p1_t0` | the Map / Seams / Crust / Stack slices inside each pane |
+| `shown_p0_t0` / `shown_p0_t1` / `shown_p0_t2` / `shown_p0_t3` / `shown_p1_t0` | the Map / Seams / Crust / Plates / Stack slices inside each pane |
 
-**Actions and signals.** One action: `pop_seams_randomize` (the randomize button).
+**Actions and signals.** Two actions, one per re-roll button: `pop_seams_randomize` and
+`pop_plates_randomize`.
 Signals are declared `on_<signal>` on the screen root — `Menu → pause_open`,
 `PageNext`/`PagePrev` and `TabNext`/`TabPrev` → the rails' own step results. The rails
 consume their four; the scene answers `pause_open`. Continuous `Look*`/`Zoom*` are read
@@ -115,9 +125,10 @@ button on this screen.
 `paged_pages`, `paged_tabs`, `paged_tabs_p1`.
 
 **Stringtable tokens:** `$pop_page_world` `$pop_page_hex` `$pop_tab_map` `$pop_tab_seams`
-`$pop_tab_crust` `$pop_tab_stack` `$pop_size` `$pop_cells` `$pop_spots`
-`$pop_seams_randomize` `$pop_stat_hexes` `$pop_stat_diameter` `$pop_stat_tile`
-`$ui_pane_empty`. Theme colours: `$stage_void` `$world_seam` `$world_tile`.
+`$pop_tab_crust` `$pop_tab_plates` `$pop_tab_stack` `$pop_size` `$pop_cells` `$pop_spots`
+`$pop_plates` `$pop_seams_randomize` `$pop_plates_randomize` `$pop_stat_hexes`
+`$pop_stat_diameter` `$pop_stat_tile` `$ui_pane_empty`. Theme colours: `$stage_void`
+`$world_seam` `$world_tile`.
 
 ## Extending it
 
@@ -141,15 +152,19 @@ node in the scene file, its `$token`, an arm in `apply_results`, a publisher in
 update it. That is the anti-drift mechanism working, but it means a content-only edit is
 never content-only.
 
-**Adding a layer** is a tab plus a field type, its re-derivation wired into every place
-the field above it changes (see Sharp edges), and a cell in the stack view.
+**Adding a layer** is a tab plus a field type and a cell in the stack view. Decide first
+whether the new field is **derived** from the one below it or carries its **own roll**:
+a derived field must be re-derived at every place its input changes (see Sharp edges);
+an independent one — like the plates — needs its own randomize arm instead, and must be
+kept out of the chain so a re-roll upstream does not disturb it.
 
 ## Gates
 
-`source ~/.cargo/env && cargo test -p flicker-populous` — **35 tests**, all green:
-5 in `map.rs` (the tiling's laws), 4 in `seams.rs` and 2 in `crust.rs` (each layer's
-field is the shape it claims), 24 in `scene.rs` (the surface, the rails, the dispatch,
-the shared world, the signals). They are named for what they hold; read the names.
+`source ~/.cargo/env && cargo test -p flicker-populous` — **42 tests**, all green:
+5 in `map.rs` (the tiling's laws), 5 in `seams.rs`, 2 in `crust.rs` and 3 in `plates.rs`
+(each layer's field is the shape it claims), 27 in `scene.rs` (the surface, the rails,
+the dispatch, the shared world, the signals). They are named for what they hold; read
+the names.
 
 Four carry contracts a change must not quietly break:
 
@@ -171,8 +186,8 @@ Four carry contracts a change must not quietly break:
   three seam arms in `apply_results` are the places that do it correctly; copy one.
   Every new layer adds a link.
 - **A `visible_bind` naming a key `arrange()` never publishes fails to nothing.** At the
-  page tier that blanks a whole page. The gates assert today's six key names by hand;
-  they do not cross-check that every gate key in the tree has a publisher, so a seventh
+  page tier that blanks a whole page. The gates assert today's seven key names by hand;
+  they do not cross-check that every gate key in the tree has a publisher, so an eighth
   is unguarded by construction.
 - **The centre cell is chosen on a layer tab, and only there.** The Map tab and the Hex
   page leave it wherever it was — at start-up, whatever the opening camera faced. The

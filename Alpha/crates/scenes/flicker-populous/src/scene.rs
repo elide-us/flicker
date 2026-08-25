@@ -59,6 +59,7 @@ use flicker_shell::{PauseScene, Theme};
 
 use crate::crust::CrustField;
 use crate::map::{HexMap, TileId, DEFAULT_FREQ, MAX_FREQ, MIN_FREQ};
+use crate::plates::{PlateField, DEFAULT_PLATES};
 use crate::seams::{SeamField, DEFAULT_CELLS, DEFAULT_SPOTS};
 use crate::ui;
 
@@ -94,15 +95,68 @@ const BEDROCK_COLOR: [f32; 3] = [0.36, 0.28, 0.19];
 /// Lava — a vent where the molten heat pushed through the bedrock: the dots
 /// on the crust map, and the whole bedrock cell of a vented column.
 const LAVA_COLOR: [f32; 3] = [0.88, 0.16, 0.05];
+/// A continental plate — this is LAND (there is no water yet), so it reads
+/// brown (Aaron 2026-08-25: "the ocean beds are probably more grey and land
+/// is more on the brown side").
+const CONTINENT_COLOR: [f32; 3] = [0.42, 0.32, 0.21];
+/// An oceanic plate — a bare rock bed, grey, not sea-blue: nothing has filled
+/// it with water yet.
+const OCEAN_BED_COLOR: [f32; 3] = [0.33, 0.34, 0.36];
+/// CONTINENTAL SHELF — the transitional zone where a bed meets a continent,
+/// the ONE edge the surface marks (plate joins between two beds or two
+/// continents paint nothing). A sandy tone between the two kinds.
+const SHELF_COLOR: [f32; 3] = [0.56, 0.49, 0.35];
+/// The plate cell's BASE heights, per kind (per cell width `w`): a continent
+/// is THICK crust riding high, an ocean bed is a thin veneer — the difference
+/// the erosion era will carve against.
+const CONTINENT_H_FRAC: f32 = 0.5;
+const OCEAN_BED_H_FRAC: f32 = 0.125;
+/// How much ELEVATION the molten seams push into the plate shell, per cell
+/// width, at full heat (Aaron 2026-08-25: heat = pressure = volume — the
+/// hotter the seam below, the taller this layer's cell). Rides ON TOP of the
+/// kind base, for both kinds: a hot seam under an ocean bed is a ridge.
+const ELEV_H_FRAC: f32 = 2.0;
+/// How far below the nominal surface a plate column's walls reach (per cell
+/// width) — the root that keeps neighbouring cells of different heights
+/// reading as EXTRUDED solids, never floating caps.
+const PLATE_ROOT_FRAC: f32 = 0.25;
 
-/// Which data the world's tile shell is painted with — one latch per view so
-/// a selection change repaints the 92k-tile mesh exactly once, never per
-/// frame. `Authored` is the stage's own look (the MAP tab).
+/// **The plate shell's per-cell height** — the composition Aaron specified:
+/// the KIND's base thickness (thin bed / thick shelf, the plates' own data)
+/// plus the seam-derived elevation (the molten layer's data, a SEPARATE
+/// channel: colour stays the plate's, geometry carries the heat below).
+fn plate_height(plates: &PlateField, seams: &SeamField, tile: TileId, w: f32) -> f32 {
+    let base = if plates.is_continent(tile) {
+        CONTINENT_H_FRAC
+    } else {
+        OCEAN_BED_H_FRAC
+    };
+    w * (base + ELEV_H_FRAC * seams.heat(tile))
+}
+
+/// Which data the world's tile shell is painted with. `Authored` is the
+/// stage's own look (the MAP tab). Every view is a BAKED mesh set in the one
+/// world (`GlobeWorld::bake`), rebuilt when its DATA changes — so a tab
+/// switch is a free `show`, never a rebuild holding the old picture on
+/// screen (Aaron's stale-flash report, 2026-08-25).
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum WorldView {
     Authored,
     Heat,
     Crust,
+    Plates,
+}
+
+impl WorldView {
+    /// The baked set this view draws from.
+    fn key(self) -> &'static str {
+        match self {
+            WorldView::Authored => "authored",
+            WorldView::Heat => "heat",
+            WorldView::Crust => "crust",
+            WorldView::Plates => "plates",
+        }
+    }
 }
 
 /// The bench's Lua ORCHESTRATION script — `arrange()` decides which tab-specific
@@ -159,6 +213,10 @@ pub struct PopulousBench {
     /// pushes through the bedrock. Derived from `seams`, re-derived whenever
     /// it changes; the crust tab's lava dots and the stack's lava columns.
     crust: CrustField,
+    /// **The tectonic shell** — continents, ocean beds and plate boundaries.
+    /// Its OWN roll, deliberately unrelated to the molten layers below
+    /// (Aaron 2026-08-25): the erosion era starts from this scheme.
+    plates: PlateField,
     /// **One column of the world, up close** — the HEX page's view: the same
     /// component as `world`, framing the centre cell's molten column instead of
     /// the planet. A second VIEW, never a second world.
@@ -205,6 +263,7 @@ impl PopulousBench {
         let hex = GlobeWorld::new(ui::HEX_STAGE_SOURCE, &ui_styles, None).in_panel(ui::VIEW_PANE);
         let seams = SeamField::new(&map, DEFAULT_CELLS, DEFAULT_SPOTS, fastrand::u64(..));
         let crust = CrustField::derive(&map, &seams);
+        let plates = PlateField::new(&map, DEFAULT_PLATES, fastrand::u64(..));
 
         let mut bench = Self {
             sel_page: 0,
@@ -221,6 +280,7 @@ impl PopulousBench {
             world,
             seams,
             crust,
+            plates,
             hex,
             focus_tile: 0,
             highlight: None,
@@ -231,7 +291,11 @@ impl PopulousBench {
             .world
             .facing(&bench.map.grid().dirs)
             .unwrap_or(0) as TileId;
-        bench.publish_world();
+        // Bake EVERY view up front — data changes re-bake theirs, and a tab
+        // switch is then a free swap.
+        bench.bake_view(WorldView::Authored);
+        bench.bake_molten_views();
+        bench.world.show(bench.shown_view.key());
         bench.publish_hex();
         bench
     }
@@ -248,6 +312,7 @@ impl PopulousBench {
         match page.tabs[self.sel_tab.min(page.tabs.len() - 1)].id {
             "seams" => WorldView::Heat,
             "crust" => WorldView::Crust,
+            "plates" => WorldView::Plates,
             _ => WorldView::Authored,
         }
     }
@@ -255,7 +320,7 @@ impl PopulousBench {
     /// Whether the current tab carries the centre-cell reticle — the two
     /// LAYER tabs, where which cell you are aimed at is the question.
     fn reticle_view(&self) -> bool {
-        matches!(self.world_view(), WorldView::Heat | WorldView::Crust)
+        self.world_view() != WorldView::Authored
     }
 
     /// Whether the HEX page is the selected one — which of the two centre-pane
@@ -264,26 +329,27 @@ impl PopulousBench {
         ui::page(self.sel_page).id == "hex"
     }
 
-    /// Hand the world this map's tiling. WHAT it looks like — the two static
-    /// shells' radii, insets and colours — is authored in `stages.populous_globe`
-    /// and read by the world itself; the bench supplies only the geometry. On a
-    /// LAYER tab the ONE data override: the topmost (tile) shell is painted with
-    /// that layer's field — the molten heat through the shared ramp, or the
-    /// crust's bedrock dotted with its lava vents — the same pattern God Mode
-    /// paints its fields with, radii and insets still the stage's.
-    fn publish_world(&mut self) {
-        self.shown_view = self.world_view();
+    /// Bake ONE view's mesh set into the world. WHAT the world looks like —
+    /// the two static shells' radii, insets and colours — is authored in
+    /// `stages.populous_globe` and read by the world itself; the bench
+    /// supplies only the geometry. On a LAYER view the ONE data override: the
+    /// topmost (tile) shell is painted with that layer's field — the molten
+    /// heat through the shared ramp, the crust's bedrock dotted with its lava
+    /// vents, or the plate shell's kinds EXTRUDED by the seam heat below —
+    /// the same pattern God Mode paints its fields with, radii and insets
+    /// still the stage's. Baking never changes which view SHOWS.
+    fn bake_view(&mut self, view: WorldView) {
         let Self {
             map,
             world,
             seams,
             crust,
-            shown_view,
+            plates,
             ..
         } = self;
         let mut shells = world.authored_shells(&map.grid().dirs, map.outlines());
         if let Some(top) = shells.last_mut() {
-            match shown_view {
+            match view {
                 WorldView::Authored => {}
                 WorldView::Heat => {
                     top.color = Box::new(|i| Some(temp_color(seams.heat(i as TileId))));
@@ -297,16 +363,60 @@ impl PopulousBench {
                         })
                     });
                 }
+                WorldView::Plates => {
+                    // Reborrow the destructured `&mut`s as SHARED refs (Copy),
+                    // so all three closures can carry their own copy.
+                    let plates: &PlateField = plates;
+                    let seams: &SeamField = seams;
+                    top.color = Box::new(move |i| {
+                        let t = i as TileId;
+                        Some(if plates.is_shelf(t) {
+                            SHELF_COLOR
+                        } else if plates.is_continent(t) {
+                            CONTINENT_COLOR
+                        } else {
+                            OCEAN_BED_COLOR
+                        })
+                    });
+                    // The RELIEF channel, separate from the colour: each cell
+                    // stands at its own height — kind base + the heat of the
+                    // seam beneath — as an EXTRUDED column whose walls root
+                    // below the surface, so uneven neighbours read as solids
+                    // sticking out of the shell, not floating caps.
+                    let w = map
+                        .tiles()
+                        .next()
+                        .map(|t| tile_width(map.direction(t), map.outline(t), RADIUS))
+                        .unwrap_or(0.0);
+                    top.cell_radius = Some(Box::new(move |i| {
+                        RADIUS + plate_height(plates, seams, i as TileId, w)
+                    }));
+                    top.depth = Some(Box::new(move |i| {
+                        plate_height(plates, seams, i as TileId, w) + w * PLATE_ROOT_FRAC
+                    }));
+                }
             }
         }
-        world.set_shells(shells);
+        world.bake(view.key(), shells);
     }
 
-    /// The selection moved — repaint the world only if its VIEW actually
-    /// changed. A 92k-tile mesh is not rebuilt to stand still.
+    /// Bake the views whose DATA the molten field feeds: the heat map, the
+    /// crust's vents — and the plate shell too, whose RELIEF is the seam heat
+    /// (Aaron: "this tab should calculate plates after seams change"). The
+    /// authored view reads only the map and is not touched.
+    fn bake_molten_views(&mut self) {
+        self.bake_view(WorldView::Heat);
+        self.bake_view(WorldView::Crust);
+        self.bake_view(WorldView::Plates);
+    }
+
+    /// The selection moved — SHOW its baked set. A swap, not a rebuild: the
+    /// meshes were baked when their data changed, so nothing stale lingers on
+    /// screen while a 92k-tile view rebuilds (the flash Aaron reported).
     fn refresh_world_view(&mut self) {
         if self.world_view() != self.shown_view {
-            self.publish_world();
+            self.shown_view = self.world_view();
+            self.world.show(self.shown_view.key());
         }
     }
 
@@ -326,6 +436,7 @@ impl PopulousBench {
             hex,
             seams,
             crust,
+            plates,
             focus_tile,
             ..
         } = self;
@@ -333,6 +444,10 @@ impl PopulousBench {
         let dir = map.direction(tile);
         let ring = column_frame(dir, map.outline(tile));
         let w = tile_width(dir, map.outline(tile), RADIUS);
+        let continent = plates.is_continent(tile);
+        // The plate cell's DERIVED height: kind base + the seam heat below —
+        // the same composition the plates view extrudes on the globe.
+        let h_plate = plate_height(plates, seams, tile, w);
         let h_bed = w * BEDROCK_H_FRAC;
         let h_molten = w * MOLTEN_H_FRAC;
         let gap = w * STACK_GAP_FRAC;
@@ -341,7 +456,7 @@ impl PopulousBench {
         // The stack's base sits at the BOTTOM of the framed region: the orbit
         // goes around the point one frame-radius above it — where the rest of
         // the stack will stand.
-        let base = RADIUS - h_bed - gap - h_molten;
+        let base = RADIUS - h_plate - gap - h_bed - gap - h_molten;
         hex.aim(Vec3::Y * (base + frame));
         let molten = temp_color(seams.heat(tile));
         let bedrock = if crust.is_vent(tile) {
@@ -349,13 +464,20 @@ impl PopulousBench {
         } else {
             BEDROCK_COLOR
         };
+        let plate = if plates.is_shelf(tile) {
+            SHELF_COLOR
+        } else if continent {
+            CONTINENT_COLOR
+        } else {
+            OCEAN_BED_COLOR
+        };
         let dirs = [Vec3::Y];
         let outlines = [ring];
         hex.set_shells(vec![
             ShellSpec {
                 dirs: &dirs,
                 outlines: &outlines,
-                radius: RADIUS - h_bed - gap,
+                radius: RADIUS - h_plate - gap - h_bed - gap,
                 inset: 0.0,
                 color: Box::new(move |_| Some(molten)),
                 cell_radius: None,
@@ -364,11 +486,20 @@ impl PopulousBench {
             ShellSpec {
                 dirs: &dirs,
                 outlines: &outlines,
-                radius: RADIUS,
+                radius: RADIUS - h_plate - gap,
                 inset: 0.0,
                 color: Box::new(move |_| Some(bedrock)),
                 cell_radius: None,
                 depth: Some(Box::new(move |_| h_bed)),
+            },
+            ShellSpec {
+                dirs: &dirs,
+                outlines: &outlines,
+                radius: RADIUS,
+                inset: 0.0,
+                color: Box::new(move |_| Some(plate)),
+                cell_radius: None,
+                depth: Some(Box::new(move |_| h_plate)),
             },
         ]);
     }
@@ -413,6 +544,11 @@ impl PopulousBench {
     /// seam field.
     pub fn crust(&self) -> &CrustField {
         &self.crust
+    }
+
+    /// The tectonic shell — the plates tab's data, its own independent roll.
+    pub fn plates(&self) -> &PlateField {
+        &self.plates
     }
 
     /// The centre cell — the reticle's tile, whose column the hex page shows.
@@ -488,13 +624,16 @@ impl PopulousBench {
         self.map = HexMap::new(freq);
         self.seams.rebuild(&self.map);
         self.crust = CrustField::derive(&self.map, &self.seams);
+        self.plates.rebuild(&self.map);
         // The centre cell is SHARED state — keep it a tile the new map has;
         // the old reticle outlined tiles that no longer exist, so it comes
         // down and the next frame on the seams tab re-faces it.
         self.focus_tile = self.focus_tile.min(self.map.len().saturating_sub(1) as TileId);
         self.highlight = None;
         self.apply_highlight();
-        self.publish_world();
+        // A new tiling: every view's geometry moved.
+        self.bake_view(WorldView::Authored);
+        self.bake_molten_views();
         self.publish_hex();
         tracing::info!(
             "populous: {} tiles at freq {}",
@@ -551,9 +690,7 @@ impl PopulousBench {
             self.seams.set_cells(&self.map, v.round().max(0.0) as u32);
             if self.seams.cells() != before {
                 self.crust = CrustField::derive(&self.map, &self.seams);
-                if self.shown_view != WorldView::Authored {
-                    self.publish_world(); // repaint only a view that shows a field
-                }
+                self.bake_molten_views();
                 self.publish_hex();
             }
         }
@@ -564,20 +701,33 @@ impl PopulousBench {
             self.seams.set_spots(&self.map, v.round().max(0.0) as u32);
             if self.seams.spots() != before {
                 self.crust = CrustField::derive(&self.map, &self.seams);
-                if self.shown_view != WorldView::Authored {
-                    self.publish_world(); // repaint only a view that shows a field
-                }
+                self.bake_molten_views();
                 self.publish_hex();
             }
+        }
+        // The plates dial: how many plates the tectonic shell tiles into. Its
+        // own field, its own arm — the molten layers never hear about it.
+        if let Some(v) = results.number(ui::PLATES_BIND) {
+            let before = self.plates.plates();
+            self.plates.set_plates(&self.map, v.round().max(0.0) as u32);
+            if self.plates.plates() != before {
+                self.bake_view(WorldView::Plates);
+                self.publish_hex();
+            }
+        }
+        // The plates randomize: a new roll of the SHELL alone — the molten
+        // seams and spots stand exactly where they were.
+        if results.is_on(ui::PLATES_ACTION) {
+            self.plates.randomize(&self.map);
+            self.bake_view(WorldView::Plates);
+            self.publish_hex();
         }
         // The randomize button: a new roll of the same count — the seams move,
         // both views repaint.
         if results.is_on(ui::SEAMS_ACTION) {
             self.seams.randomize(&self.map);
             self.crust = CrustField::derive(&self.map, &self.seams);
-            if self.shown_view != WorldView::Authored {
-                self.publish_world(); // repaint only a view that shows a field
-            }
+            self.bake_molten_views();
             self.publish_hex();
         }
     }
@@ -921,8 +1071,8 @@ mod tests {
         );
         assert_eq!(
             count("slider"),
-            3,
-            "the size, cells and spots dials"
+            4,
+            "the size, cells, spots and plates dials"
         );
         // The rail hints (lt/rt/lb/rb) and the rule are now drawn BY the `paged_menu`
         // Component, not authored tree nodes — so NOTHING on the surface wears a glyph.
@@ -1252,8 +1402,8 @@ mod tests {
             )
             .count();
         assert_eq!(
-            placeholders, 5,
-            "the seams stats pane, both crust panes and the hex page's two side panes rest on placeholders"
+            placeholders, 6,
+            "the seams stats pane, both crust panes, the plates stats pane and the hex page's two side panes rest on placeholders"
         );
 
         // The slices are gated on DIFFERENT keys, so a selection lights exactly one
@@ -1268,6 +1418,7 @@ mod tests {
             "shown_p0_t0",
             "shown_p0_t1",
             "shown_p0_t2",
+            "shown_p0_t3",
             "shown_p1_t0",
         ] {
             assert!(gates.contains(key), "`{key}` gates its slice");
@@ -1431,9 +1582,9 @@ mod tests {
             &mut state,
         );
         let rail = idle.rect("paged_tabs").expect("the tab rail resolves");
-        // Three pills now — the SEAMS pill is the middle third.
+        // Four pills now — the SEAMS pill is the second quarter.
         let click = Vec2::new(
-            rail.pos.x + rail.size.x * 0.5,
+            rail.pos.x + rail.size.x * 0.375,
             rail.pos.y + rail.size.y * 0.5,
         );
         let f = run_ui(&tree, &model, &styles, &snap(click, true, true), &mut state);
@@ -1643,6 +1794,147 @@ mod tests {
             Some(&Value::Number(f64::from(crate::seams::MAX_CELLS)))
         );
         assert_eq!(dial.tab_group, ui::LEFT_PANE, "walker-focusable");
+    }
+
+    /// **EVERY dial in the tree is accounted for, with its range pinned.**
+    /// The inverse-membership gate: each `slider` the scene authors must have
+    /// a row here pairing its bind with the code's own MIN/MAX constants — so
+    /// a new layer's control added without a row FAILS THE BUILD, the way an
+    /// unaccounted component already fails the catalog gate. (The spots dial
+    /// shipped ungated once and the plates dial then reproduced the gap
+    /// verbatim — a point fix per control does not close a loop that every
+    /// future layer re-enters; this table does.)
+    #[test]
+    fn every_dial_in_the_tree_is_accounted_with_its_range() {
+        let accounted: &[(&str, f64, f64)] = &[
+            (ui::FREQ_BIND, f64::from(MIN_FREQ), f64::from(MAX_FREQ)),
+            (
+                ui::CELLS_BIND,
+                f64::from(crate::seams::MIN_CELLS),
+                f64::from(crate::seams::MAX_CELLS),
+            ),
+            (
+                ui::SPOTS_BIND,
+                f64::from(crate::seams::MIN_SPOTS),
+                f64::from(crate::seams::MAX_SPOTS),
+            ),
+            (
+                ui::PLATES_BIND,
+                f64::from(crate::plates::MIN_PLATES),
+                f64::from(crate::plates::MAX_PLATES),
+            ),
+        ];
+        let tree = test_bench().build_tree();
+        let all = flatten(&tree);
+        let dials: Vec<&&UiNode> = all.iter().filter(|n| n.component == "slider").collect();
+        assert_eq!(
+            dials.len(),
+            accounted.len(),
+            "every authored dial has a row, every row has a dial"
+        );
+        for d in dials {
+            let bind = d.bind.as_deref().expect("a dial is bound");
+            let (_, min, max) = accounted
+                .iter()
+                .find(|(b, _, _)| *b == bind)
+                .unwrap_or_else(|| panic!("`{bind}` has no row — add (bind, MIN, MAX) here"));
+            assert_eq!(
+                d.props.get("min"),
+                Some(&Value::Number(*min)),
+                "{bind}: authored min IS the code constant"
+            );
+            assert_eq!(
+                d.props.get("max"),
+                Some(&Value::Number(*max)),
+                "{bind}: authored max IS the code constant"
+            );
+        }
+    }
+
+    /// **The plates dial + randomize drive their arms, and the shell's roll is
+    /// INDEPENDENT at the dispatcher level.** The committed count lands at the
+    /// same roll, the echo is inert, a wild number clamps — and the plates
+    /// randomize moves the continents while the molten seams, spots and the
+    /// crust's vents all stand exactly where they were (and vice versa: the
+    /// molten randomize leaves the plates alone). Aaron's independence
+    /// mandate, asserted where the buttons actually fire.
+    #[test]
+    fn the_plates_controls_drive_their_arms_independently() {
+        let mut bench = test_bench();
+        let write = |n: f64| {
+            let mut r = ValueMap::default();
+            r.set(ui::PLATES_BIND, n);
+            r
+        };
+        let seed = bench.plates().seed();
+        bench.apply_results(&write(20.0));
+        assert_eq!(bench.plates().plates(), 20, "the committed count lands");
+        assert_eq!(bench.plates().seed(), seed, "same roll, more plates");
+        bench.apply_results(&write(20.0)); // the resting echo
+        assert_eq!(bench.plates().plates(), 20);
+        bench.apply_results(&write(99.0));
+        assert_eq!(
+            bench.plates().plates(),
+            crate::plates::MAX_PLATES,
+            "a wild number clamps"
+        );
+
+        // The plates re-roll moves ONLY the plates…
+        let molten_seed = bench.seams().seed();
+        let heats = bench.seams().heats().to_vec();
+        let vents = bench.crust().vents().to_vec();
+        let mut fired = ValueMap::default();
+        fired.set(ui::PLATES_ACTION, true);
+        bench.apply_results(&fired);
+        assert_ne!(bench.plates().seed(), seed, "the shell re-rolled");
+        assert_eq!(bench.seams().seed(), molten_seed, "the molten roll held");
+        assert_eq!(bench.seams().heats(), &heats[..], "the heat stood still");
+        assert_eq!(bench.crust().vents(), &vents[..], "the vents stood still");
+
+        // …and the molten re-roll leaves the plates alone.
+        let plate_seed = bench.plates().seed();
+        let mut molten = ValueMap::default();
+        molten.set(ui::SEAMS_ACTION, true);
+        bench.apply_results(&molten);
+        assert_eq!(bench.plates().seed(), plate_seed, "the shell held");
+        assert_ne!(bench.seams().seed(), molten_seed, "the molten re-rolled");
+    }
+
+    /// **The plate shell's height composes the two channels Aaron separated:**
+    /// the KIND's base (thick shelf / thin bed — the plates' own data) plus
+    /// the seam-derived elevation (the molten heat below; heat = pressure =
+    /// volume). At equal heat a continent stands taller than a bed; on either
+    /// kind a hotter seam pushes the cell higher; and the heat term is the
+    /// SAME for both kinds — a hot seam under an ocean bed is a ridge.
+    #[test]
+    fn the_plate_height_composes_kind_base_and_seam_heat() {
+        let bench = test_bench();
+        let (plates, seams) = (bench.plates(), bench.seams());
+        let w = 2.5;
+        // Find one continental and one oceanic tile.
+        let cont = (0..bench.map().len() as TileId)
+            .find(|t| plates.is_continent(*t))
+            .expect("a continent exists");
+        let bed = (0..bench.map().len() as TileId)
+            .find(|t| !plates.is_continent(*t))
+            .expect("an ocean bed exists");
+        let base = |t: TileId| plate_height(plates, seams, t, w) - w * ELEV_H_FRAC * seams.heat(t);
+        assert!(
+            (base(cont) - w * CONTINENT_H_FRAC).abs() < 1e-4,
+            "a continent's base is the thick shelf"
+        );
+        assert!(
+            (base(bed) - w * OCEAN_BED_H_FRAC).abs() < 1e-4,
+            "a bed's base is the thin veneer"
+        );
+        assert!(base(cont) > base(bed), "shelves outstand beds at equal heat");
+        // The heat term: strictly monotone, kind-independent.
+        let lift = |t: TileId| plate_height(plates, seams, t, w) - base(t);
+        assert!(
+            (lift(cont) - w * ELEV_H_FRAC * seams.heat(cont)).abs() < 1e-4
+                && (lift(bed) - w * ELEV_H_FRAC * seams.heat(bed)).abs() < 1e-4,
+            "the elevation channel is the seam heat alone, on either kind"
+        );
     }
 
     /// **The spots dial is the field's third control, on the same contract.**
@@ -2187,6 +2479,14 @@ mod tests {
         assert!(crust.is_on("shown_p0_t2"), "the crust tab lights its slice");
         assert!(
             !crust.is_on("shown_p0_t0") && !crust.is_on("shown_p0_t1"),
+            "the other world slices are dark"
+        );
+
+        // PLATES tab (page 0, tab 3): its slice alone.
+        let plates = arrange_at(0.0, 3.0);
+        assert!(plates.is_on("shown_p0_t3"), "the plates tab lights its slice");
+        assert!(
+            !plates.is_on("shown_p0_t2") && !plates.is_on("shown_p0_t0"),
             "the other world slices are dark"
         );
 

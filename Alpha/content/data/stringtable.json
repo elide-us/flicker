@@ -2432,6 +2432,12 @@
   "pop_page_world": {
     "en-us": "World"
   },
+  "pop_plates": {
+    "en-us": "PLATES"
+  },
+  "pop_plates_randomize": {
+    "en-us": "RANDOMIZE PLATES"
+  },
   "pop_seams_randomize": {
     "en-us": "RANDOMIZE SEAMS"
   },
@@ -2452,6 +2458,9 @@
   },
   "pop_tab_map": {
     "en-us": "Map"
+  },
+  "pop_tab_plates": {
+    "en-us": "Plates"
   },
   "pop_tab_crust": {
     "en-us": "Crust"

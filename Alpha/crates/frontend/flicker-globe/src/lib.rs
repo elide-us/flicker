@@ -22,7 +22,7 @@ pub mod view;
 pub mod world;
 pub use camera::OrbitCam;
 pub use view::{Arrows, GlobeView, GLOBE_LAYERS, NO_ARROWS};
-pub use world::{GlobeWorld, ShellSpec};
+pub use world::{GlobeWorld, ShellSpec, DEFAULT_SET};
 
 use flicker::render::{MeshVertex, Vec3};
 

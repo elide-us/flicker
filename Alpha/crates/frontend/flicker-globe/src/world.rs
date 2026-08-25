@@ -38,7 +38,14 @@ use flicker_input_core::{AbstractControls, ActionSignal};
 use flicker_input_router::{Flow, InputEvent, InputHandler, RouteCtx};
 
 use crate::view::{Arrows, GlobeView, Seat, GLOBE_LAYERS};
+
+/// One baked shell set's CPU meshes, waiting for a renderer.
+type BakedSet = Vec<(Vec<MeshVertex>, Vec<u32>)>;
 use crate::{build, graticule, OrbitCam, RADIUS};
+
+/// The set name [`GlobeWorld::set_shells`] bakes into — the whole world of a
+/// single-view caller.
+pub const DEFAULT_SET: &str = "default";
 
 /// One shell of a world: what it is drawn over, how far out, how far its tiles
 /// pull in, and what colour each cell is. `color` returning `None` leaves a hole
@@ -75,12 +82,17 @@ pub struct GlobeWorld {
     view: GlobeView,
     cam: OrbitCam,
     stage: StageDef,
-    /// Uploaded shells, in draw order. Freed and replaced when a new list lands.
-    meshes: Vec<MeshHandle>,
-    /// The CPU meshes of the newest list, waiting for a renderer to upload them.
-    /// Built at [`set_shells`](GlobeWorld::set_shells) time so the caller needs
-    /// no renderer, uploaded at the top of `render` where one exists.
-    pending: Option<Vec<(Vec<MeshVertex>, Vec<u32>)>>,
+    /// Uploaded shell SETS, by name, each in draw order — a world can hold
+    /// several baked views of one planet (a bench's data tabs) and swap
+    /// between them for free. A caller that never names a set lives entirely
+    /// in [`DEFAULT_SET`] through [`set_shells`](GlobeWorld::set_shells).
+    sets: std::collections::HashMap<String, Vec<MeshHandle>>,
+    /// Which set draws.
+    active: String,
+    /// CPU meshes baked and not yet uploaded, per set. Built at
+    /// [`bake`](GlobeWorld::bake) time so the caller needs no renderer,
+    /// uploaded at the top of `render` where one exists.
+    pending: Vec<(String, BakedSet)>,
     /// The stage's own line geometry — the authored graticule, built once.
     stage_arrows: Arrows,
     /// What is actually drawn: the stage's frame plus whatever the scene added.
@@ -142,8 +154,9 @@ impl GlobeWorld {
             view: GlobeView::default(),
             cam,
             stage,
-            meshes: Vec::new(),
-            pending: None,
+            sets: std::collections::HashMap::new(),
+            active: DEFAULT_SET.to_string(),
+            pending: Vec::new(),
             arrows: stage_arrows.clone(),
             stage_arrows,
             seat: None,
@@ -197,37 +210,59 @@ impl GlobeWorld {
             .collect()
     }
 
-    /// Publish what the planet is made of. The meshes are built here (CPU only)
-    /// and uploaded at the next `render`, so a caller needs no renderer and the
-    /// old shells live until their replacements exist.
+    /// Publish what the planet is made of — the one-set sugar every
+    /// single-view world uses: bakes into [`DEFAULT_SET`] and shows it.
     pub fn set_shells(&mut self, shells: Vec<ShellSpec<'_>>) {
-        self.pending = Some(
-            shells
-                .into_iter()
-                .map(|s| {
-                    let ShellSpec {
-                        dirs,
-                        outlines,
-                        radius,
-                        inset,
-                        color,
-                        cell_radius,
-                        depth,
-                    } = s;
-                    // The sphere and the per-column stack are the SAME builder:
-                    // one answers `radius` for every cell, the other answers the
-                    // column's own height. A shell with DEPTH is the volumetric
-                    // framing — closed columns instead of caps.
-                    let top = move |i: usize| cell_radius.as_ref().map_or(radius, |f| f(i));
-                    match depth {
-                        Some(d) => crate::build_columns(dirs, outlines, top, d, inset, color),
-                        None => build(dirs, outlines, top, inset, color),
-                    }
-                })
-                .filter(|(_, i)| !i.is_empty())
-                .collect(),
-        );
+        self.bake(DEFAULT_SET, shells);
+        self.show(DEFAULT_SET);
+    }
+
+    /// Build a NAMED shell set (CPU only; uploaded at the next `render`)
+    /// without changing which set draws. A bench with several data views of
+    /// one planet bakes each when its DATA changes — so switching views is
+    /// [`show`](GlobeWorld::show), a free swap, never a rebuild stalling the
+    /// frame with the old picture on screen.
+    pub fn bake(&mut self, key: &str, shells: Vec<ShellSpec<'_>>) {
+        let built = shells
+            .into_iter()
+            .map(|s| {
+                let ShellSpec {
+                    dirs,
+                    outlines,
+                    radius,
+                    inset,
+                    color,
+                    cell_radius,
+                    depth,
+                } = s;
+                // The sphere and the per-column stack are the SAME builder:
+                // one answers `radius` for every cell, the other answers the
+                // column's own height. A shell with DEPTH is the volumetric
+                // framing — closed columns instead of caps.
+                let top = move |i: usize| cell_radius.as_ref().map_or(radius, |f| f(i));
+                match depth {
+                    Some(d) => crate::build_columns(dirs, outlines, top, d, inset, color),
+                    None => build(dirs, outlines, top, inset, color),
+                }
+            })
+            .filter(|(_, i)| !i.is_empty())
+            .collect();
+        // A re-bake of a key replaces any bake of it still waiting.
+        self.pending.retain(|(k, _)| k != key);
+        self.pending.push((key.to_string(), built));
         self.dirty = false;
+    }
+
+    /// Draw the named set from here on. A key that was never baked draws
+    /// NOTHING — loudly warned, and visibly wrong (rule 4BB12A75), never a
+    /// stale other view standing in.
+    pub fn show(&mut self, key: &str) {
+        if key != self.active {
+            if !self.sets.contains_key(key) && !self.pending.iter().any(|(k, _)| k == key) {
+                tracing::warn!("globe set `{key}` was never baked — the globe will draw empty");
+            }
+            self.active = key.to_string();
+        }
     }
 
     /// Line geometry drawn over the world, grouped by colour — headings, plate
@@ -374,10 +409,12 @@ impl GlobeWorld {
             view,
             cam,
             stage,
-            meshes,
+            sets,
+            active,
             arrows,
             ..
         } = self;
+        let meshes = sets.get(active).map_or(&[][..], Vec::as_slice);
         view.render(r, fg, seat, base_layer, cam.camera(), stage, meshes, arrows);
     }
 
@@ -390,30 +427,37 @@ impl GlobeWorld {
         let Self {
             cam,
             stage,
-            meshes,
+            sets,
+            active,
             arrows,
             ..
         } = self;
+        let meshes = sets.get(active).map_or(&[][..], Vec::as_slice);
         GlobeView::render_root(fg, cam.camera(), stage, meshes, arrows);
     }
 
-    /// Upload the newest shell list, freeing the one it replaces.
+    /// Upload every baked set still waiting, each freeing the set it replaces.
     fn upload_pending(&mut self, r: &mut Renderer) {
-        if let Some(pending) = self.pending.take() {
-            for h in self.meshes.drain(..) {
-                r.free_mesh(h);
+        for (key, built) in self.pending.drain(..) {
+            if let Some(old) = self.sets.remove(&key) {
+                for h in old {
+                    r.free_mesh(h);
+                }
             }
-            self.meshes = pending
+            let handles = built
                 .iter()
                 .map(|(v, i)| r.upload_mesh(v, MeshIndices::U32(i)))
                 .collect();
+            self.sets.insert(key, handles);
         }
     }
 
-    /// Give the GPU back: the shells and the offscreen target.
+    /// Give the GPU back: every baked set and the offscreen target.
     pub fn free(&mut self, r: &mut Renderer) {
-        for h in self.meshes.drain(..) {
-            r.free_mesh(h);
+        for (_, set) in self.sets.drain() {
+            for h in set {
+                r.free_mesh(h);
+            }
         }
         self.view.free(r);
     }
