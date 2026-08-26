@@ -29,16 +29,16 @@ use crate::map::HexMap;
 pub const MIN_CELLS: u32 = 2;
 /// The most — a busy mantle, seams everywhere.
 pub const MAX_CELLS: u32 = 12;
-/// Where the bench opens: enough cells that both the bubbles and the triple
-/// points read at a glance.
-pub const DEFAULT_CELLS: u32 = 6;
+/// Where the bench opens (Aaron 2026-08-25, functional pass): a full mantle
+/// of cells.
+pub const DEFAULT_CELLS: u32 = 12;
 
 /// The fewest hot spots the dial offers — none: a pure seam field.
 pub const MIN_SPOTS: u32 = 0;
 /// The most — a plume-riddled mantle.
 pub const MAX_SPOTS: u32 = 12;
-/// Where the bench opens: a few plumes, so the map reads as seams AND spots.
-pub const DEFAULT_SPOTS: u32 = 4;
+/// Where the bench opens (same pass): a busy sky of plumes.
+pub const DEFAULT_SPOTS: u32 = 8;
 
 /// A hot spot's angular radius. FIXED, not scaled by the cell count: a plume
 /// is its own thing — it does not grow because the convection pattern
@@ -83,6 +83,31 @@ const RIFT_STREAM: u64 = 0x94D0_49BB_1331_11EB;
 /// bubbles stay bubbles at every count.
 const SEAM_BAND: f32 = 0.45;
 
+// ── the ALONG-SEAM variation (Aaron 2026-08-25: seams are BANDS of heat,
+// not solid lines — they bunch and stretch and rise and dive; a long seam
+// should fade in places where cooler material strides over it) ──
+/// The modulation field's waves: (count, freq_min, freq_span). Mid and short
+/// wavelengths, so a seam of a cell-radius's length crosses several highs and
+/// lows — the dives and rises.
+const VARY_WAVES: [(usize, f32, f32); 2] = [(4, 5.0, 6.0), (3, 14.0, 12.0)];
+/// The modulation's saturating swing. The raw wave sum is clamped into
+/// [−1, 1]; big swing = real time spent at both rails — full dives and
+/// bunched hot stretches, not a gentle ripple.
+const VARY_SWING: f32 = 1.5;
+/// What a full DIVE leaves of the seam's heat — cooler material striding over
+/// the hot line, not the line ceasing to exist.
+const DIVE_FLOOR: f32 = 0.08;
+/// What a full RISE pushes it to — a bunched stretch runs hotter than the
+/// plain line (the final heat still clamps at 1).
+const RISE_CEIL: f32 = 1.15;
+/// The band-WIDTH field's waves and its width range, as factors on the seam
+/// band: the glow pinches to a thread and swells to a broad band.
+const WIDTH_WAVES: (usize, f32, f32) = (3, 4.0, 7.0);
+const WIDTH_MIN: f32 = 0.55;
+const WIDTH_SPAN: f32 = 1.05;
+/// The variation stream's offset off the one roll.
+const VARY_STREAM: u64 = 0xA24B_AED4_963E_E407;
+
 /// How the two boundary reads mix into one heat value: the seam line itself
 /// carries this share, and the triple-junction read carries the rest — so an
 /// ordinary seam tops out ORANGE on the shared ramp while the meeting points
@@ -108,6 +133,10 @@ pub struct SeamField {
     /// sample with the peak tapering to zero at the dead end. DATA for the
     /// coming motion layer as much as heat for this one.
     rifts: Vec<Vec<(Vec3, f32)>>,
+    /// The along-seam variation field's scalar waves `(axis, amp, freq, phase)`
+    /// — intensity — and the band-width field's.
+    vary_waves: Vec<(Vec3, f32, f32, f32)>,
+    width_waves: Vec<(Vec3, f32, f32, f32)>,
     /// Per-tile heat, `0..1` — cool bubble interiors at 0, seams hot, triple
     /// junctions hotter, spot cores hottest. Indexed by `TileId` like every
     /// per-tile layer.
@@ -125,6 +154,8 @@ impl SeamField {
             seeds: Vec::new(),
             spot_dirs: Vec::new(),
             rifts: Vec::new(),
+            vary_waves: Vec::new(),
+            width_waves: Vec::new(),
             heat: Vec::new(),
         };
         field.rebuild(map);
@@ -198,6 +229,30 @@ impl SeamField {
         self.rebuild(map);
     }
 
+    /// A saturating scalar wave field: the raw sum clamped into [−1, 1].
+    fn wave_raw(waves: &[(Vec3, f32, f32, f32)], p: Vec3) -> f32 {
+        waves
+            .iter()
+            .map(|(axis, amp, freq, phase)| amp * (freq * p.dot(*axis) + phase).sin())
+            .sum::<f32>()
+            .clamp(-1.0, 1.0)
+    }
+
+    /// The along-seam INTENSITY at `p`: [`DIVE_FLOOR`]..[`RISE_CEIL`]. A seam
+    /// crossing a low stretch dives under cooler material; a high stretch
+    /// bunches and runs hotter than the plain line.
+    fn vary(&self, p: Vec3) -> f32 {
+        let raw = Self::wave_raw(&self.vary_waves, p);
+        let mid = (DIVE_FLOOR + RISE_CEIL) * 0.5;
+        mid + (RISE_CEIL - DIVE_FLOOR) * 0.5 * raw
+    }
+
+    /// The band-WIDTH factor at `p`: the glow pinches to a thread and swells
+    /// to a broad band along the same run.
+    fn band_width(&self, p: Vec3) -> f32 {
+        WIDTH_MIN + WIDTH_SPAN * (0.5 + 0.5 * Self::wave_raw(&self.width_waves, p))
+    }
+
     /// The map was rebuilt (a new size) — derive the heat for the new tiling
     /// from the SAME seeds: the world's seams do not move when its map does.
     pub fn rebuild(&mut self, map: &HexMap) {
@@ -227,7 +282,40 @@ impl SeamField {
         // A cell's characteristic angular radius: N equal caps tile 4π sr.
         let cell_radius =
             (4.0 * std::f32::consts::PI / self.cells as f32).sqrt() * 0.5;
-        let band = SEAM_BAND * cell_radius;
+
+        // The ALONG-SEAM variation fields — their own stream, fixed sizes, so
+        // neither count dial moves them. Drawn before the rifts, whose peaks
+        // ride the same intensity.
+        let mut vr = fastrand::Rng::with_seed(self.seed.wrapping_add(VARY_STREAM));
+        let unit = |r: &mut fastrand::Rng| {
+            let z = r.f32() * 2.0 - 1.0;
+            let a = r.f32() * std::f32::consts::TAU;
+            let rr = (1.0 - z * z).max(0.0).sqrt();
+            Vec3::new(rr * a.cos(), z, rr * a.sin())
+        };
+        self.vary_waves.clear();
+        let wave_total: usize = VARY_WAVES.iter().map(|(c, _, _)| c).sum();
+        for (count, fmin, fspan) in VARY_WAVES {
+            for _ in 0..count {
+                self.vary_waves.push((
+                    unit(&mut vr),
+                    VARY_SWING * (0.5 + vr.f32()) * 2.0 / wave_total as f32,
+                    fmin + vr.f32() * fspan,
+                    vr.f32() * std::f32::consts::TAU,
+                ));
+            }
+        }
+        let (wcount, wfmin, wfspan) = WIDTH_WAVES;
+        self.width_waves = (0..wcount)
+            .map(|_| {
+                (
+                    unit(&mut vr),
+                    (0.5 + vr.f32()) * 2.0 / wcount as f32,
+                    wfmin + vr.f32() * wfspan,
+                    vr.f32() * std::f32::consts::TAU,
+                )
+            })
+            .collect();
 
         // The RIFTS: their own stream of the roll, their ROOTS on the current
         // seams — so they move with the seams and stand still under the spots
@@ -242,38 +330,65 @@ impl SeamField {
                 let z = rr.f32() * 2.0 - 1.0;
                 let a = rr.f32() * std::f32::consts::TAU;
                 let rad = (1.0 - z * z).max(0.0).sqrt();
-                let q = Vec3::new(rad * a.cos(), z, rad * a.sin());
-                // The two nearest seeds, and the projection onto their
-                // bisector plane — the local seam.
-                let mut n1 = (f32::MIN, 0usize);
-                let mut n2 = (f32::MIN, 0usize);
-                for (i, sd) in self.seeds.iter().enumerate() {
-                    let d = q.dot(*sd);
-                    if d > n1.0 {
-                        n2 = n1;
-                        n1 = (d, i);
-                    } else if d > n2.0 {
-                        n2 = (d, i);
+                let mut q = Vec3::new(rad * a.cos(), z, rad * a.sin());
+                // Project onto the LOCAL seam: the bisector of the two nearest
+                // seeds — iterated, because one projection can slide the point
+                // into a third cell's territory, off the true line. A few
+                // rounds settle it on the seam that actually runs there.
+                let nearest_two = |p: Vec3| {
+                    let mut n1 = (f32::MIN, 0usize);
+                    let mut n2 = (f32::MIN, 0usize);
+                    for (i, sd) in self.seeds.iter().enumerate() {
+                        let d = p.dot(*sd);
+                        if d > n1.0 {
+                            n2 = n1;
+                            n1 = (d, i);
+                        } else if d > n2.0 {
+                            n2 = (d, i);
+                        }
                     }
+                    (n1.1, n2.1)
+                };
+                let mut pair = nearest_two(q);
+                let mut axis = self.seeds[pair.0] - self.seeds[pair.1];
+                for _ in 0..4 {
+                    q = (q - axis * (q.dot(axis) / axis.length_squared().max(1e-6)))
+                        .normalize_or_zero();
+                    let now = nearest_two(q);
+                    if now == pair {
+                        break;
+                    }
+                    pair = now;
+                    axis = self.seeds[pair.0] - self.seeds[pair.1];
                 }
-                let axis = self.seeds[n1.1] - self.seeds[n2.1];
-                let root = (q - axis * (q.dot(axis) / axis.length_squared().max(1e-6)))
-                    .normalize_or_zero();
-                // Perpendicular to the seam, into a random one of the two cells.
-                let mut t = (axis - root * root.dot(axis)).normalize_or_zero();
+                let root = q;
+                // A SPLAY off the seam — not a perpendicular ray: the heading
+                // mixes the across-seam direction with the seam's own tangent
+                // at a shallow angle, so the fork reads as the seam splitting
+                // rather than a streak shooting off it.
+                let mut perp = (axis - root * root.dot(axis)).normalize_or_zero();
                 if rr.bool() {
-                    t = -t;
+                    perp = -perp;
                 }
+                let mut along = root.cross(perp).normalize_or_zero();
+                if rr.bool() {
+                    along = -along;
+                }
+                let splay = (25.0 + rr.f32() * 30.0).to_radians();
+                let t = (perp * splay.sin() + along * splay.cos()).normalize_or_zero();
                 let len = (RIFT_LEN_MIN + rr.f32() * RIFT_LEN_SPAN) * cell_radius;
                 let step = len / RIFT_SAMPLES as f32;
                 let turn = (rr.f32() * 2.0 - 1.0) * RIFT_CURVE / RIFT_SAMPLES as f32;
                 let mut p = root;
                 let mut samples = Vec::with_capacity(RIFT_SAMPLES);
+                let mut t = t;
                 for k in 0..RIFT_SAMPLES {
-                    // The peak fades along the arc: hot where it left the
-                    // seam, NOTHING at the dead end.
-                    let along = k as f32 / (RIFT_SAMPLES - 1) as f32;
-                    samples.push((p, RIFT_ROOT_PEAK * (1.0 - along)));
+                    // The peak fades along the arc — hot where it left the
+                    // seam, NOTHING at the dead end — and RIDES the same
+                    // intensity field as its parent seam, so a rift dives and
+                    // rises with the band it split from.
+                    let frac = k as f32 / (RIFT_SAMPLES - 1) as f32;
+                    samples.push((p, RIFT_ROOT_PEAK * (1.0 - frac) * self.vary(p).min(1.0)));
                     // March the geodesic, then curve the heading a little.
                     let (sn, cs) = step.sin_cos();
                     let np = (p * cs + t * sn).normalize_or_zero();
@@ -286,6 +401,34 @@ impl SeamField {
                 self.rifts.push(samples);
             }
         }
+        self.derive_heat(map);
+    }
+
+    /// **The slow geological drift** (Aaron 2026-08-25: upwelling seams and
+    /// volcanic dots SHIFT over much longer timelines — seams grow and
+    /// shrink, volcanoes go dormant, new ones form). Advances the intensity
+    /// and width fields' phases a little and re-derives the heat: the bands
+    /// breathe, their hot stretches migrate — and a crust re-derive on the
+    /// drifted field is what retires old vents and lights new ones. Seeds,
+    /// spots and rift geometry stand still: the pattern drifts, the world
+    /// does not re-roll.
+    pub fn drift(&mut self, map: &HexMap, amount: f32) {
+        for w in &mut self.vary_waves {
+            w.3 += amount;
+        }
+        for w in &mut self.width_waves {
+            w.3 += amount * 0.6;
+        }
+        self.derive_heat(map);
+    }
+
+    /// Recompute the heat over the CURRENT geometry and wave phases — the
+    /// tail of [`rebuild`](Self::rebuild), callable on its own so a phase
+    /// [`drift`](Self::drift) re-derives without re-rolling anything.
+    fn derive_heat(&mut self, map: &HexMap) {
+        let cell_radius =
+            (4.0 * std::f32::consts::PI / self.cells as f32).sqrt() * 0.5;
+        let band = SEAM_BAND * cell_radius;
         let rift_band = RIFT_BAND_FRAC * cell_radius;
         // Skip the exp for tiles clearly outside a rift's glow.
         let rift_near = (rift_band * 3.0).cos();
@@ -309,13 +452,18 @@ impl SeamField {
                         d3 = a;
                     }
                 }
-                let seam = 1.0 - ((d2 - d1) / band).clamp(0.0, 1.0);
+                // The band is a LIVING one: its width and its intensity both
+                // vary along the run — it bunches, stretches, rises, and
+                // DIVES under cooler material where the intensity bottoms out.
+                let band_local = band * self.band_width(*d);
+                let seam = 1.0 - ((d2 - d1) / band_local).clamp(0.0, 1.0);
                 let junction = if d3 < f32::MAX {
-                    1.0 - ((d3 - d1) / band).clamp(0.0, 1.0)
+                    1.0 - ((d3 - d1) / band_local).clamp(0.0, 1.0)
                 } else {
                     0.0 // two cells have no triple junction
                 };
-                let boundary = SEAM_WEIGHT * seam + (1.0 - SEAM_WEIGHT) * junction;
+                let boundary =
+                    (SEAM_WEIGHT * seam + (1.0 - SEAM_WEIGHT) * junction) * self.vary(*d);
                 // A plume burns wherever it is: a white-hot gaussian core that
                 // falls off over SPOT_RADIUS. The tile reads the HOTTEST source
                 // over it — heat sources do not stack past the hottest one.
@@ -339,7 +487,7 @@ impl SeamField {
                         }
                     }
                 }
-                boundary.max(plume).max(rift)
+                boundary.max(plume).max(rift).min(1.0)
             })
             .collect();
     }
@@ -468,10 +616,20 @@ mod tests {
                 "rift {r}'s root stands on a seam: Δ={}",
                 dists[1] - dists[0]
             );
-            assert!((first_peak - RIFT_ROOT_PEAK).abs() < 1e-6);
-            // The peak fades monotonically to a DEAD END…
-            for w in arc.windows(2) {
-                assert!(w[1].1 < w[0].1, "rift {r} only cools along its run");
+            // The root's peak is the fade envelope TIMES the band's local
+            // intensity — a rift born on a dived stretch is born cool.
+            assert!(
+                (0.0..=RIFT_ROOT_PEAK + 1e-6).contains(&first_peak),
+                "rift {r}'s root peak sits inside the envelope: {first_peak}"
+            );
+            // The fade ENVELOPE holds at every sample (the intensity may rise
+            // and dive along the arc, but never above the fading ceiling)…
+            for (k, (_, peak)) in arc.iter().enumerate() {
+                let frac = k as f32 / (RIFT_SAMPLES - 1) as f32;
+                assert!(
+                    *peak <= RIFT_ROOT_PEAK * (1.0 - frac) + 1e-6,
+                    "rift {r} sample {k} breaks the fade envelope"
+                );
             }
             assert_eq!(arc[RIFT_SAMPLES - 1].1, 0.0, "…to nothing at the tip");
             // …inside the cell: the arc never runs past the cell radius.
@@ -482,6 +640,13 @@ mod tests {
                 "rift {r} dies inside the cell, ran {run}"
             );
         }
+        // Not every rift is born on a dive: at least one carries real root
+        // heat (which of the six land on hot stretches is the roll's call).
+        assert!(
+            field.rifts().iter().any(|a| a[0].1 >= 0.25),
+            "some rift leaves the seam hot: peaks {:?}",
+            field.rifts().iter().map(|a| a[0].1).collect::<Vec<_>>()
+        );
         // Determinism + spot independence: the same roll grows the same
         // rifts, and the spots dial (its own stream) moves none of them.
         let again = SeamField::new(&map, DEFAULT_CELLS, 0, 42);
@@ -505,6 +670,126 @@ mod tests {
             off_seam && field.heat(t) > 0.35
         });
         assert!(cut, "a rift carries heat into a bubble interior");
+    }
+
+    /// **The seams are LIVING BANDS, not solid lines.** Walking the tiles that
+    /// stand ON the boundary line (d2−d1 within a whisker), the heat must
+    /// span a real range: stretches near full strength (the bunched rises),
+    /// stretches diving under cooler material (near the dive floor), and a
+    /// spread between — never one flat temperature down the line. The band's
+    /// WIDTH varies too: the glow's reach differs along the run.
+    #[test]
+    fn seams_are_living_bands_that_rise_and_dive() {
+        let map = HexMap::new(MIN_FREQ);
+        let field = SeamField::new(&map, DEFAULT_CELLS, 0, 42);
+        let cell_radius =
+            (4.0 * std::f32::consts::PI / field.cells() as f32).sqrt() * 0.5;
+        let mut on_line: Vec<f32> = Vec::new();
+        for t in map.tiles() {
+            let d = map.direction(t);
+            let mut dd: Vec<f32> = field
+                .seeds
+                .iter()
+                .map(|sd| d.dot(*sd).clamp(-1.0, 1.0).acos())
+                .collect();
+            dd.sort_by(f32::total_cmp);
+            if dd[1] - dd[0] < 0.02 {
+                on_line.push(field.heat(t));
+            }
+        }
+        assert!(on_line.len() > 100, "the line is sampled in quantity");
+        let hi = on_line.iter().copied().fold(0.0f32, f32::max);
+        let lo = on_line.iter().copied().fold(1.0f32, f32::min);
+        assert!(hi > 0.65, "bunched stretches run hot: {hi}");
+        assert!(lo < 0.15, "…and dives go under cooler material: {lo}");
+        let mean = on_line.iter().sum::<f32>() / on_line.len() as f32;
+        let var = on_line.iter().map(|h| (h - mean).powi(2)).sum::<f32>()
+            / on_line.len() as f32;
+        assert!(
+            var.sqrt() > 0.12,
+            "the temperature genuinely varies along the line: σ={}",
+            var.sqrt()
+        );
+        // Width: the glow's reach at a fixed off-line distance differs along
+        // the run — a pinched thread somewhere, a broad band somewhere else.
+        let probe = SEAM_BAND * cell_radius * 0.6;
+        let mut off_line: Vec<f32> = Vec::new();
+        for t in map.tiles() {
+            let d = map.direction(t);
+            let mut dd: Vec<f32> = field
+                .seeds
+                .iter()
+                .map(|sd| d.dot(*sd).clamp(-1.0, 1.0).acos())
+                .collect();
+            dd.sort_by(f32::total_cmp);
+            if (dd[1] - dd[0] - probe).abs() < 0.01 {
+                off_line.push(field.heat(t));
+            }
+        }
+        let ohi = off_line.iter().copied().fold(0.0f32, f32::max);
+        let olo = off_line.iter().copied().fold(1.0f32, f32::min);
+        assert!(
+            ohi > 0.25 && olo < 0.05,
+            "the band swells past the probe here and pinches short of it there: {olo}..{ohi}"
+        );
+    }
+
+    /// **The drift breathes the field without re-rolling the world** (Aaron
+    /// 2026-08-25: seams slowly grow and shrink, volcanoes go dormant and
+    /// new ones form, over much longer timelines). After a drift: the heat
+    /// moved but stays in range; the seeds, spots and rift arcs stand
+    /// exactly still; the change is SLOW (most tiles barely move); and the
+    /// crust re-derived on the drifted field retires some vents and lights
+    /// others while keeping a stable core — dormancy and birth, not a
+    /// re-roll.
+    #[test]
+    fn the_drift_breathes_the_field_and_shifts_the_vents() {
+        use crate::crust::CrustField;
+        use crate::map::TileId;
+        let map = HexMap::new(MIN_FREQ);
+        let mut field = SeamField::new(&map, DEFAULT_CELLS, DEFAULT_SPOTS, 42);
+        let heats0 = field.heats().to_vec();
+        let seeds0 = field.seeds.clone();
+        let spots0 = field.spot_dirs().to_vec();
+        let rifts0 = field.rifts().to_vec();
+        let vents0: std::collections::HashSet<TileId> =
+            CrustField::derive(&map, &field).vents().iter().copied().collect();
+
+        for _ in 0..6 {
+            field.drift(&map, 0.06);
+        }
+        assert_ne!(field.heats(), &heats0[..], "the field breathed");
+        assert!(field.heats().iter().all(|h| (0.0..=1.0).contains(h)));
+        assert_eq!(field.seeds, seeds0, "the cells stand still");
+        assert_eq!(field.spot_dirs(), &spots0[..], "the plumes stand still");
+        assert_eq!(field.rifts(), &rifts0[..], "the rift arcs stand still");
+        // SLOW: the median tile's change is small.
+        let mut deltas: Vec<f32> = field
+            .heats()
+            .iter()
+            .zip(&heats0)
+            .map(|(a, b)| (a - b).abs())
+            .collect();
+        deltas.sort_by(f32::total_cmp);
+        assert!(
+            deltas[deltas.len() / 2] < 0.1,
+            "a drift is a breath, not a re-roll: median Δ {}",
+            deltas[deltas.len() / 2]
+        );
+
+        let vents1: std::collections::HashSet<TileId> =
+            CrustField::derive(&map, &field).vents().iter().copied().collect();
+        let kept = vents0.intersection(&vents1).count();
+        assert!(!vents1.is_empty() && !vents0.is_empty());
+        assert!(
+            vents0.difference(&vents1).count() > 0 || vents1.difference(&vents0).count() > 0,
+            "some volcano went dormant or was born"
+        );
+        assert!(
+            kept * 3 >= vents0.len(),
+            "…while a stable core persists: kept {kept} of {}",
+            vents0.len()
+        );
     }
 
     /// **A hot spot is a white-hot core, seam or no seam.** The tile nearest a

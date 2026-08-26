@@ -121,6 +121,16 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     }
 
     let base = material_color(in.material);
+    // EMISSIVE direct colour (bit 30 inside the bit-31 direct escape): the
+    // surface GLOWS — no Lambert, no sheen, slightly over unit so it reads
+    // hot against every lit neighbour (and survives an HDR roll-off as a
+    // hot spot where a stage tonemaps).
+    if ((in.material & 0xC0000000u) == 0xC0000000u) {
+        let glow = vec4<f32>(base * 1.35, 1.0) * per_draw.tint;
+        let gdist = length(in.world_position - scene.camera_pos.xyz);
+        let gfog = 1.0 - exp(-scene.fog_color.w * gdist);
+        return vec4<f32>(mix(glow.rgb, scene.fog_color.rgb, gfog), glow.a);
+    }
     // The frame's LIGHT LIST over a flat ambient floor. Each light contributes a matte
     // Lambertian term; a light below the horizon fades by carrying a near-zero colour
     // from the scene-side day-arc math, so no explicit night branch is needed. The

@@ -48,18 +48,19 @@
 
 use std::time::Duration;
 
-use flicker::render::{FrameGraph, Renderer, TextureHandle, Vec3};
+use flicker::render::{FrameGraph, MeshDrawOptions, Renderer, TextureHandle, Vec3};
 use flicker::scene::{Scene, SceneInput, Transition};
 use flicker::script::{HudCommand, ScriptHost, UiNode, ValueMap};
 use flicker::ui::{render_hud, run_ui, SceneDef, UiInput, UiIntents, UiState, WalkerHandler};
-use flicker_globe::{column_frame, temp_color, tile_width, GlobeWorld, ShellSpec, RADIUS};
+use flicker_globe::{column_frame, lerp3, stippled, temp_color, tile_width, water_temp_color, Arrows, GlobeWorld, ShellSpec, RADIUS};
 use flicker_input_core::{AbstractControls, GamepadConfig, InputMap, InputState};
 use flicker_input_router::{InputHandler, Router};
 use flicker_shell::{PauseScene, Theme};
 
 use crate::crust::CrustField;
+use crate::evolve::Evolution;
 use crate::map::{HexMap, TileId, DEFAULT_FREQ, MAX_FREQ, MIN_FREQ};
-use crate::plates::{PlateField, DEFAULT_PLATES};
+use crate::plates::CONTINENT_H_FRAC;
 use crate::seams::{SeamField, DEFAULT_CELLS, DEFAULT_SPOTS};
 use crate::ui;
 
@@ -70,6 +71,8 @@ const HEX_FILL: f32 = 0.85;
 /// How many tile-widths across the hex view frames. Five tiles across ⇒ the
 /// column is ~1/10 of the viewport at the opening fill.
 const HEX_FRAME_TILES: f32 = 5.0;
+/// The evolve view's motion-arrow ink — one ink for the one field.
+const MOTION_INK: [f32; 4] = [0.78, 0.62, 0.36, 1.0];
 /// The centre-cell reticle's ink — the bold outline on the cell the camera
 /// faces. Instrument ink like the graticule's, not UI chrome.
 const RETICLE_INK: [f32; 4] = [1.0, 0.85, 0.30, 1.0];
@@ -95,6 +98,27 @@ const BEDROCK_COLOR: [f32; 3] = [0.36, 0.28, 0.19];
 /// Lava — a vent where the molten heat pushed through the bedrock: the dots
 /// on the crust map, and the whole bedrock cell of a vented column.
 const LAVA_COLOR: [f32; 3] = [0.88, 0.16, 0.05];
+/// Lava, EMISSIVE — the over-unit red drives the direct-colour glow bit
+/// (flicker-globe: radiance past 1 is emission), so a vent BURNS on the
+/// surface instead of sitting matte under the light.
+const LAVA_GLOW: [f32; 3] = [1.25, 0.22, 0.07];
+/// **The geological drift's cadence** (Aaron 2026-08-25: the upwelling seams
+/// and volcanic dots SLOWLY shift — seams grow and shrink, volcanoes go
+/// dormant and new ones form, over much longer timelines): every this many
+/// era ticks the molten field's phases advance by the amount, the crust's
+/// vents re-derive on the breathed field, and the plates' derived motion
+/// follows. The seams/crust/plates tabs re-bake LAZILY on next entry.
+const DRIFT_EVERY: u32 = 12;
+const DRIFT_AMOUNT: f32 = 0.06;
+
+/// How strongly the molten heat below WARMS the crust's bedrock — the subtle
+/// brown→lava shading around the hot zones (Aaron 2026-08-25: "still bedrock
+/// brown, just shade it a little from the heat map below"). Applied on
+/// heat², so interiors stay clean brown and only the real heat blushes.
+const CRUST_SHADE_GAIN: f32 = 0.55;
+/// The generation ZONE's base ink — the clearly-bounded ember band over every
+/// tile above the upwell floor: where the crust actually makes material.
+const UPWELL_ZONE_COLOR: [f32; 3] = [0.52, 0.20, 0.07];
 /// A continental plate — this is LAND (there is no water yet), so it reads
 /// brown (Aaron 2026-08-25: "the ocean beds are probably more grey and land
 /// is more on the brown side").
@@ -102,37 +126,127 @@ const CONTINENT_COLOR: [f32; 3] = [0.42, 0.32, 0.21];
 /// An oceanic plate — a bare rock bed, grey, not sea-blue: nothing has filled
 /// it with water yet.
 const OCEAN_BED_COLOR: [f32; 3] = [0.33, 0.34, 0.36];
+/// Young volcanic rock — the basalt the evolution era piles up.
+const ROCK_COLOR: [f32; 3] = [0.17, 0.15, 0.14];
+/// Loose SEDIMENT — the pale wash riding every column's top: the softest
+/// material, the water cycle's currency.
+const SEDIMENT_COLOR: [f32; 3] = [0.62, 0.57, 0.47];
+/// What a fully water-compacted consolidated cell shades toward — indurated
+/// marine rock: darker, denser, colder than fresh strata.
+const COMPACT_COLOR: [f32; 3] = [0.28, 0.29, 0.33];
+/// A consolidated stratum — rock that became a LAYER.
+const STRATA_COLOR: [f32; 3] = [0.48, 0.44, 0.40];
+// ── the motion-arrow FIELD (the God Mode read, replicated): a stippled
+// sample of columns across the WHOLE globe, each arrow coloured by its
+// plate and FILLING toward its next one-hex step ──
+/// How many headings the field aims to draw, whatever the resolution.
+const MOTION_ARROWS: usize = 2600;
+/// Below this step-progress a column is not going anywhere worth drawing.
+const MOTION_FLOOR: f32 = 0.02;
+/// Legibility gain on arrow length — a true one-hex shaft is ~1% of the
+/// radius and unreadable, so the shafts draw longer.
+const MOTION_GAIN: f32 = 3.2;
+/// Arrowhead barb length, as a fraction of the shaft.
+const MOTION_BARB: f32 = 0.34;
+/// Radius the headings draw at — clear of the ground, under the graticule.
+const R_MOTION: f32 = 1.012;
+
+// ── WATER (Aaron 2026-08-25: coverage dial; three layers — deep, shallow,
+// surface/shelf — whose temperature + circulation arrive with the erosion
+// era; today the LEVEL and the three static bands) ──
+/// The coverage dial's range and its Earth-like default: ~71% of Earth's
+/// surface is ocean (75 was Aaron's guess; 71 is the standard figure).
+const MIN_WATER: u32 = 0;
+const MAX_WATER: u32 = 100;
+/// The era opens as a WATER WORLD: the dial is a live coverage GAUGE now
+/// (Aaron 2026-08-26) — it reads how much of the surface IS water (starting
+/// ~100 and falling as the land grows); a hand on it re-pours to that share.
+const DEFAULT_WATER: u32 = 100;
+/// The bootstrap fast-forward's per-frame compute budget.
+const BOOTSTRAP_FRAME_MS: u128 = 12;
+/// The climate gauge's range (percent of the 0..1 climate scale) — the
+/// ice-age runner wanders around the baseline a write to it sets.
+const MIN_TEMP: u32 = 0;
+const MAX_TEMP: u32 = 100;
+/// Ice caps — the ink the frozen ground shades toward, in the view and stack.
+const ICE_COLOR: [f32; 3] = [0.86, 0.90, 0.94];
+/// The band depths, in tile-width units below the sea level: shallower than
+/// SURFACE_DEPTH is the surface/shelf layer (lakes, inland seas, drowned
+/// shelf); deeper than DEEP_DEPTH is the deep ocean; between is shallow sea.
+const SURFACE_DEPTH: f32 = 0.2;
+const DEEP_DEPTH: f32 = 0.7;
+// ── the first two ATMOSPHERIC layers (Aaron 2026-08-25: volumetric-fog
+// cells, mainly transparent — the clouds at their densest should barely
+// occlude; the point is only to SHOW the moisture the erosion drinks) ──
+/// The two layers' altitudes above the sea line and their cell thickness,
+/// in tile-width units — haze low and broad, clouds at the condensation deck.
+const HAZE_ALT: f32 = 1.1;
+const CLOUD_ALT: f32 = 2.1;
+const ATMO_THICK: f32 = 0.3;
+/// Presence thresholds on the moisture field: haze forms easily, a CLOUD is a
+/// condensation zone (the uplift's own).
+const HAZE_WET: f32 = 0.18;
+const CLOUD_WET: f32 = 0.5;
+/// The near-nothing alphas — see the ground THROUGH the weather, always.
+const HAZE_ALPHA: f32 = 0.08;
+const CLOUD_ALPHA: f32 = 0.15;
+
+/// The three water layers' inks, deep to surface.
+const DEEP_WATER_COLOR: [f32; 3] = [0.05, 0.10, 0.22];
+const SHALLOW_WATER_COLOR: [f32; 3] = [0.10, 0.22, 0.38];
+const SURFACE_WATER_COLOR: [f32; 3] = [0.20, 0.38, 0.52];
+/// DRY-land reclassification levels, in tile-width units of TOTAL height
+/// (Aaron: material that rises above the shelf and plate levels must take
+/// the correct colour): below SHELF_LEVEL a dry tile is still bare bed;
+/// between, it reads as shelf; above LAND_LEVEL it is land.
+const SHELF_LEVEL: f32 = 0.30;
+const LAND_LEVEL: f32 = CONTINENT_H_FRAC;
+
+/// What a tile's GROUND is, judged by its CURRENT total height — never by
+/// what it was rolled as: a seamount that grows past the levels becomes
+/// shelf, then land (the reclassification Aaron asked for). The ground is
+/// ROCK wet or dry; the water above it is its own transparent cells, split
+/// geometrically at the band depths.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Ground {
+    Bed,
+    Shelf,
+    Land,
+}
+
+/// Classify one tile's rock: `total` in tile-width units.
+fn ground_class(total: f32) -> Ground {
+    if total >= LAND_LEVEL {
+        Ground::Land
+    } else if total >= SHELF_LEVEL {
+        Ground::Shelf
+    } else {
+        Ground::Bed
+    }
+}
+
+// (The sea level lives with the era now — `Evolution::sea_level`, the
+// percentile of the era's own heights — so the dial has one derivation.)
+/// The era's clock: ticks per second while running, and how many ticks pass
+/// between REBAKES of the evolve view (the mesh is the heavy part, so the sim
+/// steps faster than the picture).
+const EVOLVE_HZ: f32 = 3.0;
+const EVOLVE_BAKE_TICKS: u64 = 3;
+
 /// CONTINENTAL SHELF — the transitional zone where a bed meets a continent,
 /// the ONE edge the surface marks (plate joins between two beds or two
 /// continents paint nothing). A sandy tone between the two kinds.
 const SHELF_COLOR: [f32; 3] = [0.56, 0.49, 0.35];
-/// The plate cell's BASE heights, per kind (per cell width `w`): a continent
-/// is THICK crust riding high, an ocean bed is a thin veneer — the difference
-/// the erosion era will carve against.
-const CONTINENT_H_FRAC: f32 = 0.5;
-const OCEAN_BED_H_FRAC: f32 = 0.125;
-/// How much ELEVATION the molten seams push into the plate shell, per cell
-/// width, at full heat (Aaron 2026-08-25: heat = pressure = volume — the
-/// hotter the seam below, the taller this layer's cell). Rides ON TOP of the
-/// kind base, for both kinds: a hot seam under an ocean bed is a ridge.
-const ELEV_H_FRAC: f32 = 2.0;
+// (The plate shell's per-kind BASE heights live with the scheme —
+// `plates::{CONTINENT_H_FRAC, OCEAN_BED_H_FRAC}` — because the era's ground
+// ledger is seeded from them too.)
+// (The heat-elevation constant is the ERA's law now — `evolve::ELEV_H_FRAC` —
+// so ground height has one owner.)
 /// How far below the nominal surface a plate column's walls reach (per cell
 /// width) — the root that keeps neighbouring cells of different heights
 /// reading as EXTRUDED solids, never floating caps.
 const PLATE_ROOT_FRAC: f32 = 0.25;
 
-/// **The plate shell's per-cell height** — the composition Aaron specified:
-/// the KIND's base thickness (thin bed / thick shelf, the plates' own data)
-/// plus the seam-derived elevation (the molten layer's data, a SEPARATE
-/// channel: colour stays the plate's, geometry carries the heat below).
-fn plate_height(plates: &PlateField, seams: &SeamField, tile: TileId, w: f32) -> f32 {
-    let base = if plates.is_continent(tile) {
-        CONTINENT_H_FRAC
-    } else {
-        OCEAN_BED_H_FRAC
-    };
-    w * (base + ELEV_H_FRAC * seams.heat(tile))
-}
 
 /// Which data the world's tile shell is painted with. `Authored` is the
 /// stage's own look (the MAP tab). Every view is a BAKED mesh set in the one
@@ -144,7 +258,7 @@ enum WorldView {
     Authored,
     Heat,
     Crust,
-    Plates,
+    Evolve,
 }
 
 impl WorldView {
@@ -154,7 +268,7 @@ impl WorldView {
             WorldView::Authored => "authored",
             WorldView::Heat => "heat",
             WorldView::Crust => "crust",
-            WorldView::Plates => "plates",
+            WorldView::Evolve => "evolve",
         }
     }
 }
@@ -169,7 +283,10 @@ const POPULOUS_SCRIPT: &str = include_str!("../../../../content/sensorium/script
 pub struct PopulousBench {
     // ── navigation (indices into the roster, never a hardcoded count) ──
     sel_page: usize,
-    sel_tab: usize,
+    /// Each PAGE's remembered tab (indexed by page): leaving a page and
+    /// returning restores the tab you were on (Aaron 2026-08-25 — the PTT
+    /// retains the tab between page swaps; a fresh page opens on its first).
+    page_tabs: Vec<usize>,
 
     // ── the surface (the scene as DATA) ──
     /// The static component tree, parsed ONCE from `populous.scene.json`:
@@ -213,10 +330,31 @@ pub struct PopulousBench {
     /// pushes through the bedrock. Derived from `seams`, re-derived whenever
     /// it changes; the crust tab's lava dots and the stack's lava columns.
     crust: CrustField,
-    /// **The tectonic shell** — continents, ocean beds and plate boundaries.
-    /// Its OWN roll, deliberately unrelated to the molten layers below
-    /// (Aaron 2026-08-25): the erosion era starts from this scheme.
-    plates: PlateField,
+    /// **The evolution era's living state** — poles, loose rock, formed
+    /// strata. Ticks only while the evolve view is watched and running.
+    evolve: Evolution,
+    /// Whether the era's clock runs.
+    evolve_running: bool,
+    /// Era ticks since the last geological drift.
+    drift_unticked: u32,
+    /// The molten-fed views (heat/crust/plates) have drifted since their last
+    /// bake — re-baked lazily on next entry, never mid-era.
+    molten_views_stale: bool,
+    /// The clock's accumulator, and ticks since the view was last rebaked.
+    evolve_accum: f32,
+    evolve_unbaked: u64,
+    /// The FAST ROLL's goal and start (0/0 = none): while the era's clock is
+    /// under the goal the run loop computes flat-out with no baking, the
+    /// progress bar filling from `roll_from`; arrival bakes once and pauses.
+    roll_until: u64,
+    roll_from: u64,
+    /// Planetary water coverage, percent of surface flooded — the sea-level
+    /// dial. DISPLAY + classification level today; the three water layers'
+    /// temperature and circulation arrive with the erosion era. Changing it
+    /// never resets the era (it is a lens, not a roll).
+    /// Whether the plate MOTION ARROWS draw on the evolve view — a lens, like
+    /// the water dial: toggling it resets nothing.
+    show_arrows: bool,
     /// **One column of the world, up close** — the HEX page's view: the same
     /// component as `world`, framing the centre cell's molten column instead of
     /// the planet. A second VIEW, never a second world.
@@ -263,11 +401,12 @@ impl PopulousBench {
         let hex = GlobeWorld::new(ui::HEX_STAGE_SOURCE, &ui_styles, None).in_panel(ui::VIEW_PANE);
         let seams = SeamField::new(&map, DEFAULT_CELLS, DEFAULT_SPOTS, fastrand::u64(..));
         let crust = CrustField::derive(&map, &seams);
-        let plates = PlateField::new(&map, DEFAULT_PLATES, fastrand::u64(..));
+        let mut evolve = Evolution::new(&map, &seams);
+        evolve.set_water(DEFAULT_WATER as f32);
 
         let mut bench = Self {
             sel_page: 0,
-            sel_tab: 0,
+            page_tabs: vec![0; ui::PAGES.len()],
             tree,
             script,
             ui_styles,
@@ -280,7 +419,15 @@ impl PopulousBench {
             world,
             seams,
             crust,
-            plates,
+            evolve,
+            evolve_running: false,
+            drift_unticked: 0,
+            molten_views_stale: false,
+            evolve_accum: 0.0,
+            evolve_unbaked: 0,
+            roll_until: 0,
+            roll_from: 0,
+            show_arrows: true,
             hex,
             focus_tile: 0,
             highlight: None,
@@ -300,6 +447,14 @@ impl PopulousBench {
         bench
     }
 
+    /// The CURRENT page's tab — its remembered selection, clamped to the
+    /// page's own roster (pages have different tab counts, and the memory of
+    /// a bigger page must not index off the end of a smaller one).
+    fn sel_tab(&self) -> usize {
+        let tabs = ui::page(self.sel_page).tabs.len();
+        self.page_tabs[self.sel_page.min(self.page_tabs.len() - 1)].min(tabs.saturating_sub(1))
+    }
+
     /// Which data the world's tile shell wears for the CURRENT selection: the
     /// SEAMS tab paints the molten heat field, the CRUST tab paints bedrock
     /// with the lava vents, every other selection shows the authored look. A
@@ -309,10 +464,10 @@ impl PopulousBench {
         if page.id != "world" {
             return WorldView::Authored;
         }
-        match page.tabs[self.sel_tab.min(page.tabs.len() - 1)].id {
+        match page.tabs[self.sel_tab()].id {
             "seams" => WorldView::Heat,
             "crust" => WorldView::Crust,
-            "plates" => WorldView::Plates,
+            "evolve" => WorldView::Evolve,
             _ => WorldView::Authored,
         }
     }
@@ -344,7 +499,7 @@ impl PopulousBench {
             world,
             seams,
             crust,
-            plates,
+            evolve,
             ..
         } = self;
         let mut shells = world.authored_shells(&map.grid().dirs, map.outlines());
@@ -355,45 +510,180 @@ impl PopulousBench {
                     top.color = Box::new(|i| Some(temp_color(seams.heat(i as TileId))));
                 }
                 WorldView::Crust => {
-                    top.color = Box::new(|i| {
-                        Some(if crust.is_vent(i as TileId) {
-                            LAVA_COLOR
-                        } else {
-                            BEDROCK_COLOR
-                        })
-                    });
-                }
-                WorldView::Plates => {
-                    // Reborrow the destructured `&mut`s as SHARED refs (Copy),
-                    // so all three closures can carry their own copy.
-                    let plates: &PlateField = plates;
                     let seams: &SeamField = seams;
                     top.color = Box::new(move |i| {
                         let t = i as TileId;
-                        Some(if plates.is_shelf(t) {
-                            SHELF_COLOR
-                        } else if plates.is_continent(t) {
-                            CONTINENT_COLOR
+                        let h = seams.heat(t);
+                        Some(if crust.is_vent(t) {
+                            LAVA_GLOW // over-unit: the vent EMITS
+                        } else if h >= crate::crust::UPWELL_HEAT {
+                            // THE GENERATION ZONE (Aaron 2026-08-25: the
+                            // crust tab defines the places material is
+                            // generated): everything above the upwell floor
+                            // wears a clearly-bounded ember band, deepening
+                            // toward lava as the heat climbs — the seam
+                            // zones read as zones, the vents burn inside
+                            // them.
+                            let z = (h - crate::crust::UPWELL_HEAT)
+                                / (1.0 - crate::crust::UPWELL_HEAT);
+                            lerp3(UPWELL_ZONE_COLOR, LAVA_COLOR, z)
                         } else {
-                            OCEAN_BED_COLOR
+                            // Bedrock, blushed by the sub-floor heat: brown
+                            // in the interiors, warming as the zone nears —
+                            // heat², so only real heat shows.
+                            lerp3(BEDROCK_COLOR, LAVA_COLOR, CRUST_SHADE_GAIN * h * h)
                         })
                     });
-                    // The RELIEF channel, separate from the colour: each cell
-                    // stands at its own height — kind base + the heat of the
-                    // seam beneath — as an EXTRUDED column whose walls root
-                    // below the surface, so uneven neighbours read as solids
-                    // sticking out of the shell, not floating caps.
+                }
+                WorldView::Evolve => {
+                    // The living view. Colour is CLASSIFIED, never inherited:
+                    // each tile's current total height against the sea level
+                    // decides what it IS — deep/shallow/surface water below
+                    // the line, bed/shelf/land above it (grown material that
+                    // crosses a level takes the level's colour — Aaron's
+                    // reclassification) — with the era's basalt, strata and
+                    // vent glow shading the dry ground, and vents glowing
+                    // faintly through shallow water (submarine volcanoes).
+                    let crust: &CrustField = crust;
+                    let evolve: &Evolution = evolve;
                     let w = map
                         .tiles()
                         .next()
                         .map(|t| tile_width(map.direction(t), map.outline(t), RADIUS))
-                        .unwrap_or(0.0);
+                        .unwrap_or(1.0);
+                    // The sea level that floods the asked share of the world.
+                    // Heights come from the ERA's OWN ground ledger — the
+                    // base rides the conveyor, so the land visibly drifts;
+                    // the heat elevation stays in the mantle's frame beneath.
+                    let era_h = move |t: TileId| evolve.ground(t);
+                    let sea = evolve.resolve_sea();
+                    // The GROUND is ROCK, wet or dry (Aaron 2026-08-25: the
+                    // depth recolouring was wrong — brown, grey and dark are
+                    // the crust's colours; the water goes ON TOP as its own
+                    // transparent cells). Height still reclassifies rock that
+                    // grows through the shelf and land levels.
+                    top.color = Box::new(move |i| {
+                        let t = i as TileId;
+                        let total = era_h(t);
+                        let mut c = match ground_class(total) {
+                            Ground::Land => CONTINENT_COLOR,
+                            Ground::Shelf => SHELF_COLOR,
+                            Ground::Bed => OCEAN_BED_COLOR,
+                        };
+                        c = lerp3(c, ROCK_COLOR, (evolve.rock(t) * 1.2).clamp(0.0, 0.8));
+                        let (n, _) = evolve.strata(t);
+                        c = lerp3(c, STRATA_COLOR, (f32::from(n) / 3.0).clamp(0.0, 0.7));
+                        if crust.is_vent(t) {
+                            c = lerp3(c, LAVA_COLOR, 0.5);
+                        }
+                        // THE VEINS glow through like the lava nodes do — the
+                        // bench's x-ray on the buried ore bodies, inked per
+                        // kind (gold amber, coal black, calcite chalk…).
+                        if let Some(k) = evolve.vein(t) {
+                            c = lerp3(c, crate::evolve::vein_kinds()[k as usize].ink, 0.5);
+                        }
+                        // THE CAPS: standing ice whitens the ground toward
+                        // frozen-through — the ice ages read at a glance.
+                        let ice = evolve.ice(t);
+                        if ice > 0.02 {
+                            c = lerp3(
+                                c,
+                                ICE_COLOR,
+                                (ice / crate::evolve::ICE_SOLID).clamp(0.0, 1.0) * 0.92,
+                            );
+                        }
+                        Some(c)
+                    });
                     top.cell_radius = Some(Box::new(move |i| {
-                        RADIUS + plate_height(plates, seams, i as TileId, w)
+                        RADIUS + era_h(i as TileId) * w
                     }));
                     top.depth = Some(Box::new(move |i| {
-                        plate_height(plates, seams, i as TileId, w) + w * PLATE_ROOT_FRAC
+                        era_h(i as TileId) * w + w * PLATE_ROOT_FRAC
                     }));
+                    // THE WATER — the liquid layer's three cells, standing
+                    // ABOVE the rock as their own TRANSPARENT shells (deep,
+                    // shallow, surface — bottom-up, because blending has no
+                    // sort and draw order is list order). Each is sparse:
+                    // a tile carries a band's cell only where its ground
+                    // lies below that band's ceiling. The ocean's top is
+                    // FLAT — the one level the dial set.
+                    let ground = era_h;
+                    let bands: [(f32, f32, [f32; 3], f32, f32); 3] = [
+                        // (ceiling below sea, floor marker, colour, alpha, gloss)
+                        (sea - DEEP_DEPTH, f32::NEG_INFINITY, DEEP_WATER_COLOR, 0.62, 0.1),
+                        (sea - SURFACE_DEPTH, sea - DEEP_DEPTH, SHALLOW_WATER_COLOR, 0.5, 0.2),
+                        (sea, sea - SURFACE_DEPTH, SURFACE_WATER_COLOR, 0.38, 0.45),
+                    ];
+                    for (band, (ceil, floor, colour, alpha, gloss)) in bands.into_iter().enumerate()
+                    {
+                        shells.push(ShellSpec {
+                            dirs: &map.grid().dirs,
+                            outlines: map.outlines(),
+                            radius: RADIUS + ceil * w,
+                            inset: 0.0,
+                            color: Box::new(move |i| {
+                                let t = i as TileId;
+                                // Frozen through: thick ice REPLACES its
+                                // water column — the cap is solid, not sea.
+                                if ground(t) >= ceil || evolve.ice(t) >= crate::evolve::ICE_SOLID
+                                {
+                                    return None;
+                                }
+                                // THE OCEAN'S OWN HEAT tints each band by ITS
+                                // temperature — surface tracked per tile,
+                                // deep the one global reservoir, shallow the
+                                // mix (bands are bottom-up: 0 deep, 2 surface).
+                                let (sst, mid, deep) = evolve.ocean_temps(t);
+                                let bt = [deep, mid, sst][band];
+                                Some(lerp3(colour, water_temp_color(bt), 0.45))
+                            }),
+                            cell_radius: None,
+                            depth: Some(Box::new(move |i| {
+                                let g = ground(i as TileId).max(floor);
+                                (ceil - g) * w
+                            })),
+                            opts: MeshDrawOptions {
+                                tint: [1.0, 1.0, 1.0, alpha],
+                                gloss,
+                                ..MeshDrawOptions::default()
+                            },
+                        });
+                    }
+                    // THE ATMOSPHERE — the first two layers, as near-nothing
+                    // fog cells: a low HAZE and the condensation-deck CLOUDS,
+                    // brightness riding the moisture field the weathering
+                    // drinks. A mountain taller than a deck pokes through it
+                    // (its cell simply is not there). Drawn last: the most
+                    // transparent thing in the scene.
+                    let atmo: [(f32, f32, f32); 2] = [
+                        (HAZE_ALT, HAZE_WET, HAZE_ALPHA),
+                        (CLOUD_ALT, CLOUD_WET, CLOUD_ALPHA),
+                    ];
+                    for (alt, wet_floor, alpha) in atmo {
+                        let deck = sea + alt;
+                        shells.push(ShellSpec {
+                            dirs: &map.grid().dirs,
+                            outlines: map.outlines(),
+                            radius: RADIUS + deck * w,
+                            inset: 0.0,
+                            color: Box::new(move |i| {
+                                let t = i as TileId;
+                                let m = evolve.moisture(t);
+                                (m >= wet_floor && ground(t) < deck).then(|| {
+                                    // Denser moisture = whiter fog.
+                                    let b = 0.55 + 0.45 * m;
+                                    [b, b, b + 0.02]
+                                })
+                            }),
+                            cell_radius: None,
+                            depth: Some(Box::new(move |_| ATMO_THICK * w)),
+                            opts: MeshDrawOptions {
+                                tint: [1.0, 1.0, 1.0, alpha],
+                                gloss: 0.0,
+                                ..MeshDrawOptions::default()
+                            },
+                        });
+                    }
                 }
             }
         }
@@ -407,7 +697,24 @@ impl PopulousBench {
     fn bake_molten_views(&mut self) {
         self.bake_view(WorldView::Heat);
         self.bake_view(WorldView::Crust);
-        self.bake_view(WorldView::Plates);
+        self.bake_view(WorldView::Evolve);
+    }
+
+    /// One era tick's share of the GEOLOGICAL DRIFT: on the cadence, breathe
+    /// the molten field, re-derive the vents on it (dormancy and birth), let
+    /// the plates' motion follow the shifted push, and mark the molten-fed
+    /// tabs for a lazy re-bake. The era reads the drifted fields next tick.
+    fn drift_fields(&mut self) {
+        self.drift_unticked += 1;
+        if self.drift_unticked < DRIFT_EVERY {
+            return;
+        }
+        self.drift_unticked = 0;
+        self.seams.drift(&self.map, DRIFT_AMOUNT);
+        self.crust = CrustField::derive(&self.map, &self.seams);
+        self.evolve
+            .derive_motion(&self.map, &self.seams);
+        self.molten_views_stale = true;
     }
 
     /// The selection moved — SHOW its baked set. A swap, not a rebuild: the
@@ -416,7 +723,19 @@ impl PopulousBench {
     fn refresh_world_view(&mut self) {
         if self.world_view() != self.shown_view {
             self.shown_view = self.world_view();
+            if self.molten_views_stale
+                && matches!(
+                    self.shown_view,
+                    WorldView::Heat | WorldView::Crust
+                )
+            {
+                // The era's drift moved the fields since these were baked —
+                // catch the whole molten-fed family up once, on entry.
+                self.molten_views_stale = false;
+                self.bake_molten_views();
+            }
             self.world.show(self.shown_view.key());
+            self.apply_overlays();
         }
     }
 
@@ -436,7 +755,7 @@ impl PopulousBench {
             hex,
             seams,
             crust,
-            plates,
+            evolve,
             focus_tile,
             ..
         } = self;
@@ -444,10 +763,11 @@ impl PopulousBench {
         let dir = map.direction(tile);
         let ring = column_frame(dir, map.outline(tile));
         let w = tile_width(dir, map.outline(tile), RADIUS);
-        let continent = plates.is_continent(tile);
-        // The plate cell's DERIVED height: kind base + the seam heat below —
-        // the same composition the plates view extrudes on the globe.
-        let h_plate = plate_height(plates, seams, tile, w);
+        // The stack reads the ERA's ground — bare floor at tick zero, and
+        // whatever the upwelling built after. LAND is a height fact now, not
+        // a plate kind: whatever stands above the resolved sea.
+        let continent = evolve.ground(tile) >= evolve.resolve_sea();
+        let h_plate = evolve.base(tile) * w;
         let h_bed = w * BEDROCK_H_FRAC;
         let h_molten = w * MOLTEN_H_FRAC;
         let gap = w * STACK_GAP_FRAC;
@@ -460,20 +780,28 @@ impl PopulousBench {
         hex.aim(Vec3::Y * (base + frame));
         let molten = temp_color(seams.heat(tile));
         let bedrock = if crust.is_vent(tile) {
-            LAVA_COLOR
+            LAVA_GLOW // the vent cell burns in the stack too
         } else {
-            BEDROCK_COLOR
+            let h = seams.heat(tile);
+            lerp3(BEDROCK_COLOR, LAVA_COLOR, CRUST_SHADE_GAIN * h * h)
         };
-        let plate = if plates.is_shelf(tile) {
-            SHELF_COLOR
-        } else if continent {
-            CONTINENT_COLOR
-        } else {
-            OCEAN_BED_COLOR
-        };
+        // The marine grade shades every CONSOLIDATED cell of this column:
+        // 1.0 = fresh, the cap = indurated sea-pressed rock.
+        let compact = ((evolve.bed_hardness(tile) - 1.0)
+            / (crate::evolve::MARINE_HARD_CAP - 1.0))
+            .clamp(0.0, 1.0);
+        let plate = lerp3(
+            if continent {
+                CONTINENT_COLOR
+            } else {
+                OCEAN_BED_COLOR
+            },
+            COMPACT_COLOR,
+            compact * 0.75,
+        );
         let dirs = [Vec3::Y];
         let outlines = [ring];
-        hex.set_shells(vec![
+        let mut shells = vec![
             ShellSpec {
                 dirs: &dirs,
                 outlines: &outlines,
@@ -482,6 +810,7 @@ impl PopulousBench {
                 color: Box::new(move |_| Some(molten)),
                 cell_radius: None,
                 depth: Some(Box::new(move |_| h_molten)),
+                opts: MeshDrawOptions::default(),
             },
             ShellSpec {
                 dirs: &dirs,
@@ -491,6 +820,7 @@ impl PopulousBench {
                 color: Box::new(move |_| Some(bedrock)),
                 cell_radius: None,
                 depth: Some(Box::new(move |_| h_bed)),
+                opts: MeshDrawOptions::default(),
             },
             ShellSpec {
                 dirs: &dirs,
@@ -500,33 +830,266 @@ impl PopulousBench {
                 color: Box::new(move |_| Some(plate)),
                 cell_radius: None,
                 depth: Some(Box::new(move |_| h_plate)),
+                opts: MeshDrawOptions::default(),
             },
-        ]);
+        ];
+        // The era's GROWN layers stand above the plate cell: each formed
+        // stratum its own cell, the loose rock a thin working cell on top —
+        // the stack the ticks are building.
+        // The crust sub-group's formed slots as REAL cells (Aaron
+        // 2026-08-26): L3 the vein layer — wearing its ore's ink when a vein
+        // lives here — then L4 the volcanic layer above it. L5 is reserved
+        // and draws nothing.
+        let mut top = RADIUS;
+        let l3 = evolve.layer3(tile) * w;
+        if l3 > 0.005 {
+            let ink = match evolve.vein(tile) {
+                Some(k) => lerp3(
+                    lerp3(STRATA_COLOR, COMPACT_COLOR, compact),
+                    crate::evolve::vein_kinds()[k as usize].ink,
+                    0.65,
+                ),
+                None => lerp3(STRATA_COLOR, COMPACT_COLOR, compact),
+            };
+            top += gap + l3;
+            shells.push(ShellSpec {
+                dirs: &dirs,
+                outlines: &outlines,
+                radius: top,
+                inset: 0.0,
+                color: Box::new(move |_| Some(ink)),
+                cell_radius: None,
+                depth: Some(Box::new(move |_| l3)),
+                opts: MeshDrawOptions::default(),
+            });
+        }
+        let l4 = evolve.layer4(tile) * w;
+        if l4 > 0.005 {
+            let ink = lerp3(
+                lerp3(STRATA_COLOR, ROCK_COLOR, 0.35),
+                COMPACT_COLOR,
+                compact * 0.5,
+            );
+            top += gap + l4;
+            shells.push(ShellSpec {
+                dirs: &dirs,
+                outlines: &outlines,
+                radius: top,
+                inset: 0.0,
+                color: Box::new(move |_| Some(ink)),
+                cell_radius: None,
+                depth: Some(Box::new(move |_| l4)),
+                opts: MeshDrawOptions::default(),
+            });
+        }
+        let rock_h = evolve.rock(tile) * w;
+        if rock_h > 0.005 {
+            top += gap + rock_h;
+            shells.push(ShellSpec {
+                dirs: &dirs,
+                outlines: &outlines,
+                radius: top,
+                inset: 0.0,
+                color: Box::new(move |_| Some(ROCK_COLOR)),
+                cell_radius: None,
+                depth: Some(Box::new(move |_| rock_h)),
+                opts: MeshDrawOptions::default(),
+            });
+        }
+        // The loose SEDIMENT riding the column's top — the cell the stack
+        // was missing: the pale soft wash the erosion is moving, the very
+        // material the standing water below presses into the bed.
+        let sed_h = evolve.sediment(tile) * w;
+        if sed_h > 0.005 {
+            top += gap + sed_h;
+            shells.push(ShellSpec {
+                dirs: &dirs,
+                outlines: &outlines,
+                radius: top,
+                inset: 0.0,
+                color: Box::new(move |_| Some(SEDIMENT_COLOR)),
+                cell_radius: None,
+                depth: Some(Box::new(move |_| sed_h)),
+                opts: MeshDrawOptions::default(),
+            });
+        }
+        // The WATER above a submerged column, deep to surface — the three
+        // layers' static faces (their temperature and circulation arrive with
+        // the erosion era). Depth = the sea level minus this column's total
+        // height, split at the band depths.
+        let sea = evolve.resolve_sea();
+        let total = evolve.ground(tile);
+        let depth = (sea - total).max(0.0);
+        // Build upward from the ground: deep first, then shallow, then the
+        // surface layer.
+        // Each band wears ITS OWN temperature (the ocean's heat by depth:
+        // surface tracked, deep the one global reservoir, shallow the mix).
+        let (b_sst, b_mid, b_deep) = evolve.ocean_temps(tile);
+        let bands = [
+            (
+                lerp3(DEEP_WATER_COLOR, water_temp_color(b_deep), 0.45),
+                (depth - DEEP_DEPTH).max(0.0),
+                0.62,
+                0.1,
+            ),
+            (
+                lerp3(SHALLOW_WATER_COLOR, water_temp_color(b_mid), 0.45),
+                (depth.min(DEEP_DEPTH) - SURFACE_DEPTH).max(0.0),
+                0.5,
+                0.2,
+            ),
+            (
+                lerp3(SURFACE_WATER_COLOR, water_temp_color(b_sst), 0.45),
+                depth.min(SURFACE_DEPTH),
+                0.38,
+                0.45,
+            ),
+        ];
+        for (color, h, alpha, gloss) in bands {
+            if h <= 0.01 {
+                continue;
+            }
+            let hw = h * w;
+            top += gap + hw;
+            shells.push(ShellSpec {
+                dirs: &dirs,
+                outlines: &outlines,
+                radius: top,
+                inset: 0.0,
+                color: Box::new(move |_| Some(color)),
+                cell_radius: None,
+                depth: Some(Box::new(move |_| hw)),
+                // Water is TRANSPARENT cells over the rock (Aaron
+                // 2026-08-25), with a wet sheen strongest at the surface.
+                opts: MeshDrawOptions {
+                    tint: [1.0, 1.0, 1.0, alpha],
+                    gloss,
+                    ..MeshDrawOptions::default()
+                },
+            });
+        }
+        // THE CAP: standing ice rides above the water (or bare ground) —
+        // the frozen cell of the column, present whenever the ice ledger
+        // holds anything real on this tile.
+        let ice_h = evolve.ice(tile) * w;
+        if ice_h > 0.01 {
+            top += gap + ice_h;
+            shells.push(ShellSpec {
+                dirs: &dirs,
+                outlines: &outlines,
+                radius: top,
+                inset: 0.0,
+                color: Box::new(move |_| Some(ICE_COLOR)),
+                cell_radius: None,
+                depth: Some(Box::new(move |_| ice_h)),
+                opts: MeshDrawOptions {
+                    tint: [1.0, 1.0, 1.0, 0.94],
+                    gloss: 0.5,
+                    ..MeshDrawOptions::default()
+                },
+            });
+        }
+        // The ATMOSPHERE's two cells over the column — near-nothing fog,
+        // present only where this tile's moisture reaches each layer's floor.
+        let m = evolve.moisture(tile);
+        for (wet_floor, alpha) in [(HAZE_WET, HAZE_ALPHA), (CLOUD_WET, CLOUD_ALPHA)] {
+            if m < wet_floor {
+                continue;
+            }
+            let hw = ATMO_THICK * w;
+            top += gap + hw;
+            let b = 0.55 + 0.45 * m;
+            shells.push(ShellSpec {
+                dirs: &dirs,
+                outlines: &outlines,
+                radius: top,
+                inset: 0.0,
+                color: Box::new(move |_| Some([b, b, b + 0.02])),
+                cell_radius: None,
+                depth: Some(Box::new(move |_| hw)),
+                opts: MeshDrawOptions {
+                    tint: [1.0, 1.0, 1.0, alpha],
+                    gloss: 0.0,
+                    ..MeshDrawOptions::default()
+                },
+            });
+        }
+        hex.set_shells(shells);
     }
 
-    /// The reticle over the globe: the centre cell's outline, twice, slightly
-    /// raised — a BOLD ring on the cell the camera faces. Drawn over the stage's
-    /// own reference frame (set_arrows re-lays the graticule under it).
-    fn apply_highlight(&mut self) {
+    /// The line OVERLAYS on the globe, composed fresh each change: the
+    /// centre-cell reticle (two raised bold rings) on any layer tab, and on
+    /// the EVOLVE view the LOCAL motion arrows — each sampled tile's own
+    /// seam-push, radiating from the sources. Drawn over the stage's own
+    /// reference frame (set_arrows re-lays the graticule under them).
+    fn apply_overlays(&mut self) {
         let Self {
             map,
             world,
+            evolve,
             highlight,
+            shown_view,
+            show_arrows,
             ..
         } = self;
-        let Some(tile) = *highlight else {
-            world.set_arrows(Vec::new());
-            return;
-        };
-        let ring = map.outline(tile);
-        let n = ring.len();
-        let mut segs = Vec::with_capacity(n * RETICLE_RINGS.len());
-        for scale in RETICLE_RINGS {
-            for k in 0..n {
-                segs.push((ring[k] * RADIUS * scale, ring[(k + 1) % n] * RADIUS * scale));
+        let mut overlays: Arrows = Vec::new();
+        if let Some(tile) = *highlight {
+            let ring = map.outline(tile);
+            let n = ring.len();
+            let mut segs = Vec::with_capacity(n * RETICLE_RINGS.len());
+            for scale in RETICLE_RINGS {
+                for k in 0..n {
+                    segs.push((ring[k] * RADIUS * scale, ring[(k + 1) % n] * RADIUS * scale));
+                }
+            }
+            overlays.push((RETICLE_INK, segs));
+        }
+        if *shown_view == WorldView::Evolve && *show_arrows {
+            // THE LOCAL FIELD (Aaron 2026-08-25: the seams drive the crust —
+            // arrows RADIATE from the vents and seams, and cold ground shows
+            // none): ~MOTION_ARROWS tiles sampled by the stable stipple hash,
+            // one arrow per sampled tile along its OWN push, shaft filling
+            // toward the tile's next one-hex step. A rigid per-plate field
+            // marched arrows straight over volcanoes; this one cannot.
+            let n = map.len();
+            let step_len =
+                RADIUS * (4.0 * std::f32::consts::PI / n as f32).sqrt() * MOTION_GAIN;
+            let coverage = (MOTION_ARROWS as f64 / n as f64).min(1.0);
+            for t in 0..n as TileId {
+                let i = t as usize;
+                if !stippled(i, 977, coverage) {
+                    continue;
+                }
+                let progress = evolve.drift_progress(t);
+                if progress < MOTION_FLOOR {
+                    continue;
+                }
+                let d = map.direction(t);
+                let heading = evolve.push_at(t).normalize_or_zero();
+                if heading.length_squared() < 0.5 {
+                    continue;
+                }
+                let from = d * (RADIUS * R_MOTION);
+                let shaft = heading * (step_len * progress);
+                let to = from + shaft;
+                let side = d.cross(heading).normalize_or_zero() * (shaft.length() * MOTION_BARB);
+                let back = heading * (shaft.length() * MOTION_BARB);
+                // One ink: there are no plates in the era — the field is
+                // the seams' push, radiating from the sources.
+                let color = MOTION_INK;
+                let slot = match overlays.iter_mut().find(|(k, _)| *k == color) {
+                    Some(s) => &mut s.1,
+                    None => {
+                        overlays.push((color, Vec::new()));
+                        &mut overlays.last_mut().expect("just pushed").1
+                    }
+                };
+                slot.push((from, to));
+                slot.push((to, to - back + side));
+                slot.push((to, to - back - side));
             }
         }
-        world.set_arrows(vec![(RETICLE_INK, segs)]);
+        world.set_arrows(overlays);
     }
 
     /// The map in the viewport.
@@ -546,9 +1109,32 @@ impl PopulousBench {
         &self.crust
     }
 
-    /// The tectonic shell — the plates tab's data, its own independent roll.
-    pub fn plates(&self) -> &PlateField {
-        &self.plates
+
+    /// The evolution era's living state — the evolve tab's data.
+    pub fn evolve(&self) -> &Evolution {
+        &self.evolve
+    }
+
+    /// The water-coverage percentage — the sea-level dial's committed value.
+    /// The LIVE water coverage the gauge shows, percent of surface flooded.
+    pub fn water_coverage_pct(&self) -> u32 {
+        (self.evolve.coverage() * 100.0).round() as u32
+    }
+
+    /// Whether the motion arrows are shown — the checkbox's committed value.
+    pub fn show_arrows(&self) -> bool {
+        self.show_arrows
+    }
+
+    /// Whether the era's clock is running.
+    pub fn evolve_running(&self) -> bool {
+        self.evolve_running
+    }
+
+    /// The live fast-roll window `(from, until)` — `None` when no roll is
+    /// queued. For gates and tools.
+    pub fn roll_window(&self) -> Option<(u64, u64)> {
+        (self.roll_until > 0).then_some((self.roll_from, self.roll_until))
     }
 
     /// The centre cell — the reticle's tile, whose column the hex page shows.
@@ -566,7 +1152,7 @@ impl PopulousBench {
 
     /// Which page and tab the rails are on — the roster indices, for tests.
     pub fn selection(&self) -> (usize, usize) {
-        (self.sel_page, self.sel_tab)
+        (self.sel_page, self.sel_tab())
     }
 
     /// Which node holds the walker's ONE focus — for tests. The panel cursor,
@@ -598,7 +1184,7 @@ impl PopulousBench {
     fn model(&self) -> ValueMap {
         let mut m = ValueMap::default();
         m.set(ui::PAGE_BIND, self.sel_page as f64);
-        m.set(ui::TAB_BIND, self.sel_tab as f64);
+        m.set(ui::TAB_BIND, self.sel_tab() as f64);
         m.set(ui::TABS_SHOWN, !ui::page(self.sel_page).tabs.is_empty());
         m.set(ui::FREQ_BIND, f64::from(self.map.freq()));
         m.set(ui::CELLS_BIND, f64::from(self.seams.cells()));
@@ -609,6 +1195,55 @@ impl PopulousBench {
             group_thousands(crate::map::diameter_mi(self.map.freq()).round() as u64),
         );
         m.set(ui::TILE_BIND, format!("{:.2}", crate::map::TILE_MI));
+        // The bootstrap roll's progress bar: visible while the era is running
+        // toward the horizon, filled by the tick fraction.
+        let booting = self.evolve_running
+            && self.roll_until > 0
+            && self.evolve.ticks() < self.roll_until;
+        m.set("pop_booting", booting);
+        let span = self.roll_until.saturating_sub(self.roll_from).max(1);
+        m.set(
+            "pop_boot",
+            (self.evolve.ticks().saturating_sub(self.roll_from) as f64 / span as f64).min(1.0),
+        );
+        m.set(
+            ui::WATER_BIND,
+            f64::from((self.evolve.coverage() * 100.0).round() as u32),
+        );
+        m.set(
+            ui::WATER_TARGET_BIND,
+            f64::from((self.evolve.water_target() * 100.0).round() as u32),
+        );
+        m.set(ui::TEMP_BIND, f64::from((self.evolve.climate() * 100.0).round() as u32));
+        m.set(ui::ARROWS_BIND, self.show_arrows);
+        m.set(ui::TICKS_BIND, group_thousands(self.evolve.ticks()));
+        // The material census TABLE: two columns per row (label | hexes),
+        // most-common first — labels are registry notation, counts formatted
+        // here like every readout. Rows past the roster fold into a final
+        // "+K" row carrying the remaining hexes; unused rows publish empty
+        // strings and take no ink.
+        let census = self.evolve.vein_census();
+        let kinds = crate::evolve::vein_kinds();
+        for i in 0..ui::CENSUS_ROWS {
+            let (name, count) = if census.len() > ui::CENSUS_ROWS && i == ui::CENSUS_ROWS - 1 {
+                let rest = &census[ui::CENSUS_ROWS - 1..];
+                (
+                    format!("+{}", rest.len()),
+                    group_thousands(rest.iter().map(|(_, c)| u64::from(*c)).sum()),
+                )
+            } else if let Some((k, c)) = census.get(i) {
+                (
+                    kinds[*k as usize].label.clone(),
+                    group_thousands(u64::from(*c)),
+                )
+            } else {
+                (String::new(), String::new())
+            };
+            m.set(ui::census_name_bind(i), name);
+            m.set(ui::census_count_bind(i), count);
+        }
+        m.set(ui::PHASE_BIND, phase_token(self.evolve.current_phase()));
+        m.set(ui::STRATA_BIND, group_thousands(self.evolve.strata_total()));
         m
     }
 
@@ -624,14 +1259,16 @@ impl PopulousBench {
         self.map = HexMap::new(freq);
         self.seams.rebuild(&self.map);
         self.crust = CrustField::derive(&self.map, &self.seams);
-        self.plates.rebuild(&self.map);
         // The centre cell is SHARED state — keep it a tile the new map has;
         // the old reticle outlined tiles that no longer exist, so it comes
         // down and the next frame on the seams tab re-faces it.
         self.focus_tile = self.focus_tile.min(self.map.len().saturating_sub(1) as TileId);
         self.highlight = None;
-        self.apply_highlight();
-        // A new tiling: every view's geometry moved.
+        self.apply_overlays();
+        // A new tiling: the era restarts over it, and every view's geometry
+        // moved.
+        self.evolve.reset(&self.map, &self.seams);
+        self.evolve.set_water(DEFAULT_WATER as f32);
         self.bake_view(WorldView::Authored);
         self.bake_molten_views();
         self.publish_hex();
@@ -660,20 +1297,31 @@ impl PopulousBench {
         // the resting value every frame (the echo contract), so only a CHANGED
         // value moves anything; in particular the page echo must not re-fire the
         // page arm, or its tab reset would pin the tab rail to 0 forever.
+        let mut page_changed = false;
         if let Some(v) = results.number(ui::PAGE_BIND) {
             let want = (v.round().max(0.0) as usize).min(pages.saturating_sub(1));
             if want != self.sel_page {
                 self.sel_page = want;
-                self.sel_tab = 0; // a new page's tabs are its own
+                // The new page opens on ITS remembered tab — the PTT retains
+                // each page's tab between swaps (Aaron 2026-08-25).
+                page_changed = true;
                 self.refresh_world_view();
             }
         }
-        if let Some(v) = results.number(ui::TAB_BIND) {
-            let tabs = ui::page(self.sel_page).tabs.len();
-            let want = (v.round().max(0.0) as usize).min(tabs.saturating_sub(1));
-            if want != self.sel_tab {
-                self.sel_tab = want;
-                self.refresh_world_view();
+        // THE CLOBBER GUARD (the regression Aaron caught twice): the tab bind
+        // ECHOES every frame, and on the page-change dispatch that echo still
+        // carries the OUTGOING page's tab — folding it in would overwrite the
+        // new page's memory (via the hex page's single tab it clamps to 0:
+        // "page return resets to tab 0"). A tab write counts only on a
+        // dispatch whose page stood still.
+        if !page_changed {
+            if let Some(v) = results.number(ui::TAB_BIND) {
+                let tabs = ui::page(self.sel_page).tabs.len();
+                let want = (v.round().max(0.0) as usize).min(tabs.saturating_sub(1));
+                if want != self.sel_tab() {
+                    self.page_tabs[self.sel_page] = want;
+                    self.refresh_world_view();
+                }
             }
         }
         // The dial's ONE write: the number it committed on release (or on a pad
@@ -690,6 +1338,8 @@ impl PopulousBench {
             self.seams.set_cells(&self.map, v.round().max(0.0) as u32);
             if self.seams.cells() != before {
                 self.crust = CrustField::derive(&self.map, &self.seams);
+                self.evolve.reset(&self.map, &self.seams);
+        self.evolve.set_water(DEFAULT_WATER as f32);
                 self.bake_molten_views();
                 self.publish_hex();
             }
@@ -701,25 +1351,89 @@ impl PopulousBench {
             self.seams.set_spots(&self.map, v.round().max(0.0) as u32);
             if self.seams.spots() != before {
                 self.crust = CrustField::derive(&self.map, &self.seams);
+                self.evolve.reset(&self.map, &self.seams);
+        self.evolve.set_water(DEFAULT_WATER as f32);
                 self.bake_molten_views();
                 self.publish_hex();
             }
         }
-        // The plates dial: how many plates the tectonic shell tiles into. Its
-        // own field, its own arm — the molten layers never hear about it.
-        if let Some(v) = results.number(ui::PLATES_BIND) {
-            let before = self.plates.plates();
-            self.plates.set_plates(&self.map, v.round().max(0.0) as u32);
-            if self.plates.plates() != before {
-                self.bake_view(WorldView::Plates);
-                self.publish_hex();
+        // The water dial: the sea level's coverage. A LENS on the evolve
+        // view — it rebakes the picture and resets NOTHING: an hour of era is
+        // never the price of trying a different ocean.
+        // TWO SLIDERS (Aaron 2026-08-26): `pop_water` is the LIVE coverage
+        // GAUGE — display only, its knob rides the world and a hand on it
+        // changes nothing — and `pop_water_target` is the CONTROL: the
+        // coverage share the in-fall pursues. A plain dial: committed number
+        // lands, echo inert, wild clamps.
+        if let Some(v) = results.number(ui::WATER_TARGET_BIND) {
+            let want = (v.round().max(0.0) as u32).clamp(MIN_WATER, MAX_WATER);
+            if want != (self.evolve.water_target() * 100.0).round() as u32 {
+                self.evolve.set_water_target(want as f32 / 100.0);
             }
         }
-        // The plates randomize: a new roll of the SHELL alone — the molten
-        // seams and spots stand exactly where they were.
-        if results.is_on(ui::PLATES_ACTION) {
-            self.plates.randomize(&self.map);
-            self.bake_view(WorldView::Plates);
+        // The climate gauge: the model publishes the runner's LIVE reading
+        // every frame (the knob moves with the glacials), so the echo returns
+        // that same number — only a write that DISAGREES with the live
+        // reading is a hand on the dial, and it sets the BASELINE the runner
+        // wanders around. A lens on the era's weather: nothing resets.
+        if let Some(v) = results.number(ui::TEMP_BIND) {
+            let live = f64::from((self.evolve.climate() * 100.0).round());
+            if (v - live).abs() > 0.6 {
+                let pct = (v.round().max(0.0) as u32).clamp(MIN_TEMP, MAX_TEMP);
+                self.evolve.set_climate(pct as f32 / 100.0);
+            }
+        }
+        // The motion-arrows checkbox: a display lens — the overlays recompose,
+        // nothing resets.
+        if let Some(flicker::script::Value::Bool(v)) = results.get(ui::ARROWS_BIND) {
+            if *v != self.show_arrows {
+                self.show_arrows = *v;
+                self.apply_overlays();
+            }
+        }
+        // The era's three controls: run/pause the clock, one deliberate step,
+        // and back to the bare shell.
+        if results.is_on(ui::EVOLVE_RUN_ACTION) {
+            self.evolve_running = !self.evolve_running;
+            self.evolve_accum = 0.0;
+            // The FIRST click on a fresh world queues the bootstrap roll;
+            // pausing mid-roll keeps the goal, so Run resumes it.
+            if self.evolve_running && self.evolve.ticks() == 0 && self.roll_until == 0 {
+                self.roll_from = 0;
+                self.roll_until = crate::evolve::BOOTSTRAP_TICKS;
+            }
+        }
+        // TICK 1200 (Aaron 2026-08-26: "what will it look like at 4500?
+        // Let's FIND OUT!"): queue another bootstrap-sized leap from wherever
+        // the clock stands — computed flat-out, no baking, progress barred,
+        // baked once and paused on arrival.
+        if results.is_on(ui::EVOLVE_ROLL_ACTION) {
+            self.roll_from = self.evolve.ticks();
+            self.roll_until = self.evolve.ticks() + crate::evolve::BOOTSTRAP_TICKS;
+            self.evolve_running = true;
+            self.evolve_accum = 0.0;
+        }
+        if results.is_on(ui::EVOLVE_STEP_ACTION) {
+            let Self {
+                map,
+                seams,
+                crust,
+                evolve,
+                ..
+            } = &mut *self;
+            let sea = evolve.resolve_sea();
+            evolve.tick(map, seams, crust, sea);
+            self.drift_fields();
+            self.bake_view(WorldView::Evolve);
+            self.publish_hex();
+        }
+        if results.is_on(ui::EVOLVE_RESET_ACTION) {
+            self.roll_until = 0;
+            self.roll_from = 0;
+            self.evolve.reset(&self.map, &self.seams);
+        self.evolve.set_water(DEFAULT_WATER as f32);
+            self.evolve_running = false;
+            self.bake_view(WorldView::Evolve);
             self.publish_hex();
         }
         // The randomize button: a new roll of the same count — the seams move,
@@ -727,9 +1441,28 @@ impl PopulousBench {
         if results.is_on(ui::SEAMS_ACTION) {
             self.seams.randomize(&self.map);
             self.crust = CrustField::derive(&self.map, &self.seams);
+            self.evolve.reset(&self.map, &self.seams);
+        self.evolve.set_water(DEFAULT_WATER as f32);
             self.bake_molten_views();
             self.publish_hex();
         }
+    }
+}
+
+/// The PROCEDURE label's stringtable token for a pipeline phase — published
+/// on a bind, resolved by the walker like any `$token` (the godmode pattern).
+fn phase_token(p: crate::evolve::Phase) -> &'static str {
+    use crate::evolve::Phase;
+    match p {
+        Phase::Climate => "$pop_phase_climate",
+        Phase::Upwell => "$pop_phase_upwell",
+        Phase::Spread => "$pop_phase_spread",
+        Phase::Collide => "$pop_phase_collide",
+        Phase::Push => "$pop_phase_push",
+        Phase::Form => "$pop_phase_form",
+        Phase::Erode => "$pop_phase_erode",
+        Phase::Compact => "$pop_phase_compact",
+        Phase::Weld => "$pop_phase_weld",
     }
 }
 
@@ -827,6 +1560,56 @@ impl Scene for PopulousBench {
         let pointer = frame.surface_pointer(ui::VIEW_SLOT).cloned();
         let hex_pointer = frame.surface_pointer(ui::HEX_SLOT).cloned();
         self.hud_commands = frame.commands;
+        // THE ELEMENT BILLBOARDS (Aaron 2026-08-26): a super-tiny label a
+        // hair above each vein node's column — the EXTRACTED element's symbol
+        // (bauxite digs as Al, per canon A4), projected through the globe's
+        // own camera into the seated viewport, culled to the facing side.
+        // Chemical symbols are notation, not prose — no stringtable token.
+        if self.shown_view == WorldView::Evolve && !self.hex_view() {
+            if let Some(rect) = self.world.rect() {
+                let cam = self.world.camera();
+                let aspect = (rect.size.x / rect.size.y.max(1.0)).max(0.01);
+                let vp = cam.view_projection(aspect);
+                let toward = cam.position.normalize_or_zero();
+                let w = self
+                    .map
+                    .tiles()
+                    .next()
+                    .map(|t| {
+                        tile_width(self.map.direction(t), self.map.outline(t), RADIUS)
+                    })
+                    .unwrap_or(1.0);
+                for (t, k) in self.evolve.vein_nodes() {
+                    let dir = self.map.direction(t);
+                    if dir.dot(toward) < 0.3 {
+                        continue; // the far side keeps its secrets
+                    }
+                    let lift = (self.evolve.ground(t) + 1.2) * w;
+                    let ndc = vp.project_point3(dir * (RADIUS + lift));
+                    if !(-1.0..=1.0).contains(&ndc.x)
+                        || !(-1.0..=1.0).contains(&ndc.y)
+                        || !(0.0..=1.0).contains(&ndc.z)
+                    {
+                        continue;
+                    }
+                    let kind = &crate::evolve::vein_kinds()[k as usize];
+                    self.hud_commands.push(HudCommand::Text {
+                        x: rect.pos.x + (ndc.x * 0.5 + 0.5) * rect.size.x,
+                        y: rect.pos.y + (0.5 - ndc.y * 0.5) * rect.size.y,
+                        text: kind.label.clone(),
+                        size: 9.0,
+                        color: [kind.ink[0], kind.ink[1], kind.ink[2], 0.95],
+                        layer: 0.9,
+                        align: flicker::script::TextAlign::Center,
+                        font: flicker::script::FontRole::Label,
+                        italic: false,
+                        bold: true,
+                        tracking: 0.0,
+                        wrap: None,
+                    });
+                }
+            }
+        }
 
         // ── The input seam (input-P3, 0569DA9B): the PUMP resolved this frame's
         // World-context events — the scene owns no Resolver. Dispatch `signals.events`
@@ -898,12 +1681,89 @@ impl Scene for PopulousBench {
                 if self.highlight != Some(f) {
                     self.highlight = Some(f);
                     self.focus_tile = f;
-                    self.apply_highlight();
+                    self.apply_overlays();
                     self.publish_hex();
                 }
             }
         } else if self.highlight.take().is_some() {
-            self.apply_highlight();
+            self.apply_overlays();
+        }
+
+        // The era's clock: ticks only while its view is WATCHED and running —
+        // a slow iteration you see grow. The sim steps at EVOLVE_HZ; the mesh
+        // rebakes every few ticks (the picture is the heavy part).
+        if self.shown_view == WorldView::Evolve && self.evolve_running {
+            self.evolve_accum += dtf;
+            let mut ticked = false;
+            if self.roll_until > 0 && self.evolve.ticks() < self.roll_until {
+                // THE BOOTSTRAP ROLL (Aaron 2026-08-26): from the first
+                // click the era runs FLAT-OUT to the horizon before the
+                // first weld and display — full cycles under a per-frame
+                // compute budget, no baking, the tick and procedure
+                // readouts spinning so the roll is visible. Arrival falls
+                // through to the normal cadence below, which bakes.
+                let start = std::time::Instant::now();
+                while self.evolve.ticks() < self.roll_until
+                    && start.elapsed().as_millis() < BOOTSTRAP_FRAME_MS
+                {
+                    let Self {
+                        map,
+                        seams,
+                        crust,
+                        evolve,
+                        ..
+                    } = &mut *self;
+                    let sea = evolve.resolve_sea();
+                    evolve.tick(map, seams, crust, sea);
+                    self.drift_fields();
+                }
+                if self.evolve.ticks() >= self.roll_until {
+                    ticked = true; // the weld: bake and show the rolled world
+                    self.evolve_unbaked = EVOLVE_BAKE_TICKS;
+                    // …and the sim STOPS at the goal (Aaron 2026-08-26): the
+                    // world stands for inspection; Run resumes, TICK 1200
+                    // leaps again.
+                    self.evolve_running = false;
+                    self.roll_until = 0;
+                    self.roll_from = 0;
+                }
+                self.evolve_accum = 0.0;
+            } else {
+                // The engine steps PROCEDURES: one pipeline phase per step,
+                // at a rate that keeps the completed-cycle (tick) cadence at
+                // EVOLVE_HZ — the phase label is a real live readout, and
+                // the sim's throughput is unchanged.
+                let step = 1.0 / (EVOLVE_HZ * crate::evolve::PHASES.len() as f32);
+                // At most two CYCLES' worth of steps a frame — a long frame
+                // never spirals.
+                for _ in 0..(2 * crate::evolve::PHASES.len()) {
+                    if self.evolve_accum < step {
+                        break;
+                    }
+                    self.evolve_accum -= step;
+                    let Self {
+                        map,
+                        seams,
+                        crust,
+                        evolve,
+                        ..
+                    } = &mut *self;
+                    let sea = evolve.resolve_sea();
+                    if evolve.tick_phase(map, seams, crust, sea) {
+                        ticked = true;
+                        self.drift_fields();
+                    }
+                }
+            }
+            if ticked {
+                self.apply_overlays(); // the arrows fill toward the next step
+                self.evolve_unbaked += 1;
+                if self.evolve_unbaked >= EVOLVE_BAKE_TICKS {
+                    self.evolve_unbaked = 0;
+                    self.bake_view(WorldView::Evolve);
+                    self.publish_hex();
+                }
+            }
         }
 
         // Menu opens the shell's pause overlay — quit, settings, back to the
@@ -1028,7 +1888,9 @@ mod tests {
             "pill_toggle", // the PTT's authored page + tab rails
             "panel",       // UI Panel and RTT Panel
             "slider",      // the size dial
+            "checkbox",    // the evolve tab's motion-arrows lens
             "button",      // the seams action
+            "resource_gauge", // the bootstrap roll's progress bar (the loading bar component)
             "text",
             "option", // localized strings
         ];
@@ -1071,8 +1933,8 @@ mod tests {
         );
         assert_eq!(
             count("slider"),
-            4,
-            "the size, cells, spots and plates dials"
+            6,
+            "the size, cells, spots, water-gauge, water-target and climate dials"
         );
         // The rail hints (lt/rt/lb/rb) and the rule are now drawn BY the `paged_menu`
         // Component, not authored tree nodes — so NOTHING on the surface wears a glyph.
@@ -1110,17 +1972,34 @@ mod tests {
                 assert!(s.starts_with('$'), "`{s}` must be a stringtable token");
             }
         }
-        let mut bound: Vec<&str> = texts
+        let mut bound: Vec<String> = texts
             .iter()
             .filter_map(|n| match n.props.get("text_bind") {
-                Some(Value::Text(t)) => Some(t.as_str()),
+                Some(Value::Text(t)) => Some(t.clone()),
                 _ => None,
             })
             .collect();
         bound.sort_unstable();
+        // The expected roster: the fixed readouts plus the census table's
+        // authored two-column rows, generated from the one row count.
+        let mut want: Vec<String> = [
+            ui::DIAMETER_BIND,
+            ui::HEXES_BIND,
+            ui::PHASE_BIND,
+            ui::STRATA_BIND,
+            ui::TICKS_BIND,
+            ui::TILE_BIND,
+        ]
+        .iter()
+        .map(|b| b.to_string())
+        .collect();
+        for i in 0..ui::CENSUS_ROWS {
+            want.push(ui::census_name_bind(i));
+            want.push(ui::census_count_bind(i));
+        }
+        want.sort_unstable();
         assert_eq!(
-            bound,
-            [ui::DIAMETER_BIND, ui::HEXES_BIND, ui::TILE_BIND],
+            bound, want,
             "every readout is a bind the scene pre-formats, never a node's own string"
         );
         // The size dial: bound over the offered range, focusable (the pad
@@ -1175,8 +2054,11 @@ mod tests {
         assert!(
             nodes
                 .iter()
-                .all(|n| matches!(n.component.as_str(), "panel" | "cell" | "row" | "text")),
-            "the stats pane is display-only (its slice gate is a plain `cell`)"
+                .all(|n| matches!(
+                    n.component.as_str(),
+                    "panel" | "cell" | "row" | "text" | "resource_gauge"
+                )),
+            "the stats pane is display-only (the gauge shows, never interacts)"
         );
         // ONE set of corner runes: the page chrome's — the `runes` DECORATION
         // FLAG on the window stack (the standalone kind is gone, 2026-08-14).
@@ -1402,8 +2284,8 @@ mod tests {
             )
             .count();
         assert_eq!(
-            placeholders, 6,
-            "the seams stats pane, both crust panes, the plates stats pane and the hex page's two side panes rest on placeholders"
+            placeholders, 5,
+            "the seams stats pane, both crust panes and the hex page's two side panes rest on placeholders"
         );
 
         // The slices are gated on DIFFERENT keys, so a selection lights exactly one
@@ -1517,20 +2399,27 @@ mod tests {
         pw.set(ui::PAGE_BIND, 0.0);
         bench.apply_results(&pw);
         assert_eq!(bench.selection(), (0, last), "no page change, no tab reset");
-        // A wild page write clamps into the roster and LANDS — and a real page
-        // change resets the tab, because a new page's tabs are its own.
+        // A wild page write clamps into the roster and LANDS. The hex page
+        // has one tab, so the world page's remembered tab CLAMPS to it while
+        // there — and is RESTORED whole on return: the PTT retains each
+        // page's tab between swaps (Aaron 2026-08-25).
+        let remembered = bench.selection().1;
         let mut wild_page = ValueMap::default();
         wild_page.set(ui::PAGE_BIND, 9.0);
         bench.apply_results(&wild_page);
         assert_eq!(
             bench.selection(),
             (ui::PAGES.len() - 1, 0),
-            "clamped to the last page, tab reset"
+            "clamped to the last page, whose one tab is 0"
         );
         let mut home = ValueMap::default();
         home.set(ui::PAGE_BIND, 0.0);
         bench.apply_results(&home);
-        assert_eq!(bench.selection(), (0, 0), "back on the world page");
+        assert_eq!(
+            bench.selection(),
+            (0, remembered),
+            "back on the world page, ON THE TAB IT REMEMBERS"
+        );
         let mut seams_tab = ValueMap::default();
         seams_tab.set(ui::TAB_BIND, 1.0);
         bench.apply_results(&seams_tab);
@@ -1539,6 +2428,33 @@ mod tests {
         back.set(ui::TAB_BIND, 0.0);
         bench.apply_results(&back);
         assert_eq!(bench.selection(), (0, 0));
+    }
+
+    /// **The PTT retains each page's tab between page swaps.** Stand the
+    /// world page on a non-default tab, visit the hex page (tab 0 — its only
+    /// one), come back: the world page is exactly where it was left. Each
+    /// page's memory is its OWN — the hex page's selection never bleeds into
+    /// the world page's — and the tab arm always writes the CURRENT page's
+    /// memory, never another's.
+    #[test]
+    fn the_ptt_remembers_each_pages_tab_across_swaps() {
+        let mut bench = test_bench();
+        let go = |b: &mut PopulousBench, key: &str, v: f64| {
+            let mut r = ValueMap::default();
+            r.set(key, v);
+            b.apply_results(&r);
+        };
+        go(&mut bench, ui::TAB_BIND, 3.0); // world → plates
+        assert_eq!(bench.selection(), (0, 3));
+        go(&mut bench, ui::PAGE_BIND, 1.0); // to the hex page
+        assert_eq!(bench.selection(), (1, 0), "the hex page's own (only) tab");
+        go(&mut bench, ui::PAGE_BIND, 0.0); // and back
+        assert_eq!(bench.selection(), (0, 3), "the world page kept PLATES");
+        // Moving the tab while on hex writes HEX's memory, not the world's.
+        go(&mut bench, ui::PAGE_BIND, 1.0);
+        go(&mut bench, ui::TAB_BIND, 0.0);
+        go(&mut bench, ui::PAGE_BIND, 0.0);
+        assert_eq!(bench.selection(), (0, 3), "another page's writes never bleed");
     }
 
     /// **A mouse click on the tab rail's second pill switches to the seams
@@ -1818,13 +2734,17 @@ mod tests {
                 f64::from(crate::seams::MIN_SPOTS),
                 f64::from(crate::seams::MAX_SPOTS),
             ),
+            (ui::WATER_BIND, f64::from(MIN_WATER), f64::from(MAX_WATER)),
             (
-                ui::PLATES_BIND,
-                f64::from(crate::plates::MIN_PLATES),
-                f64::from(crate::plates::MAX_PLATES),
+                ui::WATER_TARGET_BIND,
+                f64::from(MIN_WATER),
+                f64::from(MAX_WATER),
             ),
+            (ui::TEMP_BIND, f64::from(MIN_TEMP), f64::from(MAX_TEMP)),
         ];
-        let tree = test_bench().build_tree();
+        let bench = test_bench();
+        let tree = bench.build_tree();
+        let model = bench.model();
         let all = flatten(&tree);
         let dials: Vec<&&UiNode> = all.iter().filter(|n| n.component == "slider").collect();
         assert_eq!(
@@ -1848,94 +2768,260 @@ mod tests {
                 Some(&Value::Number(*max)),
                 "{bind}: authored max IS the code constant"
             );
+            // …and the MODEL PUBLISHES the bind. An unpublished dial echoes
+            // its authored MINIMUM, which the dispatcher then takes as a
+            // committed write — the plates tab shipped exactly that: first
+            // entry re-rolled the world down to 4 plates in front of Aaron.
+            let v = model
+                .number(bind)
+                .unwrap_or_else(|| panic!("`{bind}` is not published by model()"));
+            assert!(
+                (*min..=*max).contains(&v),
+                "{bind}: the published value {v} sits inside the dial's range"
+            );
         }
     }
 
-    /// **The plates dial + randomize drive their arms, and the shell's roll is
-    /// INDEPENDENT at the dispatcher level.** The committed count lands at the
-    /// same roll, the echo is inert, a wild number clamps — and the plates
-    /// randomize moves the continents while the molten seams, spots and the
-    /// crust's vents all stand exactly where they were (and vice versa: the
-    /// molten randomize leaves the plates alone). Aaron's independence
-    /// mandate, asserted where the buttons actually fire.
+
+    /// **The era's three controls drive their arms** (rule F50B97A5 — a
+    /// binding lands WITH its gate): RUN toggles the clock, STEP advances
+    /// exactly one tick (data changes, the readouts follow), RESET stops the
+    /// clock and returns the bare shell — and all three are declared in the
+    /// tree, in the evolve slice, in the left pane's focus group.
     #[test]
-    fn the_plates_controls_drive_their_arms_independently() {
+    fn the_evolve_controls_drive_their_arms() {
         let mut bench = test_bench();
-        let write = |n: f64| {
+        let fire = |name: &str| {
             let mut r = ValueMap::default();
-            r.set(ui::PLATES_BIND, n);
+            r.set(name, true);
             r
         };
-        let seed = bench.plates().seed();
-        bench.apply_results(&write(20.0));
-        assert_eq!(bench.plates().plates(), 20, "the committed count lands");
-        assert_eq!(bench.plates().seed(), seed, "same roll, more plates");
-        bench.apply_results(&write(20.0)); // the resting echo
-        assert_eq!(bench.plates().plates(), 20);
-        bench.apply_results(&write(99.0));
+        assert!(!bench.evolve_running(), "the era opens paused");
+        bench.apply_results(&fire(ui::EVOLVE_RUN_ACTION));
+        assert!(bench.evolve_running(), "RUN starts the clock");
+        bench.apply_results(&fire(ui::EVOLVE_RUN_ACTION));
+        assert!(!bench.evolve_running(), "…and toggles it off");
+
+        assert_eq!(bench.evolve().ticks(), 0);
+        bench.apply_results(&fire(ui::EVOLVE_STEP_ACTION));
+        assert_eq!(bench.evolve().ticks(), 1, "STEP advances exactly one tick");
+        let grown: f32 = (0..bench.map().len() as TileId)
+            .map(|t| bench.evolve().rock(t))
+            .sum();
+        assert!(grown > 0.0, "…and the world grew material");
+
+        bench.apply_results(&fire(ui::EVOLVE_RUN_ACTION));
+        bench.apply_results(&fire(ui::EVOLVE_RESET_ACTION));
+        assert_eq!(bench.evolve().ticks(), 0, "RESET returns the bare shell");
+        assert!(!bench.evolve_running(), "…and stops the clock");
+
+        // All three are authored in the tree, walker-reachable.
+        let tree = bench.build_tree();
+        for action in [
+            ui::EVOLVE_RUN_ACTION,
+            ui::EVOLVE_STEP_ACTION,
+            ui::EVOLVE_RESET_ACTION,
+        ] {
+            let b = flatten(&tree)
+                .into_iter()
+                .find(|n| n.action.as_deref() == Some(action))
+                .unwrap_or_else(|| panic!("`{action}` is declared"));
+            assert_eq!(b.component, "button");
+            assert_eq!(b.tab_group, ui::LEFT_PANE);
+        }
+    }
+
+    /// **A tile is WHAT ITS HEIGHT SAYS, against the sea the dial asked for.**
+    /// The classification ladder end to end: deep, shallow and surface water
+    /// by depth below the line; dry ground re-reads as bed, shelf or LAND as
+    /// it grows through the levels — a seamount that outgrows the shelf level
+    /// stops being painted a bed (Aaron's reclassification). And the sea
+    /// level itself floods the asked share of an equal-area world.
+    #[test]
+    fn height_reclassifies_the_surface_and_the_dial_floods_its_share() {
+        // The rock ladder: bed → shelf → land as the material grows — wet or
+        // dry, the GROUND is rock (the water is its own transparent cells).
+        assert_eq!(ground_class(SHELF_LEVEL - 0.05), Ground::Bed);
+        assert_eq!(ground_class(SHELF_LEVEL + 0.05), Ground::Shelf);
+        assert_eq!(ground_class(LAND_LEVEL + 0.05), Ground::Land);
+
+        // The percentile over the era's own heights. At TICK ZERO the crust
+        // is three flat tiers (bed / shelf / continent), so exact coverage is
+        // impossible — the strict-below count stops at a tier edge below the
+        // ask. The gate: the flood never EXCEEDS the ask, and it reaches at
+        // least the bed tier (the world's majority floor). As the era runs
+        // and injection + weathering diversify the heights, coverage
+        // converges on the dial.
+        let bench = test_bench();
+        let sea = bench.evolve().sea_level(71.0);
+        let under = (0..bench.map().len() as TileId)
+            .filter(|t| bench.evolve().ground(*t) < sea)
+            .count() as f32;
+        let frac = under / bench.map().len() as f32;
+        // Water fills WHOLE tiers, so the achievable coverages at tick zero
+        // are the tier boundaries — assert the line landed on the one CLOSEST
+        // to the ask, whatever this roll's kind mix turned out to be.
+        let mut heights: Vec<f32> = (0..bench.map().len() as TileId)
+            .map(|t| bench.evolve().ground(t))
+            .collect();
+        heights.sort_by(f32::total_cmp);
+        let n = heights.len() as f32;
+        let mut achievable = vec![0.0f32];
+        let mut i = 0usize;
+        while i < heights.len() {
+            let v = heights[i];
+            let mut j = i;
+            while j < heights.len() && heights[j] <= v + 1e-5 {
+                j += 1;
+            }
+            achievable.push(j as f32 / n);
+            i = j;
+        }
+        let closest = achievable
+            .iter()
+            .copied()
+            .min_by(|a, b| (a - 0.71).abs().total_cmp(&(b - 0.71).abs()))
+            .unwrap();
+        assert!(
+            (frac - closest).abs() < 1e-3,
+            "the flood lands on the closest achievable tier: {frac} vs {closest}"
+        );
+    }
+
+    /// **TICK 1200 queues a bootstrap-sized leap from the standing clock**
+    /// (Aaron 2026-08-26: 1200 looks amazing — what does 4800 look like?
+    /// Four presses). The arm starts the run with a roll window
+    /// [now, now+1200); reset clears it; and the first Run on a fresh world
+    /// queues the bootstrap window itself.
+    #[test]
+    fn tick_1200_queues_a_leap_and_reset_clears_it() {
+        let mut bench = test_bench();
+        assert_eq!(bench.roll_window(), None);
+        // First Run queues the bootstrap roll.
+        let mut run = ValueMap::default();
+        run.set(ui::EVOLVE_RUN_ACTION, true);
+        bench.apply_results(&run);
+        assert!(bench.evolve_running());
         assert_eq!(
-            bench.plates().plates(),
-            crate::plates::MAX_PLATES,
+            bench.roll_window(),
+            Some((0, crate::evolve::BOOTSTRAP_TICKS)),
+            "the first click queues the bootstrap window"
+        );
+        // Pausing keeps the goal (Run resumes the roll).
+        bench.apply_results(&run);
+        assert!(!bench.evolve_running());
+        assert!(bench.roll_window().is_some(), "pausing keeps the goal");
+
+        // A step moves the clock; TICK 1200 leaps from wherever it stands.
+        let mut step = ValueMap::default();
+        step.set(ui::EVOLVE_STEP_ACTION, true);
+        bench.apply_results(&step);
+        let now = bench.evolve().ticks();
+        let mut roll = ValueMap::default();
+        roll.set(ui::EVOLVE_ROLL_ACTION, true);
+        bench.apply_results(&roll);
+        assert!(bench.evolve_running(), "the leap runs");
+        assert_eq!(
+            bench.roll_window(),
+            Some((now, now + crate::evolve::BOOTSTRAP_TICKS)),
+            "the window opens at the standing clock"
+        );
+
+        // Reset clears the world AND the roll.
+        let mut reset = ValueMap::default();
+        reset.set(ui::EVOLVE_RESET_ACTION, true);
+        bench.apply_results(&reset);
+        assert_eq!(bench.roll_window(), None, "reset clears the goal");
+        assert_eq!(bench.evolve().ticks(), 0);
+    }
+
+    /// **Two sliders: the GAUGE shows, the TARGET controls** (Aaron
+    /// 2026-08-26). The live gauge opens at the water world and a hand on it
+    /// changes NOTHING — display only. The target dial is a plain control:
+    /// its committed number lands on the era's coverage target, its echo is
+    /// inert, a wild number clamps — and none of it touches the clock or any
+    /// roll: the IN-FALL, not a re-pour, walks the world toward the target.
+    #[test]
+    fn the_water_gauge_shows_and_the_target_dial_controls() {
+        let mut bench = test_bench();
+        assert!(
+            bench.water_coverage_pct() >= 99,
+            "opens a water world: {}%",
+            bench.water_coverage_pct()
+        );
+        assert_eq!(
+            (bench.evolve().water_target() * 100.0).round() as u32,
+            70,
+            "the target opens at the 70% ocean share"
+        );
+        let mut step = ValueMap::default();
+        step.set(ui::EVOLVE_STEP_ACTION, true);
+        bench.apply_results(&step);
+        let ticks = bench.evolve().ticks();
+        let molten_seed = bench.seams().seed();
+        let sea = bench.evolve().resolve_sea();
+
+        // The GAUGE is display: a hand on it changes nothing at all.
+        let mut gauge = ValueMap::default();
+        gauge.set(ui::WATER_BIND, 15.0);
+        bench.apply_results(&gauge);
+        assert_eq!(bench.evolve().resolve_sea(), sea, "the gauge is not a control");
+
+        // The TARGET dial is a plain control on the era's target.
+        let write = |n: f64| {
+            let mut r = ValueMap::default();
+            r.set(ui::WATER_TARGET_BIND, n);
+            r
+        };
+        bench.apply_results(&write(55.0));
+        assert_eq!(
+            (bench.evolve().water_target() * 100.0).round() as u32,
+            55,
+            "the committed target lands"
+        );
+        bench.apply_results(&write(55.0));
+        assert_eq!(
+            (bench.evolve().water_target() * 100.0).round() as u32,
+            55,
+            "the echo is inert"
+        );
+        bench.apply_results(&write(900.0));
+        assert_eq!(
+            (bench.evolve().water_target() * 100.0).round() as u32,
+            u32::from(MAX_WATER as u8),
             "a wild number clamps"
         );
-
-        // The plates re-roll moves ONLY the plates…
-        let molten_seed = bench.seams().seed();
-        let heats = bench.seams().heats().to_vec();
-        let vents = bench.crust().vents().to_vec();
-        let mut fired = ValueMap::default();
-        fired.set(ui::PLATES_ACTION, true);
-        bench.apply_results(&fired);
-        assert_ne!(bench.plates().seed(), seed, "the shell re-rolled");
-        assert_eq!(bench.seams().seed(), molten_seed, "the molten roll held");
-        assert_eq!(bench.seams().heats(), &heats[..], "the heat stood still");
-        assert_eq!(bench.crust().vents(), &vents[..], "the vents stood still");
-
-        // …and the molten re-roll leaves the plates alone.
-        let plate_seed = bench.plates().seed();
-        let mut molten = ValueMap::default();
-        molten.set(ui::SEAMS_ACTION, true);
-        bench.apply_results(&molten);
-        assert_eq!(bench.plates().seed(), plate_seed, "the shell held");
-        assert_ne!(bench.seams().seed(), molten_seed, "the molten re-rolled");
+        assert_eq!(bench.evolve().resolve_sea(), sea, "a target is not a pour");
+        assert_eq!(bench.evolve().ticks(), ticks, "the era's clock held");
+        assert_eq!(bench.seams().seed(), molten_seed, "no molten re-roll");
     }
 
-    /// **The plate shell's height composes the two channels Aaron separated:**
-    /// the KIND's base (thick shelf / thin bed — the plates' own data) plus
-    /// the seam-derived elevation (the molten heat below; heat = pressure =
-    /// volume). At equal heat a continent stands taller than a bed; on either
-    /// kind a hotter seam pushes the cell higher; and the heat term is the
-    /// SAME for both kinds — a hot seam under an ocean bed is a ridge.
+    /// **The motion-arrows checkbox is a LENS with an arm.** Its committed
+    /// bool lands, its echo is inert, and toggling it resets nothing — not
+    /// the era's clock, not any roll. (The arrows draw only on the evolve
+    /// view AND while this is on; the overlay recomposes on toggle.)
     #[test]
-    fn the_plate_height_composes_kind_base_and_seam_heat() {
-        let bench = test_bench();
-        let (plates, seams) = (bench.plates(), bench.seams());
-        let w = 2.5;
-        // Find one continental and one oceanic tile.
-        let cont = (0..bench.map().len() as TileId)
-            .find(|t| plates.is_continent(*t))
-            .expect("a continent exists");
-        let bed = (0..bench.map().len() as TileId)
-            .find(|t| !plates.is_continent(*t))
-            .expect("an ocean bed exists");
-        let base = |t: TileId| plate_height(plates, seams, t, w) - w * ELEV_H_FRAC * seams.heat(t);
-        assert!(
-            (base(cont) - w * CONTINENT_H_FRAC).abs() < 1e-4,
-            "a continent's base is the thick shelf"
-        );
-        assert!(
-            (base(bed) - w * OCEAN_BED_H_FRAC).abs() < 1e-4,
-            "a bed's base is the thin veneer"
-        );
-        assert!(base(cont) > base(bed), "shelves outstand beds at equal heat");
-        // The heat term: strictly monotone, kind-independent.
-        let lift = |t: TileId| plate_height(plates, seams, t, w) - base(t);
-        assert!(
-            (lift(cont) - w * ELEV_H_FRAC * seams.heat(cont)).abs() < 1e-4
-                && (lift(bed) - w * ELEV_H_FRAC * seams.heat(bed)).abs() < 1e-4,
-            "the elevation channel is the seam heat alone, on either kind"
-        );
+    fn the_arrows_checkbox_is_a_lens_with_an_arm() {
+        let mut bench = test_bench();
+        assert!(bench.show_arrows(), "opens showing the motion");
+        let mut step = ValueMap::default();
+        step.set(ui::EVOLVE_STEP_ACTION, true);
+        bench.apply_results(&step);
+        let ticks = bench.evolve().ticks();
+        let write = |b: &mut PopulousBench, v: bool| {
+            let mut r = ValueMap::default();
+            r.set(ui::ARROWS_BIND, v);
+            b.apply_results(&r);
+        };
+        write(&mut bench, false);
+        assert!(!bench.show_arrows(), "the committed toggle lands");
+        write(&mut bench, false);
+        assert!(!bench.show_arrows(), "the echo is inert");
+        write(&mut bench, true);
+        assert!(bench.show_arrows());
+        assert_eq!(bench.evolve().ticks(), ticks, "a lens resets nothing");
     }
+
 
     /// **The spots dial is the field's third control, on the same contract.**
     /// Its committed number re-rolls the plumes at the new count (same roll —
@@ -1959,14 +3045,18 @@ mod tests {
             r.set(ui::SPOTS_BIND, n);
             r
         };
-        let before_vents = bench.crust().vents().to_vec();
+        let before_heat = bench.seams().heats().to_vec();
         bench.apply_results(&write(9.0));
         assert_eq!(bench.seams().spots(), 9, "the committed number lands");
         assert_eq!(bench.seams().seed(), seed, "same roll, more plumes");
+        // The robust witness: the FIELD changed (new plumes burn in it). The
+        // derived vent LIST may legitimately coincide on some rolls — the
+        // two-scale founding separation can refuse every new field — so the
+        // old vents-differ assertion was a seed-dependent flake.
         assert_ne!(
-            bench.crust().vents(),
-            &before_vents[..],
-            "the crust's vents follow the plumes"
+            bench.seams().heats(),
+            &before_heat[..],
+            "the plumes burn in the field the crust derives from"
         );
         let heats = bench.seams().heats().to_vec();
         bench.apply_results(&write(9.0));
@@ -2482,11 +3572,11 @@ mod tests {
             "the other world slices are dark"
         );
 
-        // PLATES tab (page 0, tab 3): its slice alone.
-        let plates = arrange_at(0.0, 3.0);
-        assert!(plates.is_on("shown_p0_t3"), "the plates tab lights its slice");
+        // EVOLVE tab (page 0, tab 3): its slice alone.
+        let evolve = arrange_at(0.0, 3.0);
+        assert!(evolve.is_on("shown_p0_t3"), "the evolve tab lights its slice");
         assert!(
-            !plates.is_on("shown_p0_t2") && !plates.is_on("shown_p0_t0"),
+            !evolve.is_on("shown_p0_t2") && !evolve.is_on("shown_p0_t0"),
             "the other world slices are dark"
         );
 

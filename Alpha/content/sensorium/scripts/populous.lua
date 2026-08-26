@@ -29,7 +29,7 @@ function M.arrange()
     ["shown_p0_t0"] = { on = (page == 0 and tab == 0) }, -- the MAP tab's slice
     ["shown_p0_t1"] = { on = (page == 0 and tab == 1) }, -- the SEAMS tab's slice
     ["shown_p0_t2"] = { on = (page == 0 and tab == 2) }, -- the CRUST tab's slice
-    ["shown_p0_t3"] = { on = (page == 0 and tab == 3) }, -- the PLATES tab's slice
+    ["shown_p0_t3"] = { on = (page == 0 and tab == 3) }, -- the EVOLVE tab's slice
     ["shown_p1_t0"] = { on = (page == 1 and tab == 0) }, -- the STACK tab's slice
   }
 end

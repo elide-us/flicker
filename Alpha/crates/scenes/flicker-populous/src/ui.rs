@@ -48,11 +48,44 @@ pub const SEAMS_ACTION: &str = "pop_seams_randomize";
 pub const CELLS_BIND: &str = "pop_cells";
 /// The seams tab's hot-spot dial — how many mantle plumes the field rolls.
 pub const SPOTS_BIND: &str = "pop_spots";
-/// The plates tab's re-roll action — the tectonic shell's OWN roll, unrelated
-/// to the molten randomize.
-pub const PLATES_ACTION: &str = "pop_plates_randomize";
-/// The plates tab's count dial — how many plates the shell is tiled into.
-pub const PLATES_BIND: &str = "pop_plates";
+/// The evolve tab's three actions: run/pause the era, advance one tick, and
+/// reset to the bare shell.
+pub const EVOLVE_RUN_ACTION: &str = "pop_evolve_run";
+pub const EVOLVE_STEP_ACTION: &str = "pop_evolve_step";
+pub const EVOLVE_RESET_ACTION: &str = "pop_evolve_reset";
+/// The fast-roll button: another BOOTSTRAP_TICKS-sized leap without baking —
+/// the "what does 4500 look like?" control.
+pub const EVOLVE_ROLL_ACTION: &str = "pop_evolve_roll";
+/// The evolve tab's readouts: ticks run, and layers formed — pre-formatted
+/// strings the scene publishes.
+pub const TICKS_BIND: &str = "pop_ticks";
+/// The evolve tab's PROCEDURE label — which pipeline phase the next engine
+/// step runs; the tick counts once per completed cycle of them.
+pub const PHASE_BIND: &str = "pop_phase";
+/// The evolve tab's water-coverage dial — percent of the surface flooded.
+pub const WATER_BIND: &str = "pop_water";
+/// The climate gauge — the ice-age runner's live temperature, published every
+/// frame (the knob MOVES with the glacials); a user write sets the baseline.
+pub const TEMP_BIND: &str = "pop_temp";
+/// The water TARGET dial — the coverage share the in-fall pursues. Its
+/// sibling `WATER_BIND` is the live gauge beside it (display, never a
+/// control).
+pub const WATER_TARGET_BIND: &str = "pop_water_target";
+/// The material census TABLE — a fixed roster of two-column rows (material |
+/// hex count), most-common first; unused rows publish empty strings and
+/// vanish. The last row overflows as "+K" with the remaining hexes summed.
+pub const CENSUS_ROWS: usize = 18;
+/// The row binds: `pop_census_n{i}` (the material label) and
+/// `pop_census_c{i}` (its count), authored in the tree for every row index.
+pub fn census_name_bind(i: usize) -> String {
+    format!("pop_census_n{i}")
+}
+pub fn census_count_bind(i: usize) -> String {
+    format!("pop_census_c{i}")
+}
+/// The evolve tab's motion-arrows checkbox — show each plate's Euler velocity.
+pub const ARROWS_BIND: &str = "pop_arrows";
+pub const STRATA_BIND: &str = "pop_strata";
 
 /// Model keys the rails bind to. The `paged_menu` proto names these as its
 /// `@page_bind` / `@tab_bind` / `@tabs_shown` defaults; stated once here so the
@@ -76,7 +109,7 @@ pub struct Page {
 }
 
 /// **The bench's page/tab roster.** Two pages — the WORLD (the globe, with its
-/// MAP, SEAMS, CRUST and PLATES tabs) and the HEX stack (the centre cell's column
+/// MAP, SEAMS, CRUST and EVOLVE tabs) and the HEX stack (the centre cell's column
 /// inspected up close, layer by layer). The scene reads only COUNTS from this (the
 /// rail bounds + the dispatch clamp); each tab's actual panes are authored in
 /// `populous.scene.json` and gated by `arrange()`. The code that reads this
@@ -99,8 +132,8 @@ pub static PAGES: &[Page] = &[
                 label: "$pop_tab_crust",
             },
             Tab {
-                id: "plates",
-                label: "$pop_tab_plates",
+                id: "evolve",
+                label: "$pop_tab_evolve",
             },
         ],
     },

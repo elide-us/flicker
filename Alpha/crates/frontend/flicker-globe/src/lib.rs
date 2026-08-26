@@ -41,9 +41,20 @@ pub fn in_wedge(dir: Vec3) -> bool {
 /// The shader's direct-RGB material word (`mesh.wgsl`: bit-31 escape, RGB888
 /// in bits 0-23; u8-catalog layout 2026-08-19) — lets us colour a cell without
 /// a material-catalog id.
+///
+/// **An OVER-UNIT component means the cell EMITS**: radiance past 1 is
+/// emission, so a colour closure returns e.g. `[1.3, 0.2, 0.06]` to make a
+/// lava cell glow — bit 30 is set inside the escape and the mesh shader
+/// draws the cell full-bright, unlit. Components are clamped for the stored
+/// RGB either way.
 fn direct(rgb: [f32; 3]) -> u32 {
     let q = |v: f32| ((v.clamp(0.0, 1.0) * 255.0).round() as u32) & 0xFF;
-    0x8000_0000 | q(rgb[0]) | (q(rgb[1]) << 8) | (q(rgb[2]) << 16)
+    let emissive = if rgb.iter().any(|v| *v > 1.0) {
+        0x4000_0000
+    } else {
+        0
+    };
+    0x8000_0000 | emissive | q(rgb[0]) | (q(rgb[1]) << 8) | (q(rgb[2]) << 16)
 }
 
 /// Linear blend of two RGB triples — the primitive every data-colour ramp on a
@@ -73,6 +84,20 @@ pub fn temp_color(x: f32) -> [f32; 3] {
         lerp3([0.10, 0.16, 0.55], [0.90, 0.35, 0.12], x * 2.0)
     } else {
         lerp3([0.90, 0.35, 0.12], [1.0, 0.95, 0.85], (x - 0.5) * 2.0)
+    }
+}
+
+/// WATER temperature ramp (Aaron 2026-08-25): cold deep blue → nearly-white
+/// ice blue → PURPLE for the hottest water (surface currents). THE ink the
+/// water layers wear once their temperature tracking and circulation land —
+/// stated now, beside the rock ramp, so the two cannot drift apart when the
+/// erosion era starts reading both.
+pub fn water_temp_color(x: f32) -> [f32; 3] {
+    let x = x.clamp(0.0, 1.0);
+    if x < 0.5 {
+        lerp3([0.03, 0.10, 0.40], [0.82, 0.92, 0.98], x * 2.0)
+    } else {
+        lerp3([0.82, 0.92, 0.98], [0.55, 0.20, 0.75], (x - 0.5) * 2.0)
     }
 }
 
@@ -278,6 +303,32 @@ pub fn tile_width(dir: Vec3, outline: &[Vec3], radius: f32) -> f32 {
     let center = dir * radius;
     let sum: f32 = outline.iter().map(|c| (*c * radius - center).length()).sum();
     2.0 * sum / outline.len() as f32
+}
+
+/// A stable, distinct hue per persistent plate id (golden-ratio rotation) —
+/// a raft reads as a raft, and its colour never flickers as it drifts.
+/// Diffuse / unassigned lithosphere (id 0) is neutral grey. Lifted from God
+/// Mode when Populous grew the same motion-arrow field (rule DDD070C7).
+pub fn plate_color(id: u32) -> [f32; 3] {
+    if id == 0 {
+        return [0.22, 0.23, 0.26];
+    }
+    let h = (id as f32 * 0.618_034).fract() * std::f32::consts::TAU;
+    [
+        0.45 + 0.4 * h.cos(),
+        0.45 + 0.4 * (h + 2.094).cos(),
+        0.45 + 0.4 * (h + 4.188).cos(),
+    ]
+}
+
+/// Deterministic per-cell stipple: does cell `i` carry pattern `k` at this
+/// coverage? A hash, not a random draw, so a sampled overlay (motion arrows,
+/// air veils) stays stable frame to frame instead of crawling.
+pub fn stippled(i: usize, k: usize, coverage: f64) -> bool {
+    let h = (i as u32)
+        .wrapping_mul(2_654_435_761)
+        .wrapping_add(k as u32 * 97);
+    ((h >> 8) % 1000) < (coverage * 1000.0) as u32
 }
 
 // ── the graticule — THE reference frame every globe draws ───────────────────
@@ -502,6 +553,27 @@ mod tests {
         let mean: f32 = ring.iter().map(|c| (*c * 200.0 - dir * 200.0).length()).sum::<f32>() / 6.0;
         assert!((w - 2.0 * mean).abs() < 1e-4);
         assert_eq!(tile_width(dir, &[], 200.0), 0.0, "no ring, no width");
+    }
+
+    /// **The water-temperature ramp runs cold-blue → ice-white → hot-purple**
+    /// (Aaron's ordering, verbatim) — three distinct stations, so a
+    /// temperature field painted with it can never read as the rock ramp.
+    #[test]
+    fn the_water_ramp_runs_blue_ice_purple() {
+        let cold = water_temp_color(0.0);
+        let ice = water_temp_color(0.5);
+        let hot = water_temp_color(1.0);
+        assert!(cold[2] > cold[0] * 3.0, "cold is deep BLUE");
+        assert!(
+            ice.iter().all(|c| *c > 0.8),
+            "the middle is nearly white ice blue"
+        );
+        assert!(
+            hot[0] > hot[1] && hot[2] > hot[1],
+            "hot is PURPLE — red and blue over green"
+        );
+        assert_eq!(water_temp_color(-1.0), cold, "clamped below");
+        assert_eq!(water_temp_color(2.0), hot, "clamped above");
     }
 
     /// `inset` pulls corners toward the cell centre and `0.0` is the exact

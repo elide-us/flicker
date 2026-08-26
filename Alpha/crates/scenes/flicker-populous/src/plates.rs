@@ -33,6 +33,20 @@ pub const DEFAULT_PLATES: u32 = 12;
 /// Earth-flavoured: most of the shell is sea floor.
 const CONTINENT_FRAC: f32 = 0.35;
 
+/// The plate shell's BASE heights per kind, in tile-width units — a continent
+/// is THICK crust riding high, an ocean bed a thin veneer. The scheme's OWN
+/// physicality: the views draw it, and the evolution era's ground ledger is
+/// seeded from it.
+pub const CONTINENT_H_FRAC: f32 = 0.5;
+pub const OCEAN_BED_H_FRAC: f32 = 0.125;
+/// The SHELF band's base height — between bed and continent, so the era's
+/// tick-zero map carries the same sandy margin the plates tab shows.
+// The scheme's shelf band height is a display fact of the plates TAB only
+// now — the era starts from bare floor (Aaron 2026-08-25: land is what the
+// upwelling builds).
+#[allow(dead_code)]
+pub const SHELF_H_FRAC: f32 = 0.32;
+
 // ── the LIQUID-FLOW warp (Aaron 2026-08-25: straight Voronoi edges are
 // wrong — even "solid" crust flows and ebbs at geological scale, and the
 // shapes should express a planet spinning on an axis) ──
@@ -167,6 +181,12 @@ impl PlateField {
     /// Each plate's kind, by plate id — for legends and tests.
     pub fn kinds(&self) -> &[bool] {
         &self.continental
+    }
+
+    /// Each plate's seed direction, by plate id — where a motion arrow or a
+    /// label stands for the plate.
+    pub fn seed_dirs(&self) -> &[Vec3] {
+        &self.seeds
     }
 
     /// Re-roll the whole scheme (a new random shell) over the same map.

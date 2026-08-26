@@ -25,6 +25,11 @@ use flicker::render::{
     Camera, CompositeTarget, FrameGraph, MeshDrawOptions, MeshHandle, Rate, Rect,
     RenderTargetHandle, Renderer, StageDef, StageInputs,
 };
+
+/// One drawable shell: its uploaded mesh and HOW it draws (a water shell is a
+/// translucent, glossed draw of the same pipeline; ground is the opaque
+/// default). List order is draw order — translucent shells go last.
+pub type ShellDraw = (MeshHandle, MeshDrawOptions);
 use flicker::ui::SurfaceSlot;
 use glam::{Mat4, Vec3};
 
@@ -102,7 +107,7 @@ impl GlobeView {
         base_layer: f32,
         camera: Camera,
         stage: &StageDef,
-        meshes: &[MeshHandle],
+        meshes: &[ShellDraw],
         arrows: &'f Arrows,
     ) {
         let rect = seat.rect;
@@ -152,7 +157,7 @@ impl GlobeView {
         fg: &mut FrameGraph<'f>,
         camera: Camera,
         stage: &StageDef,
-        meshes: &[MeshHandle],
+        meshes: &[ShellDraw],
         arrows: &'f Arrows,
     ) {
         fg.surface(
@@ -173,14 +178,13 @@ impl GlobeView {
     /// planet, and that live orbit camera is what this sets.
     fn draw_pass<'f>(
         camera: Camera,
-        meshes: &[MeshHandle],
+        meshes: &[ShellDraw],
         arrows: &'f Arrows,
     ) -> impl FnOnce(&mut Renderer) + 'f {
-        let opts = MeshDrawOptions::default();
-        let meshes: Vec<MeshHandle> = meshes.to_vec();
+        let meshes: Vec<ShellDraw> = meshes.to_vec();
         move |r| {
             r.set_camera(&camera);
-            for h in meshes {
+            for (h, opts) in meshes {
                 r.draw_mesh(h, Mat4::IDENTITY, opts);
             }
             // Depth-tested against the shells, so a heading on the far side of

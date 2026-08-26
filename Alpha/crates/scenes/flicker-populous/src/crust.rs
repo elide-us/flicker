@@ -23,7 +23,12 @@ use crate::seams::SeamField;
 /// on-seam heat floor is the seam weight (0.62), so this keeps candidates in
 /// the seam band proper — the crust never vents over a cool bubble interior
 /// (a hot spot's core clears it too, and vents wherever it burns).
-const VENT_HEAT: f32 = 0.58;
+const VENT_HEAT: f32 = 0.66;
+/// The UPWELL floor: the molten heat above which the crust actually passes
+/// material — the generation ZONE the crust tab marks and the evolution's
+/// per-tick upwelling samples from. Wider than the vent floor: every vent
+/// stands inside a zone, not every zone tile vents.
+pub(crate) const UPWELL_HEAT: f32 = 0.5;
 /// How much the seeded jitter can outweigh raw heat in the ranking — enough to
 /// shuffle same-heat seam tiles (semi-random), not enough to un-favour the
 /// junctions and plume cores (the volcanic points still win their
@@ -41,7 +46,7 @@ const CLUSTER_SEPARATION: f32 = 0.7;
 const CLUSTER_RADIUS: f32 = 0.28;
 /// The BASE spacing within a glob, in tile widths — small, so a field reads
 /// as a dense chain of vents rather than one dot.
-const MEMBER_SEPARATION_TILES: f32 = 2.4;
+const MEMBER_SEPARATION_TILES: f32 = 3.2;
 /// Each vent's claimed territory is the base spacing scaled by its own seeded
 /// draw over this range (Aaron 2026-08-25: a FIXED spacing greedy-fills a
 /// plume core into a perfectly even lattice, which reads odd — varying every
@@ -49,6 +54,13 @@ const MEMBER_SEPARATION_TILES: f32 = 2.4;
 /// average).
 const MEMBER_LOOSE_MIN: f32 = 0.55;
 const MEMBER_LOOSE_SPAN: f32 = 1.2;
+/// A candidate THIS hot founds a field regardless of the founding spacing —
+/// a mantle PLUME CORE is its own volcano, even in the dead zone between
+/// existing fields (without this, a fresh plume between two chains could be
+/// forbidden from venting at all: heat with no breakthrough, a silent hole
+/// in the map). Above every seam and junction shoulder: only the plume-core
+/// grade overrides the spacing law.
+const FOUND_HOT: f32 = 0.86;
 
 /// **The deep crust's vent set.** Which tiles the molten heat breaks through,
 /// derived from one [`SeamField`] over one [`HexMap`] tiling.
@@ -88,6 +100,9 @@ impl CrustField {
         // A tile's own angular radius from the tiling itself: N caps over 4π.
         let tile_radius = 2.0 / (map.len() as f32).sqrt();
         let founding = (CLUSTER_SEPARATION * cell_radius).cos();
+        // A plume peak must stand at least HALF the founding spacing clear of
+        // every field before the override applies — "lone" in field terms.
+        let lone_founding = (0.5 * CLUSTER_SEPARATION * cell_radius).cos();
         let reach = (CLUSTER_RADIUS * cell_radius).cos();
         let mut fields: Vec<TileId> = Vec::new();
         // Each accepted vent with the cos of ITS OWN claimed radius — the
@@ -98,8 +113,24 @@ impl CrustField {
         for t in candidates {
             let d = map.direction(t);
             let in_reach = fields.iter().any(|f| d.dot(map.direction(*f)) > reach);
+            // The plume-core override: a LONE local maximum of plume-grade
+            // heat founds even inside the dead zone — a fresh plume always
+            // vents — but a peak standing near an existing field belongs to
+            // that field's volcanic region and earns no exemption (hot
+            // junction shoulders must not blanket the seams with
+            // just-beyond-reach micro-fields).
+            let lone = fields
+                .iter()
+                .all(|f| d.dot(map.direction(*f)) < lone_founding);
+            let plume_core = seams.heat(t) >= FOUND_HOT
+                && lone
+                && map
+                    .neighbours(t)
+                    .iter()
+                    .all(|nb| seams.heat(*nb) <= seams.heat(t));
             let founds = !in_reach
-                && fields.iter().all(|f| d.dot(map.direction(*f)) < founding);
+                && (plume_core
+                    || fields.iter().all(|f| d.dot(map.direction(*f)) < founding));
             if (in_reach || founds)
                 && vents.iter().all(|(v, claim)| d.dot(map.direction(*v)) < *claim)
             {
@@ -153,7 +184,9 @@ mod tests {
     fn vents_form_dense_lumps_that_stand_apart() {
         let (map, seams) = field();
         let crust = CrustField::derive(&map, &seams);
-        assert!(crust.vents().len() >= 24, "got {}", crust.vents().len());
+        // The floor allows for the seams' DIVES: a stretch of seam under
+        // cooler material sheds its vent candidates, which is the point.
+        assert!(crust.vents().len() >= 14, "got {}", crust.vents().len());
         // …and the map is MOSTLY bedrock: chains, not a wash.
         assert!(crust.vents().len() < map.len() / 20);
         assert!(!crust.is_vent(u32::MAX), "a hole is not a volcano");
@@ -199,7 +232,15 @@ mod tests {
                 gaps.push(nearest);
             }
         }
-        assert!(near >= crust.vents().len(), "the vents lump into fields");
+        // Dived seam stretches thin the fields — and the narrowed spacing
+        // (Aaron: fewer, more specific upwelling points) thins them further —
+        // so the lump signature is a MODEST ratio of close pairs, not one
+        // per vent.
+        assert!(
+            near * 3 >= crust.vents().len(),
+            "the vents lump into fields: {near} close pairs over {}",
+            crust.vents().len()
+        );
         assert!(far > 0, "…and the fields stand apart");
         // **The glob is NOT a lattice** (Aaron: evenly clustered reads odd) —
         // the per-vent claim jitter must show up as real variation in the
@@ -207,10 +248,33 @@ mod tests {
         let (lo, hi) = gaps
             .iter()
             .fold((f32::MAX, 0.0f32), |(l, h), g| (l.min(*g), h.max(*g)));
+        // (The narrowed spacing thins the close-pair sample, so the spread
+        // bound is modest — the property is variation, not its magnitude.)
         assert!(
-            hi / lo >= 1.35,
+            hi / lo >= 1.25,
             "in-glob spacing varies (loosest {hi} vs tightest {lo}), not a lattice"
         );
+    }
+
+    /// **New plumes always reach the vent map** — the lone-peak override's
+    /// gate (the spots dial once flaked on rolls where a fresh plume landed
+    /// in the clustering dead zone and was forbidden from venting): the same
+    /// roll with plumes must derive a DIFFERENT vent set than without, at
+    /// several seeds — heat with no breakthrough is a silent hole.
+    #[test]
+    fn a_new_plume_always_changes_the_vents() {
+        let map = HexMap::new(MIN_FREQ);
+        for seed in [7u64, 42, 1234, 777] {
+            let bare = SeamField::new(&map, DEFAULT_CELLS, 0, seed);
+            let plumed = SeamField::new(&map, DEFAULT_CELLS, 12, seed);
+            let a = CrustField::derive(&map, &bare);
+            let b = CrustField::derive(&map, &plumed);
+            assert_ne!(
+                a.vents(),
+                b.vents(),
+                "seed {seed}: twelve plumes left the vent map untouched"
+            );
+        }
     }
 
     /// **The vents are the seams' consequence.** The same seam field derives

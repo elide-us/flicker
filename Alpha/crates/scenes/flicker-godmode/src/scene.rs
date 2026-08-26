@@ -21,7 +21,7 @@
 
 use std::time::Duration;
 
-use flicker::render::{FrameGraph, Renderer, TextureHandle, Vec2, Vec3};
+use flicker::render::{FrameGraph, MeshDrawOptions, Renderer, TextureHandle, Vec2, Vec3};
 use flicker::scene::{Scene, SceneInput, Transition};
 use flicker::script::{HudCommand, ScriptHost, UiNode, Value, ValueMap};
 use flicker::ui::{
@@ -36,7 +36,7 @@ use crate::sim_thread::{
     CellView, SeedSpec, SimCommand, SimHandle, Snapshot, TilePreview, BED_CONTINENTAL, BED_OCEANIC,
     SHELF_BED, SHELF_CLASS, SHELF_EDGE, SHELF_EXPOSED, SHELF_LAND, SHELF_NONE, SHELF_SHELF,
 };
-use flicker_globe::{self as globe, lerp3, temp_color, GlobeWorld, ShellSpec, RADIUS};
+use flicker_globe::{self as globe, lerp3, plate_color, stippled, temp_color, GlobeWorld, ShellSpec, RADIUS};
 use flicker_poc_chemistry::{ProcessDef, PLANET_FREQ};
 
 /// The Starter's one-click input bundles — see
@@ -336,17 +336,6 @@ fn toggled(results: &ValueMap, key: &str) -> Option<bool> {
         Some(Value::Bool(b)) => Some(*b),
         _ => None,
     }
-}
-
-/// Deterministic per-cell stipple: does cell `i` carry shell `k` at this
-/// coverage? The mesh path has no alpha, so DENSITY is the honest channel — a
-/// shell's stipple density follows its column mass (via [`veil_coverages`]),
-/// and a hash (not a random draw) keeps the veil stable frame to frame.
-fn stippled(i: usize, k: usize, coverage: f64) -> bool {
-    let h = (i as u32)
-        .wrapping_mul(2_654_435_761)
-        .wrapping_add(k as u32 * 97);
-    ((h >> 8) % 1000) < (coverage * 1000.0) as u32
 }
 
 // ── Motion arrows ([`Field::Motion`]) ──
@@ -1838,6 +1827,7 @@ impl Scene for GodModeScene {
                     color: Box::new(|_| Some(CORE_COLOR)),
                     cell_radius: None, // every simulated shell is a sphere
                     depth: None,
+                    opts: MeshDrawOptions::default(),
                 });
             }
             if let Some(snap) = snap.as_ref() {
@@ -1896,6 +1886,7 @@ impl Scene for GodModeScene {
                     color: Box::new(mantle),
                     cell_radius: None,
                     depth: None,
+                    opts: MeshDrawOptions::default(),
                 });
 
                 // What a crust cell is painted with: its own rock colour normally,
@@ -1939,6 +1930,7 @@ impl Scene for GodModeScene {
                         }),
                         cell_radius: None,
                         depth: None,
+                        opts: MeshDrawOptions::default(),
                     });
                 }
 
@@ -1987,6 +1979,7 @@ impl Scene for GodModeScene {
                             }),
                             cell_radius: None,
                             depth: None,
+                            opts: MeshDrawOptions::default(),
                         });
                     }
                 }
@@ -2553,21 +2546,6 @@ fn ore_color(enrichment: f32, richest: f32) -> [f32; 3] {
 /// Core-formation progress: undifferentiated slate → differentiated gold.
 fn diff_color(d: f32) -> [f32; 3] {
     lerp3([0.12, 0.13, 0.18], [0.95, 0.75, 0.30], d.clamp(0.0, 1.0))
-}
-
-/// A stable, distinct hue per persistent plate id (golden-ratio rotation). Because
-/// the observer keeps a plate's id across ticks, its colour no longer flickers as it
-/// drifts. Diffuse lithosphere (id 0) is neutral grey.
-fn plate_color(id: u32) -> [f32; 3] {
-    if id == 0 {
-        return [0.22, 0.23, 0.26];
-    }
-    let h = (id as f32 * 0.618_034).fract() * std::f32::consts::TAU;
-    [
-        0.45 + 0.4 * h.cos(),
-        0.45 + 0.4 * (h + 2.094).cos(),
-        0.45 + 0.4 * (h + 4.188).cos(),
-    ]
 }
 
 /// Seam class → colour: divergent ridge (blue), convergent trench (red), transform

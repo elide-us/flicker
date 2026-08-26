@@ -44,11 +44,19 @@ A few flicker words, defined once:
 - **A line overlay** — grouped by colour, drawn over the world. The authored graticule
   is always drawn underneath it, never instead of it.
 
-Two colour helpers ship here so no bench grows its own: `temp_color` is **THE** heat ramp
-(cool deep-blue → red → white-hot) and `lerp3` is the primitive other ramps are built
-from. Both take and return plain RGB triples, so a painted field drops straight into a
-shell's colour closure. `temp_color` reads *relative to the field's own span* —
-deliberately, because a heat view's job is to show where the heat is.
+Each shell also carries its own **draw options** — a tint whose alpha makes the shell
+translucent, and a gloss for a wet sheen — which is how a planet gets water: ordinary
+opaque rock shells with see-through liquid layers standing over them. **A shell list is
+drawn in order, so translucent shells go last**, after everything they are meant to show
+through.
+
+Colour helpers ship here so no bench grows its own. `temp_color` is **THE** rock/heat
+ramp (cool deep-blue → red → white-hot); `water_temp_color` is its counterpart for
+liquid (cold blue → ice white → hot purple), banked as the ink for water-layer
+temperature once circulation lands and not yet applied by anything; `lerp3` is the
+primitive other ramps are built from. All take and return plain RGB triples, so a painted
+field drops straight into a shell's colour closure. Both ramps read *relative to the
+field's own span* — deliberately, because a heat view's job is to show where the heat is.
 
 ## Using it
 
@@ -149,11 +157,12 @@ not narrowed to what scenes happen to use (rule F42DA5E0).
 
 ## Gates
 
-`source ~/.cargo/env && cargo test -p flicker-globe` — **16 tests**, all green: 6 in
+`source ~/.cargo/env && cargo test -p flicker-globe` — **18 tests**, all green: 7 in
 `world.rs` (the stage drives the picture; the camera answers only bound signals, only
-while focused), 5 in `camera.rs` (orbit, zoom, framing, and that the player's
-sensitivity and invert flags reach the planet), 5 in `lib.rs` (the shared graticule, the
-inset trick, and that a column is a closed solid with radial walls).
+while focused; named sets swap, and an unbaked key draws empty rather than stale), 5 in
+`camera.rs` (orbit, zoom, framing, and that the player's sensitivity and invert flags
+reach the planet), 6 in `lib.rs` (the shared graticule, the inset trick, that a column is
+a closed solid with radial walls, and that the water ramp runs blue → ice → purple).
 
 One **external** gate keeps this the only globe:
 `no_scene_reads_a_device_or_names_a_pane_style` (in

@@ -86,7 +86,7 @@
                       {
                         "component": "option",
                         "value": 3,
-                        "label": "$pop_tab_plates"
+                        "label": "$pop_tab_evolve"
                       }
                     ]
                   },
@@ -230,30 +230,101 @@
                                 "gap": 10,
                                 "children": [
                                   {
+                                    "component": "checkbox",
+                                    "id": "pop_arrows",
+                                    "bind": "pop_arrows",
+                                    "label": "$pop_arrows",
+                                    "box": 14,
+                                    "size": 22,
+                                    "style": "checkbox",
+                                    "tab_group": "pop_left",
+                                    "nav_ordinal": 1
+                                  },
+                                  {
                                     "component": "slider",
-                                    "id": "pop_plates",
+                                    "id": "pop_water",
                                     "style": "slider",
-                                    "bind": "pop_plates",
-                                    "label": "$pop_plates",
+                                    "bind": "pop_water",
+                                    "label": "$pop_water",
                                     "vertical": true,
-                                    "min": 4,
-                                    "max": 24,
+                                    "min": 0,
+                                    "max": 100,
                                     "step": 1,
-                                    "step_coarse": 4,
+                                    "step_coarse": 5,
                                     "decimals": 0,
                                     "slider_h": 10,
                                     "value_w": 44,
                                     "grow": 1.0,
                                     "tab_group": "pop_left",
-                                    "nav_ordinal": 1
+                                    "nav_ordinal": 2
+                                  },
+                                  {
+                                    "component": "slider",
+                                    "id": "pop_water_target",
+                                    "style": "slider",
+                                    "bind": "pop_water_target",
+                                    "label": "$pop_water_target",
+                                    "vertical": true,
+                                    "min": 0,
+                                    "max": 100,
+                                    "step": 1,
+                                    "step_coarse": 5,
+                                    "decimals": 0,
+                                    "slider_h": 10,
+                                    "value_w": 44,
+                                    "grow": 1.0,
+                                    "tab_group": "pop_left",
+                                    "nav_ordinal": 3
+                                  },
+                                    {
+                                    "component": "slider",
+                                    "id": "pop_temp",
+                                    "style": "slider",
+                                    "bind": "pop_temp",
+                                    "label": "$pop_temp",
+                                    "vertical": true,
+                                    "min": 0,
+                                    "max": 100,
+                                    "step": 1,
+                                    "step_coarse": 5,
+                                    "decimals": 0,
+                                    "slider_h": 10,
+                                    "value_w": 44,
+                                    "grow": 1.0,
+                                    "tab_group": "pop_left",
+                                    "nav_ordinal": 4
                                   },
                                   {
                                     "component": "button",
-                                    "action": "pop_plates_randomize",
+                                    "action": "pop_evolve_roll",
                                     "tab_group": "pop_left",
-                                    "nav_ordinal": 2,
+                                    "nav_ordinal": 3,
                                     "size_class": "md",
-                                    "label": "$pop_plates_randomize"
+                                    "label": "$pop_evolve_roll"
+                                  },
+                                  {
+                                    "component": "button",
+                                    "action": "pop_evolve_run",
+                                    "tab_group": "pop_left",
+                                    "nav_ordinal": 3,
+                                    "size_class": "md",
+                                    "label": "$pop_evolve_run"
+                                  },
+                                  {
+                                    "component": "button",
+                                    "action": "pop_evolve_step",
+                                    "tab_group": "pop_left",
+                                    "nav_ordinal": 4,
+                                    "size_class": "md",
+                                    "label": "$pop_evolve_step"
+                                  },
+                                  {
+                                    "component": "button",
+                                    "action": "pop_evolve_reset",
+                                    "tab_group": "pop_left",
+                                    "nav_ordinal": 5,
+                                    "size_class": "md",
+                                    "label": "$pop_evolve_reset"
                                   }
                                 ]
                               },
@@ -424,10 +495,542 @@
                                 "component": "cell",
                                 "visible_bind": "shown_p0_t3",
                                 "grow": 1.0,
+                                "gap": 8,
                                 "children": [
                                   {
+                                    "component": "cell",
+                                    "visible_bind": "pop_booting",
+                                    "size": 42,
+                                    "gap": 4,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$pop_bootstrap",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label"
+                                      },
+                                      {
+                                        "component": "resource_gauge",
+                                        "id": "pop_boot_bar",
+                                        "bind": "pop_boot",
+                                        "tone": "mana",
+                                        "style": "load.gauge",
+                                        "height": 5
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$pop_stat_ticks",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_ticks",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 112
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$pop_stat_phase",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_phase",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 112
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$pop_stat_strata",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_strata",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 112
+                                      }
+                                    ]
+                                  },
+                                  {
                                     "component": "text",
-                                    "text": "$ui_pane_empty"
+                                    "text": "$pop_stat_census",
+                                    "text_size": 11,
+                                    "font": "label",
+                                    "color": "panel.stat_label",
+                                    "size": 22
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 18,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_n0",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_c0",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 96
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 18,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_n1",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_c1",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 96
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 18,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_n2",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_c2",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 96
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 18,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_n3",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_c3",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 96
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 18,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_n4",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_c4",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 96
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 18,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_n5",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_c5",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 96
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 18,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_n6",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_c6",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 96
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 18,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_n7",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_c7",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 96
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 18,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_n8",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_c8",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 96
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 18,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_n9",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_c9",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 96
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 18,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_n10",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_c10",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 96
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 18,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_n11",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_c11",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 96
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 18,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_n12",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_c12",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 96
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 18,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_n13",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_c13",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 96
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 18,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_n14",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_c14",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 96
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 18,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_n15",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_c15",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 96
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 18,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_n16",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_c16",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 96
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 18,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_n17",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_c17",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 96
+                                      }
+                                    ]
                                   }
                                 ]
                               },
@@ -477,7 +1080,7 @@
         },
         {
           "draw": "graticule",
-          "radius_scale": 1.022
+          "radius_scale": 1.2
         }
       ],
       "_hdr": "HDR: the `scene` pass (the globe's two shells + graticule, the layers above) renders into the LINEAR rgba16f `hdr` working attachment and `tonemap_grade` resolves it (ACES roll-off) into the sRGB `color` last. grade_strength 0 = tonemap only, no invented tint — an art grade is Aaron's to author in-window. Alpha passes through, so the transparent clear the holder panel shows through survives.",
@@ -633,6 +1236,12 @@
       "border_w": 1,
       "radius": 4,
       "inset": 6
+    },
+    "checkbox": {
+      "box": "$stone2",
+      "check": "$sig_green",
+      "border": "$edge4",
+      "pad": 3
     },
     "slider": {
       "track": "$well",

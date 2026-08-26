@@ -30,6 +30,7 @@ use flicker_input_router::{InputHandler, Router};
 use flicker_shell::{PauseScene, Theme};
 use flicker_worldengine::{observe, LayerKind, Simulation, MY_PER_TICK};
 
+use flicker::render::MeshDrawOptions;
 use flicker_globe::{GlobeWorld, ShellSpec, RADIUS};
 
 use crate::appearance::{self, ViewMode};
@@ -579,6 +580,7 @@ fn shells_for(sim: &Simulation, tick: u64, mode: ViewMode, cut: bool) -> Vec<She
             color,
             cell_radius: None,
                     depth: None,
+                    opts: MeshDrawOptions::default(),
         }
     }
     match mode {
@@ -638,6 +640,7 @@ fn shells_for(sim: &Simulation, tick: u64, mode: ViewMode, cut: bool) -> Vec<She
                     color: Box::new(move |i| rows[i].1),
                     cell_radius: Some(Box::new(move |i| radii[i].0)),
                     depth: None,
+                    opts: MeshDrawOptions::default(),
                 }
             })
             .collect()
