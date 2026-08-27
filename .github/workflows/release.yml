@@ -106,7 +106,7 @@ jobs:
       AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
       AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
       AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-      TS_ENDPOINT: https://eus.codesigning.azure.net/   # <-- set to ElideusGroupSigning's region (Account Overview → endpoint)
+      TS_ENDPOINT: https://wus2.codesigning.azure.net/   # <-- set to ElideusGroupSigning's region (Account Overview → endpoint)
       TS_ACCOUNT: ElideusGroupSigning
       TS_PROFILE: TEGSigningProfile
     steps:

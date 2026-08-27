@@ -946,7 +946,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-app"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "flicker-2d",
@@ -963,7 +963,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-assetpipeline"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "flicker",
@@ -994,7 +994,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-clicktrainer"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "fastrand",
  "flicker",
@@ -1007,7 +1007,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-componentcatalog"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "flicker",
  "flicker-input-core",
@@ -1019,7 +1019,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-content"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "flicker-core",
@@ -1034,7 +1034,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-controllertester"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "flicker",
  "flicker-core",
@@ -1072,7 +1072,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-globe"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "flicker",
  "flicker-input-core",
@@ -1122,7 +1122,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-loomforge"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "flicker",
@@ -1147,7 +1147,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-mechanics"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "flicker-skeletal",
  "glam",
@@ -1190,7 +1190,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-pocclusters"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "flicker",
  "flicker-content",
@@ -1211,7 +1211,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-populous"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "fastrand",
  "flicker",
@@ -1226,14 +1226,14 @@ dependencies = [
 
 [[package]]
 name = "flicker-primitive"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "clayengine",
 ]
 
 [[package]]
 name = "flicker-quartermaster"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "flicker",
  "flicker-content",
@@ -1246,7 +1246,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-render"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -1263,7 +1263,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-sablework"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "flicker",
  "flicker-content",
@@ -1280,7 +1280,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-scene"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "flicker-app",
  "flicker-input-core",
@@ -1304,7 +1304,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-shell"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "flicker",
@@ -1330,7 +1330,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-solarbirth"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "flicker",
  "flicker-core",
@@ -1354,7 +1354,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-texture"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "flicker-materials",
  "flicker-primitive",
@@ -1365,7 +1365,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-voxel"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "bytemuck",
  "clayengine",
@@ -1377,7 +1377,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-widgets"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "flicker-core",
  "flicker-input-core",
@@ -3044,7 +3044,7 @@ checksum = "e8cf8e6a8aa66ce33f63993ffc4ea4271eb5b0530a9002db8455ea6050c77bfa"
 
 [[package]]
 name = "prism-alpha"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "flicker-assetpipeline",
