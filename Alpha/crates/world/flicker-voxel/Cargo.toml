@@ -1,6 +1,6 @@
 [package]
 name = "flicker-voxel"
-version = "0.1.7"
+version = "0.1.8"
 edition.workspace = true
 license.workspace = true
 
@@ -15,7 +15,7 @@ license.workspace = true
 # standard-library only.
 [dependencies]
 clayengine.workspace = true
-flicker-primitive = { version = "0.1.7", path = "../../content/flicker-primitive" }
+flicker-primitive = { version = "0.1.8", path = "../../content/flicker-primitive" }
 bytemuck.workspace = true
 serde.workspace = true
 serde_json.workspace = true

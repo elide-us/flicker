@@ -1,6 +1,6 @@
 [package]
 name = "prism-alpha"
-version = "0.1.7"
+version = "0.1.8"
 edition.workspace = true
 license.workspace = true
 publish = false
@@ -22,16 +22,16 @@ path = "src/main.rs"
 flicker-shell.workspace = true
 # The lib-ified scenes this launcher hosts (one `SceneEntry` each). Pack Editor is a
 # raw `impl App`, not a `Scene` yet, so it is NOT here until it is converted.
-flicker-clicktrainer = { version = "0.1.7", path = "../crates/scenes/flicker-clicktrainer" }
-flicker-componentcatalog = { version = "0.1.7", path = "../crates/scenes/flicker-componentcatalog" }
-flicker-controllertester = { version = "0.1.7", path = "../crates/scenes/flicker-controllertester" }
-flicker-solarbirth = { version = "0.1.7", path = "../crates/scenes/flicker-solarbirth" }
-flicker-loomforge = { version = "0.1.7", path = "../crates/scenes/flicker-loomforge" }
-flicker-pocclusters = { version = "0.1.7", path = "../crates/scenes/flicker-pocclusters" }
-flicker-assetpipeline = { version = "0.1.7", path = "../crates/scenes/flicker-assetpipeline" }
-flicker-populous = { version = "0.1.7", path = "../crates/scenes/flicker-populous" }
-flicker-sablework = { version = "0.1.7", path = "../crates/scenes/flicker-sablework" }
-flicker-quartermaster = { version = "0.1.7", path = "../crates/scenes/flicker-quartermaster" }
+flicker-clicktrainer = { version = "0.1.8", path = "../crates/scenes/flicker-clicktrainer" }
+flicker-componentcatalog = { version = "0.1.8", path = "../crates/scenes/flicker-componentcatalog" }
+flicker-controllertester = { version = "0.1.8", path = "../crates/scenes/flicker-controllertester" }
+flicker-solarbirth = { version = "0.1.8", path = "../crates/scenes/flicker-solarbirth" }
+flicker-loomforge = { version = "0.1.8", path = "../crates/scenes/flicker-loomforge" }
+flicker-pocclusters = { version = "0.1.8", path = "../crates/scenes/flicker-pocclusters" }
+flicker-assetpipeline = { version = "0.1.8", path = "../crates/scenes/flicker-assetpipeline" }
+flicker-populous = { version = "0.1.8", path = "../crates/scenes/flicker-populous" }
+flicker-sablework = { version = "0.1.8", path = "../crates/scenes/flicker-sablework" }
+flicker-quartermaster = { version = "0.1.8", path = "../crates/scenes/flicker-quartermaster" }
 # Declares this executable's content roots (content.json) before any scene loads.
 flicker-content.workspace = true
 anyhow.workspace = true

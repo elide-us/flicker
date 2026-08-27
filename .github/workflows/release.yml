@@ -143,11 +143,13 @@ jobs:
         if: env.AZURE_CLIENT_ID != ''
         shell: pwsh
         run: |
-          # Trusted Signing client (dlib). Explicit nuget.org v3 source — a bare
-          # `nuget install` fails "Unable to find package" because the hosted runner's
-          # default source list can't be relied on. Floating latest so the build can't
-          # 404 on a guessed version; pin -Version <x> once confirmed for reproducibility.
-          nuget install Microsoft.Trusted.Signing.Client -Source https://api.nuget.org/v3/index.json -ExcludeVersion -OutputDirectory $env:RUNNER_TEMP\ts | Out-Null
+          # Trusted Signing dlib. The package is UNLISTED on nuget.org (Microsoft
+          # deprecated it while rebranding Trusted Signing -> Azure Artifact Signing),
+          # so `nuget install` CANNOT float "latest" — it fails "Unable to find
+          # package". An explicit -Version is REQUIRED for an unlisted package
+          # (1.0.95 = last published, 2025-06-23). Longer term: migrate to the official
+          # azure/artifact-signing-action@v2 (handles the dlib itself, no nuget step).
+          nuget install Microsoft.Trusted.Signing.Client -Version 1.0.95 -Source https://api.nuget.org/v3/index.json -ExcludeVersion -OutputDirectory $env:RUNNER_TEMP\ts | Out-Null
           $dlib = (Get-ChildItem -Recurse -Filter Azure.CodeSigning.Dlib.dll $env:RUNNER_TEMP\ts | Select-Object -First 1).FullName
           if (-not $dlib) { throw "Trusted Signing dlib not found in NuGet package" }
           @{ Endpoint = $env:TS_ENDPOINT; CodeSigningAccountName = $env:TS_ACCOUNT; CertificateProfileName = $env:TS_PROFILE } `
