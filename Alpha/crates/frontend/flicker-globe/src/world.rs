@@ -666,7 +666,10 @@ mod tests {
         world.show("plates");
         assert_eq!(world.active, "plates");
         assert!(
-            world.pending.iter().any(|(k, m)| k == "plates" && !m.is_empty()),
+            world
+                .pending
+                .iter()
+                .any(|(k, m)| k == "plates" && !m.is_empty()),
             "the shown set has a build to draw"
         );
 

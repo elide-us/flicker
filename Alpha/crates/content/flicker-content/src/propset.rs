@@ -185,7 +185,9 @@ mod tests {
 
     #[test]
     fn validate_rejects_empty_and_nonpositive() {
-        assert!(PropSet::new("Empty", vec![]).write(Path::new("/dev/null")).is_err());
+        assert!(PropSet::new("Empty", vec![])
+            .write(Path::new("/dev/null"))
+            .is_err());
         let bad = PropSet::new(
             "Bad",
             vec![PropVariant {

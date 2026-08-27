@@ -280,8 +280,7 @@ impl SeamField {
             .collect();
 
         // A cell's characteristic angular radius: N equal caps tile 4π sr.
-        let cell_radius =
-            (4.0 * std::f32::consts::PI / self.cells as f32).sqrt() * 0.5;
+        let cell_radius = (4.0 * std::f32::consts::PI / self.cells as f32).sqrt() * 0.5;
 
         // The ALONG-SEAM variation fields — their own stream, fixed sizes, so
         // neither count dial moves them. Drawn before the rifts, whose peaks
@@ -426,8 +425,7 @@ impl SeamField {
     /// tail of [`rebuild`](Self::rebuild), callable on its own so a phase
     /// [`drift`](Self::drift) re-derives without re-rolling anything.
     fn derive_heat(&mut self, map: &HexMap) {
-        let cell_radius =
-            (4.0 * std::f32::consts::PI / self.cells as f32).sqrt() * 0.5;
+        let cell_radius = (4.0 * std::f32::consts::PI / self.cells as f32).sqrt() * 0.5;
         let band = SEAM_BAND * cell_radius;
         let rift_band = RIFT_BAND_FRAC * cell_radius;
         // Skip the exp for tiles clearly outside a rift's glow.
@@ -594,8 +592,7 @@ mod tests {
     fn rifts_split_off_seams_and_die_out() {
         let map = HexMap::new(MIN_FREQ);
         let field = SeamField::new(&map, DEFAULT_CELLS, 0, 42);
-        let cell_radius =
-            (4.0 * std::f32::consts::PI / field.cells() as f32).sqrt() * 0.5;
+        let cell_radius = (4.0 * std::f32::consts::PI / field.cells() as f32).sqrt() * 0.5;
         assert_eq!(
             field.rifts().len(),
             (field.cells() * RIFTS_PER_CELL) as usize,
@@ -682,8 +679,7 @@ mod tests {
     fn seams_are_living_bands_that_rise_and_dive() {
         let map = HexMap::new(MIN_FREQ);
         let field = SeamField::new(&map, DEFAULT_CELLS, 0, 42);
-        let cell_radius =
-            (4.0 * std::f32::consts::PI / field.cells() as f32).sqrt() * 0.5;
+        let cell_radius = (4.0 * std::f32::consts::PI / field.cells() as f32).sqrt() * 0.5;
         let mut on_line: Vec<f32> = Vec::new();
         for t in map.tiles() {
             let d = map.direction(t);
@@ -703,8 +699,7 @@ mod tests {
         assert!(hi > 0.65, "bunched stretches run hot: {hi}");
         assert!(lo < 0.15, "…and dives go under cooler material: {lo}");
         let mean = on_line.iter().sum::<f32>() / on_line.len() as f32;
-        let var = on_line.iter().map(|h| (h - mean).powi(2)).sum::<f32>()
-            / on_line.len() as f32;
+        let var = on_line.iter().map(|h| (h - mean).powi(2)).sum::<f32>() / on_line.len() as f32;
         assert!(
             var.sqrt() > 0.12,
             "the temperature genuinely varies along the line: σ={}",
@@ -752,8 +747,11 @@ mod tests {
         let seeds0 = field.seeds.clone();
         let spots0 = field.spot_dirs().to_vec();
         let rifts0 = field.rifts().to_vec();
-        let vents0: std::collections::HashSet<TileId> =
-            CrustField::derive(&map, &field).vents().iter().copied().collect();
+        let vents0: std::collections::HashSet<TileId> = CrustField::derive(&map, &field)
+            .vents()
+            .iter()
+            .copied()
+            .collect();
 
         for _ in 0..6 {
             field.drift(&map, 0.06);
@@ -777,8 +775,11 @@ mod tests {
             deltas[deltas.len() / 2]
         );
 
-        let vents1: std::collections::HashSet<TileId> =
-            CrustField::derive(&map, &field).vents().iter().copied().collect();
+        let vents1: std::collections::HashSet<TileId> = CrustField::derive(&map, &field)
+            .vents()
+            .iter()
+            .copied()
+            .collect();
         let kept = vents0.intersection(&vents1).count();
         assert!(!vents1.is_empty() && !vents0.is_empty());
         assert!(

@@ -937,8 +937,7 @@ impl Evolution {
         self.resources_ensured = false;
         self.pressure = vec![0.0; map.len()];
         self.moist = vec![0.0; map.len()];
-        let mean_area =
-            map.grid().area.iter().sum::<f32>() / map.len().max(1) as f32;
+        let mean_area = map.grid().area.iter().sum::<f32>() / map.len().max(1) as f32;
         self.area = map.grid().area.iter().map(|a| a / mean_area).collect();
         self.ticks = 0;
         self.eruptions = 0;
@@ -1130,10 +1129,7 @@ impl Evolution {
     pub fn strata(&self, tile: TileId) -> (u8, f32) {
         let l3 = self.layer3(tile);
         let l4 = self.layer4(tile);
-        (
-            u8::from(l3 > 0.0) + u8::from(l4 > 0.0),
-            l3 + l4,
-        )
+        (u8::from(l3 > 0.0) + u8::from(l4 > 0.0), l3 + l4)
     }
 
     /// The VEIN layer's height at `tile` (stack layer 3).
@@ -1345,7 +1341,11 @@ impl Evolution {
                 j += 1;
             }
             // The line ABOVE this tier: midway to the next distinct height.
-            let line = if j < n { (v + totals[j]) * 0.5 } else { v + 0.05 };
+            let line = if j < n {
+                (v + totals[j]) * 0.5
+            } else {
+                v + 0.05
+            };
             let cover = j as f32 / n as f32;
             let d = (cover - ask).abs();
             if d < best.0 {
@@ -1526,12 +1526,8 @@ impl Evolution {
                     }
                     // THE GREENHOUSE: the frozen share of the surface builds
                     // it, time decays it — the snowball escape hatch.
-                    let frozen_share = self
-                        .ice
-                        .iter()
-                        .filter(|c| **c > ICE_ERODE_MIN)
-                        .count() as f32
-                        / n as f32;
+                    let frozen_share =
+                        self.ice.iter().filter(|c| **c > ICE_ERODE_MIN).count() as f32 / n as f32;
                     self.greenhouse += GH_BUILD * frozen_share - GH_DECAY * self.greenhouse;
                     self.temp = (self.climate_base + osc + self.greenhouse).clamp(0.0, 1.05);
                     // Growth DRAWS FROM the sea: sum this tick's growth demand first,
@@ -1586,52 +1582,50 @@ impl Evolution {
                         self.deep_temp = self.deep_temp.clamp(DEEP_MIN, DEEP_MAX);
                     }
                     // THE IN-FALL: coverage below target draws new water in,
-            // deficit-proportional — the slow delivery that keeps a growing
-            // world near its ocean share.
-            let below = (0..n)
-                .filter(|i| self.ground(*i as TileId) < sea)
-                .count() as f32
-                / n as f32;
-            let deficit = (self.water_target - below).max(0.0);
-            if deficit > 0.0 {
-                let want = deficit * INFALL_GAIN * n as f32;
-                // FIRST SOURCE: the caps. Melting locked ice raises the
-                // standing sea with NO new volume — the reserve was always
-                // part of the budget (resolve_sea solves on volume − locked).
-                let from_caps = want.min(self.ice_locked * CAP_MELT_SHARE);
-                if from_caps > 0.0 && self.ice_locked > 1e-6 {
-                    let keep = 1.0 - from_caps / self.ice_locked;
-                    for ice in &mut self.ice {
-                        *ice *= keep;
+                    // deficit-proportional — the slow delivery that keeps a growing
+                    // world near its ocean share.
+                    let below = (0..n).filter(|i| self.ground(*i as TileId) < sea).count() as f32
+                        / n as f32;
+                    let deficit = (self.water_target - below).max(0.0);
+                    if deficit > 0.0 {
+                        let want = deficit * INFALL_GAIN * n as f32;
+                        // FIRST SOURCE: the caps. Melting locked ice raises the
+                        // standing sea with NO new volume — the reserve was always
+                        // part of the budget (resolve_sea solves on volume − locked).
+                        let from_caps = want.min(self.ice_locked * CAP_MELT_SHARE);
+                        if from_caps > 0.0 && self.ice_locked > 1e-6 {
+                            let keep = 1.0 - from_caps / self.ice_locked;
+                            for ice in &mut self.ice {
+                                *ice *= keep;
+                            }
+                            self.ice_locked -= from_caps;
+                        }
+                        // Only the true shortfall falls in from the sky — and only
+                        // while the BOMBARDMENT lasts: at the water budget the sky
+                        // closes for good, and the caps and the sea share a bounded
+                        // total from then on. (The freezer cannot eat imports either
+                        // way: under a deficit the ocean's claim holds `givable` at
+                        // zero.)
+                        if self.water_volume < map.len() as f32 * WATER_BUDGET_DEPTH {
+                            self.water_volume += want - from_caps;
+                        }
                     }
-                    self.ice_locked -= from_caps;
-                }
-                // Only the true shortfall falls in from the sky — and only
-                // while the BOMBARDMENT lasts: at the water budget the sky
-                // closes for good, and the caps and the sea share a bounded
-                // total from then on. (The freezer cannot eat imports either
-                // way: under a deficit the ocean's claim holds `givable` at
-                // zero.)
-                if self.water_volume < map.len() as f32 * WATER_BUDGET_DEPTH {
-                    self.water_volume += want - from_caps;
-                }
-            }
-            // THE OCEAN'S CLAIM: the deficit shrinks the ice ration — and
-            // locked ice above the shrunken ration FORCE-MELTS, so a
-            // deadlocked glacier yields the sea its water back.
-            let ration_share = (ICE_MAX_LOCK - deficit * ICE_YIELD).max(0.2);
-            let ration = self.water_volume * ration_share;
-            if self.ice_locked > ration {
-                let melt = (self.ice_locked - ration) * EXCESS_MELT;
-                if self.ice_locked > 1e-6 {
-                    let keep = 1.0 - melt / self.ice_locked;
-                    for c in &mut self.ice {
-                        *c *= keep;
+                    // THE OCEAN'S CLAIM: the deficit shrinks the ice ration — and
+                    // locked ice above the shrunken ration FORCE-MELTS, so a
+                    // deadlocked glacier yields the sea its water back.
+                    let ration_share = (ICE_MAX_LOCK - deficit * ICE_YIELD).max(0.2);
+                    let ration = self.water_volume * ration_share;
+                    if self.ice_locked > ration {
+                        let melt = (self.ice_locked - ration) * EXCESS_MELT;
+                        if self.ice_locked > 1e-6 {
+                            let keep = 1.0 - melt / self.ice_locked;
+                            for c in &mut self.ice {
+                                *c *= keep;
+                            }
+                            self.ice_locked -= melt;
+                        }
                     }
-                    self.ice_locked -= melt;
-                }
-            }
-            let givable = (ration - self.ice_locked).max(0.0);
+                    let givable = (ration - self.ice_locked).max(0.0);
                     let scale = if demand > 1e-9 {
                         (givable / demand).min(1.0)
                     } else {
@@ -1650,8 +1644,6 @@ impl Evolution {
                     }
                     self.ice_locked = locked;
                 }
-
-
             }
             Phase::Upwell => {
                 // 1 — UPWELLING + ERUPTIONS, in the MANTLE's frame — a moving plate
@@ -1735,8 +1727,6 @@ impl Evolution {
                         ring = next;
                     }
                 }
-
-
             }
             Phase::Spread => {
                 // 2 — SPREAD: hot rock flows outward; how far a field can grow is the
@@ -1818,8 +1808,6 @@ impl Evolution {
                 for (r, d) in self.rock.iter_mut().zip(&delta) {
                     *r = (*r + d).max(0.0);
                 }
-
-
             }
             Phase::Collide => {
                 // 3 — THE CRUST'S OWN EDGES (Aaron's two-layer law: the molten seam
@@ -1831,11 +1819,7 @@ impl Evolution {
                 //   · ADVANCE — past the claim trigger the pressurised side takes
                 //     the foreign tile: the standing column subducts as a pile
                 //     (zero-loss) and the boundary moves under the material budget.
-                *compressed = self
-                    .pressure
-                    .iter()
-                    .map(|p| *p >= PRESSURE_FORM)
-                    .collect();
+                *compressed = self.pressure.iter().map(|p| *p >= PRESSURE_FORM).collect();
                 #[allow(clippy::needless_range_loop)] // parallel stores, one index
                 for i in 0..n {
                     self.pressure[i] = self.pressure[i].min(PRESSURE_MAX);
@@ -1872,16 +1856,13 @@ impl Evolution {
                         let got = UPLIFT_QUANTUM - need;
                         if got > 0.0 {
                             let old = self.rock[i].max(0.0);
-                            self.rock_hard[i] =
-                                (old * self.rock_hard[i] + got * 1.2) / (old + got);
+                            self.rock_hard[i] = (old * self.rock_hard[i] + got * 1.2) / (old + got);
                             self.rock[i] += got;
                             act[i] = true;
                         }
                     }
                     self.pressure[i] *= PRESSURE_DECAY;
                 }
-
-
             }
             Phase::Push => {
                 // 4 — LOCAL DRIFT: the molten push moves MATERIAL, within its own
@@ -1960,8 +1941,6 @@ impl Evolution {
                         }
                     }
                 }
-
-
             }
             Phase::Form => {
                 // 5 — CONSOLIDATION: rarely, the pile becomes a LAYER. Narrow
@@ -1998,10 +1977,7 @@ impl Evolution {
                         // distillation concentrates at the pressure sites): a
                         // sparse seeded lottery, kind drawn by the accretion
                         // budget's weights, DISCRETE by node separation.
-                        if pressured
-                            && self.vein[t] == 0
-                            && self.l3_h[t] >= VEIN_L3_MIN
-                        {
+                        if pressured && self.vein[t] == 0 && self.l3_h[t] >= VEIN_L3_MIN {
                             let h = (seams.seed() ^ VEIN_STREAM)
                                 .wrapping_add((t as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
                             if h.is_multiple_of(VEIN_LOTTERY) {
@@ -2047,15 +2023,12 @@ impl Evolution {
                 }
                 for (j, node) in adopt {
                     let ni = node as usize - 1;
-                    if self.vein[j] == 0 && self.vein_nodes[ni].size < self.vein_nodes[ni].budget
-                    {
+                    if self.vein[j] == 0 && self.vein_nodes[ni].size < self.vein_nodes[ni].budget {
                         self.vein[j] = 1 + self.vein_nodes[ni].kind;
                         self.vein_node_of[j] = node;
                         self.vein_nodes[ni].size += 1;
                     }
                 }
-
-
             }
             Phase::Erode => {
                 // 6 — WEATHERING: the moisture the uplift's own condensation zones
@@ -2124,16 +2097,11 @@ impl Evolution {
                             if nh >= h {
                                 return None;
                             }
-                            let dist =
-                                (map.direction(*nb) - p_dir).length() / tile_step;
+                            let dist = (map.direction(*nb) - p_dir).length() / tile_step;
                             Some((*nb as usize, (h - nh) / dist.max(0.25)))
                         })
                         .collect();
-                    let Some(deepest) = downs
-                        .iter()
-                        .map(|(_, d)| *d)
-                        .max_by(f32::total_cmp)
-                    else {
+                    let Some(deepest) = downs.iter().map(|(_, d)| *d).max_by(f32::total_cmp) else {
                         continue; // a pit sheds nothing
                     };
                     let drop_sum: f32 = downs.iter().map(|(_, d)| d).sum();
@@ -2178,14 +2146,20 @@ impl Evolution {
                         ERODE_RATE * self.moist[i] * slope * carve
                     };
                     let mut spoil = 0.0f32;
-                    let take = |store: &mut f32, hardness: f32, budget: &mut f32, spoil: &mut f32| {
-                        let want = *budget * hardness;
-                        let got = want.min(*store);
-                        *store -= got;
-                        *spoil += got;
-                        *budget -= got / hardness.max(1e-6);
-                    };
-                    take(&mut self.sediment[i], HARD_SEDIMENT, &mut budget, &mut spoil);
+                    let take =
+                        |store: &mut f32, hardness: f32, budget: &mut f32, spoil: &mut f32| {
+                            let want = *budget * hardness;
+                            let got = want.min(*store);
+                            *store -= got;
+                            *spoil += got;
+                            *budget -= got / hardness.max(1e-6);
+                        };
+                    take(
+                        &mut self.sediment[i],
+                        HARD_SEDIMENT,
+                        &mut budget,
+                        &mut spoil,
+                    );
                     if budget > 0.0 {
                         // The SPECTRUM matters here: a tile fed by a hard-pouring
                         // vent sheds slower than one fed soft — ridges of hard rock
@@ -2315,8 +2289,8 @@ impl Evolution {
                         // pile's overburden grows, because thick ice deforms and
                         // flows: the tower-killer, hemispherically blind.
                         let melt_damp = if glacial {
-                            let pressure_flow =
-                                ((s / GLACIAL_SOFT_PILE).clamp(0.0, 1.0)) * (1.0 - SUMMER_MELT_FLOW);
+                            let pressure_flow = ((s / GLACIAL_SOFT_PILE).clamp(0.0, 1.0))
+                                * (1.0 - SUMMER_MELT_FLOW);
                             SUMMER_MELT_FLOW + pressure_flow
                         } else {
                             1.0
@@ -2327,8 +2301,7 @@ impl Evolution {
                             .neighbours(t)
                             .iter()
                             .filter_map(|nb| {
-                                let dist =
-                                    (map.direction(*nb) - p_dir).length() / tile_step;
+                                let dist = (map.direction(*nb) - p_dir).length() / tile_step;
                                 let slope = (h - self.ground(*nb)) / dist.max(0.25);
                                 (slope > SED_REPOSE).then_some((*nb as usize, slope))
                             })
@@ -2427,8 +2400,6 @@ impl Evolution {
                         }
                     }
                 }
-
-
             }
             Phase::Compact => {
                 // 6b — MARINE COMPACTION, the water's ongoing press (Aaron
@@ -2483,8 +2454,6 @@ impl Evolution {
                         }
                     }
                 }
-
-
             }
             Phase::Weld => {
                 // 8 — COLD WELD, the loose-rock sink: an active tile away from the
@@ -2540,8 +2509,6 @@ impl Evolution {
                 }
                 self.changed = changed;
                 self.frontier = next;
-
-
             }
         }
         if matches!(phase, Phase::Weld) {
@@ -2619,7 +2586,6 @@ mod tests {
         (map, seams, crust, plates)
     }
 
-
     /// **The in-fall walks the world to its ocean share and holds** (Aaron
     /// 2026-08-26: land growth had drained the world under 30% water — new
     /// water arrives slowly while coverage stands below the target, and
@@ -2646,7 +2612,10 @@ mod tests {
             let sea = e.resolve_sea();
             e.tick(&map, &seams, &crust, sea);
             let c = e.coverage();
-            assert!(c >= last - 0.03, "coverage climbs, never drains: {last} -> {c}");
+            assert!(
+                c >= last - 0.03,
+                "coverage climbs, never drains: {last} -> {c}"
+            );
             last = c;
         }
         // The stable claims: the in-fall RAISES coverage against the era's
@@ -2661,8 +2630,7 @@ mod tests {
         assert!(last < 0.82, "…without wild overshoot: {last}");
         let deficit = (e.water_target() - last).max(0.0);
         assert!(
-            e.ice_locked
-                <= e.water_volume * (ICE_MAX_LOCK - deficit * ICE_YIELD).max(0.2) + 1.0,
+            e.ice_locked <= e.water_volume * (ICE_MAX_LOCK - deficit * ICE_YIELD).max(0.2) + 1.0,
             "under a standing deficit the ice honours the shrunken ration"
         );
 
@@ -2913,7 +2881,11 @@ mod tests {
         // Deep cold may REGROW what the deficit melts — the equilibrium law
         // is allowed to win that race; the promise is the SOURCE accounting
         // below, not net cap decline. The reserve must simply still be real.
-        assert!(c.ice_locked > 1.0, "the caps persist: {locked0} -> {}", c.ice_locked);
+        assert!(
+            c.ice_locked > 1.0,
+            "the caps persist: {locked0} -> {}",
+            c.ice_locked
+        );
         let import_capped = c.water_volume - vol0;
         let import_capless = t.water_volume - tvol0;
         assert!(
@@ -2958,7 +2930,9 @@ mod tests {
             }
         }
         assert!(
-            e.vein_bodies().iter().all(|b| b.size <= NODE_MAX.max(b.budget)),
+            e.vein_bodies()
+                .iter()
+                .all(|b| b.size <= NODE_MAX.max(b.budget)),
             "the guarantee plants bodies, never carpets"
         );
     }
@@ -2967,7 +2941,7 @@ mod tests {
     /// world, most-common first, totals exactly the veined hexes; empty on a
     /// fresh world; and the guaranteed world reports every quota kind.
     #[test]
-    fn the_census_counts_the_ledger()  {
+    fn the_census_counts_the_ledger() {
         let (map, seams, crust, _plates) = world();
         let mut e = Evolution::new(&map, &seams);
         assert!(e.vein_census().is_empty(), "a fresh world holds nothing");
@@ -3070,7 +3044,11 @@ mod tests {
             "pressure consolidates into L3"
         );
         // …and a vein nucleated and SPREAD into a body.
-        let veined: Vec<TileId> = patch.iter().copied().filter(|t| e.vein(*t).is_some()).collect();
+        let veined: Vec<TileId> = patch
+            .iter()
+            .copied()
+            .filter(|t| e.vein(*t).is_some())
+            .collect();
         assert!(!veined.is_empty(), "the pressed ridge nucleated a vein");
         assert!(
             veined.len() >= 2,
@@ -3081,7 +3059,9 @@ mod tests {
         // a vein): every body honours its seeded budget and the hard cap,
         // and the patch is nowhere near saturated.
         assert!(
-            e.vein_bodies().iter().all(|b| b.size <= NODE_MAX.max(b.budget)),
+            e.vein_bodies()
+                .iter()
+                .all(|b| b.size <= NODE_MAX.max(b.budget)),
             "no body outgrows its budget"
         );
         assert!(
@@ -3235,7 +3215,10 @@ mod tests {
         let pole = (0..map.len() as TileId)
             .filter(|t| !crust.is_vent(*t))
             .max_by(|a, b| {
-                map.direction(*a).y.abs().total_cmp(&map.direction(*b).y.abs())
+                map.direction(*a)
+                    .y
+                    .abs()
+                    .total_cmp(&map.direction(*b).y.abs())
             })
             .expect("tiles exist");
         for _ in 0..40 {
@@ -3285,7 +3268,10 @@ mod tests {
         let pole = (0..map.len() as TileId)
             .filter(|t| !crust.is_vent(*t))
             .max_by(|a, b| {
-                map.direction(*a).y.abs().total_cmp(&map.direction(*b).y.abs())
+                map.direction(*a)
+                    .y
+                    .abs()
+                    .total_cmp(&map.direction(*b).y.abs())
             })
             .expect("tiles exist");
         // Freeze the world in, then bank a pile on the polar tile.
@@ -3903,10 +3889,7 @@ mod tests {
             .flat_map(|t| map.neighbours(*t).iter().copied())
             .filter(|t| !cluster.contains(t))
             .collect();
-        let caught: f32 = ring
-            .iter()
-            .map(|t| e.sediment(*t) + e.strata(*t).1)
-            .sum();
+        let caught: f32 = ring.iter().map(|t| e.sediment(*t) + e.strata(*t).1).sum();
         assert!(caught > 0.5, "the range spread onto its skirts: {caught}");
     }
 
@@ -4014,7 +3997,10 @@ mod tests {
             let sea = e.resolve_sea();
             e.tick(&map, &seams, &crust, sea);
             let now = material(&e);
-            assert!(now >= prev - 0.05, "the ledger never drains: {prev} -> {now}");
+            assert!(
+                now >= prev - 0.05,
+                "the ledger never drains: {prev} -> {now}"
+            );
             prev = now;
             if !pressured {
                 pressured = (0..map.len() as TileId).any(|t| e.pressure(t) > 0.05);
@@ -4060,7 +4046,11 @@ mod tests {
         let vol = (0..map.len() as TileId)
             .map(|t| {
                 let d = sea1 - e.ground(t);
-                if d > 0.0 { d } else { 0.0 }
+                if d > 0.0 {
+                    d
+                } else {
+                    0.0
+                }
             })
             .sum::<f32>();
         assert!(vol > 0.0, "the sea still holds its water: {vol}");
@@ -4085,7 +4075,11 @@ mod tests {
             .filter(|t| e.rock(*t) > 0.05)
             .map(|t| e.rock_hardness(t))
             .collect();
-        assert!(grades.len() > 20, "rock stands in quantity: {}", grades.len());
+        assert!(
+            grades.len() > 20,
+            "rock stands in quantity: {}",
+            grades.len()
+        );
         grades.sort_by(f32::total_cmp);
         let (lo, hi) = (grades[0], grades[grades.len() - 1]);
         assert!((0.4..=1.9).contains(&lo) && (0.4..=1.9).contains(&hi));
@@ -4145,5 +4139,4 @@ mod tests {
             "channels run below their banks: {below} of {total}"
         );
     }
-
 }

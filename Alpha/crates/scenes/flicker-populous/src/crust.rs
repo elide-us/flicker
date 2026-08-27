@@ -129,10 +129,11 @@ impl CrustField {
                     .iter()
                     .all(|nb| seams.heat(*nb) <= seams.heat(t));
             let founds = !in_reach
-                && (plume_core
-                    || fields.iter().all(|f| d.dot(map.direction(*f)) < founding));
+                && (plume_core || fields.iter().all(|f| d.dot(map.direction(*f)) < founding));
             if (in_reach || founds)
-                && vents.iter().all(|(v, claim)| d.dot(map.direction(*v)) < *claim)
+                && vents
+                    .iter()
+                    .all(|(v, claim)| d.dot(map.direction(*v)) < *claim)
             {
                 if founds {
                     fields.push(t);

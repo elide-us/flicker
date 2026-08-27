@@ -301,7 +301,10 @@ pub fn tile_width(dir: Vec3, outline: &[Vec3], radius: f32) -> f32 {
         return 0.0;
     }
     let center = dir * radius;
-    let sum: f32 = outline.iter().map(|c| (*c * radius - center).length()).sum();
+    let sum: f32 = outline
+        .iter()
+        .map(|c| (*c * radius - center).length())
+        .sum();
     2.0 * sum / outline.len() as f32
 }
 
@@ -462,9 +465,14 @@ mod tests {
             })
             .collect();
         let outlines = vec![ring.clone()];
-        let (v, i) = build_columns(&dirs, &outlines, |_| 100.0, |_| 10.0, 0.0, |_| {
-            Some([1.0; 3])
-        });
+        let (v, i) = build_columns(
+            &dirs,
+            &outlines,
+            |_| 100.0,
+            |_| 10.0,
+            0.0,
+            |_| Some([1.0; 3]),
+        );
         assert_eq!(v.len(), (1 + 6) + (1 + 6) + 4 * 6, "two fans + six walls");
         assert_eq!(i.len(), 3 * 6 + 3 * 6 + 6 * 6, "closed on every face");
 
@@ -502,8 +510,7 @@ mod tests {
             if ring_reversed {
                 o.reverse();
             }
-            let (v, i) =
-                build_columns(&dirs, &[o], |_| 100.0, |_| 10.0, 0.0, |_| Some([1.0; 3]));
+            let (v, i) = build_columns(&dirs, &[o], |_| 100.0, |_| 10.0, 0.0, |_| Some([1.0; 3]));
             for tri in i.chunks(3) {
                 let p = |k: u32| Vec3::from_array(v[k as usize].position);
                 let front = (p(tri[1]) - p(tri[0])).cross(p(tri[2]) - p(tri[0]));
@@ -550,7 +557,11 @@ mod tests {
             );
         }
         let w = tile_width(dir, &ring, 200.0);
-        let mean: f32 = ring.iter().map(|c| (*c * 200.0 - dir * 200.0).length()).sum::<f32>() / 6.0;
+        let mean: f32 = ring
+            .iter()
+            .map(|c| (*c * 200.0 - dir * 200.0).length())
+            .sum::<f32>()
+            / 6.0;
         assert!((w - 2.0 * mean).abs() < 1e-4);
         assert_eq!(tile_width(dir, &[], 200.0), 0.0, "no ring, no width");
     }

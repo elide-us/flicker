@@ -1991,8 +1991,12 @@ impl Scene for GameScene {
                         Ok(mesh) => {
                             // Flat colour → packed direct-RGB per vertex (palette-independent). The
                             // colour is the FBX base colour the prop POC baked into the material.
-                            let material =
-                                pack_rgb(mesh.materials.first().map(|m| m.color.as_slice()).unwrap_or(&[]));
+                            let material = pack_rgb(
+                                mesh.materials
+                                    .first()
+                                    .map(|m| m.color.as_slice())
+                                    .unwrap_or(&[]),
+                            );
                             let verts: Vec<MeshVertex> = mesh
                                 .vertices
                                 .iter()

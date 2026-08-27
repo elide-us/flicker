@@ -58,7 +58,10 @@ fn main() -> Result<()> {
             bail!("no staging asset at {}", src.display());
         }
         if dst.exists() {
-            bail!("package target already exists at {} (already promoted?)", dst.display());
+            bail!(
+                "package target already exists at {} (already promoted?)",
+                dst.display()
+            );
         }
         move_tree(&src, &dst)?;
         std::fs::remove_dir_all(&src)

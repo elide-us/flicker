@@ -57,9 +57,9 @@ pub const SHELF_H_FRAC: f32 = 0.32;
 /// warp has structure SMALLER than the edge. Bottom octave: continental
 /// lobes; top octave: few-tile crinkle — bays, capes, ragged coasts.
 const WARP_OCTAVES: [(usize, f32, f32, f32); 4] = [
-    (4, 1.5, 2.0, 0.16),   // lobes
-    (5, 5.0, 4.0, 0.09),   // wobble
-    (5, 14.0, 10.0, 0.05), // roughness
+    (4, 1.5, 2.0, 0.16),    // lobes
+    (5, 5.0, 4.0, 0.09),    // wobble
+    (5, 14.0, 10.0, 0.05),  // roughness
     (6, 60.0, 80.0, 0.028), // tile-scale crinkle (~±2 tiles)
 ];
 /// The SPIN signature: a differential-rotation twist about the +Y axis,
@@ -307,7 +307,9 @@ impl PlateField {
         let mut ring: Vec<TileId> = (0..map.len() as TileId)
             .filter(|t| {
                 let mine = kind_of(*t as usize);
-                map.neighbours(*t).iter().any(|n| kind_of(*n as usize) != mine)
+                map.neighbours(*t)
+                    .iter()
+                    .any(|n| kind_of(*n as usize) != mine)
             })
             .collect();
         for t in &ring {
@@ -410,7 +412,11 @@ mod tests {
                 .neighbours(t)
                 .iter()
                 .any(|n| field.home(*n) != field.home(t));
-            assert_eq!(field.is_boundary(t), want, "boundary is adjacency, tile {t}");
+            assert_eq!(
+                field.is_boundary(t),
+                want,
+                "boundary is adjacency, tile {t}"
+            );
             let rings = dist[t as usize];
             if rings == 0 {
                 assert!(field.is_shelf(t), "a kind-edge tile is always shelf: {t}");

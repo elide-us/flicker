@@ -1111,6 +1111,19 @@
     }
   },
   "styles": {
+    "load": {
+      "_comment": "The bootstrap-roll progress bar reuses the loading-screen gauge look (same values as Loading.scene.json load.gauge); per-scene styles by design, palette tokens single-sourced in ui_theme.json.",
+      "gauge": {
+        "track": "$well",
+        "border": "$edge2",
+        "border_w": 1,
+        "radius": 1,
+        "pad": 0,
+        "mana_top": "$mana_hi",
+        "mana_bot": "$mana_lo",
+        "sheen": "$sheen"
+      }
+    },
     "paged_menu": {
       "frame": {
         "fill_top": "$surface_top",

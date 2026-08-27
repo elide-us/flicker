@@ -144,7 +144,11 @@ mod tests {
                 "placed above the waterline (z={})",
                 pl.pos[2]
             );
-            assert!(pl.pos[0] >= 0.0, "no grass on the drowned half (x={})", pl.pos[0]);
+            assert!(
+                pl.pos[0] >= 0.0,
+                "no grass on the drowned half (x={})",
+                pl.pos[0]
+            );
             assert!((0.8..=1.2).contains(&pl.scale));
             assert!((0..3).contains(&pl.variant));
         }
@@ -154,7 +158,10 @@ mod tests {
     #[test]
     fn drowned_or_degenerate_is_empty() {
         let p = params();
-        assert!(scatter(&[1.0], &p, |_, _| -100.0).is_empty(), "all underwater");
+        assert!(
+            scatter(&[1.0], &p, |_, _| -100.0).is_empty(),
+            "all underwater"
+        );
         let mut bad = p;
         bad.spacing = 0.0;
         assert!(scatter(&[1.0], &bad, |_, _| 500.0).is_empty(), "no spacing");

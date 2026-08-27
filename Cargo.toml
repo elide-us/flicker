@@ -54,7 +54,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.6"
 edition = "2021"
 # 1.88 = the zip crate's MSRV (see [workspace.dependencies] zip). The toolchain
 # itself floats stable via rust-toolchain.toml; this is the declared floor.
