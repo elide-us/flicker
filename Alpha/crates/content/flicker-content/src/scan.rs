@@ -815,15 +815,11 @@ mod tests {
 
     #[test]
     fn names_alone_settle_the_unambiguous_classes() {
-        // The `.gz` at-rest suffix must not hide the logical extension.
-        assert_eq!(
-            classify_package(Path::new("a/Foo_BaseColor.png")),
-            PackageClass::Texture
-        );
-        assert_eq!(
-            classify_package(Path::new("a/Cinzel.ttf")),
-            PackageClass::Font
-        );
+        // What actually needs pinning is the at-rest `.gz` strip revealing the logical,
+        // often MULTI-PART extension — a naive `Path::extension()` sees only `gz`/`json`
+        // and misclassifies every one of these. The plain single-extension classes
+        // (Texture/Font/Doc) are exercised on real content by
+        // `every_real_package_file_classifies`, so they need no synthetic restatement here.
         assert_eq!(
             classify_package(Path::new("a/intro.flight.gz")),
             PackageClass::Flight
@@ -842,10 +838,13 @@ mod tests {
         );
         // A prop variation set is named by its `.set.json` extension, gz-at-rest.
         assert_eq!(
-            classify_package(Path::new("props/environment/GrassField/GrassField.set.json.gz")),
+            classify_package(Path::new(
+                "props/environment/GrassField/GrassField.set.json.gz"
+            )),
             PackageClass::PropSet
         );
-        assert_eq!(classify_package(Path::new("a/OFL.txt")), PackageClass::Doc);
+        // An unrecognized extension fails honestly instead of guessing — the property
+        // the drift gate leans on.
         assert_eq!(
             classify_package(Path::new("a/thing.bin")),
             PackageClass::Unknown
