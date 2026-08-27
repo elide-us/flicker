@@ -1,6 +1,6 @@
 [package]
 name = "flicker-populous"
-version = "0.1.6"
+version = "0.1.7"
 edition.workspace = true
 license.workspace = true
 publish = false
@@ -18,7 +18,7 @@ path = "src/lib.rs"
 flicker-worldgrid.workspace = true
 # The shared hex-globe view: mesh builder + graticule + orbit camera + the
 # offscreen viewport pass.
-flicker-globe = { version = "0.1.6", path = "../../frontend/flicker-globe" }
+flicker-globe = { version = "0.1.7", path = "../../frontend/flicker-globe" }
 
 flicker = { version = "0.1.0", path = "../../core/flicker" }
 flicker-shell.workspace = true

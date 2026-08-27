@@ -134,8 +134,8 @@ flicker-poc-chemistry = { version = "0.1.0", path = "Alpha/crates/world/flicker-
 flicker-worldtile = { version = "0.1.0", path = "Alpha/crates/world/flicker-worldtile" }
 flicker-celestial = { version = "0.1.0", path = "crates/flicker-celestial" }
 flicker-system = { version = "0.1.0", path = "crates/flicker-system" }
-flicker-primitive = { version = "0.1.6", path = "Alpha/crates/content/flicker-primitive" }
-flicker-texture = { version = "0.1.6", path = "Alpha/crates/content/flicker-texture" }
+flicker-primitive = { version = "0.1.7", path = "Alpha/crates/content/flicker-primitive" }
+flicker-texture = { version = "0.1.7", path = "Alpha/crates/content/flicker-texture" }
 flicker-core = { version = "0.1.0", path = "Alpha/crates/core/flicker-core" }
 # Input model + resolution leaf (spec §2). Router/device build on it.
 flicker-input-core = { version = "0.1.5", path = "Alpha/crates/input/flicker-input-core" }
@@ -144,25 +144,25 @@ flicker-input-router = { version = "0.1.5", path = "Alpha/crates/input/flicker-i
 # Platform input sources + the 120 Hz analog sampler (spec §6). The only input crate
 # with OS/hw deps; fills the core snapshot/cache. Must not depend on flicker-app.
 flicker-input-device = { version = "0.1.5", path = "Alpha/crates/input/flicker-input-device" }
-flicker-render = { version = "0.1.6", path = "Alpha/crates/render/flicker-render" }
+flicker-render = { version = "0.1.7", path = "Alpha/crates/render/flicker-render" }
 flicker-2d = { version = "0.1.0", path = "Alpha/crates/render/flicker-2d" }
 flicker-script = { version = "0.1.5", path = "Alpha/crates/scripting/flicker-script" }
 flicker-net = { version = "0.1.5", path = "Alpha/crates/net/flicker-net" }
-flicker-app = { version = "0.1.6", path = "Alpha/crates/platform/flicker-app" }
-flicker-scene = { version = "0.1.6", path = "Alpha/crates/frontend/flicker-scene" }
+flicker-app = { version = "0.1.7", path = "Alpha/crates/platform/flicker-app" }
+flicker-scene = { version = "0.1.7", path = "Alpha/crates/frontend/flicker-scene" }
 flicker-greed = { version = "0.1.0", path = "crates/flicker-greed" }
-flicker-shell = { version = "0.1.6", path = "Alpha/crates/frontend/flicker-shell" }
-flicker-widgets = { version = "0.1.6", path = "Alpha/crates/frontend/flicker-widgets" }
+flicker-shell = { version = "0.1.7", path = "Alpha/crates/frontend/flicker-shell" }
+flicker-widgets = { version = "0.1.7", path = "Alpha/crates/frontend/flicker-widgets" }
 flicker-flight = { version = "0.1.0", path = "Alpha/crates/animation/flicker-flight" }
-flicker-voxel = { version = "0.1.6", path = "Alpha/crates/world/flicker-voxel" }
+flicker-voxel = { version = "0.1.7", path = "Alpha/crates/world/flicker-voxel" }
 flicker-worker = { version = "0.1.0", path = "Alpha/crates/core/flicker-worker" }
 # Alpha crates (promoted, non-POC).
 flicker-skeletal = { version = "0.1.5", path = "Alpha/crates/animation/flicker-skeletal" }
 # mechanics cluster (collision/combat).
-flicker-mechanics = { version = "0.1.6", path = "Alpha/crates/mechanics/flicker-mechanics" }
+flicker-mechanics = { version = "0.1.7", path = "Alpha/crates/mechanics/flicker-mechanics" }
 # in-app content pipeline (folder scan → FBX parse → canonical rig → bake).
-flicker-content = { version = "0.1.6", path = "Alpha/crates/content/flicker-content" }
-flicker-assetpipeline = { version = "0.1.6", path = "Alpha/crates/scenes/flicker-assetpipeline" }
+flicker-content = { version = "0.1.7", path = "Alpha/crates/content/flicker-content" }
+flicker-assetpipeline = { version = "0.1.7", path = "Alpha/crates/scenes/flicker-assetpipeline" }
 # Native open-folder dialog for the Asset Pipeline editor's Load step.
 rfd = "0.15.4"
 # Shared GPU-free planet-layout model (the orrery) — the roster + orbits both the
