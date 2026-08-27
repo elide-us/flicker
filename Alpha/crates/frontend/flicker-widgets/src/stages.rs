@@ -2872,12 +2872,12 @@ mod tests {
 
         // The flip is PRESENT: every lit-3D stage S3b took HDR is found on the path. Absent
         // this, a silent revert to the non-HDR encode would pass every compile-clean gate.
+        // (`pocepochs_globe` + `godmode_globe` left the corpus with their retired scenes,
+        // 2026-08-26 — superseded by the Populous Bench.)
         for expected in [
             "solarbirth_sky",
             "pocclusters_world",
             "populous_globe",
-            "pocepochs_globe",
-            "godmode_globe",
             "sablework_lit",
             "portrait",
         ] {
@@ -2888,8 +2888,8 @@ mod tests {
             );
         }
         assert!(
-            hdr_stages.len() >= 7,
-            "expected at least the seven S3b lit-3D stages on the HDR path, found \
+            hdr_stages.len() >= 5,
+            "expected at least the five surviving S3b lit-3D stages on the HDR path, found \
              {hdr_stages:?}"
         );
     }

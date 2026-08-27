@@ -1,8 +1,8 @@
 # prism-alpha
 
 The **single launcher binary**. One executable hosts *every* Prism scene — the Populous
-bench, the world/epoch simulations, the authoring benches, the click trainer, the cinematic
-fly-in — behind one shared front-end (intro splash → mode menu → scene → pause). A **scene**
+world bench, the authoring benches, the click trainer, the cinematic fly-in — behind one
+shared front-end (intro splash → mode menu → scene → pause). A **scene**
 here is one interactive screen (a bench, a game, a POC); the launcher's job is to register
 all of them and let the shell pick which one to play. There is no per-scene executable: each
 `flicker-*` scene crate is a library, and this binary is the only `main()` that ships.
@@ -23,7 +23,7 @@ content tree — nothing here draws or simulates anything itself.
   - `flicker-content` — declares where this executable's content tree lives (`content.json`)
     before any scene loads, so scenes ask `flicker_content::roots()` instead of climbing out
     of their own crate directory.
-  - **The twelve scene crates** it hosts — one `SceneEntry` each (see the roster table). Each
+  - **The ten scene crates** it hosts — one `SceneEntry` each (see the roster table). Each
     is a thin library exposing a single `pub fn scene(&SceneDef) -> Box<dyn Scene>`.
 - **Bypasses the `flicker` umbrella.** Unlike the shell, this crate does **not** depend on
   the `flicker` core umbrella crate at all — it reaches the engine only through
@@ -105,7 +105,7 @@ SceneEntry::new("clicktrainer", "Click Trainer", "primary", flicker_clicktrainer
 | `.with_info(SceneInfo::new(…))` | The five-field panel row | Required for a launcher row; without it the entry is a plain button. Fields below. |
 
 `SceneInfo` fields (all display strings): **name** (row title) · **mode** (category tag,
-e.g. "Simulation", "Editor") · **region** (short kind, e.g. "World / Voxels") · **desc**
+e.g. "Authoring", "Editor") · **region** (short kind, e.g. "World / Voxels") · **desc**
 (one-line description) · **meta** (small build/type line).
 
 **The realms** (constants in `flicker-shell`; the launcher's tier-1 → tier-2 map):
@@ -114,7 +114,7 @@ e.g. "Simulation", "Editor") · **region** (short kind, e.g. "World / Voxels") �
 |---|---|---|---|
 | `REALM_ADVENTURER` | `"adventurer"` | Explore the World | player-facing scenes |
 | `REALM_DM` | `"dm"` | Build the World | **empty** — no bench migrated yet (page is a note) |
-| `REALM_GAMEMASTER` | `"gamemaster"` | Game Master | world-authoring: the sims + map benches |
+| `REALM_GAMEMASTER` | `"gamemaster"` | Game Master | world-authoring: the Populous Bench |
 | `REALM_DEVELOPER` | `"developer"` | Developer | engine tooling / benches / POCs |
 
 The root-menu button *text* for each page (e.g. "Explore the World") is a stringtable token
@@ -122,7 +122,7 @@ owned by the shell's menu script, not by this crate.
 
 ### The current roster
 
-Twelve scenes, grouped by realm as `roster()` orders them. Each links its crate README (API
+Ten scenes, grouped by realm as `roster()` orders them. Each links its crate README (API
 + signals + Model keys for that scene) and its scene file. How to author the file and its
 pair script is the content tree's job — see
 [`../content/sensorium/README.md`](../content/sensorium/README.md).
@@ -132,8 +132,6 @@ pair script is the content tree's job — see
 | `id` | Row title | Crate | Scene file |
 |---|---|---|---|
 | `populous` | Populous Bench | [flicker-populous](../crates/scenes/flicker-populous/README.md) | [populous.scene.json](../content/sensorium/scenes/populous.scene.json) |
-| `godmode` | God Mode | [flicker-godmode](../crates/scenes/flicker-godmode/README.md) | [godmode.scene.json](../content/sensorium/scenes/godmode.scene.json) |
-| `pocepochs` | Epoch Simulation | [flicker-pocepochs](../crates/scenes/flicker-pocepochs/README.md) | [pocepochs.scene.json](../content/sensorium/scenes/pocepochs.scene.json) |
 
 **Developer** (`REALM_DEVELOPER`)
 

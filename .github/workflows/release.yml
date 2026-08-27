@@ -16,8 +16,10 @@
 # for now. Actions are SHA-pinned; Dependabot proposes bumps.
 #
 # Signing is GATED ON SECRETS: absent secrets ⇒ unsigned artifacts (the release
-# body says so). Wire later without workflow edits by adding repo secrets:
-#   WINDOWS_CERT_PFX_BASE64 / WINDOWS_CERT_PASSWORD          (Authenticode PFX)
+# body says so). Wire by adding repo secrets:
+#   AZURE_TENANT_ID / AZURE_CLIENT_ID / AZURE_CLIENT_SECRET   (Trusted Signing CI service principal;
+#     SP needs the "Trusted Signing Certificate Profile Signer" role on the signing account.
+#     Account/profile/region are the TS_* env in the windows job — set TS_ENDPOINT to your region.)
 #   MACOS_CERT_P12_BASE64 / MACOS_CERT_P12_PASSWORD           (Developer ID app+installer)
 #   MACOS_NOTARY_APPLE_ID / MACOS_NOTARY_TEAM_ID / MACOS_NOTARY_PASSWORD (notarytool)
 
@@ -98,7 +100,15 @@ jobs:
     timeout-minutes: 90
     env:
       VERSION: ${{ needs.gate.outputs.version }}
-      WINDOWS_CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+      # Trusted Signing (Azure). The CI service principal authenticates the dlib via the
+      # AZURE_* env vars (Azure.Identity EnvironmentCredential); it must hold the
+      # "Trusted Signing Certificate Profile Signer" role on the account below.
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      TS_ENDPOINT: https://eus.codesigning.azure.net/   # <-- set to ElideusGroupSigning's region (Account Overview → endpoint)
+      TS_ACCOUNT: ElideusGroupSigning
+      TS_PROFILE: TEGSigningProfile
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Warm toolchain
@@ -129,14 +139,21 @@ jobs:
           if (!(Get-ChildItem dist\stage\content\sensorium\scenes -Filter *.scene.json)) {
             throw "staged layout has no scene files — the shell would panic at startup"
           }
-      - name: Sign exe (gated on secrets)
-        if: env.WINDOWS_CERT_PFX_BASE64 != ''
+      - name: Sign exe (Trusted Signing, gated on secrets)
+        if: env.AZURE_CLIENT_ID != ''
         shell: pwsh
         run: |
-          [IO.File]::WriteAllBytes("cert.pfx", [Convert]::FromBase64String($env:WINDOWS_CERT_PFX_BASE64))
+          # Trusted Signing client (dlib). Floating latest so the build can't 404 on a
+          # guessed version; pin -Version <x> once confirmed for reproducible builds.
+          nuget install Microsoft.Trusted.Signing.Client -ExcludeVersion -OutputDirectory $env:RUNNER_TEMP\ts | Out-Null
+          $dlib = (Get-ChildItem -Recurse -Filter Azure.CodeSigning.Dlib.dll $env:RUNNER_TEMP\ts | Select-Object -First 1).FullName
+          if (-not $dlib) { throw "Trusted Signing dlib not found in NuGet package" }
+          @{ Endpoint = $env:TS_ENDPOINT; CodeSigningAccountName = $env:TS_ACCOUNT; CertificateProfileName = $env:TS_PROFILE } `
+            | ConvertTo-Json | Set-Content -Path $env:RUNNER_TEMP\ts-metadata.json
           $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" | Select-Object -Last 1
-          & $signtool sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com `
-            /f cert.pfx /p "${{ secrets.WINDOWS_CERT_PASSWORD }}" dist\stage\prism-alpha.exe
+          & $signtool sign /v /fd SHA256 /tr http://timestamp.acs.microsoft.com /td SHA256 `
+            /dlib $dlib /dmdf $env:RUNNER_TEMP\ts-metadata.json dist\stage\prism-alpha.exe
+          if ($LASTEXITCODE -ne 0) { throw "exe signing failed" }
       - name: Build MSI (WiX v5)
         shell: pwsh
         run: |
@@ -145,13 +162,16 @@ jobs:
           wix build Alpha\prism-alpha\packaging\windows\prism-alpha.wxs `
             -d Version=$env:VERSION -d StageDir=$PWD\dist\stage `
             -arch x64 -o dist\prism-alpha-v$env:VERSION-x86_64-pc-windows-msvc.msi
-      - name: Sign MSI (gated on secrets)
-        if: env.WINDOWS_CERT_PFX_BASE64 != ''
+      - name: Sign MSI (Trusted Signing, gated on secrets)
+        if: env.AZURE_CLIENT_ID != ''
         shell: pwsh
         run: |
+          # Reuses the dlib + metadata staged by the exe-signing step (same runner, RUNNER_TEMP persists).
+          $dlib = (Get-ChildItem -Recurse -Filter Azure.CodeSigning.Dlib.dll $env:RUNNER_TEMP\ts | Select-Object -First 1).FullName
           $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" | Select-Object -Last 1
-          & $signtool sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com `
-            /f cert.pfx /p "${{ secrets.WINDOWS_CERT_PASSWORD }}" dist\prism-alpha-v$env:VERSION-x86_64-pc-windows-msvc.msi
+          & $signtool sign /v /fd SHA256 /tr http://timestamp.acs.microsoft.com /td SHA256 `
+            /dlib $dlib /dmdf $env:RUNNER_TEMP\ts-metadata.json dist\prism-alpha-v$env:VERSION-x86_64-pc-windows-msvc.msi
+          if ($LASTEXITCODE -ne 0) { throw "MSI signing failed" }
       - name: MSI content smoke (admin extract, no elevation)
         shell: pwsh
         run: |

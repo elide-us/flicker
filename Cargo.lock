@@ -1083,24 +1083,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "flicker-godmode"
-version = "0.1.1"
-dependencies = [
- "flicker",
- "flicker-globe",
- "flicker-input-core",
- "flicker-input-router",
- "flicker-materials",
- "flicker-poc-chemistry",
- "flicker-shell",
- "flicker-worldgrid",
- "flicker-worldtile",
- "glam",
- "serde_json",
- "tracing",
-]
-
-[[package]]
 name = "flicker-greed"
 version = "0.1.0"
 dependencies = [
@@ -1223,21 +1205,6 @@ dependencies = [
  "flicker-voxel",
  "flicker-worker",
  "glam",
- "serde_json",
- "tracing",
-]
-
-[[package]]
-name = "flicker-pocepochs"
-version = "0.1.1"
-dependencies = [
- "flicker",
- "flicker-core",
- "flicker-globe",
- "flicker-input-core",
- "flicker-input-router",
- "flicker-shell",
- "flicker-worldengine",
  "serde_json",
  "tracing",
 ]
@@ -3085,10 +3052,8 @@ dependencies = [
  "flicker-componentcatalog",
  "flicker-content",
  "flicker-controllertester",
- "flicker-godmode",
  "flicker-loomforge",
  "flicker-pocclusters",
- "flicker-pocepochs",
  "flicker-populous",
  "flicker-quartermaster",
  "flicker-sablework",

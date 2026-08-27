@@ -31,13 +31,11 @@ members = [
     "Alpha/crates/scenes/flicker-componentcatalog",
     "Alpha/crates/scenes/flicker-controllertester",
     "Alpha/crates/frontend/flicker-globe",
-    "Alpha/crates/scenes/flicker-godmode",
     "Alpha/crates/scenes/flicker-solarbirth",
     "Alpha/crates/scenes/flicker-loomforge",
     "Alpha/crates/scenes/flicker-assetpipeline",
     "Alpha/crates/scenes/flicker-pocclusters",
     "Alpha/crates/scenes/flicker-populous",
-    "Alpha/crates/scenes/flicker-pocepochs",
     "Alpha/crates/scenes/flicker-quartermaster",
     "Alpha/crates/scenes/flicker-sablework",
     # The Prism-Alpha client (the app that hosts the scenes).

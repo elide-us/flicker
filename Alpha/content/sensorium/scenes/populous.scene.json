@@ -1062,7 +1062,7 @@
   "exits": {},
   "stages": {
     "populous_globe": {
-      "_comment": "The POPULOUS hex ledger globe — the authored world drawn into the multi-view's centre viewport. Like `godmode_globe` it deliberately has NO `camera` block: the map is flown by the game master, so the scene's own orbit camera owns the view and the stage authors only the light it is seen by (the default light source). `clear` is transparent so the node's holder panel shows through. Unlike God Mode, this world has NO simulation publishing shells, so its whole appearance is authored here: the near-black under-shell, the inset tile shell over it (the seams between the tiles show the shell beneath, and those seams ARE the outlines — two static shells, no per-edge line geometry), and the shared reference frame above both.",
+      "_comment": "The POPULOUS hex ledger globe — the authored world drawn into the multi-view's centre viewport. It deliberately has NO `camera` block: the map is flown by the game master, so the scene's own orbit camera owns the view and the stage authors only the light it is seen by (the default light source). `clear` is transparent so the node's holder panel shows through. This world has NO simulation publishing shells, so its whole appearance is authored here: the near-black under-shell, the inset tile shell over it (the seams between the tiles show the shell beneath, and those seams ARE the outlines — two static shells, no per-edge line geometry), and the shared reference frame above both.",
       "lighting": "studio",
       "clear": "$stage_void",
       "layers": [
