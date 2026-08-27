@@ -47,12 +47,19 @@
                         "component": "option",
                         "value": 0,
                         "label": "$pop_page_world"
+                      },
+                      {
+                        "component": "option",
+                        "value": 1,
+                        "label": "$pop_page_hex"
                       }
                     ]
                   },
                   {
+                    "_comment": "One tab rail PER PAGE, each gated on its page's arrange() key and all binding the one `tab` value — the catalog's ratified per-page PTT pattern. An unplaced rail neither draws nor steps, so the shared step names never double-fire.",
                     "component": "pill_toggle",
                     "id": "paged_tabs",
+                    "visible_bind": "shown_page0",
                     "bind": "tab",
                     "next_action": "tab_next",
                     "prev_action": "tab_prev",
@@ -70,6 +77,35 @@
                         "component": "option",
                         "value": 1,
                         "label": "$pop_tab_seams"
+                      },
+                      {
+                        "component": "option",
+                        "value": 2,
+                        "label": "$pop_tab_crust"
+                      },
+                      {
+                        "component": "option",
+                        "value": 3,
+                        "label": "$pop_tab_evolve"
+                      }
+                    ]
+                  },
+                  {
+                    "component": "pill_toggle",
+                    "id": "paged_tabs_p1",
+                    "visible_bind": "shown_page1",
+                    "bind": "tab",
+                    "next_action": "tab_next",
+                    "prev_action": "tab_prev",
+                    "size": 520,
+                    "style": "paged_menu.tab_track",
+                    "tab_active": "paged_menu.tab_active",
+                    "tab_idle": "paged_menu.tab_idle",
+                    "children": [
+                      {
+                        "component": "option",
+                        "value": 0,
+                        "label": "$pop_tab_stack"
                       }
                     ]
                   },
@@ -121,14 +157,185 @@
                                 "component": "cell",
                                 "visible_bind": "shown_p0_t1",
                                 "grow": 1.0,
+                                "gap": 10,
                                 "children": [
+                                  {
+                                    "component": "row",
+                                    "grow": 1.0,
+                                    "gap": 10,
+                                    "children": [
+                                      {
+                                        "component": "slider",
+                                        "id": "pop_cells",
+                                        "style": "slider",
+                                        "bind": "pop_cells",
+                                        "label": "$pop_cells",
+                                        "vertical": true,
+                                        "min": 2,
+                                        "max": 12,
+                                        "step": 1,
+                                        "step_coarse": 2,
+                                        "decimals": 0,
+                                        "slider_h": 10,
+                                        "value_w": 44,
+                                        "grow": 1.0,
+                                        "tab_group": "pop_left",
+                                        "nav_ordinal": 1
+                                      },
+                                      {
+                                        "component": "slider",
+                                        "id": "pop_spots",
+                                        "style": "slider",
+                                        "bind": "pop_spots",
+                                        "label": "$pop_spots",
+                                        "vertical": true,
+                                        "min": 0,
+                                        "max": 12,
+                                        "step": 1,
+                                        "step_coarse": 2,
+                                        "decimals": 0,
+                                        "slider_h": 10,
+                                        "value_w": 44,
+                                        "grow": 1.0,
+                                        "tab_group": "pop_left",
+                                        "nav_ordinal": 2
+                                      }
+                                    ]
+                                  },
                                   {
                                     "component": "button",
                                     "action": "pop_seams_randomize",
                                     "tab_group": "pop_left",
-                                    "nav_ordinal": 1,
+                                    "nav_ordinal": 3,
                                     "size_class": "md",
                                     "label": "$pop_seams_randomize"
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "cell",
+                                "visible_bind": "shown_p0_t2",
+                                "grow": 1.0,
+                                "children": [
+                                  {
+                                    "component": "text",
+                                    "text": "$ui_pane_empty"
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "cell",
+                                "visible_bind": "shown_p0_t3",
+                                "grow": 1.0,
+                                "gap": 10,
+                                "children": [
+                                  {
+                                    "component": "checkbox",
+                                    "id": "pop_arrows",
+                                    "bind": "pop_arrows",
+                                    "label": "$pop_arrows",
+                                    "box": 14,
+                                    "size": 22,
+                                    "style": "checkbox",
+                                    "tab_group": "pop_left",
+                                    "nav_ordinal": 1
+                                  },
+                                  {
+                                    "component": "slider",
+                                    "id": "pop_water",
+                                    "style": "slider",
+                                    "bind": "pop_water",
+                                    "label": "$pop_water",
+                                    "vertical": true,
+                                    "min": 0,
+                                    "max": 100,
+                                    "step": 1,
+                                    "step_coarse": 5,
+                                    "decimals": 0,
+                                    "slider_h": 10,
+                                    "value_w": 44,
+                                    "grow": 1.0,
+                                    "tab_group": "pop_left",
+                                    "nav_ordinal": 2
+                                  },
+                                  {
+                                    "component": "slider",
+                                    "id": "pop_water_target",
+                                    "style": "slider",
+                                    "bind": "pop_water_target",
+                                    "label": "$pop_water_target",
+                                    "vertical": true,
+                                    "min": 0,
+                                    "max": 100,
+                                    "step": 1,
+                                    "step_coarse": 5,
+                                    "decimals": 0,
+                                    "slider_h": 10,
+                                    "value_w": 44,
+                                    "grow": 1.0,
+                                    "tab_group": "pop_left",
+                                    "nav_ordinal": 3
+                                  },
+                                    {
+                                    "component": "slider",
+                                    "id": "pop_temp",
+                                    "style": "slider",
+                                    "bind": "pop_temp",
+                                    "label": "$pop_temp",
+                                    "vertical": true,
+                                    "min": 0,
+                                    "max": 100,
+                                    "step": 1,
+                                    "step_coarse": 5,
+                                    "decimals": 0,
+                                    "slider_h": 10,
+                                    "value_w": 44,
+                                    "grow": 1.0,
+                                    "tab_group": "pop_left",
+                                    "nav_ordinal": 4
+                                  },
+                                  {
+                                    "component": "button",
+                                    "action": "pop_evolve_roll",
+                                    "tab_group": "pop_left",
+                                    "nav_ordinal": 3,
+                                    "size_class": "md",
+                                    "label": "$pop_evolve_roll"
+                                  },
+                                  {
+                                    "component": "button",
+                                    "action": "pop_evolve_run",
+                                    "tab_group": "pop_left",
+                                    "nav_ordinal": 3,
+                                    "size_class": "md",
+                                    "label": "$pop_evolve_run"
+                                  },
+                                  {
+                                    "component": "button",
+                                    "action": "pop_evolve_step",
+                                    "tab_group": "pop_left",
+                                    "nav_ordinal": 4,
+                                    "size_class": "md",
+                                    "label": "$pop_evolve_step"
+                                  },
+                                  {
+                                    "component": "button",
+                                    "action": "pop_evolve_reset",
+                                    "tab_group": "pop_left",
+                                    "nav_ordinal": 5,
+                                    "size_class": "md",
+                                    "label": "$pop_evolve_reset"
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "cell",
+                                "visible_bind": "shown_p1_t0",
+                                "grow": 1.0,
+                                "children": [
+                                  {
+                                    "component": "text",
+                                    "text": "$ui_pane_empty"
                                   }
                                 ]
                               }
@@ -144,11 +351,32 @@
                             "aspect": 1.0,
                             "children": [
                               {
-                                "component": "surface",
-                                "id": "pop_view_rtt",
-                                "style": "rtt_holder",
+                                "component": "cell",
+                                "visible_bind": "shown_page0",
                                 "grow": 1.0,
-                                "source": "populous_globe"
+                                "children": [
+                                  {
+                                    "component": "surface",
+                                    "id": "pop_view_rtt",
+                                    "style": "rtt_holder",
+                                    "grow": 1.0,
+                                    "source": "populous_globe"
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "cell",
+                                "visible_bind": "shown_page1",
+                                "grow": 1.0,
+                                "children": [
+                                  {
+                                    "component": "surface",
+                                    "id": "pop_hex_rtt",
+                                    "style": "rtt_holder",
+                                    "grow": 1.0,
+                                    "source": "populous_hex"
+                                  }
+                                ]
                               }
                             ]
                           },
@@ -251,6 +479,571 @@
                                     "text": "$ui_pane_empty"
                                   }
                                 ]
+                              },
+                              {
+                                "component": "cell",
+                                "visible_bind": "shown_p0_t2",
+                                "grow": 1.0,
+                                "children": [
+                                  {
+                                    "component": "text",
+                                    "text": "$ui_pane_empty"
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "cell",
+                                "visible_bind": "shown_p0_t3",
+                                "grow": 1.0,
+                                "gap": 8,
+                                "children": [
+                                  {
+                                    "component": "cell",
+                                    "visible_bind": "pop_booting",
+                                    "size": 42,
+                                    "gap": 4,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$pop_bootstrap",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label"
+                                      },
+                                      {
+                                        "component": "resource_gauge",
+                                        "id": "pop_boot_bar",
+                                        "bind": "pop_boot",
+                                        "tone": "mana",
+                                        "style": "load.gauge",
+                                        "height": 5
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$pop_stat_ticks",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_ticks",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 112
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$pop_stat_phase",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_phase",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 112
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$pop_stat_strata",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_strata",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 112
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "text",
+                                    "text": "$pop_stat_census",
+                                    "text_size": 11,
+                                    "font": "label",
+                                    "color": "panel.stat_label",
+                                    "size": 22
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 18,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_n0",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_c0",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 96
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 18,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_n1",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_c1",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 96
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 18,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_n2",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_c2",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 96
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 18,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_n3",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_c3",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 96
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 18,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_n4",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_c4",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 96
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 18,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_n5",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_c5",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 96
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 18,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_n6",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_c6",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 96
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 18,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_n7",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_c7",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 96
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 18,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_n8",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_c8",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 96
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 18,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_n9",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_c9",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 96
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 18,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_n10",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_c10",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 96
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 18,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_n11",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_c11",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 96
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 18,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_n12",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_c12",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 96
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 18,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_n13",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_c13",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 96
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 18,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_n14",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_c14",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 96
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 18,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_n15",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_c15",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 96
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 18,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_n16",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_c16",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 96
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 18,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_n17",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_census_c17",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 96
+                                      }
+                                    ]
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "cell",
+                                "visible_bind": "shown_p1_t0",
+                                "grow": 1.0,
+                                "children": [
+                                  {
+                                    "component": "text",
+                                    "text": "$ui_pane_empty"
+                                  }
+                                ]
                               }
                             ]
                           }
@@ -267,7 +1060,70 @@
     ]
   },
   "exits": {},
+  "stages": {
+    "populous_globe": {
+      "_comment": "The POPULOUS hex ledger globe — the authored world drawn into the multi-view's centre viewport. It deliberately has NO `camera` block: the map is flown by the game master, so the scene's own orbit camera owns the view and the stage authors only the light it is seen by (the default light source). `clear` is transparent so the node's holder panel shows through. This world has NO simulation publishing shells, so its whole appearance is authored here: the near-black under-shell, the inset tile shell over it (the seams between the tiles show the shell beneath, and those seams ARE the outlines — two static shells, no per-edge line geometry), and the shared reference frame above both.",
+      "lighting": "studio",
+      "clear": "$stage_void",
+      "layers": [
+        {
+          "draw": "shell",
+          "radius_scale": 0.998,
+          "inset": 0.0,
+          "color": "$world_seam"
+        },
+        {
+          "draw": "shell",
+          "radius_scale": 1.0,
+          "inset": 0.12,
+          "color": "$world_tile"
+        },
+        {
+          "draw": "graticule",
+          "radius_scale": 1.2
+        }
+      ],
+      "_hdr": "HDR: the `scene` pass (the globe's two shells + graticule, the layers above) renders into the LINEAR rgba16f `hdr` working attachment and `tonemap_grade` resolves it (ACES roll-off) into the sRGB `color` last. grade_strength 0 = tonemap only, no invented tint — an art grade is Aaron's to author in-window. Alpha passes through, so the transparent clear the holder panel shows through survives.",
+      "attachments": {
+        "hdr": { "format": "rgba16f" },
+        "color": { "format": "surface" },
+        "depth": { "format": "depth32" }
+      },
+      "passes": [
+        { "pass": "scene", "writes": ["hdr", "depth"] },
+        { "pass": "tonemap_grade" }
+      ]
+    },
+    "populous_hex": {
+      "_comment": "The HEX-STACK inspector — one column of the world, up close. Authors NO shell layers and no graticule: the column is published data (the scene's own shells), alone under the stage's light; the camera is the scene's orbit, aimed at the stack. Same HDR resolve as the globe so the heat ramp reads identically in both panes.",
+      "lighting": "studio",
+      "clear": "$stage_void",
+      "layers": [{ "draw": "shells" }],
+      "attachments": {
+        "hdr": { "format": "rgba16f" },
+        "color": { "format": "surface" },
+        "depth": { "format": "depth32" }
+      },
+      "passes": [
+        { "pass": "scene", "writes": ["hdr", "depth"] },
+        { "pass": "tonemap_grade" }
+      ]
+    }
+  },
   "styles": {
+    "load": {
+      "_comment": "The bootstrap-roll progress bar reuses the loading-screen gauge look (same values as Loading.scene.json load.gauge); per-scene styles by design, palette tokens single-sourced in ui_theme.json.",
+      "gauge": {
+        "track": "$well",
+        "border": "$edge2",
+        "border_w": 1,
+        "radius": 1,
+        "pad": 0,
+        "mana_top": "$mana_hi",
+        "mana_bot": "$mana_lo",
+        "sheen": "$sheen"
+      }
+    },
     "paged_menu": {
       "frame": {
         "fill_top": "$surface_top",
@@ -287,24 +1143,9 @@
       "title": "$ink_bright",
       "rule": "$seam",
       "page_active": {
-        "fill_top": [
-          0,
-          0,
-          0,
-          0
-        ],
-        "fill_bot": [
-          0,
-          0,
-          0,
-          0
-        ],
-        "border": [
-          0,
-          0,
-          0,
-          0
-        ],
+        "fill_top": "$stage_void",
+        "fill_bot": "$stage_void",
+        "border": "$stage_void",
         "border_w": 0,
         "radius": 0,
         "label": "$ink_bright",
@@ -313,24 +1154,9 @@
         "underline_w": 2
       },
       "page_idle": {
-        "fill_top": [
-          0,
-          0,
-          0,
-          0
-        ],
-        "fill_bot": [
-          0,
-          0,
-          0,
-          0
-        ],
-        "border": [
-          0,
-          0,
-          0,
-          0
-        ],
+        "fill_top": "$stage_void",
+        "fill_bot": "$stage_void",
+        "border": "$stage_void",
         "border_w": 0,
         "radius": 0,
         "label": "$dim",
@@ -352,24 +1178,9 @@
         "label": "$ink_sapphire"
       },
       "tab_idle": {
-        "fill_top": [
-          0,
-          0,
-          0,
-          0
-        ],
-        "fill_bot": [
-          0,
-          0,
-          0,
-          0
-        ],
-        "border": [
-          0,
-          0,
-          0,
-          0
-        ],
+        "fill_top": "$stage_void",
+        "fill_bot": "$stage_void",
+        "border": "$stage_void",
         "border_w": 0,
         "radius": 12,
         "label": "$dim"
@@ -387,18 +1198,8 @@
       "row_seam": "$seam",
       "row_focus": {
         "fill_top": "$accent_wash",
-        "fill_bot": [
-          0,
-          0,
-          0,
-          0
-        ],
-        "border": [
-          0,
-          0,
-          0,
-          0
-        ],
+        "fill_bot": "$stage_void",
+        "border": "$stage_void",
         "border_w": 0,
         "radius": 0
       },
@@ -448,6 +1249,12 @@
       "border_w": 1,
       "radius": 4,
       "inset": 6
+    },
+    "checkbox": {
+      "box": "$stone2",
+      "check": "$sig_green",
+      "border": "$edge4",
+      "pad": 3
     },
     "slider": {
       "track": "$well",

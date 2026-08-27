@@ -353,7 +353,7 @@ fn closest_point_segment(p: Vec3, a: Vec3, b: Vec3) -> Vec3 {
     a + ab * t
 }
 
-pub fn bake_prop(model: &RawModel, source_name: &str) -> RigFile {
+pub fn bake_prop(model: &RawModel, source_name: &str, flat_color: Option<[f32; 3]>) -> RigFile {
     let vertices: Vec<Vertex> = model
         .vertices
         .iter()
@@ -369,9 +369,18 @@ pub fn bake_prop(model: &RawModel, source_name: &str) -> RigFile {
     // One flat submesh/material — the same placeholder the character bake emits, over which
     // [`write_prop`] wires the source folder's maps. Left un-textured (a bake straight from
     // `bake_prop`, with no folder to read) the paperdoll renders the prop as flat steel.
+    //
+    // POC ONLY — NOT PERMANENT. `flat_color`, when present, is the FBX material's base colour baked
+    // straight into the rig's per-material `color`, so an untextured flat-shaded prop (Synty
+    // foliage) keeps its look through this path. This DELIBERATELY CONFLICTS with the
+    // Materials-Unification project (render_class / 255-slot draw vocabulary), which is the durable
+    // home for prop colour — remove this once prop colour is sourced through the materials system
+    // instead of the rig. Absent `flat_color`, behaviour is unchanged (empty `color` = placeholder).
+    let color = flat_color.map_or_else(Vec::new, |c| vec![c[0], c[1], c[2]]);
     let materials = vec![Material {
         name: "material_0".to_string(),
         slot: "material_0".to_string(),
+        color,
         ..Default::default()
     }];
     let submeshes = vec![Submesh {
@@ -758,8 +767,9 @@ pub fn write_prop(
     source_name: &str,
     out: &Path,
     fit: &Fit,
+    flat_color: Option<[f32; 3]>,
 ) -> Result<()> {
-    let mut rig = bake_prop(model, source_name);
+    let mut rig = bake_prop(model, source_name, flat_color);
     rig.attach = fit.to_attach();
     wire_source_textures(source_fbx, source_name, out, &mut rig)?;
     write_rig_file(&rig, out)
@@ -1153,7 +1163,8 @@ mod tests {
         }
 
         let out = out_dir.join("PieceA.json");
-        write_prop(&tiny_model(), &fbx, "PieceA", &out, &Fit::default()).expect("the prop writes");
+        write_prop(&tiny_model(), &fbx, "PieceA", &out, &Fit::default(), None)
+            .expect("the prop writes");
 
         let rig: RigFile =
             serde_json::from_str(&crate::package::read_text(&out).expect("the rig was written"))
@@ -1267,7 +1278,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let name = "PrismHumanBaseHairColor";
         let out = dir.join(format!("{name}.json"));
-        write_prop(&tiny_model(), &fbx, name, &out, &Fit::default()).expect("the hair prop writes");
+        write_prop(&tiny_model(), &fbx, name, &out, &Fit::default(), None)
+            .expect("the hair prop writes");
 
         let rig: RigFile =
             serde_json::from_str(&crate::package::read_text(&out).expect("the rig was written"))
@@ -1310,7 +1322,7 @@ mod tests {
         assert!(model.bones.is_empty(), "a weapon carries no skeleton");
         assert!(!model.vertices.is_empty(), "but it has geometry");
 
-        let rig = bake_prop(&model, "Dagger");
+        let rig = bake_prop(&model, "Dagger", None);
         assert!(
             rig.skeleton.bones.is_empty(),
             "a prop bakes with NO skeleton (no synthesized root)"

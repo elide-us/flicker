@@ -4,12 +4,11 @@
 //!
 //! Each `draw_mesh` call composes `projection × view × model` to produce
 //! the clip-space transform for that mesh. The `view × projection` is
-//! shared across the frame via [`MeshPipeline::set_camera_matrix`]
-//! (called once per frame from the renderer) and stored in a single
-//! uniform buffer. The `model` matrix plus tint and a wireframe flag
-//! are written into a per-draw uniform buffer; the bind group references
-//! both, with the per-draw entry bound through a dynamic offset that
-//! advances by `per_draw_stride` for each queued draw.
+//! shared across the frame — and across every lit pipeline — by the
+//! [`FrameBindGroup`] this module also owns ([`FrameBindGroup::set_camera_matrix`],
+//! called once per frame from the renderer). The `model` matrix plus tint and a
+//! wireframe flag are written into a per-draw uniform buffer at `@group(1)`, bound
+//! through a dynamic offset that advances by `per_draw_stride` for each queued draw.
 //!
 //! # Depth
 //!
@@ -48,12 +47,28 @@ use bytemuck::{Pod, Zeroable};
 use glam::Mat4;
 use wgpu::util::DeviceExt;
 
-use crate::mesh::{MeshHandle, MeshIndices, MeshVertex};
+use crate::mesh::{LightRig, MeshHandle, MeshIndices, MeshVertex, MAX_LIGHTS};
+use crate::pipeline_shadow::ShadowBind;
 
 /// The depth attachment format used by the renderer. Matched between the
 /// 3D pipeline and the 2D pipelines (which set `depth_write_enabled =
 /// false` and `depth_compare = Always`).
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+
+/// The ONE shared frame prelude — the `struct Light`/`Scene`/`ShadowUniform` declarations
+/// plus `light_sample` and `shadow_factor`. WGSL has no `#include`, so every lit pipeline
+/// PREPENDS it to its body shader via [`compose_lit`] at module build. This is the E0EA83C8
+/// remediation: one text, not three pasted copies. `lines.wgsl` reads no light and does NOT
+/// use it.
+pub const FRAME_PRELUDE: &str = include_str!("shaders/frame_prelude.wgsl");
+
+/// Compose a lit shader's full source: the shared [`FRAME_PRELUDE`] followed by the body.
+/// The prelude declares the shared structs/functions; the body declares its own `@group`
+/// bindings (which reference the prelude by name — WGSL resolves module-scope declarations
+/// regardless of order). Called once per pipeline at construction, never per frame.
+pub fn compose_lit(body: &str) -> String {
+    format!("{FRAME_PRELUDE}\n{body}")
+}
 
 /// CPU-side mirror of the WGSL `Camera` uniform.
 #[repr(C)]
@@ -70,33 +85,71 @@ const CAMERA_UNIFORM_SIZE: u64 = std::mem::size_of::<CameraUniform>() as u64;
 struct PerDraw {
     model: [[f32; 4]; 4], // 64 bytes
     tint: [f32; 4],       // 16 bytes
-    flags: [f32; 4],      // 16 bytes; flags.x = wireframe (0/1), rest reserved.
+    // 16 bytes; flags.x = wireframe (0/1), flags.y = gloss (sheen strength). zw unused.
+    flags: [f32; 4],
 }
 
 const PER_DRAW_RAW_SIZE: u64 = std::mem::size_of::<PerDraw>() as u64;
 
-/// CPU-side mirror of the WGSL `Scene` uniform — the frame-global
-/// lighting/atmosphere state (sun + moon directional lights, ambient,
-/// and the fog/grade fields used by later slices). Laid out as `[f32; 4]`
-/// lanes to match the shader's `vec4` fields exactly (16-byte aligned, no
-/// implicit std140 padding). The `.w` lanes pack scalars: `fog_color[3]`
-/// is fog density, `grade[3]` is grade strength.
+/// CPU-side mirror of the WGSL `Light` — ONE entry of the frame's light list.
+/// Every member is a 16-byte `vec4` lane, so std140 alignment is trivially correct
+/// and an `array<Light, N>` needs no padding between elements.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default, Pod, Zeroable)]
+pub struct LightUniform {
+    /// `rgb` = colour, `w` = intensity (the driver's gain is already applied).
+    pub color_intensity: [f32; 4],
+    /// `xyz` = world position (point/spot), `w` = kind (0 dir, 1 point, 2 spot).
+    pub position_kind: [f32; 4],
+    /// `xyz` = toward-the-light (dir) or the cone axis (spot), `w` = radius
+    /// (`<= 0` ⇒ no falloff).
+    pub direction_radius: [f32; 4],
+    /// `x` = cos(cone_inner), `y` = cos(cone_outer); `zw` reserved.
+    pub cone: [f32; 4],
+}
+
+/// CPU-side mirror of the WGSL `Scene` uniform — the frame-global lighting/atmosphere
+/// state: ambient, the camera position (fog distance + view vector), distance fog, and
+/// the [`MAX_LIGHTS`]-slot LIGHT LIST the lit shaders loop over `counts.x` times.
+/// Laid out as `[f32; 4]` lanes to match the shader's `vec4` fields exactly (16-byte
+/// aligned, no implicit std140 padding). The `.w` lanes pack scalars: `fog_color[3]` is
+/// fog density. There is no grade lane — the colour grade is pass-owned by
+/// [`TonemapGradePass`](crate::TonemapGradePass) and never rides here.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub struct SceneUniform {
-    pub sun_dir: [f32; 4],
-    pub sun_color: [f32; 4],
-    pub moon_dir: [f32; 4],
-    pub moon_color: [f32; 4],
     pub ambient: [f32; 4],
     pub camera_pos: [f32; 4],
+    /// `rgb` = fog colour, `w` = fog density.
     pub fog_color: [f32; 4],
-    pub grade: [f32; 4],
-    pub point_pos: [f32; 4],   // xyz = point-light world position; w unused
-    pub point_color: [f32; 4], // rgb = point-light radiance; w unused
+    /// `x` = how many of `lights` are lit this frame; `yzw` reserved.
+    pub counts: [u32; 4],
+    pub lights: [LightUniform; MAX_LIGHTS],
 }
 
 const SCENE_UNIFORM_SIZE: u64 = std::mem::size_of::<SceneUniform>() as u64;
+
+// **The layout gate.** The shader's `Scene` is `4 × vec4` of header + an
+// `array<Light, MAX_LIGHTS>` of `4 × vec4` each. ABSOLUTE offsets, not `% 16`: every
+// member IS a 16-byte lane, so an alignment check holds for any PERMUTATION of them and
+// would wave through a reorder that shears the data against the WGSL `Scene` while
+// every size still agrees. Pinned offsets pin the Rust order; the shader half of the
+// same contract — that `struct Scene` / `struct Light` spell their fields in THIS order
+// — is gated as text by `the_lit_shaders_ship_the_light_loop_the_mirrors_assert` below.
+// wgpu's default `max_uniform_buffer_binding_size` is 64 KiB, which 576 B does not come
+// close to.
+const _: () = assert!(std::mem::size_of::<LightUniform>() == 64);
+const _: () = assert!(std::mem::size_of::<SceneUniform>() == 64 + 64 * MAX_LIGHTS);
+const _: () = assert!(std::mem::offset_of!(SceneUniform, ambient) == 0);
+const _: () = assert!(std::mem::offset_of!(SceneUniform, camera_pos) == 16);
+const _: () = assert!(std::mem::offset_of!(SceneUniform, fog_color) == 32);
+const _: () = assert!(std::mem::offset_of!(SceneUniform, counts) == 48);
+const _: () = assert!(std::mem::offset_of!(SceneUniform, lights) == 64);
+const _: () = assert!(std::mem::offset_of!(LightUniform, color_intensity) == 0);
+const _: () = assert!(std::mem::offset_of!(LightUniform, position_kind) == 16);
+const _: () = assert!(std::mem::offset_of!(LightUniform, direction_radius) == 32);
+const _: () = assert!(std::mem::offset_of!(LightUniform, cone) == 48);
+const _: () = assert!(SCENE_UNIFORM_SIZE <= 65_536);
 
 /// One colour per material-catalog slot (`materials.json`, ids `0..=255`),
 /// as `vec4<f32>` for trivial std140 layout. The whole palette is 4 KiB.
@@ -112,24 +165,112 @@ fn magenta_palette() -> [[f32; 4]; MATERIAL_PALETTE_LEN] {
 }
 
 impl Default for SceneUniform {
-    /// Reproduces the pre-uniform hardcoded look: a single warm-white sun
-    /// at `normalize(0.5, 1.0, 0.3)` scaled to `0.7`, over a `0.3` ambient,
-    /// no moon, no fog, no grade — i.e. `base * (0.3 + 0.7 * lambert)`.
+    /// The default rig, packed — the pre-uniform hardcoded look. DERIVED from
+    /// [`LightRig::default`] through the one converter, never a second spelling of it:
+    /// a restated copy here would drift the moment the rig's default moved.
     fn default() -> Self {
-        // normalize(0.5, 1.0, 0.3)
-        let sun = [0.4319, 0.8638, 0.2591, 0.0];
+        crate::renderer::rig_to_uniform(&LightRig::default(), glam::Vec3::ZERO)
+    }
+}
+
+/// **The one per-frame bind group** — `@group(0) = { 0: camera, 1: scene }`, shared by
+/// every lit pipeline (mesh, mesh_textured, skinned, lines) so the camera matrix and
+/// the light list are uploaded ONCE per frame instead of once per pipeline. Owned by
+/// the [`Renderer`](crate::Renderer), built once, handed to each pipeline's `new` (for
+/// its layout) and to each `render` (for the group itself).
+///
+/// Lives here because this module already owns [`SceneUniform`] and [`DEPTH_FORMAT`] —
+/// the two things every lit pipeline already imports from it.
+pub struct FrameBindGroup {
+    layout: wgpu::BindGroupLayout,
+    camera_buf: wgpu::Buffer,
+    scene_buf: wgpu::Buffer,
+    bind_group: wgpu::BindGroup,
+}
+
+impl FrameBindGroup {
+    pub fn new(device: &wgpu::Device) -> Self {
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("flicker.frame.bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: NonZeroU64::new(CAMERA_UNIFORM_SIZE),
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: NonZeroU64::new(SCENE_UNIFORM_SIZE),
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let camera_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("flicker.frame.camera_uniform"),
+            size: CAMERA_UNIFORM_SIZE,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        // Seeded with the default rig so the first frames (before any `set_scene`)
+        // match the former hardcoded lighting.
+        let scene_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("flicker.frame.scene_uniform"),
+            contents: bytemuck::bytes_of(&SceneUniform::default()),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("flicker.frame.bind_group"),
+            layout: &layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: camera_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: scene_buf.as_entire_binding(),
+                },
+            ],
+        });
         Self {
-            sun_dir: sun,
-            sun_color: [0.7, 0.7, 0.7, 0.0],
-            moon_dir: [0.0, 1.0, 0.0, 0.0],
-            moon_color: [0.0, 0.0, 0.0, 0.0],
-            ambient: [0.3, 0.3, 0.3, 0.0],
-            camera_pos: [0.0, 0.0, 0.0, 0.0],
-            fog_color: [0.0, 0.0, 0.0, 0.0],
-            grade: [0.0, 0.0, 0.0, 0.0],
-            point_pos: [0.0, 0.0, 0.0, 0.0],
-            point_color: [0.0, 0.0, 0.0, 0.0],
+            layout,
+            camera_buf,
+            scene_buf,
+            bind_group,
         }
+    }
+
+    /// The layout every lit pipeline builds its `@group(0)` against.
+    pub fn layout(&self) -> &wgpu::BindGroupLayout {
+        &self.layout
+    }
+
+    /// The group every lit pipeline binds at slot 0 while encoding.
+    pub fn bind_group(&self) -> &wgpu::BindGroup {
+        &self.bind_group
+    }
+
+    /// Upload this frame's view-projection — once, for every lit pipeline.
+    pub fn set_camera_matrix(&self, queue: &wgpu::Queue, view_projection: Mat4) {
+        let uniform = CameraUniform {
+            view_projection: view_projection.to_cols_array_2d(),
+        };
+        queue.write_buffer(&self.camera_buf, 0, bytemuck::bytes_of(&uniform));
+    }
+
+    /// Upload this frame's lighting/atmosphere — once, for every lit pipeline.
+    pub fn set_scene_uniform(&self, queue: &wgpu::Queue, scene: SceneUniform) {
+        queue.write_buffer(&self.scene_buf, 0, bytemuck::bytes_of(&scene));
     }
 }
 
@@ -146,6 +287,25 @@ pub struct LoadedMesh {
     edge_index_format: wgpu::IndexFormat,
 }
 
+impl LoadedMesh {
+    /// The GPU buffers of a stored mesh, for a pipeline that draws it WITHOUT owning the mesh
+    /// store — the water grid, drawn by [`pipeline_water_mesh`](crate::pipeline_water_mesh)
+    /// against the same `Renderer::meshes` pool this pipeline fills. Filled draws only (the
+    /// grid never draws as wireframe), so no edge-buffer accessor is exposed.
+    pub(crate) fn vertex_buffer(&self) -> &wgpu::Buffer {
+        &self.vertex_buffer
+    }
+    pub(crate) fn tri_index_buffer(&self) -> &wgpu::Buffer {
+        &self.triangle_index_buffer
+    }
+    pub(crate) fn tri_index_count(&self) -> u32 {
+        self.triangle_index_count
+    }
+    pub(crate) fn tri_index_format(&self) -> wgpu::IndexFormat {
+        self.triangle_index_format
+    }
+}
+
 /// One queued draw call for the current frame.
 struct MeshDraw {
     handle: MeshHandle,
@@ -157,15 +317,17 @@ const MESH_VERTEX_ATTRS: [wgpu::VertexAttribute; 3] =
 
 /// The 3D mesh pipeline.
 pub struct MeshPipeline {
-    triangle_pipeline: wgpu::RenderPipeline,
-    line_pipeline: wgpu::RenderPipeline,
+    /// Filled triangles. Baked for both colour formats (swapchain + [`crate::HDR_FORMAT`])
+    /// over the one shared bind group / buffers; [`Self::render`] selects by
+    /// [`crate::TargetColor`].
+    triangle_pipeline: [wgpu::RenderPipeline; 2],
+    /// Line-list wireframe, same both-format baking as `triangle_pipeline`.
+    line_pipeline: [wgpu::RenderPipeline; 2],
+    /// This pipeline's OWN `@group(1)`: the per-draw uniform (dynamic offset) + the
+    /// material palette. The camera and the frame's light list ride the shared
+    /// [`FrameBindGroup`] at `@group(0)`.
     bind_group_layout: wgpu::BindGroupLayout,
     bind_group: wgpu::BindGroup,
-    camera_buf: wgpu::Buffer,
-    /// Frame-global lighting/atmosphere uniform (sun/moon/ambient/fog/grade),
-    /// written each frame by [`MeshPipeline::set_scene_uniform`]. Lives in the
-    /// same bind group as the camera and per-draw uniforms.
-    scene_buf: wgpu::Buffer,
     /// The material-catalog colour palette (one `vec4` per `MaterialId`),
     /// booted all-magenta (loud-wrong) and replaced by
     /// [`MeshPipeline::set_material_palette`] with `materials.json` colours.
@@ -183,6 +345,8 @@ pub struct MeshPipeline {
 impl MeshPipeline {
     pub fn new(
         device: &wgpu::Device,
+        frame: &FrameBindGroup,
+        shadow: &ShadowBind,
         surface_format: wgpu::TextureFormat,
         min_uniform_offset_alignment: u32,
     ) -> Self {
@@ -193,7 +357,7 @@ impl MeshPipeline {
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("flicker.mesh.shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/mesh.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(compose_lit(include_str!("shaders/mesh.wgsl")).into()),
         });
 
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -201,16 +365,6 @@ impl MeshPipeline {
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: NonZeroU64::new(CAMERA_UNIFORM_SIZE),
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
                     visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
@@ -219,22 +373,10 @@ impl MeshPipeline {
                     },
                     count: None,
                 },
-                // Frame-global lighting/atmosphere — fragment-only, one value
-                // per frame (no dynamic offset).
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: NonZeroU64::new(SCENE_UNIFORM_SIZE),
-                    },
-                    count: None,
-                },
                 // The material-catalog colour palette — fragment-only, set
                 // rarely (content load), read per-fragment by index.
                 wgpu::BindGroupLayoutEntry {
-                    binding: 3,
+                    binding: 1,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
@@ -248,7 +390,9 @@ impl MeshPipeline {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("flicker.mesh.pipeline_layout"),
-            bind_group_layouts: &[&bind_group_layout],
+            // @group(2) = the shared shadow bind (a 1×1 default is bound for non-shadow
+            // surfaces, so this is inert until a shadow is cast).
+            bind_group_layouts: &[frame.layout(), &bind_group_layout, shadow.layout()],
             push_constant_ranges: &[],
         });
 
@@ -269,87 +413,82 @@ impl MeshPipeline {
             stencil: wgpu::StencilState::default(),
             bias: wgpu::DepthBiasState::default(),
         });
-        let color_target = Some(wgpu::ColorTargetState {
-            format: surface_format,
-            blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-            write_mask: wgpu::ColorWrites::ALL,
-        });
 
-        let triangle_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("flicker.mesh.triangle_pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: "vs_main",
-                buffers: std::slice::from_ref(&vertex_layout),
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: "fs_main",
-                targets: std::slice::from_ref(&color_target),
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: Some(wgpu::Face::Back),
-                unclipped_depth: false,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                conservative: false,
-            },
-            depth_stencil: depth_stencil.clone(),
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
+        // Build the (triangle, line) pipeline pair for one colour format — the ONLY thing
+        // that varies between the sRGB and HDR variants. The pair shares the vertex shader,
+        // bind groups, depth state, and blend; `render` picks the variant by `TargetColor`.
+        let make = |fmt: wgpu::TextureFormat| {
+            let color_target = Some(wgpu::ColorTargetState {
+                format: fmt,
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            });
+            let triangle = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("flicker.mesh.triangle_pipeline"),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: "vs_main",
+                    buffers: std::slice::from_ref(&vertex_layout),
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: "fs_main",
+                    targets: std::slice::from_ref(&color_target),
+                    compilation_options: Default::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    cull_mode: Some(wgpu::Face::Back),
+                    unclipped_depth: false,
+                    polygon_mode: wgpu::PolygonMode::Fill,
+                    conservative: false,
+                },
+                depth_stencil: depth_stencil.clone(),
+                multisample: wgpu::MultisampleState::default(),
+                multiview: None,
+                cache: None,
+            });
 
-        let line_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("flicker.mesh.line_pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: "vs_main",
-                buffers: std::slice::from_ref(&vertex_layout),
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: "fs_main",
-                targets: std::slice::from_ref(&color_target),
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::LineList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                // Lines have no notion of "back-facing" — disable culling.
-                cull_mode: None,
-                unclipped_depth: false,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                conservative: false,
-            },
-            depth_stencil,
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
-
-        let camera_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("flicker.mesh.camera_uniform"),
-            size: CAMERA_UNIFORM_SIZE,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        // Seed the scene uniform with the default look so the first frames
-        // (before any `set_scene`) match the former hardcoded lighting.
-        let scene_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("flicker.mesh.scene_uniform"),
-            contents: bytemuck::bytes_of(&SceneUniform::default()),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
+            let line = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("flicker.mesh.line_pipeline"),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: "vs_main",
+                    buffers: std::slice::from_ref(&vertex_layout),
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: "fs_main",
+                    targets: std::slice::from_ref(&color_target),
+                    compilation_options: Default::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::LineList,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    // Lines have no notion of "back-facing" — disable culling.
+                    cull_mode: None,
+                    unclipped_depth: false,
+                    polygon_mode: wgpu::PolygonMode::Fill,
+                    conservative: false,
+                },
+                depth_stencil: depth_stencil.clone(),
+                multisample: wgpu::MultisampleState::default(),
+                multiview: None,
+                cache: None,
+            });
+            (triangle, line)
+        };
+        let (tri_srgb, line_srgb) = make(surface_format);
+        let (tri_hdr, line_hdr) = make(crate::HDR_FORMAT);
+        let triangle_pipeline = [tri_srgb, tri_hdr];
+        let line_pipeline = [line_srgb, line_hdr];
 
         // Boot loud-wrong: every slot magenta until the catalog palette is set.
         let palette_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -366,22 +505,13 @@ impl MeshPipeline {
             mapped_at_creation: false,
         });
 
-        let bind_group = make_bind_group(
-            device,
-            &bind_group_layout,
-            &camera_buf,
-            &scene_buf,
-            &palette_buf,
-            &per_draw_buf,
-        );
+        let bind_group = make_bind_group(device, &bind_group_layout, &palette_buf, &per_draw_buf);
 
         Self {
             triangle_pipeline,
             line_pipeline,
             bind_group_layout,
             bind_group,
-            camera_buf,
-            scene_buf,
             palette_buf,
             per_draw_buf,
             per_draw_capacity: initial_capacity,
@@ -482,28 +612,6 @@ impl MeshPipeline {
         self.queued.clear();
     }
 
-    /// Update the camera matrix used for the rest of this frame.
-    pub fn set_camera_matrix(&mut self, queue: &wgpu::Queue, view_projection: Mat4) {
-        let uniform = CameraUniform {
-            view_projection: view_projection.to_cols_array_2d(),
-        };
-        queue.write_buffer(&self.camera_buf, 0, bytemuck::bytes_of(&uniform));
-    }
-
-    /// Exposes the camera uniform buffer so sibling pipelines (e.g.
-    /// the immediate-mode lines pipeline) can reuse the same
-    /// view-projection without keeping their own copy.
-    pub fn camera_buffer(&self) -> &wgpu::Buffer {
-        &self.camera_buf
-    }
-
-    /// Update the frame-global lighting/atmosphere uniform for the rest of
-    /// this frame. Mirrors [`MeshPipeline::set_camera_matrix`] — the renderer
-    /// calls it once per frame from `end_frame`.
-    pub fn set_scene_uniform(&mut self, queue: &wgpu::Queue, scene: SceneUniform) {
-        queue.write_buffer(&self.scene_buf, 0, bytemuck::bytes_of(&scene));
-    }
-
     /// Replace the material-catalog colour palette (one `vec4` RGBA per
     /// `MaterialId`, index = id). Undefined slots should stay the loud-wrong
     /// magenta the pipeline booted with — pass them through unchanged rather
@@ -555,8 +663,6 @@ impl MeshPipeline {
             self.bind_group = make_bind_group(
                 device,
                 &self.bind_group_layout,
-                &self.camera_buf,
-                &self.scene_buf,
                 &self.palette_buf,
                 &self.per_draw_buf,
             );
@@ -574,11 +680,25 @@ impl MeshPipeline {
 
     /// Issue the queued draws. Wireframe draws bind the line-list
     /// pipeline + the edge index buffer; filled draws bind the
-    /// triangle-list pipeline + the triangle index buffer.
-    pub fn render<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, meshes: &'a [Option<LoadedMesh>]) {
+    /// triangle-list pipeline + the triangle index buffer. `target` selects the
+    /// colour-format variant (sRGB or HDR) for the surface being encoded. `frame` is
+    /// the renderer's ONE per-frame group (camera + lights), bound at slot 0.
+    pub fn render<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        frame: &'a FrameBindGroup,
+        shadow: &'a ShadowBind,
+        meshes: &'a [Option<LoadedMesh>],
+        target: crate::TargetColor,
+    ) {
         if self.queued.is_empty() {
             return;
         }
+        let t = target as usize;
+        pass.set_bind_group(0, frame.bind_group(), &[]);
+        // @group(2) — the shadow bind for this surface (the active source, or the 1×1
+        // default when none), the same for every draw.
+        pass.set_bind_group(2, shadow.active_bind_group(), &[]);
         for (i, draw) in self.queued.iter().enumerate() {
             let Some(mesh) = meshes.get(draw.handle.0 as usize).and_then(|s| s.as_ref()) else {
                 continue;
@@ -586,14 +706,14 @@ impl MeshPipeline {
             let offset = (i as u32) * self.per_draw_stride;
             let wireframe = draw.per_draw.flags[0] > 0.5;
             if wireframe {
-                pass.set_pipeline(&self.line_pipeline);
-                pass.set_bind_group(0, &self.bind_group, &[offset]);
+                pass.set_pipeline(&self.line_pipeline[t]);
+                pass.set_bind_group(1, &self.bind_group, &[offset]);
                 pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
                 pass.set_index_buffer(mesh.edge_index_buffer.slice(..), mesh.edge_index_format);
                 pass.draw_indexed(0..mesh.edge_index_count, 0, 0..1);
             } else {
-                pass.set_pipeline(&self.triangle_pipeline);
-                pass.set_bind_group(0, &self.bind_group, &[offset]);
+                pass.set_pipeline(&self.triangle_pipeline[t]);
+                pass.set_bind_group(1, &self.bind_group, &[offset]);
                 pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
                 pass.set_index_buffer(
                     mesh.triangle_index_buffer.slice(..),
@@ -651,8 +771,6 @@ fn extract_edges(indices: &MeshIndices<'_>) -> HashSet<(u32, u32)> {
 fn make_bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
-    camera_buf: &wgpu::Buffer,
-    scene_buf: &wgpu::Buffer,
     palette_buf: &wgpu::Buffer,
     per_draw_buf: &wgpu::Buffer,
 ) -> wgpu::BindGroup {
@@ -662,10 +780,6 @@ fn make_bind_group(
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
-                resource: camera_buf.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
                 resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                     buffer: per_draw_buf,
                     offset: 0,
@@ -673,12 +787,8 @@ fn make_bind_group(
                 }),
             },
             wgpu::BindGroupEntry {
-                binding: 3,
+                binding: 1,
                 resource: palette_buf.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 2,
-                resource: scene_buf.as_entire_binding(),
             },
         ],
     })
@@ -720,47 +830,326 @@ pub fn create_depth_view(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
+    /// The three LIT shaders as this crate SHIPS them — the same text
+    /// `create_shader_module` is handed at pipeline build. Reading the real channel is
+    /// the whole point: a gate over a Rust re-derivation certifies the mirror, never the
+    /// source. (`lines.wgsl` is deliberately absent — it reads no light.)
+    const LIT_SHADERS: [(&str, &str); 3] = [
+        ("mesh.wgsl", include_str!("shaders/mesh.wgsl")),
+        (
+            "mesh_textured.wgsl",
+            include_str!("shaders/mesh_textured.wgsl"),
+        ),
+        ("skinned.wgsl", include_str!("shaders/skinned.wgsl")),
+    ];
+
+    /// One shipped shader's source by file name.
+    fn shader(file: &str) -> &'static str {
+        LIT_SHADERS
+            .into_iter()
+            .find(|(f, _)| *f == file)
+            .unwrap_or_else(|| panic!("`{file}` is one of the lit shaders"))
+            .1
+    }
+
+    /// The text between `struct <name> {` and its closing brace — for asserting FIELD
+    /// ORDER, which is the half of the uniform contract a size check cannot see.
+    fn struct_body<'a>(wgsl: &'a str, name: &str, file: &str) -> &'a str {
+        let head = format!("struct {name} {{");
+        let at = wgsl
+            .find(&head)
+            .unwrap_or_else(|| panic!("{file} declares `{head}`"));
+        let rest = &wgsl[at + head.len()..];
+        let end = rest
+            .find('}')
+            .unwrap_or_else(|| panic!("{file}: `struct {name}` is unterminated"));
+        &rest[..end]
+    }
+
+    /// **GATE — the SHIPPED light loop is the one every mirror asserts against.**
+    /// S4a's numeric half lives one crate over, in `flicker-widgets`
+    /// (`the_light_loop_is_bit_identical_to_the_closed_form`): it proves a CPU
+    /// re-derivation of the loop equals a CPU re-derivation of the closed form, bit for
+    /// bit. Both of its sides are Rust. THIS is the source half, in the crate that owns
+    /// the shaders — the load-bearing facts of the real WGSL text: how each accumulator
+    /// is SEEDED, what BOUNDS the loop, and how the per-light term is SPELLED. Together
+    /// they cover the channel: re-associating `radiance * (ndl * s.w)`, or moving the
+    /// ambient across the loop, now fails HERE instead of quietly turning "zero pixel
+    /// change" into an unbacked claim.
+    ///
+    /// It also carries the shader half of the uniform contract: `struct Scene` and
+    /// `struct Light` must spell their fields in the order the `offset_of!` asserts
+    /// above pin CPU-side, or the two agree on every size while shearing the data.
+    #[test]
+    fn the_lit_shaders_ship_the_light_loop_the_mirrors_assert() {
+        // ── THE SEEDS AND THE SPELLING ── f32 addition is not associative, so the seed
+        // and the association ARE the pixels: `mesh`/`skinned` seed the accumulator with
+        // `scene.ambient.rgb`, `mesh_textured` seeds diffuse AND spec with zero.
+        // The `* vis` tail is the S6 shadow multiply: `vis` is 1.0 exactly for every light
+        // but the shadowed one (and for every surface with `enabled = 0`), so `t * 1.0 == t`
+        // keeps these sums bit-identical to the unshadowed loop the CPU mirror asserts.
+        let facts: [(&str, &[&str]); 3] = [
+            (
+                "mesh.wgsl",
+                &[
+                    "var diffuse = scene.ambient.rgb;",
+                    "let ndl = max(dot(in.world_normal, s.xyz), 0.0);",
+                    "diffuse = diffuse + radiance * (ndl * s.w) * vis;",
+                ],
+            ),
+            (
+                "mesh_textured.wgsl",
+                &[
+                    "var direct = vec3<f32>(0.0);",
+                    "var spec = vec3<f32>(0.0);",
+                    "let ndl = max(dot(n, s.xyz), 0.0);",
+                    "direct = direct + radiance * (ndl * s.w) * vis;",
+                    "let ambient = scene.ambient.rgb * ao;",
+                ],
+            ),
+            (
+                "skinned.wgsl",
+                &[
+                    "var diffuse = scene.ambient.rgb;",
+                    "diffuse = diffuse + radiance * (max(dot(n, s.xyz), 0.0) * s.w) * vis;",
+                ],
+            ),
+        ];
+        for (file, expected) in facts {
+            let wgsl = shader(file);
+            for fact in expected {
+                assert!(
+                    wgsl.contains(fact),
+                    "{file} no longer spells `{fact}` — the light loop the CPU mirrors \
+                     assert against has drifted from the shipped shader"
+                );
+            }
+        }
+
+        // ── THE LOOP BOUND AND THE RADIANCE TERM ── identical in all three.
+        for (file, wgsl) in LIT_SHADERS {
+            for fact in [
+                "for (var i = 0u; i < scene.counts.x; i = i + 1u) {",
+                "let li = scene.lights[i];",
+                "let radiance = li.color_intensity.rgb * li.color_intensity.w;",
+            ] {
+                assert!(
+                    wgsl.contains(fact),
+                    "{file}'s light loop no longer spells `{fact}`"
+                );
+            }
+        }
+
+        // ── THE AMBIENT STAYS OUTSIDE mesh_textured's LOOP ── its ONE mention of
+        // `scene.ambient` comes AFTER the accumulation, which is what keeps that sum's
+        // order (and so its exact f32 result) the zero-seeded one the mirror asserts.
+        let textured = shader("mesh_textured.wgsl");
+        assert_eq!(
+            textured.matches("scene.ambient").count(),
+            1,
+            "mesh_textured.wgsl must apply the ambient in exactly ONE place"
+        );
+        let ambient_at = textured
+            .find("let ambient = scene.ambient.rgb * ao;")
+            .expect("the ambient term");
+        let accum_at = textured
+            .find("direct = direct + radiance * (ndl * s.w) * vis;")
+            .expect("the diffuse accumulation");
+        assert!(
+            ambient_at > accum_at,
+            "mesh_textured.wgsl must apply the ambient AFTER the light loop, never seed \
+             the accumulator with it"
+        );
+
+        // ── THE SHADER HALF OF THE UNIFORM CONTRACT ── field ORDER, in the ONE shared
+        // prelude (dedup'd into `frame_prelude.wgsl`; every lit shader prepends it).
+        for (name, fields) in [
+            (
+                "Scene",
+                ["ambient", "camera_pos", "fog_color", "counts", "lights"].as_slice(),
+            ),
+            (
+                "Light",
+                [
+                    "color_intensity",
+                    "position_kind",
+                    "direction_radius",
+                    "cone",
+                ]
+                .as_slice(),
+            ),
+        ] {
+            let body = struct_body(FRAME_PRELUDE, name, "frame_prelude.wgsl");
+            let mut at = 0;
+            for field in fields {
+                let needle = format!("{field}:");
+                let found = body[at..].find(&needle).unwrap_or_else(|| {
+                    panic!(
+                        "frame_prelude.wgsl: `struct {name}` has no `{needle}` after byte {at} \
+                         — the field ORDER is the contract with `SceneUniform`, and a reorder \
+                         shears the data while every size still agrees"
+                    )
+                });
+                at += found + needle.len();
+            }
+        }
+    }
+
+    /// **GATE — the frame prelude is ONE text (E0EA83C8 discharged).** WGSL has no
+    /// `#include`, so `struct Light`/`Scene`/`ShadowUniform`, `light_sample()` and
+    /// `shadow_factor()` were the triplicated-prelude violation. S6 folds them into ONE
+    /// `frame_prelude.wgsl` every lit pipeline PREPENDS (see [`compose_lit`]) — so
+    /// byte-identity is now guaranteed by construction, and this gate proves the dedup is
+    /// REAL: the shared file carries the contract, and no body shader re-declares it (a
+    /// second copy would compile fine and silently re-fork the source of truth). It also
+    /// covers the S6 shadow channel — the prelude ships the `shadow_factor` the lit loops
+    /// call. `lines.wgsl` reads no light and must carry none of it.
+    #[test]
+    fn the_frame_prelude_is_one_text() {
+        // The shared prelude carries the whole contract — the structs, the falloff/cone
+        // math, and the shadow sampler.
+        for fact in [
+            "struct Light {",
+            "struct Scene {",
+            "struct ShadowUniform {",
+            "fn light_sample(",
+            "fn shadow_factor(",
+            "textureSampleCompareLevel(",
+        ] {
+            assert!(
+                FRAME_PRELUDE.contains(fact),
+                "frame_prelude.wgsl must carry `{fact}` — it is the ONE text every lit \
+                 shader shares"
+            );
+        }
+        // No body shader re-declares the shared contract: if one pasted its own
+        // `struct Scene`/`light_sample`/`shadow_factor`, the dedup would be a lie (two
+        // sources of truth that happen to agree today). The bodies keep only their OWN
+        // `@group` bindings + entry points.
+        for (file, wgsl) in LIT_SHADERS {
+            for dup in [
+                "struct Light {",
+                "struct Scene {",
+                "struct ShadowUniform {",
+                "fn light_sample(",
+                "fn shadow_factor(",
+            ] {
+                assert!(
+                    !wgsl.contains(dup),
+                    "{file} re-declares `{dup}` — it must inherit it from the ONE shared \
+                     frame_prelude.wgsl, not paste a second copy"
+                );
+            }
+        }
+        // `lines.wgsl` reads no light — neither the prelude nor a hand-rolled copy.
+        assert!(
+            !include_str!("shaders/lines.wgsl").contains("fn light_sample("),
+            "lines.wgsl reads no light — it must not carry a copy of the prelude"
+        );
+        // And it is never composed WITH the prelude either (a `Camera`-only pipeline).
+        assert!(
+            !compose_lit("// body").is_empty() && compose_lit("X").ends_with('X'),
+            "compose_lit prepends the prelude to the body"
+        );
+    }
+
+    /// A headless device, or `None` on a machine without a GPU adapter.
+    pub(crate) fn test_device(label: &str) -> Option<(wgpu::Device, wgpu::Queue)> {
+        let instance = wgpu::Instance::default();
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            compatible_surface: None,
+            force_fallback_adapter: false,
+        }))?;
+        Some(
+            pollster::block_on(adapter.request_device(
+                &wgpu::DeviceDescriptor {
+                    label: Some(label),
+                    required_features: wgpu::Features::empty(),
+                    required_limits: wgpu::Limits::default(),
+                    memory_hints: wgpu::MemoryHints::default(),
+                },
+                None,
+            ))
+            .expect("request device"),
+        )
+    }
+
     /// Build the mesh pipeline under a validation error scope. Creating the
-    /// render pipelines compiles `mesh.wgsl` and checks it against the bind-
-    /// group layout (camera + per-draw + the `Scene` uniform at binding 2), so
-    /// a malformed shader or a struct/layout mismatch fails here rather than at
-    /// app launch. Skips cleanly on a machine without a GPU adapter.
+    /// render pipelines compiles `mesh.wgsl` and checks it against BOTH bind-group
+    /// layouts — the shared frame group (camera + the `Scene` light list) at `@group(0)`
+    /// and the pipeline's own per-draw + palette group at `@group(1)` — so a malformed
+    /// shader or a struct/layout mismatch fails here rather than at app launch.
+    /// Skips cleanly on a machine without a GPU adapter.
     #[test]
     fn mesh_pipeline_compiles_shader() {
-        let instance = wgpu::Instance::default();
-        let Some(adapter) =
-            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: None,
-                force_fallback_adapter: false,
-            }))
-        else {
+        let Some((device, queue)) = test_device("flicker.mesh_test.device") else {
             eprintln!("mesh_pipeline_compiles_shader: no GPU adapter — skipping");
             return;
         };
-        let (device, queue) = pollster::block_on(adapter.request_device(
-            &wgpu::DeviceDescriptor {
-                label: Some("flicker.mesh_test.device"),
-                required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::default(),
-                memory_hints: wgpu::MemoryHints::default(),
-            },
-            None,
-        ))
-        .expect("request device");
 
         device.push_error_scope(wgpu::ErrorFilter::Validation);
         let align = device.limits().min_uniform_buffer_offset_alignment;
-        let mut pipeline = MeshPipeline::new(&device, wgpu::TextureFormat::Rgba8UnormSrgb, align);
-        // Exercise the scene-uniform upload path too (writes binding 2).
-        pipeline.set_scene_uniform(&queue, SceneUniform::default());
-        // And the material-palette upload path (writes binding 3).
+        let frame = FrameBindGroup::new(&device);
+        let shadow = crate::pipeline_shadow::ShadowBind::new(&device);
+        let mut pipeline = MeshPipeline::new(
+            &device,
+            &frame,
+            &shadow,
+            wgpu::TextureFormat::Rgba8UnormSrgb,
+            align,
+        );
+        // Exercise the shared frame-uniform upload path too (writes group 0).
+        frame.set_scene_uniform(&queue, SceneUniform::default());
+        frame.set_camera_matrix(&queue, Mat4::IDENTITY);
+        // And the material-palette upload path (writes group 1, binding 1).
         pipeline.set_material_palette(&queue, &magenta_palette());
         device.poll(wgpu::Maintain::Wait);
         let err = pollster::block_on(device.pop_error_scope());
         assert!(err.is_none(), "mesh.wgsl failed validation: {err:?}");
+    }
+
+    /// **GATE — the lit pipelines share ONE per-frame layout.** All four (mesh,
+    /// mesh_textured, skinned, lines) are built from a SINGLE [`FrameBindGroup`], so
+    /// the camera matrix and the light list are uploaded once per frame and reach every
+    /// lit shader. If any of them declared a `@group(0)` that disagreed with the shared
+    /// layout, pipeline creation would raise a validation error here — the same scope
+    /// the per-shader `*_compiles_shader` tests use.
+    #[test]
+    fn the_lit_pipelines_share_one_frame_layout() {
+        let Some((device, queue)) = test_device("flicker.frame_test.device") else {
+            eprintln!("the_lit_pipelines_share_one_frame_layout: no GPU adapter — skipping");
+            return;
+        };
+        device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let fmt = wgpu::TextureFormat::Rgba8UnormSrgb;
+        let align = device.limits().min_uniform_buffer_offset_alignment;
+        let frame = FrameBindGroup::new(&device);
+        let shadow = crate::pipeline_shadow::ShadowBind::new(&device);
+        let _mesh = MeshPipeline::new(&device, &frame, &shadow, fmt, align);
+        let _textured = crate::pipeline_mesh_textured::TexturedMeshPipeline::new(
+            &device, &queue, &frame, &shadow, fmt, align,
+        );
+        let _skinned = crate::pipeline_skinned::SkinnedMeshPipeline::new(
+            &device, &queue, &frame, &shadow, fmt,
+        );
+        let _lines = crate::pipeline_lines::LinesPipeline::new(
+            &device,
+            &frame,
+            fmt,
+            wgpu::CompareFunction::LessEqual,
+        );
+        // ONE upload feeds all four.
+        frame.set_camera_matrix(&queue, Mat4::IDENTITY);
+        frame.set_scene_uniform(&queue, SceneUniform::default());
+        device.poll(wgpu::Maintain::Wait);
+        let err = pollster::block_on(device.pop_error_scope());
+        assert!(
+            err.is_none(),
+            "a lit pipeline disagrees with the shared frame layout: {err:?}"
+        );
     }
 }

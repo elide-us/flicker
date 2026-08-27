@@ -2423,6 +2423,30 @@
   "poc_life_supporting_conditions": {
     "en-us": "LIFE-SUPPORTING CONDITIONS"
   },
+  "pop_cells": {
+    "en-us": "CELLS"
+  },
+  "pop_bootstrap": {
+    "en-us": "BAKING 1200 TICKS"
+  },
+  "pop_evolve_reset": {
+    "en-us": "RESET"
+  },
+  "pop_evolve_roll": {
+    "en-us": "TICK 1200"
+  },
+  "pop_evolve_run": {
+    "en-us": "RUN · PAUSE"
+  },
+  "pop_evolve_step": {
+    "en-us": "STEP"
+  },
+  "pop_page_hex": {
+    "en-us": "Hex"
+  },
+  "pop_arrows": {
+    "en-us": "MOTION ARROWS"
+  },
   "pop_page_world": {
     "en-us": "World"
   },
@@ -2432,20 +2456,80 @@
   "pop_size": {
     "en-us": "SIZE"
   },
+  "pop_stat_phase": {
+    "en-us": "PROCEDURE"
+  },
+  "pop_stat_census": {
+    "en-us": "MATERIALS · HEXES"
+  },
+  "pop_phase_climate": {
+    "en-us": "Climate"
+  },
+  "pop_phase_upwell": {
+    "en-us": "Upwell"
+  },
+  "pop_phase_spread": {
+    "en-us": "Spread"
+  },
+  "pop_phase_collide": {
+    "en-us": "Collide"
+  },
+  "pop_phase_push": {
+    "en-us": "Push"
+  },
+  "pop_phase_form": {
+    "en-us": "Form"
+  },
+  "pop_phase_erode": {
+    "en-us": "Erode"
+  },
+  "pop_phase_compact": {
+    "en-us": "Compact"
+  },
+  "pop_phase_weld": {
+    "en-us": "Weld"
+  },
+  "pop_spots": {
+    "en-us": "SPOTS"
+  },
   "pop_stat_diameter": {
     "en-us": "DIAMETER · MI"
   },
   "pop_stat_hexes": {
     "en-us": "HEXES"
   },
+  "pop_stat_strata": {
+    "en-us": "LAYERS FORMED"
+  },
+  "pop_stat_ticks": {
+    "en-us": "TICKS"
+  },
   "pop_stat_tile": {
     "en-us": "TILE WIDTH · MI"
+  },
+  "pop_temp": {
+    "en-us": "CLIMATE"
+  },
+  "pop_water": {
+    "en-us": "WATER %"
+  },
+  "pop_water_target": {
+    "en-us": "TARGET"
   },
   "pop_tab_map": {
     "en-us": "Map"
   },
+  "pop_tab_crust": {
+    "en-us": "Crust"
+  },
+  "pop_tab_evolve": {
+    "en-us": "Evolve"
+  },
   "pop_tab_seams": {
     "en-us": "Seams"
+  },
+  "pop_tab_stack": {
+    "en-us": "Stack"
   },
   "qm_caret_closed": {
     "en-us": "▸"
@@ -3220,6 +3304,42 @@
   },
   "wf_step_task": {
     "en-us": "Workflow"
+  },
+  "wf_step_prep": {
+    "en-us": "Prep"
+  },
+  "ap_prep_title": {
+    "en-us": "Prep Mesh"
+  },
+  "ap_prep_hint": {
+    "en-us": "Set the height and trim triangles before rigging"
+  },
+  "ap_prep_head": {
+    "en-us": "Condition the mesh"
+  },
+  "ap_prep_blurb": {
+    "en-us": "Raw meshes arrive at any size and triangle count. Set the real-world height and trim the triangle budget, then rig."
+  },
+  "ap_stature": {
+    "en-us": "Height"
+  },
+  "ap_height_cm": {
+    "en-us": "cm"
+  },
+  "ap_decimate": {
+    "en-us": "Decimate"
+  },
+  "ap_keep_pct": {
+    "en-us": "Keep %"
+  },
+  "ap_prep_keep": {
+    "en-us": "Keeping"
+  },
+  "ap_prep_rigged": {
+    "en-us": "Already rigged — game-ready, no prep needed"
+  },
+  "ap_wireframe": {
+    "en-us": "Wireframe"
   },
   "cat_nav_splash": {
     "en-us": "Splash"

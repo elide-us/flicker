@@ -18,9 +18,19 @@
 //! simulation and no data meaning yet: the sphere itself. Every further layer
 //! docks into a pane rather than rebuilding the chrome.
 
+mod crust;
+mod evolve;
 mod map;
+mod plates;
 mod scene;
+mod seams;
 pub mod ui;
 
+pub use crust::CrustField;
+pub use evolve::Evolution;
 pub use map::{HexMap, TileId, DEFAULT_FREQ, MAX_FREQ, MIN_FREQ};
+pub use plates::{PlateField, DEFAULT_PLATES, MAX_PLATES, MIN_PLATES};
 pub use scene::{scene, PopulousBench};
+pub use seams::{
+    SeamField, DEFAULT_CELLS, DEFAULT_SPOTS, MAX_CELLS, MAX_SPOTS, MIN_CELLS, MIN_SPOTS,
+};

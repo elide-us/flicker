@@ -14,12 +14,14 @@ pub mod bake;
 pub mod baseline;
 pub mod bvh;
 pub mod conform;
+pub mod decimate;
 pub mod fbx;
 pub mod manifest;
 pub mod ops;
 pub mod pack;
 pub mod package;
 pub mod pipeline;
+pub mod propset;
 pub mod retarget;
 pub mod rig;
 pub mod scan;
@@ -37,11 +39,15 @@ pub use bake::{
 };
 pub use conform::{
     conform_to_canonical, default_reference, derive_ankle_placement, derive_hip_placement,
-    derive_shoulder_placement, infer_canonical_bones, reorient_to_canonical,
+    derive_shoulder_placement, fit_baseline_to_mesh, infer_canonical_bones,
+    install_baseline_skeleton, reorient_to_canonical, scale_mesh_to_stature,
     splice_canonical_chain, AnkleReport, ConformMode, ConformOutput, ConformReport, HipReport,
-    InferReport, ShoulderReport,
+    InferReport, ScaleReport, ShoulderReport,
 };
-pub use fbx::{apply_orientation, parse_fbx, quarter_turn, RawBone, RawModel, RawVertex};
+pub use decimate::{decimate, decimate_levels, DecimateLevels};
+pub use fbx::{
+    apply_orientation, first_material_color, parse_fbx, quarter_turn, RawBone, RawModel, RawVertex,
+};
 pub use flicker_core::roots::{
     init_from_app_dir, installed_app_dir, roots, set_content_root, ContentConfig, ContentRoots,
 };
@@ -50,6 +56,7 @@ pub use ops::{
     FileOp, Resolution, TRASH_DIR,
 };
 pub use pipeline::{import_folder, source_maps, ImportSummary, SourceMaps};
+pub use propset::{PropSet, PropVariant};
 pub use rig::{rename_to_canonical, RenameReport};
 pub use scan::{
     classify, classify_asset, classify_package, classify_package_head, scan_folder, AssetClass,

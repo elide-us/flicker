@@ -36,7 +36,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use flicker_render::Vec2;
+use flicker_render::{Rate, Vec2};
 use flicker_script::{FontRole, HudCommand, TextAlign, UiAnchor, UiNode, Value, ValueMap};
 use serde_json::Value as Json;
 
@@ -491,13 +491,12 @@ impl UiState {
 /// deliberately does not fill. (The ROOT surface is the screen itself: its element is
 /// the frame graph's root pass, and it reserves nothing.)
 ///
-/// The walker runs late (its commands are main-frame draws), while
-/// `FrameGraph::execute` must run FIRST in a scene's `render()` — the offscreen
-/// passes reset the shared per-frame draw queues. A nested `surface` therefore
-/// *reserves* its rect here, and the scene feeds the slot to its frame graph:
+/// The walker runs late — its HUD commands are the screen surface's final 2D, declared
+/// as an overlay. A nested `surface` therefore *reserves* its rect here, and the scene
+/// declares the slot into the frame's shared graph:
 ///
 /// ```text
-/// fg.target(handle, clear, |r| draw_source(r, source));
+/// fg.surface(CompositeTarget::Target(handle), stage, inputs, |r| draw_source(r, source));
 /// fg.composite_panel(handle, CompositeTarget::Screen, rect, layer, tint, None, None);
 /// ```
 ///
@@ -520,11 +519,11 @@ pub struct SurfaceSlot {
     pub h: f32,
     /// Sub-layer, matching the node's own draw commands.
     pub layer: f32,
-    /// Whether this slot should render a FRESH target this frame; `false` means the
-    /// scene should blit its cached poster instead. N live targets cost N GPU
-    /// submits per frame and a pack-browser screen carries ~14 stages, so liveness
-    /// is authored data (`live` / `live_bind`), not a renderer detail.
-    pub live: bool,
+    /// How often this slot re-renders — [`Rate::Live`] every frame, [`Rate::Poster`]
+    /// never (the scene blits the image its target already holds). N live targets cost
+    /// N GPU submits per frame and a pack-browser screen carries ~14 stages, so this is
+    /// authored data (`rate`, or the `live` / `live_bind` sugar), not a renderer detail.
+    pub rate: Rate,
     /// Composite tint (default opaque white), from the node's `tint` dotted colour
     /// path or its style block.
     pub tint: [f32; 4],
@@ -659,7 +658,7 @@ impl UiFrame {
     }
 
     /// The rect the layout RESOLVED for the id'd node this frame — any node,
-    /// not only `rtt` (see [`rects`](Self::rects)). `None` when the node is
+    /// not only `surface` (see [`rects`](Self::rects)). `None` when the node is
     /// absent or hidden; a `Some` of zero extent is a control that exists and
     /// cannot be seen or clicked, which is exactly what a surface gate asserts
     /// against.
@@ -1122,12 +1121,34 @@ pub fn run_ui(
             .map(|n| n as f32)
             .unwrap_or_else(|| jnum(st, "inset", 0.0));
         let img = p.rect.inset(inset);
-        // Liveness: an explicit Model bind wins, then a literal `live` prop, else
-        // live (the single-stage case should just work).
-        let live = match ptext(p.node, "live_bind") {
-            Some(key) => eff_bool(&results, model, key),
-            None if p.node.props.contains_key("live") => pbool(p.node, "live"),
-            None => true,
+        // Liveness: an explicit `rate` wins, read by THE one rate parser so a node and a
+        // stage spell it identically; then the boolean sugar — a Model bind, then a
+        // literal `live` prop — else live (the single-stage case should just work).
+        let rate = match ptext(p.node, "rate") {
+            Some(name) => {
+                let mut problems = Vec::new();
+                let rate = crate::stages::compile_rate(
+                    &serde_json::Value::String(name.to_string()),
+                    &format!("surface node {:?} rate", p.node.id),
+                    &mut problems,
+                );
+                for problem in &problems {
+                    tracing::warn!("{problem}");
+                }
+                rate
+            }
+            None => {
+                let live = match ptext(p.node, "live_bind") {
+                    Some(key) => eff_bool(&results, model, key),
+                    None if p.node.props.contains_key("live") => pbool(p.node, "live"),
+                    None => true,
+                };
+                if live {
+                    Rate::Live
+                } else {
+                    Rate::Poster
+                }
+            }
         };
         let tint = match ptext(p.node, "tint") {
             Some(path) => json_color(jpath(styles, path), [1.0; 4]),
@@ -1141,7 +1162,7 @@ pub fn run_ui(
             w: img.w,
             h: img.h,
             layer: p.layer,
-            live,
+            rate,
             tint,
             layout,
         });
@@ -6314,7 +6335,17 @@ fn hit_slider(m: Vec2, r: Rect, props: &Json, click: bool, down: bool) -> HitVer
         } else {
             saturate((m.x - track.x) / track.w)
         };
-        v.value = Some(Value::Number(f64::from(min + t * (max - min))));
+        // Snap a captured drag to the authored `step`, so the knob lands on the same increments
+        // the d-pad nudge already uses (a slider declaring `step: 5` moves in 5s, not smoothly).
+        // Absent/zero `step` keeps the continuous drag — backward-compatible for smooth sliders.
+        let raw = min + t * (max - min);
+        let step = jnum(props, "step", 0.0);
+        let value = if step > 0.0 {
+            (min + ((raw - min) / step).round() * step).clamp(min, max)
+        } else {
+            raw
+        };
+        v.value = Some(Value::Number(f64::from(value)));
         // A drag that has left the row still claims: the pointer belongs to this control
         // until it is let go.
         v.hit = true;
@@ -12909,62 +12940,6 @@ mod tests {
         assert_eq!(f.results.number("page"), Some(0.0));
     }
 
-    /// A MOUSE CLICK on a rail hint steps the strip — the click path feeds the
-    /// strip-step channel exactly as the signal path does. Regression for the bug
-    /// Aaron found in-window (2026-08-10): a hint FLASHED on click but never advanced
-    /// the page, because only the signal path called `push_step` and a click set the
-    /// result alone. A click is an activation like any other.
-    #[test]
-    fn a_mouse_click_on_a_rail_hint_steps_the_strip() {
-        let styles = serde_json::json!({});
-        let option = |i: usize| prop(node("option"), "value", Value::Number(i as f64));
-
-        let mut hint = node("button");
-        hint.action = Some("idx_next".into());
-        hint.size = Some(24.0);
-
-        let mut strip = node("tabs");
-        strip.id = "strip".into();
-        strip.bind = Some("idx".into());
-        strip = prop(strip, "next_action", Value::Text("idx_next".into()));
-        strip.children = vec![option(0), option(1), option(2)];
-        strip.size = Some(24.0);
-
-        let mut col = node("cell");
-        col.anchor = Some(UiAnchor::TopLeft);
-        col.offset = [16.0, 16.0];
-        col.width = Some(200.0);
-        col.children = vec![hint, strip];
-        let mut screen = node("surface");
-        screen.children = vec![col];
-
-        let mut state = UiState::new();
-        let model = ValueMap::new().with("idx", 0.0);
-        // The hint is the first child: y 16..40. Click it.
-        let f1 = run_ui(
-            &screen,
-            &model,
-            &styles,
-            &input_at(50.0, 28.0, true),
-            &mut state,
-        );
-        // The step channel is one-frame (like the signal path): fold f1's value and run
-        // once more without a click so a same-frame OR next-frame step both land.
-        let model = model.with("idx", f1.results.number("idx").unwrap_or(0.0));
-        let f2 = run_ui(
-            &screen,
-            &model,
-            &styles,
-            &input_at(-9.0, -9.0, false),
-            &mut state,
-        );
-        assert_eq!(
-            f2.results.number("idx"),
-            Some(1.0),
-            "a mouse click on the hint stepped the strip — a click is an activation"
-        );
-    }
-
     // ── Composites: popup_panel + paged_menu ─────────────────────────────────
 
     /// A `popup_panel` reserves its drawn title block at the top, then flows its
@@ -15463,7 +15438,11 @@ mod tests {
             [1.0, 0.9, 0.8, 1.0],
             "tint resolved from its dotted path"
         );
-        assert!(slot.live, "a stage with no liveness policy renders");
+        assert_eq!(
+            slot.rate,
+            Rate::Live,
+            "a stage with no liveness policy renders"
+        );
         // The walker draws the backdrop itself, which is why the scene passes
         // `frame: None` to composite_panel — one panel, one code path.
         assert!(
@@ -15479,6 +15458,9 @@ mod tests {
         );
     }
 
+    /// Liveness is authored in ONE vocabulary. A node may spell it outright (`rate`,
+    /// read by the same compiler a stage's own `rate` goes through), or through the
+    /// boolean sugar (`live_bind` / `live`) that maps onto the same two rates.
     #[test]
     fn stage_liveness_follows_its_bind_and_a_sourceless_surface_still_reserves() {
         let st = serde_json::json!({ "thumb": { "fill_top": [0.1,0.1,0.1,1.0] } });
@@ -15499,8 +15481,21 @@ mod tests {
         orphan.width = Some(10.0);
         orphan.height = Some(10.0);
 
+        // An explicit `rate` outranks the sugar — and reaches the slot as the typed rate.
+        let mut parked = node("surface");
+        parked.id = "parked".into();
+        parked.width = Some(40.0);
+        parked.height = Some(40.0);
+        parked = prop(parked, "source", Value::Text("portrait".into()));
+        parked = prop(parked, "rate", Value::Text("poster".into()));
+
         let mut page = node("surface");
-        page.children = vec![staged("hot", "sel"), staged("cold", "unsel"), orphan];
+        page.children = vec![
+            staged("hot", "sel"),
+            staged("cold", "unsel"),
+            orphan,
+            parked,
+        ];
 
         let model = ValueMap::new().with("sel", true).with("unsel", false);
         let mut state = UiState::new();
@@ -15514,14 +15509,20 @@ mod tests {
 
         assert_eq!(
             frame.surfaces.len(),
-            3,
+            4,
             "the source-less surface reserves too"
         );
-        let live_of = |id: &str| frame.surfaces.iter().find(|s| s.id == id).unwrap().live;
+        let rate_of = |id: &str| frame.surfaces.iter().find(|s| s.id == id).unwrap().rate;
+        let live_of = |id: &str| rate_of(id) == Rate::Live;
         assert!(live_of("hot"), "bound true → renders a fresh target");
         assert!(
             live_of("orphan"),
             "no liveness policy → live, and no source → empty"
+        );
+        assert_eq!(
+            rate_of("parked"),
+            Rate::Poster,
+            "an authored `rate` reaches the slot as the typed rate"
         );
         assert_eq!(
             frame

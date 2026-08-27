@@ -5,27 +5,27 @@
   "styles": {
     "controllertester": {
       "title": {
-        "color": [0.45, 0.68, 1.0, 1.0]
+        "color": "$rune_glow"
       },
       "dim": {
-        "color": [0.52, 0.56, 0.62, 1.0]
+        "color": "$dim"
       },
-      "ok": [0.45, 0.98, 0.62, 1.0],
-      "off": [0.52, 0.56, 0.62, 1.0],
+      "ok": "$sig_green",
+      "off": "$dim",
       "tab_active": {
-        "fill_top": [0.141, 0.247, 0.471, 0.30],
-        "fill_bot": [0.141, 0.247, 0.471, 0.30],
-        "border": [0.722, 0.592, 0.353, 1.0],
+        "fill_top": "$accent_wash_2",
+        "fill_bot": "$accent_wash_2",
+        "border": "$bronze",
         "border_w": 2,
-        "label": [0.906, 0.882, 0.824, 1.0],
+        "label": "$ink_bright",
         "radius": 4
       },
       "tab_idle": {
-        "fill_top": [0.0, 0.0, 0.0, 0.0],
-        "fill_bot": [0.0, 0.0, 0.0, 0.0],
-        "border": [0.0, 0.0, 0.0, 0.0],
+        "fill_top": "$stage_void",
+        "fill_bot": "$stage_void",
+        "border": "$stage_void",
         "border_w": 0,
-        "label": [0.561, 0.541, 0.49, 1.0],
+        "label": "$dim",
         "radius": 4
       }
     }

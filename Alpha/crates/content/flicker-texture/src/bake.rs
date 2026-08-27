@@ -354,7 +354,9 @@ mod tests {
         let emit = set.get(MapKind::Emit).expect("emit map baked");
         let lit = emit
             .pixels
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|p| p[0] > 0 || p[1] > 0 || p[2] > 0)
             .count();
         assert!(
@@ -369,7 +371,9 @@ mod tests {
         assert!(
             emit0
                 .pixels
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .all(|p| p[0] == 0 && p[1] == 0 && p[2] == 0),
             "an unlit material must write a black emit map",
         );

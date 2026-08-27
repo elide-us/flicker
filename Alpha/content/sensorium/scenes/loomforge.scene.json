@@ -2,6 +2,43 @@
   "_comment": "Loomforge Bench SCENE DEFINITION (201F4F51 template-free). The four-page animation-authoring editor over one flicker.pack: STATE MACHINE (tool rail · scene-drawn node-graph canvas in the walker-reserved `lf_canvas` rect · the pack rail, whose clip library / transition inspector swap on `rail_clips`/`rail_edge` · the scene-drawn TAE preview strip in `lf_tae_strip`), PACK BROWSER (filter rail · card grid · manifest detail), CREATURE COMPOSER (pending), TAE EDITOR (track list · doll + transport · event inspector · the scene-drawn page timeline in `lf_tae_page_strip`). The `loomforge` behaviour plays it (flicker-loomforge); loomforge.lua derives page gates, tab/tool/filter/card/response washes. The named container cells (`lf_clip_rows`, `lf_pack_cards`, `lf_skel_rows`) are REFILLED by the behaviour at event time (pack load / scroll / filter / scan) — the sablework Rust-fills-the-container pattern, content-keyed so the doll slot ids stay honest poster-cache keys; their row labels ride binds, never literals. Styles were folded in from the crate's quarantined scene_styles.json (the dead canvas.grid and tae_lane.track keys did not move).",
   "behaviour": "loomforge",
   "params": {},
+  "stages": {
+    "portrait": {
+      "_comment": "One character on a dark void — the Loomforge Stage doll (pack cards, clip rows, the TAE preview). The node's panel style supplies the backdrop gradient, so the target clears TRANSPARENT and the doll composites over it. Which clip poses the doll is the bench's own request per slot, not a stage key.",
+      "lighting": "studio",
+      "clear": "$stage_void",
+      "camera": {
+        "kind": "orbit",
+        "yaw": 0.55,
+        "pitch": 0.18,
+        "dist": 2.6,
+        "target_y": 0.95
+      },
+      "layers": [
+        {
+          "draw": "skinned"
+        },
+        {
+          "draw": "ring",
+          "radius": 0.45,
+          "y": 0.0,
+          "segments": 24,
+          "color": "$bronze",
+          "color_active": "$rune_glow"
+        }
+      ],
+      "_hdr": "HDR: the `scene` pass (the doll rig + its ground ring, the layers above) renders into the LINEAR rgba16f `hdr` working attachment and `tonemap_grade` resolves it (ACES roll-off) into the sRGB `color` last. grade_strength 0 = tonemap only, no invented tint — an art grade is Aaron's to author in-window. Alpha passes through, so the transparent clear the node panel shows through survives.",
+      "attachments": {
+        "hdr": { "format": "rgba16f" },
+        "color": { "format": "surface" },
+        "depth": { "format": "depth32" }
+      },
+      "passes": [
+        { "pass": "scene", "writes": ["hdr", "depth"] },
+        { "pass": "tonemap_grade" }
+      ]
+    }
+  },
   "styles": {
     "loomforge": {
       "top_bar": {

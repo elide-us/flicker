@@ -2,10 +2,14 @@
 //
 // Renders un-indexed line-list vertices with per-vertex color. Used
 // by `Renderer::draw_bounding_box` and any other gizmo-style line
-// drawing. Shares the mesh pipeline's camera uniform for the view-
+// drawing. Binds the renderer's ONE per-frame group for the view-
 // projection matrix; depth-tested against the 3D scene (LessEqual)
 // but does not write depth so line drawing doesn't occlude other
 // geometry that's submitted later in the same pass.
+//
+// Lines carry their own vertex colour and read no light, so `@group(0) @binding(1)`
+// (the frame's `Scene` light list) is part of the shared layout and simply goes unread
+// here — one group, one upload, four shaders.
 
 struct Camera {
     view_projection: mat4x4<f32>,

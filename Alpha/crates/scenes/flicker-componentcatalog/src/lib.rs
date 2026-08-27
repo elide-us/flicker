@@ -20,7 +20,8 @@
 use std::time::Duration;
 
 use flicker::render::{
-    grid_segments_xy, Rect, Renderer, TextureHandle, Vec3, ViewportFiller, ViewportLayout,
+    grid_segments_xy, FrameGraph, Rect, Renderer, TextureHandle, Vec3, ViewportFiller,
+    ViewportLayout,
 };
 use flicker::scene::{Scene, SceneInput, Transition};
 use flicker::script::{HudCommand, ScriptHost, UiNode, ValueMap};
@@ -365,15 +366,15 @@ impl Scene for ComponentCatalog {
         Transition::None
     }
 
-    fn render(&mut self, renderer: &mut Renderer) {
-        let base_layer = renderer.layer();
-        // The viewport card FIRST. Its frame graph's offscreen passes RESET the per-frame
-        // draw queues (the "render RTTs before the main view" rule), so anything queued
-        // before it is discarded — the HUD MUST come after. Seat the shared filler in the
-        // rect the walker reserved, orbit the panel under the cursor on a left-drag, and
-        // render a wireframe stage (ground grid + a cube) into it — the kind's LIVE catalog
-        // exerciser. Wheel is left out so it never fights the tray scroll. Composites at
-        // `base+2`, ABOVE the HUD's `base+1`, so the views land inside the card's well.
+    fn render<'f>(&'f mut self, renderer: &mut Renderer, fg: &mut FrameGraph<'f>) {
+        let base_layer = fg.base_layer();
+        // The viewport card. The `ViewportFiller` declares its offscreen passes +
+        // composite into the frame's shared graph (the manager executes it once); seat
+        // the shared filler in the rect the walker reserved, orbit the panel under the
+        // cursor on a left-drag, and render a wireframe stage (ground grid + a cube) into
+        // it — the kind's LIVE catalog exerciser. Wheel is left out so it never fights the
+        // tray scroll. Composites at `base+2`, ABOVE the HUD's `base+1`, so the views land
+        // inside the card's well.
         if let Some((rect, layout)) = self.surface_seat {
             if self.viewport.is_none() {
                 self.viewport = Some(ViewportFiller::new(renderer, layout));
@@ -394,15 +395,26 @@ impl Scene for ComponentCatalog {
             }
             let ground = grid_segments_xy(0.5, 2.5, -1.0);
             let cube = demo_cube();
-            vf.render(renderer, base_layer + 2.0, DEMO_RADIUS, |r, _view| {
-                r.draw_lines(&ground, DEMO_GROUND);
-                r.draw_lines(&cube, DEMO_CUBE);
-            });
+            vf.declare(
+                renderer,
+                fg,
+                base_layer + 2.0,
+                DEMO_RADIUS,
+                move |r, _view| {
+                    r.draw_lines(&ground, DEMO_GROUND);
+                    r.draw_lines(&cube, DEMO_CUBE);
+                },
+            );
         }
+        // The HUD is the screen surface's final 2D — one overlay after the composites.
         if let Some(&white) = self.textures.first() {
-            renderer.set_layer(base_layer + 1.0);
-            render_hud(renderer, &self.hud_commands, white, &self.textures);
-            renderer.set_layer(base_layer);
+            let hud_commands = &self.hud_commands;
+            let textures = &self.textures;
+            fg.overlay(move |r| {
+                r.set_layer(base_layer + 1.0);
+                render_hud(r, hud_commands, white, textures);
+                r.set_layer(base_layer);
+            });
         }
     }
 }

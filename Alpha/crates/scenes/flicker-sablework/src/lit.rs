@@ -20,16 +20,27 @@
 //! is the right control for a swatch (you want the highlight to travel across the
 //! surface), it needs no camera class, and it means this is not a fifth copy of
 //! the `OrbitCam` already duplicated across four scenes.
+//!
+//! # What it draws is the authored stage
+//!
+//! The look — lighting, clear, framing — is the [`StageDef`] the bench names
+//! ([`STAGE_SOURCE`]), compiled by the one stage compiler; the `material` layer IS
+//! the sample body. A stage that authors no `material` layer draws nothing and says
+//! so, because a declaration nothing consumes is how this view once shipped lit by
+//! a constant while its own `"lighting": "studio"` sat unused.
 
 use flicker::render::{
-    build_textured_verts, Camera, CompositeTarget, FrameGraph, Mat4, MeshDrawOptions, MeshIndices,
-    PbrMaps, Rect, RenderTargetHandle, Renderer, SceneLighting, TextureHandle, TexturedMeshHandle,
-    Vec3,
+    build_textured_verts, CompositeTarget, FrameGraph, Mat4, MeshDrawOptions, MeshIndices, PbrMaps,
+    Rect, RenderTargetHandle, Renderer, StageDef, StageInputs, TextureHandle, TexturedMeshHandle,
+    Vec2,
 };
+use flicker::ui::SurfaceSlot;
 
-/// The stage source this view is authored under, in `ui_theme.json`'s `stages`
-/// block. The look — lighting, camera framing — is DATA there, not constants here.
+/// The stage source this view is authored under (`stages.<source>` in the loaded
+/// styles). The look — lighting, camera framing — is DATA there, not constants here.
 pub const STAGE_SOURCE: &str = "sablework_lit";
+/// The one layer kind the lit preview draws: the material sample body.
+const LIT_LAYERS: &[&str] = &["material"];
 /// Turns per second of the turntable. Slow: the point is to watch a highlight
 /// travel, and a fast spin reads as motion rather than as surface.
 const SPIN_RATE: f32 = 0.15;
@@ -133,6 +144,8 @@ pub struct LitPreview {
     plane: Option<TexturedMeshHandle>,
     target: Option<RenderTargetHandle>,
     size: (u32, u32),
+    /// The stage's undrawn layers were named once; say it once, not per frame.
+    layers_checked: bool,
     /// Turntable angle, radians. Advanced by `dt` so the spin is frame-rate
     /// independent.
     spin: f32,
@@ -147,94 +160,11 @@ impl Default for LitPreview {
             plane: None,
             target: None,
             size: (0, 0),
+            layers_checked: false,
             spin: 0.0,
             body: Body::default(),
             spinning: true,
         }
-    }
-}
-
-/// The authored look of the lit stage: where the light comes from and how the
-/// sample is framed.
-///
-/// Read from `stages.<source>` rather than hardcoded, because that block is what
-/// the bench DECLARES — a config nothing reads is an authored name that resolves
-/// to nothing, which is how this view first shipped lit by a constant while its
-/// own `"lighting": "studio"` sat unused.
-#[derive(Clone, Copy, Debug)]
-pub struct Stage {
-    pub lighting: SceneLighting,
-    pub yaw: f32,
-    pub pitch: f32,
-    pub dist: f32,
-}
-
-impl Default for Stage {
-    fn default() -> Self {
-        Self {
-            lighting: SceneLighting::default(),
-            yaw: 0.6,
-            pitch: 0.28,
-            dist: 2.6,
-        }
-    }
-}
-
-impl Stage {
-    /// Parse `stages.<source>` out of the loaded `ui_theme.json`.
-    ///
-    /// Best-effort: anything missing keeps the default, because a malformed style
-    /// file must not leave the bench with a black panel and no explanation. What
-    /// it must never do is silently ignore a value that IS authored.
-    pub fn from_styles(styles: &serde_json::Value, source: &str) -> Self {
-        let mut out = Stage::default();
-        let Some(stage) = styles.get("stages").and_then(|s| s.get(source)) else {
-            tracing::warn!("stages.{source} is not authored — the lit view uses defaults");
-            return out;
-        };
-        // `lighting` NAMES a block in the shared `stages.lighting` table, the same
-        // indirection every other stage source uses.
-        if let Some(name) = stage.get("lighting").and_then(|v| v.as_str()) {
-            match styles
-                .get("stages")
-                .and_then(|s| s.get("lighting"))
-                .and_then(|l| l.get(name))
-            {
-                Some(l) => {
-                    let v3 = |k: &str| -> Option<Vec3> {
-                        let a = l.get(k)?.as_array()?;
-                        Some(Vec3::new(
-                            a.first()?.as_f64()? as f32,
-                            a.get(1)?.as_f64()? as f32,
-                            a.get(2)?.as_f64()? as f32,
-                        ))
-                    };
-                    if let Some(v) = v3("sun_dir") {
-                        out.lighting.sun_dir = v.normalize_or_zero();
-                    }
-                    if let Some(v) = v3("sun") {
-                        out.lighting.sun_color = v;
-                    }
-                    if let Some(v) = v3("moon_dir") {
-                        out.lighting.moon_dir = v.normalize_or_zero();
-                    }
-                    if let Some(v) = v3("moon") {
-                        out.lighting.moon_color = v;
-                    }
-                    if let Some(v) = v3("ambient") {
-                        out.lighting.ambient = v;
-                    }
-                }
-                None => tracing::warn!("stages.lighting.{name} is not authored"),
-            }
-        }
-        if let Some(cam) = stage.get("camera") {
-            let f = |k: &str| cam.get(k).and_then(|v| v.as_f64()).map(|v| v as f32);
-            out.yaw = f("yaw").unwrap_or(out.yaw);
-            out.pitch = f("pitch").unwrap_or(out.pitch);
-            out.dist = f("dist").unwrap_or(out.dist);
-        }
-        out
     }
 }
 
@@ -272,7 +202,10 @@ impl LitPreview {
         }
     }
 
-    /// Declare this frame's offscreen pass and composite it into `rect`.
+    /// Declare this frame's offscreen pass and composite it into the seat the walker
+    /// reserved for the bench's `surface` node — at the node's own sub-layer above
+    /// `base_layer`, with its tint, and honouring its rate (a `poster` surface keeps its
+    /// last image: the poster rule).
     ///
     /// `maps` are the bench's six preview textures in [`MapKind::ALL`] order — the
     /// SAME handles the flat swatch draws, so nothing is uploaded twice.
@@ -280,14 +213,43 @@ impl LitPreview {
         &mut self,
         r: &mut Renderer,
         fg: &mut FrameGraph<'_>,
-        rect: Rect,
-        layer: f32,
+        slot: &SurfaceSlot,
+        base_layer: f32,
         maps: &[TextureHandle],
-        stage: Stage,
+        stage: &StageDef,
     ) {
+        if !self.layers_checked {
+            self.layers_checked = true;
+            let undrawn = stage.layers_outside(LIT_LAYERS);
+            if !undrawn.is_empty() {
+                tracing::warn!(
+                    "stages.{STAGE_SOURCE} authors {undrawn:?} layers the lit preview does not draw"
+                );
+            }
+            if !stage.has_layer("material") {
+                tracing::warn!(
+                    "stages.{STAGE_SOURCE} authors no `material` layer — the sample is not drawn"
+                );
+            }
+            // The framing is the stage's, applied by the frame graph from the definition
+            // — so a source that authors none leaves the sample at whatever camera the
+            // scene last set, which is a picture nobody chose.
+            if stage.camera.is_none() {
+                tracing::warn!(
+                    "stages.{STAGE_SOURCE} authors no `camera` — the sample is framed by \
+                     whatever set the camera last"
+                );
+            }
+        }
+        if !stage.has_layer("material") {
+            return;
+        }
         self.ensure_built(r);
-        let w = (rect.size.x.round() as u32).max(1);
-        let h = (rect.size.y.round() as u32).max(1);
+        let rect = Rect {
+            pos: Vec2::new(slot.x, slot.y),
+            size: Vec2::new(slot.w, slot.h),
+        };
+        let (w, h) = stage.attachments.pixels(rect.size);
         match self.target {
             Some(_) if self.size == (w, h) => {}
             Some(t) => {
@@ -320,31 +282,46 @@ impl LitPreview {
             ao: maps.get(4).copied(),
             emit: maps.get(6).copied(),
         };
-        let cam = Camera::orbit(Vec3::ZERO, stage.dist, stage.yaw, stage.pitch);
-        let lighting = stage.lighting;
-        // The SAMPLE turns, not the camera: the light stays put and the highlight
-        // travels across the surface, which is the whole point of the view.
+        // The SAMPLE turns, not the camera: the light stays put and the highlight travels
+        // across the surface, which is the whole point of the view. The stage's lighting and
+        // framing are applied by the graph from the definition. Liveness is the seat's
+        // `rate`, driven by the renderer's per-surface clock — a poster keeps its last image
+        // (the composite below still runs); a `live` sample turns every frame.
         let model = Mat4::from_rotation_y(self.spin);
-        fg.target(target, [0.0, 0.0, 0.0, 0.0], move |r| {
-            r.set_scene(lighting);
-            r.set_camera(&cam);
-            r.draw_textured_mesh_pbr(mesh, albedo, pbr, model, MeshDrawOptions::default());
-        });
+        fg.surface(
+            CompositeTarget::Target(target),
+            stage,
+            StageInputs::default(),
+            slot.rate,
+            move |r| {
+                r.draw_textured_mesh_pbr(mesh, albedo, pbr, model, MeshDrawOptions::default());
+            },
+        );
         fg.composite_panel(
             target,
             CompositeTarget::Screen,
             rect,
-            layer,
-            [1.0; 4],
+            base_layer + slot.layer,
+            slot.tint,
             None,
             None,
         );
+    }
+
+    /// Give the target back — a bench that leaves the Lit tab, or the scene, holds
+    /// GPU memory for a picture nobody is looking at otherwise.
+    pub fn free(&mut self, r: &mut Renderer) {
+        if let Some(t) = self.target.take() {
+            r.free_render_target(t);
+            self.size = (0, 0);
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flicker::render::Vec3;
 
     /// Both bodies must be triangle SOUP — a whole number of triangles, one tangent
     /// per triple. A shared-vertex mesh would average tangents across the UV seam
@@ -405,17 +382,19 @@ mod tests {
         assert_eq!(a.spin, before);
     }
 
-    /// THE AUTHORED STAGE IS ACTUALLY READ, and it lights something.
+    /// THE AUTHORED STAGE IS ACTUALLY READ, and it lights — and frames — something.
     ///
     /// The view first shipped BLACK for two reasons at once: the sample meshes
     /// were never built (an init step nobody called), and the `"lighting":
     /// "studio"` this bench authored was ignored in favour of a Rust constant. A
-    /// stage config nothing reads is an authored name that resolves to nothing.
+    /// stage config nothing reads is an authored name that resolves to nothing —
+    /// so the shipped stage must compile, be lit, frame the sample, and author the
+    /// one layer this view draws.
     #[test]
     fn the_authored_stage_is_read_and_lights_the_sample() {
-        // The scene's own style blocks ride the shipped scene file now (the
-        // five-line split); the stage block itself lives in ui_theme.json's
-        // `stages` until the renderer campaign moves scene-owned stages.
+        // The scene's own style blocks ride the shipped scene file (the five-line
+        // split); the stage block lives in the ui_stages.json satellite until the
+        // renderer campaign moves scene-owned stages into the scene file.
         let def = flicker::ui::SceneDef::parse("sablework", crate::SW_SCENE)
             .expect("the shipped sablework.scene.json parses");
         let styles = flicker::ui::load_styles_for(
@@ -425,37 +404,34 @@ mod tests {
             ),
             def.styles.as_ref(),
         );
-        let stage = Stage::from_styles(&styles, STAGE_SOURCE);
+        let stage = flicker::ui::stage_def(&styles, STAGE_SOURCE)
+            .unwrap_or_else(|| panic!("stages.{STAGE_SOURCE} is not authored"));
 
-        // It must differ from the bare default, or nothing was actually read.
-        let fallback = Stage::default();
-        assert!(
-            stage.lighting.sun_dir != fallback.lighting.sun_dir
-                || stage.lighting.ambient != fallback.lighting.ambient,
-            "stages.{STAGE_SOURCE} was not read — the sample is lit by a constant"
-        );
-
-        // And it must actually EMIT light. All-black terms render a black panel,
+        // It must actually EMIT light. All-black terms render a black panel,
         // which is indistinguishable from the view being broken.
         let lum = |v: Vec3| v.x + v.y + v.z;
-        assert!(lum(stage.lighting.sun_color) > 0.1, "the stage has no sun");
+        assert!(
+            lum(stage.lighting.sky_sun().color) > 0.1,
+            "the stage has no sun"
+        );
         assert!(
             lum(stage.lighting.ambient) > 0.0,
             "the stage has no ambient floor"
         );
         assert!(
-            stage.lighting.sun_dir.length() > 0.5,
+            stage.lighting.sky_sun().direction.length() > 0.5,
             "the sun points nowhere"
         );
-        assert!(stage.dist > 0.0, "the camera sits on the sample");
-    }
-
-    /// An unauthored source falls back rather than going dark — a malformed style
-    /// file must not leave a black panel with no explanation.
-    #[test]
-    fn an_unknown_stage_falls_back_to_a_lit_default() {
-        let stage = Stage::from_styles(&serde_json::json!({}), "nope");
-        assert!(stage.lighting.sun_color.x > 0.0, "the fallback is unlit");
+        let cam = stage.camera.expect("the lit stage frames its sample");
+        assert!(cam.dist > 0.0, "the camera sits on the sample");
+        assert!(
+            stage.has_layer("material"),
+            "the stage authors the `material` layer this view draws"
+        );
+        assert!(
+            stage.layers_outside(LIT_LAYERS).is_empty(),
+            "and nothing the lit preview cannot draw"
+        );
     }
 
     #[test]

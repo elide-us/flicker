@@ -126,6 +126,12 @@ pub struct SceneDef {
     /// merged over the shared theme root by `load_styles_for`. Colours in here are
     /// `$token` refs — the palette stays `ui_theme.json`'s alone. `None` when the
     /// scene needs nothing beyond the shared defaults.
+    ///
+    /// Also carries the scene's OWN STAGES under the `stages` key — the file authors
+    /// them as a top-level `stages` section (see [`SceneDef::stages`]) and the parser
+    /// folds them in here, so the one loader merge hands every scene block, stage or
+    /// style, to the styles root in one pass (`stages` merges INTO the shared block,
+    /// never over it).
     pub styles: Option<serde_json::Value>,
 }
 
@@ -144,6 +150,7 @@ const SCENE_KEYS: &[&str] = &[
     "tree",
     "exits",
     "styles",
+    "stages",
 ];
 
 impl SceneDef {
@@ -221,7 +228,7 @@ impl SceneDef {
             Some(_) => return Err(format!("scene '{id}': `exits` must be an object")),
         }
 
-        let styles = match obj.get("styles") {
+        let mut styles = match obj.get("styles") {
             None | Some(serde_json::Value::Null) => None,
             Some(v @ serde_json::Value::Object(map)) => {
                 if map.contains_key("theme") {
@@ -231,10 +238,43 @@ impl SceneDef {
                          colours are $token refs"
                     ));
                 }
+                if map.contains_key("stages") {
+                    return Err(format!(
+                        "scene '{id}': `styles` carries a `stages` key — a scene's stages \
+                         are its own top-level `stages` section, one spelling"
+                    ));
+                }
                 Some(v.clone())
             }
             Some(_) => return Err(format!("scene '{id}': `styles` must be an object")),
         };
+
+        // The scene's OWN stages (ruling 8DE71FB0: a stage one scene uses is that
+        // scene's data). Folded under `styles.stages` so the one loader merge carries
+        // them; the loader merges them INTO the shared `stages` block, where the
+        // `lighting` presets live — a scene names a preset, it never authors one.
+        match obj.get("stages") {
+            None | Some(serde_json::Value::Null) => {}
+            Some(serde_json::Value::Object(stages)) => {
+                if stages.contains_key("lighting") {
+                    return Err(format!(
+                        "scene '{id}': `stages` carries a `lighting` key — lighting presets \
+                         live in the shared stage library (ui_stages.json); a scene's stage \
+                         NAMES one"
+                    ));
+                }
+                let mut blocks = match styles.take() {
+                    Some(serde_json::Value::Object(map)) => map,
+                    _ => serde_json::Map::new(),
+                };
+                blocks.insert(
+                    "stages".to_string(),
+                    serde_json::Value::Object(stages.clone()),
+                );
+                styles = Some(serde_json::Value::Object(blocks));
+            }
+            Some(_) => return Err(format!("scene '{id}': `stages` must be an object")),
+        }
 
         Ok(Self {
             id: id.to_string(),
@@ -245,6 +285,12 @@ impl SceneDef {
             exits,
             styles,
         })
+    }
+
+    /// The scene's OWN stage sources — the file's top-level `stages` section, as
+    /// folded under [`styles`](Self::styles). `None` when the scene authors none.
+    pub fn stages(&self) -> Option<&serde_json::Map<String, serde_json::Value>> {
+        self.styles.as_ref()?.get("stages")?.as_object()
     }
 
     /// One string entry from this scene's [`params`](Self::params) — the shape a

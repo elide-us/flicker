@@ -342,33 +342,13 @@
     },
     "menu": {
       "scrim_l": {
-        "fill_top": [
-          0.031,
-          0.035,
-          0.047,
-          0.82
-        ],
-        "fill_bot": [
-          0.031,
-          0.035,
-          0.047,
-          0.0
-        ],
+        "fill_top": "$scrim",
+        "fill_bot": "$stage_void",
         "grad": 2
       },
       "scrim_r": {
-        "fill_top": [
-          0.031,
-          0.035,
-          0.047,
-          0.0
-        ],
-        "fill_bot": [
-          0.031,
-          0.035,
-          0.047,
-          0.66
-        ],
+        "fill_top": "$stage_void",
+        "fill_bot": "$scrim",
         "grad": 2
       },
       "thread": {
@@ -389,74 +369,29 @@
       "desc": "$dim",
       "divider": "$bronze",
       "row": {
-        "fill_top": [
-          0.086,
-          0.098,
-          0.133,
-          1.0
-        ],
-        "fill_bot": [
-          0.059,
-          0.075,
-          0.098,
-          1.0
-        ],
-        "border": [
-          0.72,
-          0.59,
-          0.35,
-          0.2
-        ],
+        "fill_top": "$surface_top",
+        "fill_bot": "$surface_bot",
+        "border": "$slot_rim",
         "radius": 4
       },
       "preview_frame": {
         "fill_top": "$bronze",
-        "fill_bot": [
-          0.43,
-          0.35,
-          0.2,
-          1.0
-        ],
+        "fill_bot": "$bronze_dim",
         "radius": 3
       },
       "preview_inner": {
-        "fill_top": [
-          0.039,
-          0.047,
-          0.063,
-          1.0
-        ],
-        "fill_bot": [
-          0.039,
-          0.047,
-          0.063,
-          1.0
-        ],
-        "border": [
-          0.063,
-          0.024,
-          0.031,
-          1.0
-        ],
+        "fill_top": "$well",
+        "fill_bot": "$well",
+        "border": "$med_rim",
         "radius": 2
       },
       "name": "$ink_bright",
-      "mode": [
-        0.561,
-        0.69,
-        1.0,
-        1.0
-      ],
+      "mode": "$rune_glow_hi",
       "row_desc": "$faint",
       "meta": "$studio"
     },
     "logo": {
-      "backdrop": [
-        0.0,
-        0.0,
-        0.0,
-        1.0
-      ],
+      "backdrop": "$stage_black",
       "fade": 0.6,
       "hold": 1.2,
       "fit": 0.9
@@ -480,24 +415,9 @@
       "title": "$ink_bright",
       "rule": "$seam",
       "page_active": {
-        "fill_top": [
-          0,
-          0,
-          0,
-          0
-        ],
-        "fill_bot": [
-          0,
-          0,
-          0,
-          0
-        ],
-        "border": [
-          0,
-          0,
-          0,
-          0
-        ],
+        "fill_top": "$stage_void",
+        "fill_bot": "$stage_void",
+        "border": "$stage_void",
         "border_w": 0,
         "radius": 0,
         "label": "$ink_bright",
@@ -506,24 +426,9 @@
         "underline_w": 2
       },
       "page_idle": {
-        "fill_top": [
-          0,
-          0,
-          0,
-          0
-        ],
-        "fill_bot": [
-          0,
-          0,
-          0,
-          0
-        ],
-        "border": [
-          0,
-          0,
-          0,
-          0
-        ],
+        "fill_top": "$stage_void",
+        "fill_bot": "$stage_void",
+        "border": "$stage_void",
         "border_w": 0,
         "radius": 0,
         "label": "$dim",
@@ -545,24 +450,9 @@
         "label": "$ink_sapphire"
       },
       "tab_idle": {
-        "fill_top": [
-          0,
-          0,
-          0,
-          0
-        ],
-        "fill_bot": [
-          0,
-          0,
-          0,
-          0
-        ],
-        "border": [
-          0,
-          0,
-          0,
-          0
-        ],
+        "fill_top": "$stage_void",
+        "fill_bot": "$stage_void",
+        "border": "$stage_void",
         "border_w": 0,
         "radius": 12,
         "label": "$dim"
@@ -580,18 +470,8 @@
       "row_seam": "$seam",
       "row_focus": {
         "fill_top": "$accent_wash",
-        "fill_bot": [
-          0,
-          0,
-          0,
-          0
-        ],
-        "border": [
-          0,
-          0,
-          0,
-          0
-        ],
+        "fill_bot": "$stage_void",
+        "border": "$stage_void",
         "border_w": 0,
         "radius": 0
       },

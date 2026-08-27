@@ -9,7 +9,9 @@
 //! + per-frame vertex re-upload (the single-character POC path in the example).
 //!
 //! Layout (`shaders/skinned.wgsl`):
-//! * group 0 — camera(@0, VERTEX uniform) + scene(@1, FRAGMENT uniform);
+//! * group 0 — the renderer's ONE per-frame group: camera(@0) + the `Scene` light list(@1),
+//!   shared with the mesh / mesh_textured / lines pipelines
+//!   ([`FrameBindGroup`](crate::pipeline_mesh::FrameBindGroup));
 //! * group 1 — `palettes`(@0) + `instances`(@1), both **read-only storage** read in
 //!   the vertex stage (requires the adapter's `VERTEX_STORAGE` downlevel capability;
 //!   native Metal/Vulkan/D3D12 have it — the M5 Pro + RTX 3060 boxes both do).
@@ -24,14 +26,13 @@
 //!
 //! Additive: the flat / textured mesh pipelines are untouched.
 
-use std::num::NonZeroU64;
-
 use bytemuck::{Pod, Zeroable};
 use glam::Mat4;
 use wgpu::util::DeviceExt;
 
 use crate::mesh::MeshIndices;
-use crate::pipeline_mesh::{SceneUniform, DEPTH_FORMAT};
+use crate::pipeline_mesh::{compose_lit, FrameBindGroup, DEPTH_FORMAT};
+use crate::pipeline_shadow::ShadowBind;
 
 /// Vertex for the skinned pipeline: the **bind pose** attributes, uploaded once and
 /// never re-uploaded (the GPU deforms them). `joints`/`weights` are 4-influence LBS,
@@ -51,14 +52,6 @@ pub struct SkinnedVertex {
 /// and textured mesh handles so the stores never cross.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct SkinnedMeshHandle(pub(crate) u32);
-
-#[repr(C)]
-#[derive(Copy, Clone, Pod, Zeroable)]
-struct CameraUniform {
-    view_projection: [[f32; 4]; 4],
-}
-const CAMERA_UNIFORM_SIZE: u64 = std::mem::size_of::<CameraUniform>() as u64;
-const SCENE_UNIFORM_SIZE: u64 = std::mem::size_of::<SceneUniform>() as u64;
 
 /// Per-instance record in the `instances` storage buffer. Mirrors `Instance` in
 /// `skinned.wgsl` (mat4 + two u32 + 2×u32 pad → 80 bytes, 16-aligned element stride).
@@ -86,13 +79,13 @@ const VERTEX_ATTRS: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![
 ];
 
 pub struct SkinnedMeshPipeline {
-    pipeline: wgpu::RenderPipeline,
-    uniform_bind_group: wgpu::BindGroup,
+    /// Baked for both colour formats (swapchain + [`crate::HDR_FORMAT`]) over the one
+    /// shared uniform / skin storage bind groups; [`Self::render`] selects by
+    /// [`crate::TargetColor`].
+    pipeline: [wgpu::RenderPipeline; 2],
     /// Kept: the skin bind group is rebuilt against it when the storage buffers grow.
     skin_bgl: wgpu::BindGroupLayout,
     skin_bind_group: wgpu::BindGroup,
-    camera_buf: wgpu::Buffer,
-    scene_buf: wgpu::Buffer,
     /// `array<mat4x4<f32>>` — all instances' bone palettes, concatenated. Rewritten
     /// each `draw_instanced`; grows (and rebuilds the skin bind group) when needed.
     palette_buf: wgpu::Buffer,
@@ -110,37 +103,15 @@ impl SkinnedMeshPipeline {
     pub fn new(
         device: &wgpu::Device,
         _queue: &wgpu::Queue,
+        frame: &FrameBindGroup,
+        shadow: &ShadowBind,
         surface_format: wgpu::TextureFormat,
     ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("flicker.skinned.shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/skinned.wgsl").into()),
-        });
-
-        let uniform_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("flicker.skinned.uniform_bgl"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: NonZeroU64::new(CAMERA_UNIFORM_SIZE),
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: NonZeroU64::new(SCENE_UNIFORM_SIZE),
-                    },
-                    count: None,
-                },
-            ],
+            source: wgpu::ShaderSource::Wgsl(
+                compose_lit(include_str!("shaders/skinned.wgsl")).into(),
+            ),
         });
 
         let storage_entry = |binding: u32| wgpu::BindGroupLayoutEntry {
@@ -160,7 +131,9 @@ impl SkinnedMeshPipeline {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("flicker.skinned.pipeline_layout"),
-            bind_group_layouts: &[&uniform_bgl, &skin_bgl],
+            // @group(2) = the shared shadow bind (a 1×1 default is bound for non-shadow
+            // surfaces, so this is inert until a shadow is cast on a skinned receiver).
+            bind_group_layouts: &[frame.layout(), &skin_bgl, shadow.layout()],
             push_constant_ranges: &[],
         });
 
@@ -170,57 +143,50 @@ impl SkinnedMeshPipeline {
             attributes: &VERTEX_ATTRS,
         };
 
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("flicker.skinned.pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: "vs_main",
-                buffers: std::slice::from_ref(&vertex_layout),
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: "fs_main",
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: surface_format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: Some(wgpu::Face::Back),
-                unclipped_depth: false,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                conservative: false,
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::LessEqual,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
-
-        let camera_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("flicker.skinned.camera_uniform"),
-            size: CAMERA_UNIFORM_SIZE,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let scene_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("flicker.skinned.scene_uniform"),
-            contents: bytemuck::bytes_of(&SceneUniform::default()),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
+        // Bake for both colour formats over the one shared layout; only the colour-target
+        // format differs. `render` picks the variant by `TargetColor`.
+        let make = |fmt: wgpu::TextureFormat| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("flicker.skinned.pipeline"),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: "vs_main",
+                    buffers: std::slice::from_ref(&vertex_layout),
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: "fs_main",
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: fmt,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    cull_mode: Some(wgpu::Face::Back),
+                    unclipped_depth: false,
+                    polygon_mode: wgpu::PolygonMode::Fill,
+                    conservative: false,
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: true,
+                    depth_compare: wgpu::CompareFunction::LessEqual,
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+                multisample: wgpu::MultisampleState::default(),
+                multiview: None,
+                cache: None,
+            })
+        };
+        let pipeline = [make(surface_format), make(crate::HDR_FORMAT)];
 
         let palette_capacity: u32 = 256;
         let instance_capacity: u32 = 32;
@@ -237,16 +203,12 @@ impl SkinnedMeshPipeline {
             mapped_at_creation: false,
         });
 
-        let uniform_bind_group = make_uniform_bg(device, &uniform_bgl, &camera_buf, &scene_buf);
         let skin_bind_group = make_skin_bg(device, &skin_bgl, &palette_buf, &instance_buf);
 
         Self {
             pipeline,
-            uniform_bind_group,
             skin_bgl,
             skin_bind_group,
-            camera_buf,
-            scene_buf,
             palette_buf,
             palette_capacity,
             instance_buf,
@@ -317,17 +279,6 @@ impl SkinnedMeshPipeline {
     /// Drop the frame's queued instanced draw (call at frame start).
     pub fn clear(&mut self) {
         self.queued = None;
-    }
-
-    pub fn set_camera_matrix(&mut self, queue: &wgpu::Queue, view_projection: Mat4) {
-        let uniform = CameraUniform {
-            view_projection: view_projection.to_cols_array_2d(),
-        };
-        queue.write_buffer(&self.camera_buf, 0, bytemuck::bytes_of(&uniform));
-    }
-
-    pub fn set_scene_uniform(&mut self, queue: &wgpu::Queue, scene: SceneUniform) {
-        queue.write_buffer(&self.scene_buf, 0, bytemuck::bytes_of(&scene));
     }
 
     /// Upload this frame's per-instance palettes + model transforms and queue **one
@@ -401,44 +352,31 @@ impl SkinnedMeshPipeline {
         self.queued = Some((mesh, count));
     }
 
-    /// Issue the queued instanced draw (group 0 = camera/scene, group 1 = palettes +
-    /// instances). One `draw_indexed` for all instances.
-    pub fn render<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {
+    /// Issue the queued instanced draw (group 0 = the renderer's ONE per-frame group,
+    /// group 1 = palettes + instances). One `draw_indexed` for all instances. `target`
+    /// selects the colour-format variant (sRGB or HDR) for the surface being encoded.
+    pub fn render<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        frame: &'a FrameBindGroup,
+        shadow: &'a ShadowBind,
+        target: crate::TargetColor,
+    ) {
         let Some((handle, count)) = self.queued else {
             return;
         };
         let Some(mesh) = self.meshes.get(handle.0 as usize).and_then(|s| s.as_ref()) else {
             return;
         };
-        pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+        pass.set_pipeline(&self.pipeline[target as usize]);
+        pass.set_bind_group(0, frame.bind_group(), &[]);
         pass.set_bind_group(1, &self.skin_bind_group, &[]);
+        // @group(2) — the shadow bind for this surface (the active source, or the default).
+        pass.set_bind_group(2, shadow.active_bind_group(), &[]);
         pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
         pass.set_index_buffer(mesh.index_buffer.slice(..), mesh.index_format);
         pass.draw_indexed(0..mesh.index_count, 0, 0..count);
     }
-}
-
-fn make_uniform_bg(
-    device: &wgpu::Device,
-    layout: &wgpu::BindGroupLayout,
-    camera_buf: &wgpu::Buffer,
-    scene_buf: &wgpu::Buffer,
-) -> wgpu::BindGroup {
-    device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("flicker.skinned.uniform_bind_group"),
-        layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: camera_buf.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: scene_buf.as_entire_binding(),
-            },
-        ],
-    })
 }
 
 fn make_skin_bg(
@@ -475,33 +413,20 @@ mod tests {
     /// proof of the instanced-skinning path (visual correctness is a windowed check).
     #[test]
     fn skinned_pipeline_compiles_and_draws_instanced() {
-        let instance = wgpu::Instance::default();
-        let Some(adapter) =
-            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: None,
-                force_fallback_adapter: false,
-            }))
+        let Some((device, queue)) =
+            crate::pipeline_mesh::tests::test_device("flicker.skinned_test.device")
         else {
             eprintln!("skinned_pipeline: no GPU adapter — skipping");
             return;
         };
-        let (device, queue) = pollster::block_on(adapter.request_device(
-            &wgpu::DeviceDescriptor {
-                label: Some("flicker.skinned_test.device"),
-                required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::default(),
-                memory_hints: wgpu::MemoryHints::default(),
-            },
-            None,
-        ))
-        .expect("request device");
 
         device.push_error_scope(wgpu::ErrorFilter::Validation);
         let format = wgpu::TextureFormat::Rgba8UnormSrgb;
-        let mut pipeline = SkinnedMeshPipeline::new(&device, &queue, format);
-        pipeline.set_scene_uniform(&queue, SceneUniform::default());
-        pipeline.set_camera_matrix(&queue, Mat4::IDENTITY);
+        let frame = FrameBindGroup::new(&device);
+        let shadow = ShadowBind::new(&device);
+        let mut pipeline = SkinnedMeshPipeline::new(&device, &queue, &frame, &shadow, format);
+        frame.set_scene_uniform(&queue, crate::pipeline_mesh::SceneUniform::default());
+        frame.set_camera_matrix(&queue, Mat4::IDENTITY);
 
         // One triangle, all vertices bound to bone 0 at full weight.
         let v = |p: [f32; 3]| SkinnedVertex {
@@ -570,7 +495,7 @@ mod tests {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
-            pipeline.render(&mut pass);
+            pipeline.render(&mut pass, &frame, &shadow, crate::TargetColor::Srgb);
         }
         queue.submit([enc.finish()]);
         device.poll(wgpu::Maintain::Wait);

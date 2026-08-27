@@ -63,7 +63,7 @@ use flicker_input_core::{InputContext, InputState};
 /// shared context stack after the frame.
 pub type SceneInput<'a> = FrameInput<'a>;
 
-use flicker_render::Renderer;
+use flicker_render::{FrameGraph, Renderer};
 
 /// One screen / mode of the application — a logo, a menu, the game, a pause
 /// modal, and so on. Scenes are owned by the [`SceneManager`] on a stack.
@@ -105,8 +105,21 @@ pub trait Scene {
         false
     }
 
-    /// Draw the scene. Overlays draw over whatever is already on screen.
-    fn render(&mut self, renderer: &mut Renderer);
+    /// Declare the scene into the frame's shared [`FrameGraph`]. Overlays draw over
+    /// whatever is already on screen.
+    ///
+    /// A scene's render is **declare-only**: it records its offscreen targets, its root /
+    /// surface content, its screen composites, and its final 2D — the HUD replay and any
+    /// immediate 2D — as one [`FrameGraph::overlay`]. It never builds or executes a graph
+    /// of its own; the manager owns the ONE graph per frame and calls
+    /// [`FrameGraph::execute`] on it exactly once, after every visible scene has declared.
+    ///
+    /// `&'f mut self` lets a scene run its `&mut` phase (GPU uploads) and then borrow its
+    /// own fields into the deferred draw closures for the rest of the frame (the
+    /// destructure idiom); the closures live in `fg` until `execute`, so they and the
+    /// scene share the lifetime `'f`. The scene's depth band is already stamped on `fg`
+    /// (read it with [`FrameGraph::base_layer`]).
+    fn render<'f>(&'f mut self, renderer: &mut Renderer, fg: &mut FrameGraph<'f>);
 
     /// Called once when the scene is removed ([`Pop`](Transition::Pop) /
     /// `Replace` / `Quit`). Free GPU resources here. Default: no-op.
@@ -491,20 +504,27 @@ impl App for SceneManager {
 
     fn render(&mut self, renderer: &mut Renderer) {
         // Structural changes need &mut Renderer (enter/exit), so apply them
-        // here, then draw the visible slice bottom-up.
+        // here, then declare the visible slice bottom-up into ONE frame graph and
+        // execute it exactly once — the manager is the sole owner of `execute`, so a
+        // scene stacked over another (an overlay over a bench) can no longer erase the
+        // scene beneath it by executing its own graph.
         self.apply_pending(renderer);
         let start = self.visible_start();
+        let mut fg = FrameGraph::new();
         for (offset, scene) in self.stack[start..].iter_mut().enumerate() {
-            // Each scene occupies a wide DEPTH BAND (its stack position ×
-            // SCENE_LAYER_STRIDE), not a single layer — so a scene's internal
-            // sub-layers (a modal's background/Muse vs. its popup + labels, an open
-            // dropdown over its rows) never collide with the next scene's, and an
-            // overlay's panels *and* text cleanly cover the scene beneath it. A
-            // scene offsets small relative layers from `renderer.layer()` within
-            // its band (see render_hud's `base + layer`).
-            renderer.set_layer((start + offset) as f32 * SCENE_LAYER_STRIDE);
-            scene.render(renderer);
+            // Stamp each scene's wide DEPTH BAND (its stack position ×
+            // SCENE_LAYER_STRIDE) onto the graph — not a single layer — so a scene's
+            // internal sub-layers (a modal's background/Muse vs. its popup + labels, an
+            // open dropdown over its rows) never collide with the next scene's, and an
+            // overlay's panels *and* text cleanly cover the scene beneath it. A scene
+            // offsets small relative layers from `fg.base_layer()` within its band;
+            // `execute` restores the band before each declared element runs (see
+            // render_hud's `base + layer`). `iter_mut` yields disjoint `&'f mut` scenes,
+            // so every scene's declarations coexist in the one graph until `execute`.
+            fg.set_base_layer((start + offset) as f32 * SCENE_LAYER_STRIDE);
+            scene.render(renderer, &mut fg);
         }
+        fg.execute(renderer);
     }
 }
 
@@ -528,7 +548,12 @@ mod tests {
             ) -> super::Transition {
                 super::Transition::None
             }
-            fn render(&mut self, _: &mut flicker_render::Renderer) {}
+            fn render<'f>(
+                &'f mut self,
+                _: &mut flicker_render::Renderer,
+                _: &mut flicker_render::FrameGraph<'f>,
+            ) {
+            }
         }
         let img = CursorImage {
             rgba: vec![0xff; 4],
@@ -553,6 +578,36 @@ mod tests {
         assert_eq!(visible_start_in(&[false, false]), 1); // two opaque → only the top
         assert_eq!(visible_start_in(&[false, false, true]), 1); // opaque, opaque, overlay
         assert_eq!(visible_start_in(&[true]), 0); // overlay with nothing under it
+    }
+
+    /// A base scene with an overlay pushed over it: both are in the visible slice, so the
+    /// manager threads BOTH into the ONE per-frame [`flicker_render::FrameGraph`], each
+    /// stamped its own depth band — the overlay can no longer execute a graph of its own
+    /// and erase the scene beneath it (the bug latent when every scene owned its execute).
+    /// Mirrors `SceneManager::render`'s loop; execute-time survival of both scenes'
+    /// declarations is the frame-graph `schedule` gates' job — here we prove the ownership
+    /// (one graph, distinct bands) purely, without a GPU.
+    #[test]
+    fn two_visible_scenes_declare_into_one_graph() {
+        use super::{visible_start_in, SCENE_LAYER_STRIDE};
+        use flicker_render::FrameGraph;
+
+        let overlays = [false, true]; // base scene, then an overlay over it
+        let start = visible_start_in(&overlays);
+        assert_eq!(start, 0, "the overlay keeps the base scene visible");
+
+        // ONE graph for the whole visible slice.
+        let mut fg = FrameGraph::new();
+        let mut bands = Vec::new();
+        for (offset, _scene) in overlays[start..].iter().enumerate() {
+            fg.set_base_layer((start + offset) as f32 * SCENE_LAYER_STRIDE);
+            // What each scene reads back at declare time to offset its own sub-layers
+            // (render_hud's `base + layer`); `execute` restores it before the draw runs.
+            bands.push(fg.base_layer());
+        }
+        // Both visible scenes declared into the SAME graph, each in its own distinct band.
+        assert_eq!(bands, vec![0.0, SCENE_LAYER_STRIDE]);
+        assert_ne!(bands[0], bands[1], "the two scenes never share a band");
     }
 
     /// The kernel's phase is a pure function of "is it quitting" + "what is on top",
@@ -580,7 +635,12 @@ mod tests {
             ) -> Transition {
                 Transition::None
             }
-            fn render(&mut self, _: &mut flicker_render::Renderer) {}
+            fn render<'f>(
+                &'f mut self,
+                _: &mut flicker_render::Renderer,
+                _: &mut flicker_render::FrameGraph<'f>,
+            ) {
+            }
         }
         assert_eq!(SceneManager::new(Box::new(Stub)).phase(), Phase::Starting);
     }
@@ -604,7 +664,12 @@ mod tests {
             ) -> Transition {
                 Transition::None
             }
-            fn render(&mut self, _: &mut flicker_render::Renderer) {}
+            fn render<'f>(
+                &'f mut self,
+                _: &mut flicker_render::Renderer,
+                _: &mut flicker_render::FrameGraph<'f>,
+            ) {
+            }
             fn route(&self, _result: &str) -> Option<Transition> {
                 Some(Transition::Goto {
                     id: "next".into(),
@@ -624,7 +689,12 @@ mod tests {
             ) -> Transition {
                 Transition::None
             }
-            fn render(&mut self, _: &mut flicker_render::Renderer) {}
+            fn render<'f>(
+                &'f mut self,
+                _: &mut flicker_render::Renderer,
+                _: &mut flicker_render::FrameGraph<'f>,
+            ) {
+            }
         }
 
         let mgr = SceneManager::new(Box::new(Router)).with_resolver(Box::new(

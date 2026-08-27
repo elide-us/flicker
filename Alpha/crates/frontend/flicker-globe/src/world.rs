@@ -30,14 +30,23 @@
 //! settings panel reaches the globe.
 
 use flicker::render::{
-    Camera, FrameGraph, MeshHandle, MeshIndices, MeshVertex, Rect, Renderer, Vec3,
+    Camera, FrameGraph, MeshDrawOptions, MeshHandle, MeshIndices, MeshVertex, Rect, Renderer,
+    StageDef, StageLayer, Vec3,
 };
 use flicker::ui::{SurfacePointer, SurfaceSlot};
 use flicker_input_core::{AbstractControls, ActionSignal};
 use flicker_input_router::{Flow, InputEvent, InputHandler, RouteCtx};
 
-use crate::view::{Arrows, GlobeStage, GlobeView, Seat, StageLayer};
+use crate::view::{Arrows, GlobeView, Seat, GLOBE_LAYERS};
+
+/// One baked shell set's CPU meshes, each with its draw options, waiting for
+/// a renderer.
+type BakedSet = Vec<(Vec<MeshVertex>, Vec<u32>, MeshDrawOptions)>;
 use crate::{build, graticule, OrbitCam, RADIUS};
+
+/// The set name [`GlobeWorld::set_shells`] bakes into — the whole world of a
+/// single-view caller.
+pub const DEFAULT_SET: &str = "default";
 
 /// One shell of a world: what it is drawn over, how far out, how far its tiles
 /// pull in, and what colour each cell is. `color` returning `None` leaves a hole
@@ -57,6 +66,21 @@ pub struct ShellSpec<'a> {
     /// until it was absorbed; the second framing lives on the ONE shell spec so
     /// there is nothing left to fork.
     pub cell_radius: Option<Box<dyn Fn(usize) -> f32 + 'a>>,
+    /// **How this shell is DRAWN**: the default is the opaque lit fill every
+    /// ground shell uses. A WATER shell sets `tint` with an alpha below 1 —
+    /// the mesh pipeline alpha-blends — and some `gloss` for the wet sheen.
+    /// Blending has no sort: order translucent shells LAST in the list,
+    /// bottom-up (deep before shallow before surface).
+    pub opts: MeshDrawOptions,
+    /// **Column depth**, making the shell VOLUMETRIC: each cell becomes a
+    /// CLOSED solid — top face at the cell's radius, bottom face `depth(i)`
+    /// beneath it, side walls between, their edges along the corner directions
+    /// (straight lines out from the centre of the world, so the top hex is
+    /// naturally a little wider than the bottom). `None` — the ordinary case —
+    /// is the cap-only shell every planet view draws. Per-cell like
+    /// `cell_radius`, because a layer's THICKNESS is per-column physics: this
+    /// is the hex-stack ledger's drawing form.
+    pub depth: Option<Box<dyn Fn(usize) -> f32 + 'a>>,
 }
 
 /// **A globe, whole.** The mesh stack, the offscreen target, the authored stage,
@@ -64,13 +88,18 @@ pub struct ShellSpec<'a> {
 pub struct GlobeWorld {
     view: GlobeView,
     cam: OrbitCam,
-    stage: GlobeStage,
-    /// Uploaded shells, in draw order. Freed and replaced when a new list lands.
-    meshes: Vec<MeshHandle>,
-    /// The CPU meshes of the newest list, waiting for a renderer to upload them.
-    /// Built at [`set_shells`](GlobeWorld::set_shells) time so the caller needs
-    /// no renderer, uploaded at the top of `render` where one exists.
-    pending: Option<Vec<(Vec<MeshVertex>, Vec<u32>)>>,
+    stage: StageDef,
+    /// Uploaded shell SETS, by name, each in draw order — a world can hold
+    /// several baked views of one planet (a bench's data tabs) and swap
+    /// between them for free. A caller that never names a set lives entirely
+    /// in [`DEFAULT_SET`] through [`set_shells`](GlobeWorld::set_shells).
+    sets: std::collections::HashMap<String, Vec<(MeshHandle, MeshDrawOptions)>>,
+    /// Which set draws.
+    active: String,
+    /// CPU meshes baked and not yet uploaded, per set. Built at
+    /// [`bake`](GlobeWorld::bake) time so the caller needs no renderer,
+    /// uploaded at the top of `render` where one exists.
+    pending: Vec<(String, BakedSet)>,
     /// The stage's own line geometry — the authored graticule, built once.
     stage_arrows: Arrows,
     /// What is actually drawn: the stage's frame plus whatever the scene added.
@@ -96,11 +125,23 @@ pub struct GlobeWorld {
 }
 
 impl GlobeWorld {
-    /// A world authored by `stages.<source>` in the shared style file, opening
-    /// with the planet filling `fill` of the viewport's height (`None` keeps the
-    /// camera's plain three-radii framing).
+    /// A world authored by `stages.<source>` in the loaded styles, opening with the
+    /// planet filling `fill` of the viewport's height (`None` keeps the camera's plain
+    /// three-radii framing). An unauthored source still shows a picture — the scene's
+    /// own shells, default-lit — because a typo in a style file should cost the
+    /// authored look, never the planet (the compiler has already warned).
     pub fn new(source: &str, styles: &serde_json::Value, fill: Option<f32>) -> Self {
-        let stage = GlobeStage::from_styles(styles, source);
+        let stage = flicker::ui::stage_def(styles, source).unwrap_or_else(|| {
+            tracing::warn!("stages.{source}: the globe shows the scene's own shells instead");
+            StageDef {
+                layers: vec![StageLayer::Shells],
+                ..StageDef::default()
+            }
+        });
+        let undrawn = stage.layers_outside(GLOBE_LAYERS);
+        if !undrawn.is_empty() {
+            tracing::warn!("stages.{source} authors {undrawn:?} layers a globe does not draw");
+        }
         let mut cam = OrbitCam::new(RADIUS);
         if let Some(fill) = fill {
             cam = cam.with_fill(fill);
@@ -120,8 +161,9 @@ impl GlobeWorld {
             view: GlobeView::default(),
             cam,
             stage,
-            meshes: Vec::new(),
-            pending: None,
+            sets: std::collections::HashMap::new(),
+            active: DEFAULT_SET.to_string(),
+            pending: Vec::new(),
             arrows: stage_arrows.clone(),
             stage_arrows,
             seat: None,
@@ -140,7 +182,7 @@ impl GlobeWorld {
 
     /// The authored look this world was built from — what a bench reads instead
     /// of writing its own colours down.
-    pub fn stage(&self) -> &GlobeStage {
+    pub fn stage(&self) -> &StageDef {
         &self.stage
     }
 
@@ -168,43 +210,69 @@ impl GlobeWorld {
                     inset,
                     color: Box::new(move |_| Some(color)),
                     cell_radius: None, // an authored shell is a sphere
+                    depth: None,       // …and a cap, not a column
+                    opts: MeshDrawOptions::default(),
                 }),
                 _ => None,
             })
             .collect()
     }
 
-    /// Publish what the planet is made of. The meshes are built here (CPU only)
-    /// and uploaded at the next `render`, so a caller needs no renderer and the
-    /// old shells live until their replacements exist.
+    /// Publish what the planet is made of — the one-set sugar every
+    /// single-view world uses: bakes into [`DEFAULT_SET`] and shows it.
     pub fn set_shells(&mut self, shells: Vec<ShellSpec<'_>>) {
-        self.pending = Some(
-            shells
-                .into_iter()
-                .map(|s| {
-                    let ShellSpec {
-                        dirs,
-                        outlines,
-                        radius,
-                        inset,
-                        color,
-                        cell_radius,
-                    } = s;
-                    // The sphere and the per-column stack are the SAME builder:
-                    // one answers `radius` for every cell, the other answers the
-                    // column's own height.
-                    build(
-                        dirs,
-                        outlines,
-                        move |i| cell_radius.as_ref().map_or(radius, |f| f(i)),
-                        inset,
-                        color,
-                    )
-                })
-                .filter(|(_, i)| !i.is_empty())
-                .collect(),
-        );
+        self.bake(DEFAULT_SET, shells);
+        self.show(DEFAULT_SET);
+    }
+
+    /// Build a NAMED shell set (CPU only; uploaded at the next `render`)
+    /// without changing which set draws. A bench with several data views of
+    /// one planet bakes each when its DATA changes — so switching views is
+    /// [`show`](GlobeWorld::show), a free swap, never a rebuild stalling the
+    /// frame with the old picture on screen.
+    pub fn bake(&mut self, key: &str, shells: Vec<ShellSpec<'_>>) {
+        let built = shells
+            .into_iter()
+            .map(|s| {
+                let ShellSpec {
+                    dirs,
+                    outlines,
+                    radius,
+                    inset,
+                    color,
+                    cell_radius,
+                    depth,
+                    opts,
+                } = s;
+                // The sphere and the per-column stack are the SAME builder:
+                // one answers `radius` for every cell, the other answers the
+                // column's own height. A shell with DEPTH is the volumetric
+                // framing — closed columns instead of caps.
+                let top = move |i: usize| cell_radius.as_ref().map_or(radius, |f| f(i));
+                let (v, i) = match depth {
+                    Some(d) => crate::build_columns(dirs, outlines, top, d, inset, color),
+                    None => build(dirs, outlines, top, inset, color),
+                };
+                (v, i, opts)
+            })
+            .filter(|(_, i, _)| !i.is_empty())
+            .collect();
+        // A re-bake of a key replaces any bake of it still waiting.
+        self.pending.retain(|(k, _)| k != key);
+        self.pending.push((key.to_string(), built));
         self.dirty = false;
+    }
+
+    /// Draw the named set from here on. A key that was never baked draws
+    /// NOTHING — loudly warned, and visibly wrong (rule 4BB12A75), never a
+    /// stale other view standing in.
+    pub fn show(&mut self, key: &str) {
+        if key != self.active {
+            if !self.sets.contains_key(key) && !self.pending.iter().any(|(k, _)| k == key) {
+                tracing::warn!("globe set `{key}` was never baked — the globe will draw empty");
+            }
+            self.active = key.to_string();
+        }
     }
 
     /// Line geometry drawn over the world, grouped by colour — headings, plate
@@ -245,6 +313,25 @@ impl GlobeWorld {
     /// `look` tuple handed to [`update`](GlobeWorld::update).
     pub fn set_controls(&mut self, controls: AbstractControls) {
         self.cam.set_controls(controls);
+    }
+
+    /// Aim the orbit at `target` — what an INSPECTOR world does: a column shown
+    /// at its true radius is orbited about its own region, not the far-away
+    /// centre of the planet it came from. A whole-planet world never calls this
+    /// (the default target is the origin the planet is centred on).
+    pub fn aim(&mut self, target: Vec3) {
+        self.cam.look_at(target);
+    }
+
+    /// Re-frame the camera around a region of `radius`, optionally opening with
+    /// the region filling `fill` of the viewport (same meaning as `new`'s
+    /// fill). Pose, target and the player's controls are kept — this is what a
+    /// view calls when the thing it frames changes size, not a reset.
+    pub fn set_frame(&mut self, radius: f32, fill: Option<f32>) {
+        self.cam.set_frame(radius);
+        if let Some(fill) = fill {
+            self.cam.refill(fill);
+        }
     }
 
     /// One frame of camera motion. `pointer` is the walker's sample for this globe's
@@ -332,10 +419,12 @@ impl GlobeWorld {
             view,
             cam,
             stage,
-            meshes,
+            sets,
+            active,
             arrows,
             ..
         } = self;
+        let meshes = sets.get(active).map_or(&[][..], Vec::as_slice);
         view.render(r, fg, seat, base_layer, cam.camera(), stage, meshes, arrows);
     }
 
@@ -348,30 +437,37 @@ impl GlobeWorld {
         let Self {
             cam,
             stage,
-            meshes,
+            sets,
+            active,
             arrows,
             ..
         } = self;
+        let meshes = sets.get(active).map_or(&[][..], Vec::as_slice);
         GlobeView::render_root(fg, cam.camera(), stage, meshes, arrows);
     }
 
-    /// Upload the newest shell list, freeing the one it replaces.
+    /// Upload every baked set still waiting, each freeing the set it replaces.
     fn upload_pending(&mut self, r: &mut Renderer) {
-        if let Some(pending) = self.pending.take() {
-            for h in self.meshes.drain(..) {
-                r.free_mesh(h);
+        for (key, built) in self.pending.drain(..) {
+            if let Some(old) = self.sets.remove(&key) {
+                for (h, _) in old {
+                    r.free_mesh(h);
+                }
             }
-            self.meshes = pending
+            let handles = built
                 .iter()
-                .map(|(v, i)| r.upload_mesh(v, MeshIndices::U32(i)))
+                .map(|(v, i, opts)| (r.upload_mesh(v, MeshIndices::U32(i)), *opts))
                 .collect();
+            self.sets.insert(key, handles);
         }
     }
 
-    /// Give the GPU back: the shells and the offscreen target.
+    /// Give the GPU back: every baked set and the offscreen target.
     pub fn free(&mut self, r: &mut Renderer) {
-        for h in self.meshes.drain(..) {
-            r.free_mesh(h);
+        for (_, set) in self.sets.drain() {
+            for (h, _) in set {
+                r.free_mesh(h);
+            }
         }
         self.view.free(r);
     }
@@ -445,7 +541,8 @@ mod tests {
         }));
         let world = GlobeWorld::new("test_globe", &s, None);
         let stage = world.stage();
-        for (got, want) in stage.clear.iter().zip([0.1, 0.2, 0.3, 1.0]) {
+        let clear = stage.clear.expect("the stage authors a clear");
+        for (got, want) in clear.iter().zip([0.1, 0.2, 0.3, 1.0]) {
             assert!(
                 (got - want).abs() < 1e-6,
                 "the authored clear is read: {got} vs {want}"
@@ -525,6 +622,67 @@ mod tests {
             None,
         );
         assert!(bare.arrows.is_empty());
+    }
+
+    /// **Named sets: meshes follow DATA, showing is a swap, and a key that
+    /// was never baked draws EMPTY — never a stale other view standing in
+    /// (rule 4BB12A75).** The CPU state machine end to end: `set_shells` is
+    /// the DEFAULT_SET sugar; `bake` builds without changing what draws and a
+    /// re-bake replaces its own pending build; `show` swaps the active key;
+    /// an unbaked key resolves to NO meshes — the loudly-warned empty globe,
+    /// not the previous view.
+    #[test]
+    fn baked_sets_swap_and_an_unbaked_key_draws_empty_not_stale() {
+        let s = styles(serde_json::json!({ "layers": [{ "draw": "shells" }] }));
+        let mut world = GlobeWorld::new("test_globe", &s, None);
+        let (dirs, outlines) = tiling();
+        let spec = |rgb: [f32; 3]| ShellSpec {
+            dirs: &dirs,
+            outlines: &outlines,
+            radius: 100.0,
+            inset: 0.0,
+            color: Box::new(move |_| Some(rgb)),
+            cell_radius: None,
+            depth: None,
+            opts: MeshDrawOptions::default(),
+        };
+
+        // The one-set sugar: bakes DEFAULT_SET and shows it.
+        world.set_shells(vec![spec([1.0, 0.0, 0.0])]);
+        assert_eq!(world.active, DEFAULT_SET);
+        assert_eq!(world.pending.len(), 1);
+        assert_eq!(world.pending[0].0, DEFAULT_SET);
+
+        // Baking a named view builds it WITHOUT changing what draws…
+        world.bake("plates", vec![spec([0.0, 1.0, 0.0])]);
+        assert_eq!(world.active, DEFAULT_SET, "baking never swaps the view");
+        assert_eq!(world.pending.len(), 2);
+        // …and a re-bake of the same key replaces its own pending build
+        // rather than queueing a second one.
+        world.bake("plates", vec![spec([0.0, 0.0, 1.0])]);
+        assert_eq!(world.pending.len(), 2, "a re-bake replaces, never stacks");
+
+        // Showing a baked key swaps; the draw path resolves ITS meshes.
+        world.show("plates");
+        assert_eq!(world.active, "plates");
+        assert!(
+            world
+                .pending
+                .iter()
+                .any(|(k, m)| k == "plates" && !m.is_empty()),
+            "the shown set has a build to draw"
+        );
+
+        // THE CONTRACT: a key that was never baked still swaps — and resolves
+        // to NOTHING to draw (the warned, visibly-wrong empty globe), never
+        // the previous view standing in as if it were this one.
+        world.show("no_such_view");
+        assert_eq!(world.active, "no_such_view");
+        assert!(!world.sets.contains_key(&world.active));
+        assert!(
+            !world.pending.iter().any(|(k, _)| k == "no_such_view"),
+            "nothing baked under the key: the draw resolves empty"
+        );
     }
 
     fn bench_bindings() -> ContextualBindings {

@@ -2,7 +2,7 @@
   "_meta": {
     "source": "Prism/BookIII.md — the compound catalog (Common, Alloy, Biological, Mineral, Useful, Gemstone Compounds). Transcribed faithfully; the engine's compound catalog was previously deferred (BookIII: 'the exact mapping from these tables to classified materials is unassigned — the world simulation works element->material directly'). This file lands it.",
     "split": "Ids 1-78 = gameplay compound catalog (Prism BookIII transcription, the source prototype for the materials map). Ids 79-96 = the mantle + world-formation-simulation compounds, moved to the sibling crust_compounds.json on 2026-08-19 to keep the gameplay and world-sim material-slot budgets legible. ONE shared id space across both files - ids are globally unique and never reused (see retired_ids). flicker-materials (src/source.rs::load_compounds) loads BOTH files into a single in-memory catalog, so every consumer resolves any compound by name/id regardless of which file it lives in.",
-    "schema": "Each row: id, name, formula (ASCII, verbatim from the book — may reference elements outside the Prism 28-element table (ceiling 30; count per periodic_table.json _meta.additions)), category (common|mineral|useful|gemstone|biological|alloy), elements[{symbol,count}] (PARSED constituents, restricted to Prism periodic_table.json elements — non-Prism symbols like F in Apatite's formula are dropped from this list but kept in `formula`), natural (true = forms in-world during world-gen; false = a crafted alloy/recipe), hardness_mohs / density_g_cm3 / brittleness (0..1) — ONE TABLE (Aaron, 2026-07-13): populated on EVERY row, no split populations. Real-world reference values; for the 78 Book III rows they are proposed-starting-values pending ratification (the R6b twelve were ruled with theirs); 0.0 hardness/brittleness = not applicable (non-solid), the element-table gas convention. Quench/cooling-rate is deliberately NOT a column here: per R4b it is per-layer formation provenance, combined with these constants by the R7 conditions registry. extracted_element (ore target, omitted if none), harvestable (true = curated mineable ore/gem that must reach a concentrated vein; curated gameplay canon — NOT extended by the R6b merge; spodumene/dolomite ore notes await a separate ruling), sim_required (true = row added beyond the Book III transcription for the world-sim — the R6b minerals 79-90 and the gas species 91-96, now in crust_compounds.json, plus the biological Lignin/Cellulose/Oils that remain here), uses (Book rows) / note (R6b rows) — sparse text fields.",
+    "schema": "Each row: id, name, formula (ASCII, verbatim from the book — may reference elements outside the Prism 28-element table (ceiling 30; count per periodic_table.json _meta.additions)), category (common|mineral|useful|gemstone|biological|alloy), elements[{symbol,count}] (PARSED constituents, restricted to Prism periodic_table.json elements — non-Prism symbols like F in Apatite's formula are dropped from this list but kept in `formula`), natural (true = forms in-world during world-gen; false = a crafted alloy/recipe), hardness_mohs / density_g_cm3 / brittleness (0..1) — ONE TABLE (Aaron, 2026-07-13): populated on EVERY row, no split populations. Real-world reference values; for the 78 Book III rows they are proposed-starting-values pending ratification (the R6b twelve were ruled with theirs); 0.0 hardness/brittleness = not applicable (non-solid), the element-table gas convention. Quench/cooling-rate is deliberately NOT a column here: per R4b it is per-layer formation provenance, combined with these constants by the R7 conditions registry. extracted_element (ore target, omitted if none), harvestable (true = curated mineable ore/gem that must reach a concentrated vein; curated gameplay canon — NOT extended by the R6b merge; spodumene/dolomite ore notes await a separate ruling), sim_required (true = row added beyond the Book III transcription for the world-sim — the R6b minerals 79-90 and the gas species 91-96, now in crust_compounds.json, plus the biological Lignin/Cellulose/Oils that remain here), uses (Book rows) / note (R6b rows) — sparse text fields. vein_demand ('high'; PROPOSED gameplay canon 2026-08-26, awaiting ratification) = the bulk-crafting demand tier: the populous vein pass gives these kinds more static-site quota and a boosted draw weight. Membership leans on ~1800s-era bulk crafting in the dark-gothic-fantasy frame (iron, copper, tin, lead, zinc, coal, calcite flux, salt); advanced-but-craftable materials like titanium stay normal tier. Proposed and TUNABLE — the crafting system will re-rate these when it exists.",
     "use": "Loaded by flicker-materials Tables via TableSource (JsonTableSource reads this as a sibling of periodic_table.json/materials.json). The composition->compound classifier + the mineral extraction wiring to the node/vein layer are the next step. Since 2026-08-19 the mantle/world-formation-sim compounds (ids 79-96) live in the sibling crust_compounds.json, appended into this same catalog at load (see _meta.split).",
     "counts": {
       "common": 9,
@@ -249,7 +249,8 @@
       "brittleness": 0.6,
       "extracted_element": "Na",
       "harvestable": true,
-      "uses": "Common salt used for food preservation, seasoning, glass and hide tanning, and as a chlorine source for disinfectants."
+      "uses": "Common salt used for food preservation, seasoning, glass and hide tanning, and as a chlorine source for disinfectants.",
+      "vein_demand": "high"
     },
     {
       "id": 11,
@@ -301,7 +302,8 @@
       "brittleness": 0.6,
       "extracted_element": "Ca",
       "harvestable": true,
-      "uses": "Primary construction material (cement, mortar, concrete) also used to adjust soil pH and for building with limestone and marble."
+      "uses": "Primary construction material (cement, mortar, concrete) also used to adjust soil pH and for building with limestone and marble.",
+      "vein_demand": "high"
     },
     {
       "id": 13,
@@ -381,7 +383,8 @@
       "brittleness": 0.7,
       "extracted_element": "Fe",
       "harvestable": true,
-      "uses": "Abundant early-game iron source for tools, weapons, building materials, and steel when combined with carbon."
+      "uses": "Abundant early-game iron source for tools, weapons, building materials, and steel when combined with carbon.",
+      "vein_demand": "high"
     },
     {
       "id": 16,
@@ -457,7 +460,8 @@
       "brittleness": 0.7,
       "extracted_element": "Cu",
       "harvestable": true,
-      "uses": "Copper source for electrical components, wiring, tools, construction, and bronze when alloyed with tin."
+      "uses": "Copper source for electrical components, wiring, tools, construction, and bronze when alloyed with tin.",
+      "vein_demand": "high"
     },
     {
       "id": 19,
@@ -481,7 +485,8 @@
       "brittleness": 0.7,
       "extracted_element": "Zn",
       "harvestable": true,
-      "uses": "Zinc source for galvanization against rust, brass with copper, and other alloys and metal treatments."
+      "uses": "Zinc source for galvanization against rust, brass with copper, and other alloys and metal treatments.",
+      "vein_demand": "high"
     },
     {
       "id": 20,
@@ -623,7 +628,8 @@
         "to": "Graphite",
         "pressure_pa": 300000000.0,
         "temp_k": 700.0
-      }
+      },
+      "vein_demand": "high"
     },
     {
       "id": 26,
@@ -671,7 +677,8 @@
       "brittleness": 0.6,
       "extracted_element": "Sn",
       "harvestable": true,
-      "uses": "Tin source for bronze with copper, pewter, solder, and coating or plating processes."
+      "uses": "Tin source for bronze with copper, pewter, solder, and coating or plating processes.",
+      "vein_demand": "high"
     },
     {
       "id": 28,
@@ -695,7 +702,8 @@
       "brittleness": 0.7,
       "extracted_element": "Pb",
       "harvestable": true,
-      "uses": "Lead source for batteries, pipes, radiation shielding, weights, ammunition, and protective equipment."
+      "uses": "Lead source for batteries, pipes, radiation shielding, weights, ammunition, and protective equipment.",
+      "vein_demand": "high"
     },
     {
       "id": 29,

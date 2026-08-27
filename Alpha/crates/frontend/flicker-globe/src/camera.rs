@@ -19,6 +19,10 @@ pub struct OrbitCam {
     distance: f32,
     min_distance: f32,
     max_distance: f32,
+    /// What the orbit goes AROUND. The origin for a planet (the world is centred
+    /// there); somewhere else for an inspector framing a region of it — a column
+    /// standing at its true radius is orbited about its own midpoint.
+    target: Vec3,
     /// The player's OWN look settings — sensitivity and the two invert flags,
     /// straight off the settings panel. The planet turns at the rate the player
     /// asked for, the same as every other camera in the app; this struct does
@@ -36,6 +40,7 @@ impl OrbitCam {
             distance: radius * 3.0,
             min_distance: radius * 1.2,
             max_distance: radius * 9.0,
+            target: Vec3::ZERO,
             controls: AbstractControls::default(),
         }
     }
@@ -45,6 +50,24 @@ impl OrbitCam {
         self.controls = controls;
     }
 
+    /// Aim the orbit at `target` — the point the camera goes around and looks
+    /// at. The origin (the default) for a whole planet; a region's own centre
+    /// for an inspector view of a piece of it.
+    pub fn look_at(&mut self, target: Vec3) {
+        self.target = target;
+    }
+
+    /// Re-frame in place around a region of the given `radius`: the same
+    /// derivation as [`new`](Self::new) — start distance and both zoom clamps —
+    /// with the pose (yaw, pitch, target) and the player's controls kept. What
+    /// a view calls when the thing it frames changes size.
+    pub fn set_frame(&mut self, radius: f32) {
+        self.radius = radius;
+        self.distance = radius * 3.0;
+        self.min_distance = radius * 1.2;
+        self.max_distance = radius * 9.0;
+    }
+
     /// Open with the planet FILLING `fill` of the viewport's height (0..1):
     /// the start distance is derived from the default vertical FOV, so a
     /// square viewport shows the sphere at that fraction on entry. The sphere's
@@ -52,10 +75,17 @@ impl OrbitCam {
     /// that equals `fill` of the half-FOV gives `D = R / sin(fill · fov/2)`.
     /// Zoom clamps are untouched — this frames the OPENING shot, not the range.
     pub fn with_fill(mut self, fill: f32) -> Self {
+        self.refill(fill);
+        self
+    }
+
+    /// [`with_fill`](Self::with_fill)'s body, callable on a live camera — what
+    /// [`set_frame`](Self::set_frame) pairs with when a re-framed view also
+    /// wants the framed opening shot.
+    pub fn refill(&mut self, fill: f32) {
         let fov = Camera::default().fov_y_radians;
         let half = (fill.clamp(0.05, 1.0) * fov * 0.5).min(1.5);
         self.distance = (self.radius / half.sin()).clamp(self.min_distance, self.max_distance);
-        self
     }
 
     /// Apply this frame's POINTER SAMPLE — the walker's [`SurfacePointer`] for this
@@ -110,7 +140,7 @@ impl OrbitCam {
     }
 
     pub fn camera(&self) -> Camera {
-        Camera::orbit(Vec3::ZERO, self.distance, self.yaw, self.pitch)
+        Camera::orbit(self.target, self.distance, self.yaw, self.pitch)
     }
 }
 
@@ -217,6 +247,38 @@ mod tests {
         // An absurd ask still lands inside the clamps.
         let tight = OrbitCam::new(r).with_fill(5.0);
         assert!(tight.distance >= tight.min_distance);
+    }
+
+    /// **The orbit goes around what it is aimed at, at the frame it was set.**
+    /// `look_at` moves the target — the camera looks there and its position
+    /// rides the same offset; `set_frame` re-derives distance and both zoom
+    /// clamps around a new radius while KEEPING the pose and target. The
+    /// inspector contract: re-frame a column without losing where you were
+    /// looking from.
+    #[test]
+    fn look_at_and_set_frame_move_the_orbit_not_the_pose() {
+        let mut cam = OrbitCam::new(100.0);
+        let base = cam.camera();
+        let target = Vec3::new(0.0, 250.0, 0.0);
+        cam.look_at(target);
+        let aimed = cam.camera();
+        assert_eq!(aimed.target, target, "the camera looks at the target");
+        assert!(
+            (aimed.position - (base.position + target)).length() < 1e-4,
+            "the whole orbit translated with it"
+        );
+
+        let (yaw, pitch) = (cam.yaw, cam.pitch);
+        cam.set_frame(10.0);
+        assert_eq!(cam.distance, 30.0, "re-derived start distance");
+        assert_eq!(cam.min_distance, 12.0);
+        assert_eq!(cam.max_distance, 90.0);
+        assert_eq!((cam.yaw, cam.pitch), (yaw, pitch), "the pose is kept");
+        assert_eq!(cam.camera().target, target, "and so is the target");
+        // refill = with_fill on a live camera: the same derivation.
+        cam.refill(0.85);
+        let want = OrbitCam::new(10.0).with_fill(0.85).distance;
+        assert!((cam.distance - want).abs() < 1e-4);
     }
 
     /// The stick zoom is exponential inside the same clamps as the wheel:

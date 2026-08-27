@@ -5,9 +5,9 @@
 // `palette_offset`) plus a model transform. The vertex shader looks the instance
 // up by `@builtin(instance_index)`, skins position + normal from that instance's
 // palette (4-influence linear blend), applies the model transform, then the
-// camera. The fragment is a simple two-light Lambert over neutral steel — this
-// slice proves the skinning + instancing path; texturing/PBR is a later slice
-// (reuse the material path from mesh_textured.wgsl).
+// camera. The fragment is a simple Lambert over neutral steel, driven by the frame's
+// LIGHT LIST — this slice proves the skinning + instancing path; texturing/PBR is a
+// later slice (reuse the material path from mesh_textured.wgsl).
 //
 // Storage buffers are read in the VERTEX stage — requires the adapter's
 // VERTEX_STORAGE downlevel capability (native Metal / Vulkan / D3D12 have it;
@@ -15,19 +15,9 @@
 
 struct Camera { view_projection: mat4x4<f32>, };
 
-// Mirrors `SceneUniform` (pipeline_mesh.rs) — 10 vec4s, std140-trivial.
-struct Scene {
-    sun_dir: vec4<f32>,
-    sun_color: vec4<f32>,
-    moon_dir: vec4<f32>,
-    moon_color: vec4<f32>,
-    ambient: vec4<f32>,
-    camera_pos: vec4<f32>,
-    fog_color: vec4<f32>,
-    grade: vec4<f32>,
-    point_pos: vec4<f32>,
-    point_color: vec4<f32>,
-};
+// The frame prelude (struct Light / Scene / ShadowUniform / light_sample / shadow_factor)
+// is PREPENDED from `shaders/frame_prelude.wgsl` at module build — the ONE shared text, not
+// a copy pasted here. See that file and `compose_lit` in `pipeline_mesh.rs`.
 
 struct Instance {
     model: mat4x4<f32>,
@@ -41,6 +31,13 @@ struct Instance {
 @group(0) @binding(1) var<uniform> scene: Scene;
 @group(1) @binding(0) var<storage, read> palettes: array<mat4x4<f32>>;
 @group(1) @binding(1) var<storage, read> instances: array<Instance>;
+
+// The sun/light shadow map (group 2 is free for this pipeline). The prelude's
+// `shadow_factor` reads these by name; a non-shadow surface binds a default with
+// `enabled = 0`, so it returns 1.0 and this shader is byte-identical to the no-shadow path.
+@group(2) @binding(0) var<uniform> shadow_uni: ShadowUniform;
+@group(2) @binding(1) var shadow_tex: texture_depth_2d;
+@group(2) @binding(2) var shadow_samp: sampler_comparison;
 
 struct VertexIn {
     @location(0) position: vec3<f32>,
@@ -95,8 +92,22 @@ fn vs_main(in: VertexIn) -> VertexOut {
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let base = vec3<f32>(0.55, 0.57, 0.62); // neutral steel — reads the pose via lighting
     let n = normalize(in.world_normal);
-    let sun = scene.sun_color.rgb * max(dot(n, scene.sun_dir.xyz), 0.0);
-    let moon = scene.moon_color.rgb * max(dot(n, scene.moon_dir.xyz), 0.0);
-    let shaded = base * (scene.ambient.rgb + sun + moon);
+    // Ambient-seeded, exactly as the sun+moon sum this replaced. Point and spot lights
+    // now REACH the skinned pass (they used to be silently dropped here); no shipped
+    // stage pairs a `skinned` layer with a non-directional rig — gated scene-side.
+    var diffuse = scene.ambient.rgb;
+    for (var i = 0u; i < scene.counts.x; i = i + 1u) {
+        let li = scene.lights[i];
+        let s = light_sample(li, in.world_position);
+        let radiance = li.color_intensity.rgb * li.color_intensity.w;
+        // Shadow darkens only the light this map is cast for; vis = 1.0 exactly otherwise
+        // (and for every surface with no shadow bound), so the term is bit-identical then.
+        var vis = 1.0;
+        if (shadow_uni.params.y > 0.5 && u32(shadow_uni.params.w) == i) {
+            vis = shadow_factor(in.world_position);
+        }
+        diffuse = diffuse + radiance * (max(dot(n, s.xyz), 0.0) * s.w) * vis;
+    }
+    let shaded = base * diffuse;
     return vec4<f32>(shaded, 1.0);
 }

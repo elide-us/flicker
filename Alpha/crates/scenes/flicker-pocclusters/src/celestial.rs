@@ -6,7 +6,7 @@
 //! table — so the sky and the solar-birth cinematic read the same layout (single
 //! source of truth). Sun/moon discs, the Milky-Way "galactic cloud", and the eclipse
 //! corona are drawn by the engine sky pass (`draw_sky` + `sky.wgsl`) from the
-//! [`SceneLighting`] this module computes; the planets, the ecliptic, and the
+//! [`LightRig`] this module computes; the planets, the ecliptic, and the
 //! constellations are overlays drawn here.
 //!
 //! Art may lie for beauty (the arcs, the glow), but the *body layout* is the
@@ -15,7 +15,7 @@
 
 use std::time::Duration;
 
-use flicker::render::{Mat4, Renderer, SceneLighting, TextureHandle, Vec2, Vec3};
+use flicker::render::{Light, LightRig, Mat4, Renderer, TextureHandle, Vec2, Vec3};
 use flicker_orrery as orrery;
 
 /// How far out on the sky dome overlays sit (world units). Large, so they read as
@@ -28,9 +28,18 @@ const OBLIQUITY: f32 = 0.41;
 /// apparent sizes" from Home's sky. Tunable.
 const PLANET_DISC: f32 = 46.0;
 /// Sun/moon disc radii — **must stay in sync with `sky.wgsl`** (the eclipse coverage
-/// geometry is mirrored there).
+/// geometry is mirrored there). `sky.wgsl` spells them as bare literals (`sun_r` / `moon_r`),
+/// because a WGSL shader cannot read a Rust `const`; the two-end gate
+/// `the_disc_radii_match_the_shipped_sky_shader` asserts the shipped shader text still carries
+/// THESE numbers, so a retune on either side fails loud instead of desynchronising the ground's
+/// eclipse darkening from the sky's corona.
 const SUN_DISC_R: f32 = 0.038;
 const MOON_DISC_R: f32 = 0.047;
+/// The ORDERING the coverage curve depends on: the moon disc is the larger of the two, which
+/// is what lets it swallow the sun cleanly at totality. Swap them and the
+/// `smoothstep(MOON − SUN, MOON + SUN, separation)` below runs backwards — so this is a
+/// COMPILE error, not a test failure.
+const _: () = assert!(MOON_DISC_R > SUN_DISC_R);
 
 // --- small math helpers -----------------------------------------------------
 
@@ -74,6 +83,48 @@ fn sun_direction(time_of_day: f32, year_month: f32, latitude: f32) -> Vec3 {
     latitude_mat(latitude).transform_vector3(eq)
 }
 
+// --- the golden hour ---------------------------------------------------------
+//
+// The sun elevations (`sun_dir.y`, so -1 = straight down, +1 = straight up) that bracket the
+// warm band. ART numbers — retune the LOOK here, never in the recipe: the scene file authors
+// the golden TINT, this curve authors WHEN it comes on.
+
+/// Above this elevation the sun is HIGH: no grade at all, so midday is exactly what it is
+/// today (the resolve is pure ACES).
+const GOLDEN_HIGH: f32 = 0.45;
+/// Falling past this, the grade has ramped fully in — the top of the golden band.
+const GOLDEN_PEAK_HIGH: f32 = 0.20;
+/// The bottom of the golden band: below this the sun is on the horizon and the grade starts
+/// ramping back out.
+const GOLDEN_PEAK_LOW: f32 = 0.02;
+/// Below this the sun has SET: the grade is fully out, so night is ungraded (the sky is
+/// already dark; tinting it gold would light the night orange).
+const GOLDEN_SET: f32 = -0.06;
+
+/// **The cap on the effective grade** — how far the resolve lerps toward the scene's authored
+/// golden tint at the peak of the band. Still partial (a full-strength tint would REPLACE the
+/// frame's colour rather than warm it), but pushed to 0.65 in-window on 2026-08-24: at 0.35 the
+/// band read as "slightly warm", not as golden hour. The tint lerp is LINEAR and lands BEFORE
+/// the ACES curve, so raising this both saturates the warm end and deepens the contrast through
+/// the shoulder — which is what "truly golden" actually looks like. This is the ART half of the
+/// feature; the scene file's `grade` tint is the other half, and they multiply.
+pub const GOLDEN_HOUR_STRENGTH: f32 = 0.65;
+
+/// The golden-hour grade strength at a sun elevation (`sun_dir.y`) — a smooth band that is
+/// **0 with the sun high**, rises as it falls, holds its peak across
+/// `[GOLDEN_PEAK_LOW, GOLDEN_PEAK_HIGH]`, and fades back to **0 below the horizon**. Two
+/// `smoothstep`s multiplied, so it is C¹ everywhere and never overshoots its cap.
+///
+/// Pure and allocation-free — evaluated once per frame and published as `grade_warmth`, the
+/// key the room recipe's `tonemap_grade` binds its `grade_strength` to. The output IS the
+/// effective strength (the [`GOLDEN_HOUR_STRENGTH`] cap is folded in), so there is ONE number
+/// travelling the channel rather than a shape here and a scale at the far end.
+pub fn grade_warmth(sun_up: f32) -> f32 {
+    GOLDEN_HOUR_STRENGTH
+        * smoothstep(GOLDEN_HIGH, GOLDEN_PEAK_HIGH, sun_up)
+        * smoothstep(GOLDEN_SET, GOLDEN_PEAK_LOW, sun_up)
+}
+
 /// World-space direction toward the moon: the sun's arc offset by the phase.
 fn moon_direction(time_of_day: f32, moon_phase: f32, year_month: f32, latitude: f32) -> Vec3 {
     use std::f32::consts::TAU;
@@ -91,7 +142,7 @@ fn compute_scene(
     year_month: f32,
     fog: f32,
     latitude: f32,
-) -> SceneLighting {
+) -> LightRig {
     use std::f32::consts::TAU;
 
     let sun_dir = sun_direction(time_of_day, year_month, latitude);
@@ -133,19 +184,23 @@ fn compute_scene(
     let star_rotation =
         (latitude_mat(latitude) * Mat4::from_rotation_z(day_angle(time_of_day))).inverse();
 
-    SceneLighting {
-        sun_dir,
-        sun_color,
-        moon_dir,
-        moon_color,
-        ambient,
-        sky_zenith,
-        sky_horizon,
-        fog_color,
-        fog_density,
-        star_rotation,
-        ..SceneLighting::default()
-    }
+    // The cycle owns the rig's two SKY SLOTS — slot 0 the sun, slot 1 the moon, the
+    // very slots `sky_sun()`/`sky_moon()` read back out (ONE addressing scheme, not a
+    // filtered "first directional light") — plus the atmosphere below. Both lights are
+    // `Dir`, which is what the slots require. This rig is a CARRIER for exactly those
+    // fields: `over` lifts
+    // them onto the stage's authored rig, and the default's remaining slot and count
+    // never leave this function.
+    let mut rig = LightRig::default();
+    rig.lights[0] = Light::dir(sun_dir, sun_color);
+    rig.lights[1] = Light::dir(moon_dir, moon_color);
+    rig.ambient = ambient;
+    rig.sky_zenith = sky_zenith;
+    rig.sky_horizon = sky_horizon;
+    rig.fog_color = fog_color;
+    rig.fog_density = fog_density;
+    rig.star_rotation = star_rotation;
+    rig
 }
 
 /// A 16×16 soft white RGBA disc — uploaded once, tinted per-planet by the billboard
@@ -328,6 +383,10 @@ pub struct CelestialState {
     figures: Vec<Constellation>,
 }
 
+/// The Fog control's resting value — the point at which an authored fog density means
+/// exactly itself (the ground fog scales by `fog / DEFAULT_FOG`).
+pub const DEFAULT_FOG: f32 = 0.22;
+
 impl Default for CelestialState {
     fn default() -> Self {
         Self {
@@ -335,7 +394,7 @@ impl Default for CelestialState {
             moon_phase: 1.2,
             year_month: 5.0,
             sim_speed: 30.0,
-            fog: 0.22,
+            fog: DEFAULT_FOG,
             latitude: 35.0,
             epoch: 3.4,
             show_planets: true,
@@ -348,6 +407,27 @@ impl Default for CelestialState {
 }
 
 impl CelestialState {
+    /// The unit direction TOWARD the sun this frame — the same vector [`Self::over`] writes
+    /// into the rig's slot-0 `Dir` light (both go through the ONE `sun_direction` helper).
+    /// The sun-shadow producer fits its orthographic box to this, so the shadow's caster
+    /// view and the light on the ground are the same sun. Latitude is stored in degrees; the
+    /// frame helper takes radians (as `over`/`draw` do).
+    pub fn sun_dir(&self) -> Vec3 {
+        sun_direction(
+            self.time_of_day,
+            self.year_month,
+            self.latitude.to_radians(),
+        )
+    }
+
+    /// This frame's GOLDEN-HOUR grade strength — [`grade_warmth`] at the same sun this cycle
+    /// lights the world with (through the ONE [`Self::sun_dir`]). Published as `grade_warmth`
+    /// and bound by the room recipe's `tonemap_grade`, so the frame warms toward the authored
+    /// golden tint exactly as the sun sinks and is neutral at noon and at night.
+    pub fn grade_warmth(&self) -> f32 {
+        grade_warmth(self.sun_dir().y)
+    }
+
     /// Auto-advance the clock by `sim_speed` (sim-minutes per real second); paused at
     /// 0. Moon over ~28 days (4 wk), year over 360 days (12 mo); the orbital epoch
     /// ticks each time the year wraps.
@@ -368,19 +448,50 @@ impl CelestialState {
         }
     }
 
-    /// The frame's [`SceneLighting`] (sun/moon/sky/fog/eclipse/star-rotation).
-    pub fn lighting(&self) -> SceneLighting {
+    /// This frame's sky COMPOSED OVER the stage's authored rig: the cycle overwrites
+    /// the two SKY SLOTS it owns — `lights[0]` the sun, `lights[1]` the moon (eclipse
+    /// included) — plus the atmosphere it computes (ambient, sky palette, fog, star
+    /// rotation), and leaves **every other authored light standing**, at the count the
+    /// stage compiled and with whatever intensity its driver already gave it.
+    ///
+    /// The index writes below and [`LightRig::sky_sun`]/`sky_moon` are the SAME
+    /// addressing scheme, which is what makes the disc drawn in the sky and the light
+    /// falling on the ground one sun: this writes slots 0/1, the sky pass reads slots
+    /// 0/1. A preset that parks a fixed light in either is reported at compile time
+    /// (`compile_preset`), so a light this would eat is loud before it is eaten.
+    ///
+    /// That is what makes the room's own fires possible: the Prism Test Room's
+    /// `hearth` preset reserves slots 0/1 for exactly these two and puts its flickering
+    /// point light in slot 2, so a day/night cycle and a fireplace share ONE rig with no
+    /// second door into the scene uniform. The cycle is a scene that publishes its
+    /// lights, never a driver — it computes eclipse coverage, moon phase, star rotation
+    /// and fog, an order of magnitude beyond a light modulation.
+    ///
+    /// A rig that carries fewer than two lights is GROWN to two rather than written
+    /// past its count: the sun and the moon are slots, not appendices.
+    pub fn over(&self, rig: LightRig) -> LightRig {
         // NB: the frame helpers take latitude in **radians** (they feed
         // `Mat4::from_rotation_x`); `latitude` is stored in degrees, so convert here —
         // exactly as `draw` does. (Passing degrees rotated the whole sky by ~57× and
         // desynced the Milky-Way band from the constellations.)
-        compute_scene(
+        let sky = compute_scene(
             self.time_of_day,
             self.moon_phase,
             self.year_month,
             self.fog,
             self.latitude.to_radians(),
-        )
+        );
+        let mut out = rig;
+        out.count = out.count.max(2);
+        out.lights[0] = sky.lights[0];
+        out.lights[1] = sky.lights[1];
+        out.ambient = sky.ambient;
+        out.sky_zenith = sky.sky_zenith;
+        out.sky_horizon = sky.sky_horizon;
+        out.fog_color = sky.fog_color;
+        out.fog_density = sky.fog_density;
+        out.star_rotation = sky.star_rotation;
+        out
     }
 
     /// Draw the sky overlays from the observer at `eye`: the seven worlds on the
@@ -603,4 +714,132 @@ pub fn fmt_lat(d: f32) -> String {
 /// Orbital epoch, years.
 pub fn fmt_epoch(v: f32) -> String {
     format!("yr {v:.1}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **GATE — the golden-hour curve is the band it claims.** This is the whole shape of the
+    /// feature: the room's grade strength IS this number, so a curve that peaked at noon would
+    /// paint the midday field orange and one that never reached zero would tint the night. Four
+    /// facts, checked against the shipped function (no GPU, no renderer): **0 with the sun
+    /// high** (midday resolves pure ACES, exactly as it did before the grade could be bound),
+    /// **capped peak across the low band**, **0 below the horizon** (and staying 0 all night),
+    /// and **monotone + smooth** on the way down (no step, no overshoot past the cap).
+    #[test]
+    fn the_golden_hour_curve_peaks_low_and_is_zero_at_noon_and_night() {
+        // HIGH SUN → nothing. Midday is untouched, which is the promise that made the bind
+        // safe to ship on the live room.
+        for y in [1.0, 0.8, 0.6, GOLDEN_HIGH] {
+            assert_eq!(grade_warmth(y), 0.0, "sun at y={y} must not grade");
+        }
+
+        // THE BAND → the capped peak, held flat between the two inner edges.
+        for y in [GOLDEN_PEAK_HIGH, 0.1, 0.05, GOLDEN_PEAK_LOW] {
+            assert!(
+                (grade_warmth(y) - GOLDEN_HOUR_STRENGTH).abs() < 1e-6,
+                "sun at y={y} is golden hour: {}",
+                grade_warmth(y)
+            );
+        }
+
+        // BELOW THE HORIZON → back to nothing, and it STAYS nothing all the way down (a
+        // one-sided fade would leave the night graded).
+        for y in [GOLDEN_SET, -0.2, -0.6, -1.0] {
+            assert_eq!(grade_warmth(y), 0.0, "sun at y={y} has set — no grade");
+        }
+
+        // The horizon itself is inside the ramp-out, not at either extreme: the sun sitting
+        // exactly ON the horizon is still strongly golden.
+        let at_horizon = grade_warmth(0.0);
+        assert!(
+            at_horizon > GOLDEN_HOUR_STRENGTH * 0.5 && at_horizon < GOLDEN_HOUR_STRENGTH,
+            "the sun on the horizon is fading but still golden: {at_horizon}"
+        );
+
+        // SMOOTH + BOUNDED everywhere: sampling the whole sky, no step bigger than a small
+        // fraction of the cap, and never outside `0 ..= cap`.
+        let sample = |i: i32| grade_warmth(i as f32 / 500.0);
+        let mut prev = sample(-500);
+        for i in -499..=500 {
+            let v = sample(i);
+            assert!(
+                (0.0..=GOLDEN_HOUR_STRENGTH + 1e-6).contains(&v),
+                "warmth left 0..cap at y={}: {v}",
+                i as f32 / 500.0
+            );
+            assert!(
+                (v - prev).abs() < GOLDEN_HOUR_STRENGTH * 0.05,
+                "warmth stepped at y={}: {prev} → {v}",
+                i as f32 / 500.0
+            );
+            prev = v;
+        }
+
+        // MONOTONE RISING as the sun sinks through the ramp-in (high → band), so the grade
+        // fades on rather than pulsing.
+        let mut last = 0.0;
+        for i in 0..=40 {
+            let y = GOLDEN_HIGH + (GOLDEN_PEAK_HIGH - GOLDEN_HIGH) * (i as f32 / 40.0);
+            let v = grade_warmth(y);
+            assert!(v >= last - 1e-6, "warmth dipped while the sun sank: {v}");
+            last = v;
+        }
+
+        // The cycle's own accessor reads the SAME sun it lights the world with: high noon at
+        // the equator is ungraded, and the state's answer is the curve at `sun_dir().y`.
+        let noon = CelestialState {
+            time_of_day: 12.0,
+            latitude: 0.0,
+            year_month: 3.0,
+            ..CelestialState::default()
+        };
+        assert!(noon.sun_dir().y > GOLDEN_HIGH, "noon is a high sun");
+        assert_eq!(noon.grade_warmth(), 0.0, "noon is ungraded");
+        assert_eq!(noon.grade_warmth(), grade_warmth(noon.sun_dir().y));
+
+        // ...and somewhere between noon and midnight the sun crosses the band, so the grade
+        // actually happens on the shipped clock rather than being unreachable.
+        let peaked = (0..=240).any(|i| {
+            let c = CelestialState {
+                time_of_day: i as f32 / 10.0,
+                latitude: 0.0,
+                year_month: 3.0,
+                ..CelestialState::default()
+            };
+            (c.grade_warmth() - GOLDEN_HOUR_STRENGTH).abs() < 1e-6
+        });
+        assert!(peaked, "the day never passes through golden hour");
+    }
+
+    /// **GATE (TWO-END) — the eclipse disc radii are ONE pair of numbers, not two.**
+    /// `SUN_DISC_R` / `MOON_DISC_R` above drive the coverage curve that kills the key light and
+    /// sinks ambient + sky into the Advent's blood shadow; `sky.wgsl` re-spells the SAME two
+    /// radii as bare literals to draw the discs and the corona ring. WGSL cannot read a Rust
+    /// `const`, so the numbers are physically duplicated — and a duplication with a gate on only
+    /// ONE end is exactly how the ground goes dark while the sky shows no eclipse (rules
+    /// 13DDA9FD / AEEF2A68). This reads the SHIPPED shader text — the real channel — and asserts
+    /// it still carries these constants' values, so retuning either end fails here.
+    #[test]
+    fn the_disc_radii_match_the_shipped_sky_shader() {
+        let sky = include_str!("../../../render/flicker-render/src/shaders/sky.wgsl");
+        // The declarations, spelled the way sky.wgsl spells them, with the numbers FORMATTED
+        // from the Rust constants — so editing the constant changes what is searched for, and
+        // only a matching shader edit satisfies it.
+        for (name, value) in [("sun_r", SUN_DISC_R), ("moon_r", MOON_DISC_R)] {
+            let decl = format!("let {name} = {value};");
+            assert!(
+                sky.contains(&decl),
+                "sky.wgsl must declare `{decl}` — it is the shader half of the eclipse geometry \
+                 this module computes coverage from. Found instead:\n{}",
+                sky.lines()
+                    .filter(|l| l.contains(&format!("let {name}")))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            );
+        }
+        // (The ORDERING half of the contract — moon larger than sun — is a `const _` assert
+        // beside the two constants, so a swap fails to COMPILE rather than waiting for a test.)
+    }
 }

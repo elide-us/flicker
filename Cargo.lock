@@ -946,7 +946,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-app"
-version = "0.1.1"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "flicker-2d",
@@ -963,7 +963,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-assetpipeline"
-version = "0.1.1"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "flicker",
@@ -994,7 +994,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-clicktrainer"
-version = "0.1.1"
+version = "0.1.6"
 dependencies = [
  "fastrand",
  "flicker",
@@ -1007,7 +1007,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-componentcatalog"
-version = "0.1.1"
+version = "0.1.6"
 dependencies = [
  "flicker",
  "flicker-input-core",
@@ -1019,7 +1019,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-content"
-version = "0.1.1"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "flicker-core",
@@ -1034,7 +1034,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-controllertester"
-version = "0.1.1"
+version = "0.1.6"
 dependencies = [
  "flicker",
  "flicker-core",
@@ -1072,29 +1072,11 @@ dependencies = [
 
 [[package]]
 name = "flicker-globe"
-version = "0.1.1"
+version = "0.1.6"
 dependencies = [
  "flicker",
  "flicker-input-core",
  "flicker-input-router",
- "glam",
- "serde_json",
- "tracing",
-]
-
-[[package]]
-name = "flicker-godmode"
-version = "0.1.1"
-dependencies = [
- "flicker",
- "flicker-globe",
- "flicker-input-core",
- "flicker-input-router",
- "flicker-materials",
- "flicker-poc-chemistry",
- "flicker-shell",
- "flicker-worldgrid",
- "flicker-worldtile",
  "glam",
  "serde_json",
  "tracing",
@@ -1102,7 +1084,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-greed"
-version = "0.1.0"
+version = "0.1.6"
 dependencies = [
  "fastrand",
  "thiserror 2.0.20",
@@ -1110,7 +1092,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-input-core"
-version = "0.1.1"
+version = "0.1.5"
 dependencies = [
  "glam",
  "serde",
@@ -1119,7 +1101,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-input-device"
-version = "0.1.1"
+version = "0.1.5"
 dependencies = [
  "flicker-input-core",
  "gilrs",
@@ -1133,14 +1115,14 @@ dependencies = [
 
 [[package]]
 name = "flicker-input-router"
-version = "0.1.1"
+version = "0.1.5"
 dependencies = [
  "flicker-input-core",
 ]
 
 [[package]]
 name = "flicker-loomforge"
-version = "0.1.1"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "flicker",
@@ -1156,7 +1138,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-materials"
-version = "0.1.1"
+version = "0.1.5"
 dependencies = [
  "serde",
  "serde_json",
@@ -1165,7 +1147,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-mechanics"
-version = "0.1.0"
+version = "0.1.6"
 dependencies = [
  "flicker-skeletal",
  "glam",
@@ -1173,7 +1155,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-net"
-version = "0.1.1"
+version = "0.1.5"
 dependencies = [
  "flicker-core",
  "reqwest",
@@ -1208,7 +1190,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-pocclusters"
-version = "0.1.1"
+version = "0.1.6"
 dependencies = [
  "flicker",
  "flicker-content",
@@ -1217,7 +1199,9 @@ dependencies = [
  "flicker-input-router",
  "flicker-materials",
  "flicker-orrery",
+ "flicker-primitive",
  "flicker-shell",
+ "flicker-skeletal",
  "flicker-voxel",
  "flicker-worker",
  "glam",
@@ -1226,24 +1210,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "flicker-pocepochs"
-version = "0.1.1"
-dependencies = [
- "flicker",
- "flicker-core",
- "flicker-globe",
- "flicker-input-core",
- "flicker-input-router",
- "flicker-shell",
- "flicker-worldengine",
- "serde_json",
- "tracing",
-]
-
-[[package]]
 name = "flicker-populous"
-version = "0.1.1"
+version = "0.1.6"
 dependencies = [
+ "fastrand",
  "flicker",
  "flicker-globe",
  "flicker-input-core",
@@ -1256,14 +1226,14 @@ dependencies = [
 
 [[package]]
 name = "flicker-primitive"
-version = "0.1.0"
+version = "0.1.6"
 dependencies = [
  "clayengine",
 ]
 
 [[package]]
 name = "flicker-quartermaster"
-version = "0.1.1"
+version = "0.1.6"
 dependencies = [
  "flicker",
  "flicker-content",
@@ -1276,7 +1246,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-render"
-version = "0.1.1"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -1293,7 +1263,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-sablework"
-version = "0.1.1"
+version = "0.1.6"
 dependencies = [
  "flicker",
  "flicker-content",
@@ -1310,7 +1280,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-scene"
-version = "0.1.1"
+version = "0.1.6"
 dependencies = [
  "flicker-app",
  "flicker-input-core",
@@ -1321,7 +1291,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-script"
-version = "0.1.1"
+version = "0.1.5"
 dependencies = [
  "flicker-input-core",
  "glam",
@@ -1334,7 +1304,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-shell"
-version = "0.1.1"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "flicker",
@@ -1349,7 +1319,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-skeletal"
-version = "0.1.1"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "flicker-core",
@@ -1360,7 +1330,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-solarbirth"
-version = "0.1.1"
+version = "0.1.6"
 dependencies = [
  "flicker",
  "flicker-core",
@@ -1376,7 +1346,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-system"
-version = "0.1.0"
+version = "0.1.6"
 dependencies = [
  "flicker-materials",
  "glam",
@@ -1384,7 +1354,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-texture"
-version = "0.1.1"
+version = "0.1.6"
 dependencies = [
  "flicker-materials",
  "flicker-primitive",
@@ -1395,7 +1365,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-voxel"
-version = "0.1.1"
+version = "0.1.6"
 dependencies = [
  "bytemuck",
  "clayengine",
@@ -1407,7 +1377,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-widgets"
-version = "0.1.1"
+version = "0.1.6"
 dependencies = [
  "flicker-core",
  "flicker-input-core",
@@ -3074,7 +3044,7 @@ checksum = "e8cf8e6a8aa66ce33f63993ffc4ea4271eb5b0530a9002db8455ea6050c77bfa"
 
 [[package]]
 name = "prism-alpha"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "flicker-assetpipeline",
@@ -3082,10 +3052,8 @@ dependencies = [
  "flicker-componentcatalog",
  "flicker-content",
  "flicker-controllertester",
- "flicker-godmode",
  "flicker-loomforge",
  "flicker-pocclusters",
- "flicker-pocepochs",
  "flicker-populous",
  "flicker-quartermaster",
  "flicker-sablework",

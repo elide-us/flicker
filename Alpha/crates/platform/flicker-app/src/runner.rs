@@ -295,6 +295,10 @@ impl<A: App> ApplicationHandler for Runner<A> {
                     return;
                 }
 
+                // Advance the per-surface clock once per frame — before `begin_frame`, which
+                // `render_to_texture` re-enters per offscreen pass. Poster / `hz` surfaces
+                // measure their liveness against it.
+                renderer.tick(dt);
                 renderer.begin_frame();
                 self.app.render(renderer);
                 if let Err(e) = renderer.end_frame() {

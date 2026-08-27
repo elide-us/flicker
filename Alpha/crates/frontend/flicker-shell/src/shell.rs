@@ -10,7 +10,7 @@ use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
 
 use flicker::app::run_with_input;
-use flicker::render::{Renderer, TextureHandle};
+use flicker::render::{FrameGraph, Renderer, TextureHandle};
 use flicker::scene::{GotoMode, Scene, SceneInput, SceneManager, Transition};
 use flicker::script::{parse_ui_json, HudCommand, ScriptHost, UiAnchor, UiNode, Value, ValueMap};
 use flicker::ui::{
@@ -901,9 +901,9 @@ impl Scene for MainMenuScene {
         self.route(&results, renderer)
     }
 
-    fn render(&mut self, renderer: &mut Renderer) {
+    fn render<'f>(&'f mut self, _renderer: &mut Renderer, fg: &mut FrameGraph<'f>) {
         if let Some(view) = self.view.as_ref() {
-            view.render(renderer);
+            fg.overlay(move |r| view.render(r));
         }
     }
 }
@@ -1342,9 +1342,11 @@ impl Scene for LogoScene {
         Transition::Fire(SPLASH_NEXT.to_string())
     }
 
-    fn render(&mut self, renderer: &mut Renderer) {
+    fn render<'f>(&'f mut self, _renderer: &mut Renderer, fg: &mut FrameGraph<'f>) {
         if let Some(&white) = self.textures.first() {
-            render_hud(renderer, &self.hud_commands, white, &self.textures);
+            let hud_commands = &self.hud_commands;
+            let textures = &self.textures;
+            fg.overlay(move |r| render_hud(r, hud_commands, white, textures));
         }
     }
 
@@ -1586,9 +1588,10 @@ impl Scene for LoadingScene {
         Transition::Fire(SPLASH_NEXT.to_string())
     }
 
-    fn render(&mut self, renderer: &mut Renderer) {
+    fn render<'f>(&'f mut self, _renderer: &mut Renderer, fg: &mut FrameGraph<'f>) {
         if let Some(white) = self.white {
-            render_hud(renderer, &self.hud_commands, white, &[white]);
+            let hud_commands = &self.hud_commands;
+            fg.overlay(move |r| render_hud(r, hud_commands, white, &[white]));
         }
     }
 
@@ -1719,8 +1722,9 @@ impl Scene for ConfirmDisplayScene {
         Transition::None
     }
 
-    fn render(&mut self, renderer: &mut Renderer) {
-        self.view.render(renderer);
+    fn render<'f>(&'f mut self, _renderer: &mut Renderer, fg: &mut FrameGraph<'f>) {
+        let view = &self.view;
+        fg.overlay(move |r| view.render(r));
     }
 }
 
@@ -3988,10 +3992,12 @@ impl Scene for UnifiedSettingsScene {
         Transition::None
     }
 
-    fn render(&mut self, renderer: &mut Renderer) {
+    fn render<'f>(&'f mut self, _renderer: &mut Renderer, fg: &mut FrameGraph<'f>) {
         // Blit the commands stashed by `update`'s walker pass (`textures[0]` = white).
         if let Some(&white) = self.textures.first() {
-            render_hud(renderer, &self.commands, white, &self.textures);
+            let commands = &self.commands;
+            let textures = &self.textures;
+            fg.overlay(move |r| render_hud(r, commands, white, textures));
         }
     }
 }
@@ -4087,8 +4093,9 @@ impl Scene for PauseScene {
         Transition::None
     }
 
-    fn render(&mut self, renderer: &mut Renderer) {
-        self.view.render(renderer);
+    fn render<'f>(&'f mut self, _renderer: &mut Renderer, fg: &mut FrameGraph<'f>) {
+        let view = &self.view;
+        fg.overlay(move |r| view.render(r));
     }
 }
 

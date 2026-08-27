@@ -199,6 +199,13 @@ pub fn bone_diamonds(
         if len <= 1e-6 {
             continue;
         }
+        // A bone hanging directly off a ground ROOT (the root → pelvis link) draws as a single
+        // line, not a diamond glyph — it is the ground offset, not a deforming bone (Aaron
+        // 2026-08-22, Clayworks rig view).
+        if parents[parent as usize] < 0 {
+            segs.push((world.transform_point3(head), world.transform_point3(tail)));
+            continue;
+        }
         let dir = axis / len;
         let (u, v) = perp_basis(dir);
         let w = waist_frac * len;
@@ -342,7 +349,7 @@ mod tests {
     }
 
     #[test]
-    fn bone_diamonds_make_twelve_edges_per_bone_and_skip_the_root() {
+    fn bone_diamonds_draw_root_child_as_a_line_and_others_as_diamonds() {
         let parents = [-1i32, 0, 1];
         let globals = [
             Mat4::IDENTITY,
@@ -350,7 +357,17 @@ mod tests {
             Mat4::from_translation(Vec3::new(15.0, 0.0, 0.0)),
         ];
         let d = bone_diamonds(Mat4::IDENTITY, &parents, &globals, 0.1);
-        assert_eq!(d.len(), 2 * 12, "two non-root bones, twelve edges each");
+        // Bone 1 hangs off the ground root → a single line; bone 2 is a 12-edge diamond.
+        assert_eq!(
+            d.len(),
+            1 + 12,
+            "root→child is a line, the other bone a diamond"
+        );
+        assert_eq!(
+            d[0],
+            (Vec3::ZERO, Vec3::new(10.0, 0.0, 0.0)),
+            "the root→child link is a plain head→tail segment"
+        );
     }
 
     #[test]

@@ -1,7 +1,95 @@
 {
   "_comment": "POCCLUSTERS 'Prism Test Room' — scene definition on the canonical system (migration P6 of the materials-unification plan, 2026-08-19; design mock DesignSync a39150df). Three HUD panels over the full-screen 3D cluster field (the clicktrainer layering): LEFT main (header + mode pill, readout box, 6 debug-overlay toggles, move-speed slider), RIGHT inspector (visible only with a pick: 7-column table over the selected voxel's 8 corners), BOTTOM-RIGHT celestial cycle (sun/moon + world sliders, view toggles). The tree is the former shared/hud_pocclusters.lua M.tree() authored as data with the quarantined scene_styles.json layout/label constants inlined; the style-only blocks live under `styles` below (chat = the floating comms window the scene runs as a second walker pass — see lib.rs). Readouts are text_bind values derived by the pair script; toggles + sliders are two-way binds. Nav: pc_main (1) and pc_cc (2) are panel stops per the flatten contract; the inspector is a pick-gated readout, not a stop. Esc fires the declared on_menu = pause_open.",
   "behaviour": "pocclusters",
-  "params": {},
+  "stages": {
+    "pocclusters_world": {
+      "_comment": "The ROOT surface of the Prism Test Room — the whole window, and the ONE place the world's rendering recipe is spelled. `sky` is the procedural gradient, sun/moon discs, star field and eclipse corona behind everything — a PASS here, never a `draw_sky()` line in Rust; its sun and moon ARE the rig's SLOTS 0 and 1, read back out of the ONE scene uniform every pass on this surface shares, which the encoder samples once, after every pass has been applied — so the disc in the sky and the light on the ground are the same sun. `scene` is the field itself (`draw_world`: camera, clusters, the debug overlays); the Celestial Cycle still owns the SKY and the framing, so this stage authors no `camera` and lets the content set it — but it DOES author a `lighting` preset now (`hearth`), and the cycle COMPOSES over that rig instead of replacing it: see `_lighting`. `ground_fog` is the raymarched slab lying in the valleys, drawn over the field and occluded by it — it `reads` the depth the scene wrote, and that read IS the ordering (no pass numbers anywhere). TUNE THE FOG HERE, never in Rust: `bottom`/`top` are offsets from the floor the simulation publishes as `fog_floor` (the lowest walkable floor over the field, recomputed only when nav surfaces arrive), `bounds` is the 3×3 field of 256-voxel clusters in world units, `edge_fade` pulls the slab in from that rim, and `fall_depth`/`flow` are the curtain that spills over it (0 = flat fog). No `color`: the fog takes the renderer's LIVE horizon colour, so it melts into whatever the cycle's sky is doing. No `density` either — the Celestial Cycle's Fog control owns it (`fog_density` = the control over its 0.22 default), and a bind REPLACES the authored field, so a number here would be dead data.",
+      "_hdr": "HDR: the sky/scene/water/ground_fog/bloom passes render into the LINEAR rgba16f `hdr` working attachment and `tonemap_grade` resolves it (ACES roll-off) into the sRGB `color` last, so the field rolls off instead of clipping. The grade is no longer static: its TINT is authored art (a golden placeholder) and its STRENGTH is BOUND to `grade_warmth`, the golden-hour curve the Celestial Cycle publishes — 0 at midday (pure ACES, unchanged), peaking as the sun sits on the horizon, 0 again at night. See the tonemap pass's own comment.",
+      "_lighting": "LIGHTING: `hearth` (the shared library preset, ui_stages.json `stages.lighting.hearth`) is the ROOM's own rig — slots 0 and 1 reserved by index for the sun and the moon (the SKY SLOTS: what the sky pass reads and what the cycle overwrites, one and the same, so the preset compiler REPORTS a non-`dir` light parked in either), slot 2 the flickering hearth point light standing on the nav floor beside the spawn. The frame graph applies it DRIVEN before `draw_world` runs: the hearth's `flicker` driver is evaluated once per frame against the clock this scene publishes (`stage_inputs().clock(fog_time)`), so the fire is deterministic and seedable rather than tied to a wall clock. `draw_world` then COMPOSES — `set_scene(celestial.over(scene_lighting()))` — and the Celestial Cycle overwrites only the two directional slots plus ambient / sky palette / fog, leaving the hearth and its already-driven intensity standing. That is the whole contract: the cycle owns the sky, the room owns its fires, and a light-count change is a change to the preset, not to Rust. TUNE THE FIRE IN ui_stages.json, never here and never in Rust.",
+      "lighting": "hearth",
+      "attachments": {
+        "hdr": { "format": "rgba16f" },
+        "color": { "format": "surface" },
+        "depth": { "format": "depth32" }
+      },
+      "_shadow": "SUN SHADOW: the `shadow_map` line below is the CONSUMER — it names the producer stage `pocclusters_sun_shadow` (a separate offscreen surface, throttled to hz:20, that renders the cluster casters from the SUN's view into a depth map) and binds that depth so the `scene` pass's lit terrain samples it. THIS line is the single authority for the two sampling knobs the runtime reads: `light: 0` is the sun (the rig's slot-0 Dir light the Celestial Cycle drives) — both the light term the shadow darkens AND the direction the producer renders its depth from; `bias` fights self-shadow acne (raise it if the terrain stipples, lower it if shadows detach). Both are art knobs, tuned HERE, never in Rust and never duplicated on the producer stage (which authors only the caster-box `extent` + its `rate`). The producer is a ROOT-consumed offscreen Target, so the frame graph renders it before this root with no authored edge. Everything non-shadow is byte-identical: a surface naming no shadow binds a disabled default.",
+      "passes": [
+        { "pass": "sky", "writes": ["hdr"] },
+        { "pass": "shadow_map", "light": 0, "from": "pocclusters_sun_shadow", "bias": 0.0015 },
+        { "pass": "scene", "writes": ["hdr", "depth"] },
+        {
+          "_comment": "WATER — a REAL animated PROJECTED-GRID ocean at sea_level 120 that floods the newly-baked island dome (SEABED 96, PEAK 156 at the field centre (384,384)): terrain above y=120 stays DRY (the ~214-radius island), the rest fills out to the HORIZON. It is no longer a fixed field box — the vertex shader reads its grid as SCREEN space and projects it through the camera onto the sea plane, so the water always tiles exactly the visible sea to the horizon, dense near the camera and coarse far away (a built-in LOD at a fixed vertex count). REAL GEOMETRY — depth-tested + depth-writing (it occludes and is occluded by the terrain), premultiplied over the lit scene, WRITING linear radiance into `hdr` so `tonemap_grade` rolls it off — derived AFTER `scene` (it needs that depth) and BEFORE `ground_fog` (so the far water melts into the horizon fog) and the tonemap. EVERY NUMBER BELOW IS AN ART PLACEHOLDER, tuned in-window, never in Rust: `sea_level` is the flood height (Aaron's vision call — 120 floods the dome into an island); `shallow`/`deep` are the linear-RGB body colours (teal at grazing view angles, dark blue looking straight down) the view angle lerps between; `shore_fade` sharpens that shallow→deep transition; `spec_shininess`/`spec_strength` size the REAL glint — ONE tight half-vector specular lobe run over BOTH sky slots, light 0 (the Celestial sun) and light 1 (the Celestial moon), and summed: by day the sun owns it and it stretches into a horizon streak near sunrise/sunset (the 'glow' the old fake reflection dot was standing in for), and at NIGHT, when the sun's radiance has gone black, the moon's dimmer radiance leaves a subtle moon streak on the water. One knob set, no separate moon dials — the moon's glint is quieter because the moon IS quieter; `normal_scale` exaggerates the wave slope used for SHADING (glint choppiness) without changing the geometry; `wave_falloff` is the far-field flattening rate `1/(1+dist·k)` — bigger = the ocean goes flat-mirror closer in (hides projected-grid coarseness + kills far shimmer), 0 = waves ripple all the way to the horizon; `time_bind` reuses the ONE scene clock `fog_time` (never a second clock) so the ripples and the fog drift on the same beat. ENVIRONMENT-LIT: the sea is no longer a flat colour ramp — it MIRRORS the live sky (the same zenith/horizon palette the `sky` pass paints, sampled along the reflected view ray and blended in by Fresnel, so the reflection strengthens toward the horizon) and its `shallow`/`deep` body is LIT by the rig's ambient + BOTH sky slots' diffuse (sun AND moon), so the night sea is faintly moonlit rather than pure black. Nothing here is authored per time of day: the Celestial Cycle rewrites the rig every frame, so the sea is aquamarine at noon, golden at sunset and moonlit at night for free. `env_strength` 0..1 is the ONE dial on that — 1.0 is the full Fresnel reflection (real water), 0.0 is the body colour alone (the pre-environment look). AUTHORED AT 0.4 (in-window, 2026-08-24): at 1.0 the mirror multiplied every wave facet's slope into a per-pixel sky sample, and over the fine near-shore chop that read as a nauseating scramble rather than as water. 0.4 keeps the sea reading as a reflective surface (the horizon still picks up the sunset) while the body colour carries most of the shading, so the facets stop flickering. Raise it toward 1.0 only alongside LONGER, lower-slope waves.",
+          "_waves": "WAVE SOURCES — ONE roster of two KINDS, summed together. A RADIAL entry names a `center` [x,z] its circular ripples radiate from (three of them ring the island perimeter, ~radius 300 from the field centre (384,384)); a DIRECTIONAL entry instead names a `dir` [dx,dz] the crests march along (normalized for you), which makes it a plane wave with no centre — it is defined EVERYWHERE, so it is the open-ocean swell that keeps the horizon band moving. Every entry also takes: `amplitude` the peak height (world units); `wavelength` the crest-to-crest distance; `speed` the crest travel speed (units/sec); `phase` a radian offset so sources are not in lockstep. Author-friendly wavelength/speed convert to the physics k=2π/λ, ω=speed·k. An entry names EITHER `center` or `dir`, never both and never neither. Add/remove/retune freely (max 6).",
+          "pass": "water_surface",
+          "reads": ["depth"],
+          "writes": ["hdr"],
+          "sea_level": 120.0,
+          "shallow": [0.10, 0.32, 0.36, 1.0],
+          "deep": [0.01, 0.05, 0.13, 1.0],
+          "shore_fade": 6.0,
+          "spec_shininess": 220.0,
+          "spec_strength": 3.0,
+          "normal_scale": 1.0,
+          "wave_falloff": 0.0015,
+          "env_strength": 0.4,
+          "_waves": "3 radial generators around the field rim + 2 directional open-ocean swells. amplitude=crest height (units); wavelength=crest spacing (units); speed=phase velocity (units/sec, period=wavelength/speed); phase staggers them. Smaller+faster = finer chop; bigger+slower = swell/'snail piles'. Aaron's art — tune freely. CALMED (in-window, 2026-08-24): the three RADIAL chop sources were softened ~30% — amplitudes 0.6/0.5/0.45 → 0.4/0.34/0.3 and wavelengths 26/32/19 → 30/36/24, speeds untouched. Amplitude/wavelength is what the SLOPE is, and slope is what the env mirror multiplies into facet flicker; lower amplitude on a LONGER wavelength drops the slope twice over, so the sea still moves at the same beat without scrambling. The two directional swells are deliberately UNCHANGED — long-λ, low-slope horizon motion, not the noise.",
+          "_ambient": "The two `dir` entries are the OPEN-OCEAN AMBIENT SWELL — the fix for the far sea reading as a dead glass mirror. The radial sources are centred on the island and `wave_falloff` flattens them toward the horizon, so past the shore nothing moved; a directional plane wave has no centre and feels only a FRACTION of that same falloff, so the horizon band swells too. Author them LONG (λ ~130-200) and only moderately fast: a short far-field wavelength lands under a pixel out there and shimmers/aliases instead of swelling. Their two directions cross ~40° apart so the crests interfere into open water rather than reading as one corduroy pattern, and the staggered phases keep them off each other's beat. Amplitude is deliberately below the near-shore chop — this is a swell you notice as motion, not as waves.",
+          "wave_sources": [
+            { "center": [684, 384], "amplitude": 0.4, "wavelength": 30, "speed": 14.0, "phase": 0.0 },
+            { "center": [234, 644], "amplitude": 0.34, "wavelength": 36, "speed": 12.0, "phase": 2.1 },
+            { "center": [234, 124], "amplitude": 0.3, "wavelength": 24, "speed": 16.0, "phase": 4.2 },
+            { "dir": [1.0, 0.35], "amplitude": 0.5, "wavelength": 190, "speed": 11.0, "phase": 0.9 },
+            { "dir": [0.6, 1.0], "amplitude": 0.38, "wavelength": 130, "speed": 13.0, "phase": 3.4 }
+          ],
+          "time_bind": "fog_time"
+        },
+        {
+          "pass": "ground_fog",
+          "reads": ["depth"],
+          "writes": ["hdr"],
+          "bottom": -2,
+          "top": 12,
+          "noise_scale": 0.02,
+          "coverage": 0.55,
+          "wind": [0.4, 0.1],
+          "height_power": 1.5,
+          "edge_fade": 48,
+          "bounds": [0, 0, 768, 768],
+          "fall_depth": 0,
+          "flow": 0,
+          "floor_bind": "fog_floor",
+          "density_bind": "fog_density",
+          "time_bind": "fog_time"
+        },
+        {
+          "_comment": "BLOOM — an HDR post-effect that makes the genuinely bright highlights GLOW: the REAL sun glint on the water (the >1 specular off light slot 0, strongest as a horizon streak near sunrise/sunset) and the sun DISC in the sky. It reads the linear `hdr` the sky/scene/water/fog wrote, extracts everything above the threshold into a half-res buffer, blurs it, and ADDS the glow back into `hdr` — so it derives AFTER every hdr writer (it reads `hdr`) and BEFORE `tonemap_grade` (which reads the bloomed `hdr` and rolls it off). No pass numbers anywhere — the reads/writes ARE the order. EVERY NUMBER BELOW IS AN ART PLACEHOLDER, tuned in-window, never in Rust: `threshold` ~1.0 is the post-exposure brightness a pixel must exceed to bloom, so only the sun glint / sun disc glow while the lit terrain (< 1.0) does not; `knee` is the soft shoulder below the threshold so the glow fades in instead of popping on at a hard edge; `intensity` is how strongly the blurred glow is added back; `radius` scales the blur spread (how wide the halo spreads).",
+          "pass": "bloom",
+          "reads": ["hdr"],
+          "writes": ["hdr"],
+          "threshold": 1.0,
+          "knee": 0.5,
+          "intensity": 0.6,
+          "radius": 1.0
+        },
+        {
+          "_comment": "TONEMAP + GOLDEN-HOUR GRADE — the ACES resolve of the linear `hdr` working colour into the sRGB `color`, LAST (its read of `hdr` is what puts it there). `grade` is the tint the resolve lerps toward: an ART PLACEHOLDER golden — warm red, slightly pulled green, dropped blue — tuned in-window, never in Rust. There is deliberately NO `grade_strength` here: `grade_strength_bind` names the per-frame key the Celestial Cycle publishes (`grade_warmth`), and a bind REPLACES the authored field, so a number beside it would be dead data (the compiler says so). That key is 0 with the sun high (midday resolves pure ACES, exactly as before), ramps up as the sun sinks, peaks while it sits on the horizon, and is back to 0 once it has set — so the whole frame goes golden at sunrise/sunset and is neutral at noon and at night, with no second clock and no scene reaching into the recipe. Retune the LOOK here (the tint), the TIMING in celestial.rs's golden-hour band. THE TINT IS AARON'S ART — tune it freely in-window; no test pins these three numbers (the gate asserts only that the tint is NON-DEFAULT, i.e. that the parser actually read this line, so retuning the look never breaks a build). The lerp happens in LINEAR space BEFORE the ACES curve, so pushing R up and crushing B does three things at once: it pushes saturated colour, it warms the whites, and it deepens contrast through the ACES shoulder. [1.35, 0.92, 0.52] is a REAL amber push (the earlier [1.18, 0.92, 0.68] only implied one).",
+          "pass": "tonemap_grade",
+          "grade": [1.35, 0.92, 0.52, 1.0],
+          "grade_strength_bind": "grade_warmth"
+        }
+      ]
+    },
+    "pocclusters_sun_shadow": {
+      "_comment": "The SUN-SHADOW PRODUCER — a small offscreen surface that renders the cluster casters from the sun's orthographic view into its `depth` attachment, which `pocclusters_world`'s `shadow_map` consumer then samples. Depth-only in spirit (its colour attachment is rendered but discarded; a depth-only pipeline is a later optimization). The scene (`flicker-pocclusters/src/lib.rs`) creates the render target at `enter`, computes the ONE light-view-projection matrix from the sun direction + the field bounds via `LightRig::shadow_view_proj`, and draws the cluster caster meshes here. Nothing new to author per light: a light-count change is a change to the rig, and the sun is slot 0.",
+      "_knobs": "ART KNOBS (tune in DATA, never in Rust): `rate.hz` throttles how often the shadow re-renders — 20 Hz keeps the sun's slow drift smooth without a depth pass every frame; drop it lower for perf, raise it if the shadow edge lags a fast time-scrub. `extent` is the HALF-size (world units) of the square orthographic caster box fitted around the field centre — 640 covers the 768-unit 3×3 field's diagonal from any oblique sun with margin; shrink it for a sharper (higher-resolution-per-metre) shadow over a smaller area, grow it if the field ever extends past the box (corners stop casting). The sampling `bias` and the `light` the shadow is cast for are NOT authored here — they live on the CONSUMER (`pocclusters_world`'s `shadow_map` line), the ONE authority the runtime reads for both; this producer stage authors only the caster box (`extent`) and its throttle (`rate`) that it fits the depth render to.",
+      "lighting": "hearth",
+      "rate": { "hz": 20 },
+      "passes": [
+        { "pass": "shadow_map", "extent": 640 },
+        { "pass": "scene" }
+      ]
+    }
+  },
   "exits": {},
   "styles": {
     "pocclusters": {

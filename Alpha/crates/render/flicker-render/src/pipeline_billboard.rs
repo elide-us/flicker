@@ -63,11 +63,14 @@ struct Run {
 
 pub struct BillboardPipeline {
     /// Alpha-blended, depth-writing — the default (occludes/ordered against 3D mesh).
-    pipeline: wgpu::RenderPipeline,
+    /// Baked for both colour formats (swapchain + [`crate::HDR_FORMAT`]); [`Self::render`]
+    /// selects by [`crate::TargetColor`].
+    pipeline: [wgpu::RenderPipeline; 2],
     /// Additive, **non**-depth-writing — for soft glows (star, dust, flashes). Additive
     /// billboards don't clip each other (they don't write depth), so overlapping soft
-    /// quads stack into a glow instead of producing hard cutout artifacts.
-    pipeline_additive: wgpu::RenderPipeline,
+    /// quads stack into a glow instead of producing hard cutout artifacts. Also baked for
+    /// both colour formats.
+    pipeline_additive: [wgpu::RenderPipeline; 2],
     camera_buf: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     pub texture_bind_group_layout: wgpu::BindGroupLayout,
@@ -152,54 +155,65 @@ impl BillboardPipeline {
             attributes: &BILLBOARD_VERTEX_ATTRS,
         };
 
-        // Both variants share everything but their blend + depth-write state.
-        let make_pipeline = |label: &str, blend: wgpu::BlendState, depth_write: bool| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(label),
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: "vs_main",
-                    buffers: std::slice::from_ref(&vertex_layout),
-                    compilation_options: Default::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: "fs_main",
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: surface_format,
-                        blend: Some(blend),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: Default::default(),
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    strip_index_format: None,
-                    front_face: wgpu::FrontFace::Ccw,
-                    cull_mode: None,
-                    unclipped_depth: false,
-                    polygon_mode: wgpu::PolygonMode::Fill,
-                    conservative: false,
-                },
-                depth_stencil: Some(wgpu::DepthStencilState {
-                    format: DEPTH_FORMAT,
-                    depth_write_enabled: depth_write,
-                    depth_compare: wgpu::CompareFunction::LessEqual,
-                    stencil: wgpu::StencilState::default(),
-                    bias: wgpu::DepthBiasState::default(),
-                }),
-                multisample: wgpu::MultisampleState::default(),
-                multiview: None,
-                cache: None,
-            })
-        };
+        // Both variants share everything but their blend + depth-write state; and each is
+        // baked for both colour formats (only the colour-target format differs).
+        let make_pipeline =
+            |label: &str, blend: wgpu::BlendState, depth_write: bool, fmt: wgpu::TextureFormat| {
+                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some(label),
+                    layout: Some(&pipeline_layout),
+                    vertex: wgpu::VertexState {
+                        module: &shader,
+                        entry_point: "vs_main",
+                        buffers: std::slice::from_ref(&vertex_layout),
+                        compilation_options: Default::default(),
+                    },
+                    fragment: Some(wgpu::FragmentState {
+                        module: &shader,
+                        entry_point: "fs_main",
+                        targets: &[Some(wgpu::ColorTargetState {
+                            format: fmt,
+                            blend: Some(blend),
+                            write_mask: wgpu::ColorWrites::ALL,
+                        })],
+                        compilation_options: Default::default(),
+                    }),
+                    primitive: wgpu::PrimitiveState {
+                        topology: wgpu::PrimitiveTopology::TriangleList,
+                        strip_index_format: None,
+                        front_face: wgpu::FrontFace::Ccw,
+                        cull_mode: None,
+                        unclipped_depth: false,
+                        polygon_mode: wgpu::PolygonMode::Fill,
+                        conservative: false,
+                    },
+                    depth_stencil: Some(wgpu::DepthStencilState {
+                        format: DEPTH_FORMAT,
+                        depth_write_enabled: depth_write,
+                        depth_compare: wgpu::CompareFunction::LessEqual,
+                        stencil: wgpu::StencilState::default(),
+                        bias: wgpu::DepthBiasState::default(),
+                    }),
+                    multisample: wgpu::MultisampleState::default(),
+                    multiview: None,
+                    cache: None,
+                })
+            };
 
-        let pipeline = make_pipeline(
-            "flicker.billboard.pipeline",
-            wgpu::BlendState::ALPHA_BLENDING,
-            true,
-        );
+        let pipeline = [
+            make_pipeline(
+                "flicker.billboard.pipeline",
+                wgpu::BlendState::ALPHA_BLENDING,
+                true,
+                surface_format,
+            ),
+            make_pipeline(
+                "flicker.billboard.pipeline",
+                wgpu::BlendState::ALPHA_BLENDING,
+                true,
+                crate::HDR_FORMAT,
+            ),
+        ];
         // Additive: `out.rgb * out.a` is *added* to the target (glow), depth NOT written so
         // overlapping glows stack instead of clipping each other.
         let additive_blend = wgpu::BlendState {
@@ -214,8 +228,20 @@ impl BillboardPipeline {
                 operation: wgpu::BlendOperation::Add,
             },
         };
-        let pipeline_additive =
-            make_pipeline("flicker.billboard.pipeline.additive", additive_blend, false);
+        let pipeline_additive = [
+            make_pipeline(
+                "flicker.billboard.pipeline.additive",
+                additive_blend,
+                false,
+                surface_format,
+            ),
+            make_pipeline(
+                "flicker.billboard.pipeline.additive",
+                additive_blend,
+                false,
+                crate::HDR_FORMAT,
+            ),
+        ];
 
         let camera_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("flicker.billboard.camera_uniform"),
@@ -349,12 +375,13 @@ impl BillboardPipeline {
         &'a self,
         pass: &mut wgpu::RenderPass<'a>,
         textures: &'a [Option<crate::texture::LoadedTexture>],
+        target: crate::TargetColor,
     ) {
         pass.set_bind_group(0, &self.camera_bind_group, &[]);
         // Alpha-blended (depth-writing) billboards first…
         draw_runs(
             pass,
-            &self.pipeline,
+            &self.pipeline[target as usize],
             &self.vertex_buffer,
             &self.vertices,
             &self.runs,
@@ -363,7 +390,7 @@ impl BillboardPipeline {
         // …then additive glow on top (no depth write).
         draw_runs(
             pass,
-            &self.pipeline_additive,
+            &self.pipeline_additive[target as usize],
             &self.vertex_buffer_additive,
             &self.vertices_additive,
             &self.runs_additive,

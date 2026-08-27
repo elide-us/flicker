@@ -2,64 +2,36 @@
 //!
 //! A stage is a panel whose fill is a render-to-texture sub-scene: something says WHERE
 //! (a walker `surface` node reserving a [`SurfaceSlot`], or the scene-owned canvas placing a
-//! card), the shared `stages` block in `ui_theme.json` says WHAT, and `FrameGraph`
-//! decides WHEN. This module owns the WHAT→GPU half: parsing the authored sources,
-//! posing the doll, and declaring the offscreen passes.
+//! card), the authored `stages.<source>` block says WHAT (compiled by the ONE stage
+//! compiler, `flicker::ui::stage_defs`), and `FrameGraph` decides WHEN. This module owns
+//! the WHAT→GPU half for the doll: posing it and declaring the offscreen passes.
 //!
-//! **Liveness IS the poster cache.** A slot that is not `live` simply skips its
-//! `FrameGraph::target` pass — its render target keeps the last image drawn into it and
-//! still composites, so a still doll costs zero GPU work per frame and needs no separate
-//! poster texture. Only the selected card and the pointed-at clip row animate, which is
-//! what makes a screen carrying a dozen dolls affordable (N live targets = N submits).
+//! **Liveness is the seat's [`Rate`], driven by the renderer's per-surface clock.** A slot
+//! declares its `FrameGraph::surface` every frame; the clock skips the RENDER of one whose
+//! rate is not `Live` (its target keeps the last image and still composites), so a still
+//! doll costs zero GPU submits and needs no separate poster texture or hand-rolled cache.
+//! Only the selected card and the pointed-at clip row animate, which is what makes a screen
+//! carrying a dozen dolls affordable (N live targets = N submits).
 //!
-//! Parsing and framing are pure functions over JSON — unit-tested without a device; only
+//! Framing and line geometry are pure functions — unit-tested without a device; only
 //! [`StageRig::load`] and [`StageRig::stage`] touch the renderer.
+//!
+//! [`SurfaceSlot`]: flicker::ui::SurfaceSlot
 
 use std::collections::HashMap;
 
 use flicker::render::{
-    grid_segments, ring_segments, Camera, CompositeTarget, FrameGraph, Mat4, MeshIndices, Rect,
-    RenderTargetHandle, Renderer, SceneLighting, SkinnedMeshHandle, SkinnedVertex, Vec3,
+    grid_segments, ring_segments, CompositeTarget, FrameGraph, Mat4, MeshIndices, Rate, Rect,
+    RenderTargetHandle, Renderer, SkinnedMeshHandle, SkinnedVertex, StageCamera, StageDef,
+    StageInputs, StageLayer, Vec3,
 };
 use flicker_skeletal::format::{Bone, Model, ResolvedClip, Vertex};
 use flicker_skeletal::{pose, skin};
 use serde_json::Value as Json;
 
-/// One authored draw layer of a stage source (`stages.<source>.layers[]`).
-#[derive(Clone, Debug, PartialEq)]
-pub enum Layer {
-    /// The posed character. The JSON names `model_bind`/`pose_bind`, but an editor drives
-    /// its own dolls: the pose comes from this scene's document, not the walker's model
-    /// map, so those keys are declarations of intent rather than lookups here.
-    Skinned,
-    /// The ground ring under the doll — lit differently when the slot is active.
-    Ring {
-        radius: f32,
-        y: f32,
-        segments: usize,
-        color: [f32; 4],
-        color_active: [f32; 4],
-    },
-    /// The faint floor grid under a turntable shot.
-    Grid {
-        spacing: f32,
-        extent: f32,
-        y: f32,
-        color: [f32; 4],
-    },
-}
-
-/// A named sub-scene: how to light it, where to put the camera, and what to draw.
-#[derive(Clone, Debug)]
-pub struct Source {
-    pub lighting: SceneLighting,
-    pub clear: [f64; 4],
-    pub yaw: f32,
-    pub pitch: f32,
-    pub dist: f32,
-    pub target_y: f32,
-    pub layers: Vec<Layer>,
-}
+/// The layer kinds the doll rig draws. A stage authoring any other kind is told so at
+/// load — once — rather than drawing nothing in silence.
+const DOLL_LAYERS: &[&str] = &["skinned", "ring", "grid"];
 
 /// What the scene wants staged in one slot this frame.
 ///
@@ -75,8 +47,9 @@ pub struct StageReq {
     pub rect: Rect,
     pub layer: f32,
     pub tint: [f32; 4],
-    /// Re-render this frame. `false` reuses the target's last image (the poster).
-    pub live: bool,
+    /// How often this slot re-renders. Anything but [`Rate::Live`] reuses the target's
+    /// last image (the poster).
+    pub rate: Rate,
     /// Clip index to pose with; `None` → the rest pose.
     pub clip: Option<usize>,
     /// Play-head, seconds. The clip loops on its own duration.
@@ -85,20 +58,20 @@ pub struct StageReq {
     pub active: bool,
 }
 
-/// One slot's offscreen target, plus whether anything has been drawn into it yet (a
-/// never-drawn slot must render once even when it is not live, or it would blit garbage).
+/// One slot's offscreen target and the size it was last built at. Liveness — a never-drawn
+/// slot rendering once, a poster keeping its image — is the renderer's per-surface clock's
+/// job now (the `rate` handed to `FrameGraph::surface`), not a flag carried here.
 struct Slot {
     target: RenderTargetHandle,
     w: u32,
     h: u32,
-    drawn: bool,
 }
 
-/// The GPU-side stage rig: the doll's skinned mesh, the authored sources, and one render
+/// The GPU-side stage rig: the doll's skinned mesh, the compiled sources, and one render
 /// target per slot id.
 #[derive(Default)]
 pub struct StageRig {
-    sources: HashMap<String, Source>,
+    sources: HashMap<String, StageDef>,
     mesh: Option<SkinnedMeshHandle>,
     bone_count: u32,
     /// Rest-pose ground offset. `Model::world` centres the rig on the origin, but the
@@ -113,10 +86,27 @@ impl StageRig {
         Self::default()
     }
 
-    /// Parse the authored sources and upload the doll's skinned mesh. Call from `enter`,
+    /// Compile the authored sources and upload the doll's skinned mesh. Call from `enter`,
     /// once the styles are resolved and the document's model is loaded.
     pub fn load(&mut self, r: &mut Renderer, model: &Model, styles: &Json) {
-        self.sources = parse_sources(styles);
+        self.sources = flicker::ui::stage_defs(styles);
+        for (name, def) in &mut self.sources {
+            let undrawn = def.layers_outside(DOLL_LAYERS);
+            if !undrawn.is_empty() {
+                tracing::warn!(
+                    "loomforge stage: `{name}` authors {undrawn:?} layers the doll rig does not draw"
+                );
+            }
+            // The framing is applied by the frame graph from the DEFINITION, so the doll
+            // rig's "an unframed stage is a portrait" policy is applied to the definition
+            // — once, at load — rather than re-decided in every frame's draw closure.
+            if def.camera.is_none() {
+                tracing::warn!(
+                    "loomforge stage: `{name}` authors no camera — the doll takes the portrait framing"
+                );
+                def.camera = Some(StageCamera::default());
+            }
+        }
         self.bone_count = model.bones.len() as u32;
         self.ground = ground_transform(model.world, &model.mesh.vertices);
 
@@ -163,11 +153,9 @@ impl StageRig {
         self.slots.len()
     }
 
-    /// Declare this frame's stage passes and composites on `fg`.
-    ///
-    /// Must be followed by `fg.execute(r)` as the FIRST thing in `render()` — offscreen
-    /// passes reset the shared draw queues, so any main-frame geometry queued before it
-    /// would be dropped.
+    /// Declare this frame's stage passes and composites on `fg` — declare-only; the
+    /// manager owns the one graph and executes it once, running every offscreen pass
+    /// before the scene's overlay chrome.
     ///
     /// `base_layer` is the scene's own layer at draw time; a request's `layer` is relative
     /// to it, because the tree is built in `update` before the base layer is known.
@@ -191,17 +179,16 @@ impl StageRig {
             let Some(src) = sources.get(&req.source) else {
                 continue;
             };
-            let w = (req.rect.size.x.round() as u32).max(1);
-            let h = (req.rect.size.y.round() as u32).max(1);
+            let (w, h) = src.attachments.pixels(req.rect.size);
 
             let slot = match slots.get_mut(&req.id) {
                 Some(s) => {
-                    // A resized slot's old image is the wrong shape — redraw it.
+                    // A resized slot's old image is the wrong shape — the resize rebuilds a
+                    // fresh (never-drawn) target, so the clock renders it once again.
                     if s.w != w || s.h != h {
                         r.resize_render_target(s.target, w, h);
                         s.w = w;
                         s.h = h;
-                        s.drawn = false;
                     }
                     s
                 }
@@ -209,42 +196,40 @@ impl StageRig {
                     target: r.create_render_target(w, h),
                     w,
                     h,
-                    drawn: false,
                 }),
             };
 
-            if req.live || !slot.drawn {
-                // Everything the pass needs is OWNED here, so the closure borrows nothing
-                // and can outlive this loop iteration.
-                let palette = palette_for(
-                    &model.bones,
-                    req.clip.and_then(|i| model.clips.get(i)),
-                    req.time,
-                    model.retarget,
-                );
-                let cam = Camera::orbit(
-                    Vec3::new(0.0, src.target_y, 0.0),
-                    src.dist,
-                    src.yaw,
-                    src.pitch,
-                );
-                let lighting = src.lighting;
-                let lines = line_layers(&src.layers, req.active);
-                let (ground, mesh, bones) = (*ground, *mesh, *bone_count);
-                fg.target(slot.target, src.clear, move |r| {
-                    r.set_scene(lighting);
-                    r.set_camera(&cam);
+            // Everything the pass needs is OWNED here, so the closure borrows nothing and
+            // can outlive this loop iteration. Liveness is the seat's `rate`, driven by the
+            // renderer's per-surface clock: a poster doll's pass is skipped (its composite
+            // below still runs), so a screen of still dolls costs no GPU submits.
+            let palette = palette_for(
+                &model.bones,
+                req.clip.and_then(|i| model.clips.get(i)),
+                req.time,
+                model.retarget,
+            );
+            let lines = line_layers(&src.layers, req.active);
+            let (ground, mesh, bones) = (*ground, *mesh, *bone_count);
+            // The stage's lighting and framing are applied by the graph from the
+            // definition; the doll publishes no per-frame inputs.
+            fg.surface(
+                CompositeTarget::Target(slot.target),
+                src,
+                StageInputs::default(),
+                req.rate,
+                move |r| {
                     // Line layers are depth-tested against the doll, so the authored
-                    // order costs nothing to honour and a ring still reads under the feet.
+                    // order costs nothing to honour and a ring still reads under the
+                    // feet.
                     for (segs, color) in &lines {
                         r.draw_lines(segs, *color);
                     }
                     if let Some(m) = mesh {
                         r.draw_skinned_instanced(m, &[ground], &palette, bones);
                     }
-                });
-                slot.drawn = true;
-            }
+                },
+            );
 
             // `frame: None` — the backdrop panel was already drawn by whoever placed the
             // slot, keeping every panel in the codebase on one code path.
@@ -311,13 +296,13 @@ fn ground_transform(world: Mat4, vertices: &[Vertex]) -> Mat4 {
 /// One line layer's segments plus the colour to draw them in.
 type LineLayer = (Vec<(Vec3, Vec3)>, [f32; 4]);
 
-/// The line geometry of a source's non-character layers, in authored order.
-fn line_layers(layers: &[Layer], active: bool) -> Vec<LineLayer> {
+/// The line geometry of a source's non-character layers, in authored order. Kinds the
+/// doll rig does not draw were named at load; here they simply contribute no lines.
+fn line_layers(layers: &[StageLayer], active: bool) -> Vec<LineLayer> {
     layers
         .iter()
         .filter_map(|l| match l {
-            Layer::Skinned => None,
-            Layer::Ring {
+            StageLayer::Ring {
                 radius,
                 y,
                 segments,
@@ -327,130 +312,15 @@ fn line_layers(layers: &[Layer], active: bool) -> Vec<LineLayer> {
                 ring_segments(Vec3::new(0.0, *y, 0.0), *radius, *segments),
                 if active { *color_active } else { *color },
             )),
-            Layer::Grid {
+            StageLayer::Grid {
                 spacing,
                 extent,
                 y,
                 color,
             } => Some((grid_segments(*spacing, *extent, *y), *color)),
+            _ => None,
         })
         .collect()
-}
-
-// ── Parsing the authored `stages` block ──────────────────────────────────────
-
-/// Every named source in `stages`, keyed by name. `lighting` holds the shared presets
-/// and `_`-prefixed keys are comments, so neither is a source.
-pub fn parse_sources(styles: &Json) -> HashMap<String, Source> {
-    let Some(stages) = styles.get("stages").and_then(Json::as_object) else {
-        return HashMap::new();
-    };
-    let presets = stages.get("lighting");
-    stages
-        .iter()
-        .filter(|(k, _)| !k.starts_with('_') && k.as_str() != "lighting")
-        .map(|(name, v)| (name.clone(), parse_source(v, presets)))
-        .collect()
-}
-
-fn parse_source(v: &Json, presets: Option<&Json>) -> Source {
-    let cam = v.get("camera");
-    Source {
-        lighting: parse_lighting(presets, v.get("lighting").and_then(Json::as_str)),
-        clear: jcolor(v, "clear", [0.0; 4]).map(|c| c as f64),
-        yaw: jnum(cam, "yaw", 0.55),
-        pitch: jnum(cam, "pitch", 0.18),
-        dist: jnum(cam, "dist", 2.6),
-        target_y: jnum(cam, "target_y", 0.95),
-        layers: v
-            .get("layers")
-            .and_then(Json::as_array)
-            .map(|a| a.iter().filter_map(parse_layer).collect())
-            .unwrap_or_default(),
-    }
-}
-
-fn parse_layer(v: &Json) -> Option<Layer> {
-    match v.get("draw").and_then(Json::as_str)? {
-        "skinned" => Some(Layer::Skinned),
-        "ring" => Some(Layer::Ring {
-            radius: jnum(Some(v), "radius", 0.45),
-            y: jnum(Some(v), "y", 0.0),
-            segments: jnum(Some(v), "segments", 24.0).max(0.0) as usize,
-            color: jcolor(v, "color", [0.72, 0.59, 0.35, 1.0]),
-            // A source may omit the active colour; then the ring simply never lights.
-            color_active: jcolor(
-                v,
-                "color_active",
-                jcolor(v, "color", [0.72, 0.59, 0.35, 1.0]),
-            ),
-        }),
-        "grid" => Some(Layer::Grid {
-            spacing: jnum(Some(v), "spacing", 0.5),
-            extent: jnum(Some(v), "extent", 6.0),
-            y: jnum(Some(v), "y", 0.0),
-            color: jcolor(v, "color", [0.55, 0.63, 0.75, 0.09]),
-        }),
-        other => {
-            tracing::warn!("loomforge stage: unknown layer draw kind {other:?} — skipped");
-            None
-        }
-    }
-}
-
-fn parse_lighting(presets: Option<&Json>, name: Option<&str>) -> SceneLighting {
-    let d = SceneLighting::default();
-    let Some(p) = presets.zip(name).and_then(|(p, n)| p.get(n)) else {
-        return d;
-    };
-    let p = Some(p);
-    SceneLighting {
-        sun_dir: jvec3(p, "sun_dir", d.sun_dir).normalize_or_zero(),
-        sun_color: jvec3(p, "sun", d.sun_color),
-        moon_dir: jvec3(p, "moon_dir", d.moon_dir).normalize_or_zero(),
-        moon_color: jvec3(p, "moon", d.moon_color),
-        ambient: jvec3(p, "ambient", d.ambient),
-        sky_zenith: jvec3(p, "sky_zenith", d.sky_zenith),
-        sky_horizon: jvec3(p, "sky_horizon", d.sky_horizon),
-        ..d
-    }
-}
-
-fn jnum(v: Option<&Json>, key: &str, default: f32) -> f32 {
-    v.and_then(|v| v.get(key))
-        .and_then(Json::as_f64)
-        .map(|n| n as f32)
-        .filter(|n| n.is_finite())
-        .unwrap_or(default)
-}
-
-fn jvec3(v: Option<&Json>, key: &str, default: Vec3) -> Vec3 {
-    let Some(a) = v.and_then(|v| v.get(key)).and_then(Json::as_array) else {
-        return default;
-    };
-    if a.len() < 3 {
-        return default;
-    }
-    let c = |i: usize| a[i].as_f64().unwrap_or(0.0) as f32;
-    let out = Vec3::new(c(0), c(1), c(2));
-    if out.is_finite() {
-        out
-    } else {
-        default
-    }
-}
-
-/// An rgba from an already token-resolved colour array (`resolve_tokens` has turned
-/// `$bronze` into four floats by the time the styles reach here).
-fn jcolor(v: &Json, key: &str, default: [f32; 4]) -> [f32; 4] {
-    let Some(a) = v.get(key).and_then(Json::as_array) else {
-        return default;
-    };
-    let mut out = default;
-    for (i, c) in a.iter().take(4).enumerate() {
-        out[i] = c.as_f64().unwrap_or(default[i] as f64) as f32;
-    }
-    out
 }
 
 #[cfg(test)]
@@ -458,63 +328,64 @@ mod tests {
     use super::*;
     use flicker_skeletal::format::{Bone, Vertex};
 
-    /// The REAL shared `stages` block — the parser must understand what is actually
-    /// authored, not a fixture that drifts from it.
+    /// The REAL styles root for this bench — the shared theme trio with the shipped
+    /// loomforge.scene.json's own blocks (its `stages` section holds the doll source)
+    /// merged over it, exactly as the runtime builds them.
     fn real_styles() -> Json {
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../../content/sensorium/resources/ui_theme.json"
-        );
-        flicker::ui::load_styles(path)
+        let def = flicker::ui::SceneDef::parse(
+            "loomforge",
+            include_str!("../../../../content/sensorium/scenes/loomforge.scene.json"),
+        )
+        .expect("the shipped loomforge.scene.json parses");
+        flicker::ui::load_styles_for(
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../../content/sensorium/resources/ui_theme.json"
+            ),
+            def.styles.as_ref(),
+        )
     }
 
+    /// The doll's source is authored, lit, framed, and made of exactly the layer kinds
+    /// the rig draws — so nothing it authors is a name that resolves to nothing.
     #[test]
-    fn parses_the_shared_stage_sources() {
-        let styles = real_styles();
-        let sources = parse_sources(&styles);
+    fn the_doll_source_is_authored_lit_and_framed() {
+        let sources = flicker::ui::stage_defs(&real_styles());
+        let p = sources
+            .get("portrait")
+            .expect("the Loomforge doll source must exist");
         assert!(
-            sources.contains_key("portrait"),
-            "the Loomforge doll source must exist"
+            !sources.contains_key("lighting") && !sources.keys().any(|k| k.starts_with('_')),
+            "the preset table and comments are not sources"
         );
-        assert!(
-            sources.contains_key("turntable"),
-            "the TAE preview source must exist"
-        );
-        assert!(
-            !sources.contains_key("lighting"),
-            "the preset table is not a source"
-        );
-        assert!(
-            !sources.keys().any(|k| k.starts_with('_')),
-            "comments are not sources"
-        );
-
-        let p = &sources["portrait"];
-        assert!(p.dist > 0.0 && p.target_y > 0.0, "portrait is framed");
+        let cam = p.camera.expect("the portrait frames its subject");
+        assert!(cam.dist > 0.0 && cam.target_y > 0.0, "portrait is framed");
         // studio lighting: a lit sun, unlike the `night` preset.
-        assert!(p.lighting.sun_color.length() > 0.1, "studio preset is lit");
         assert!(
-            p.layers.contains(&Layer::Skinned),
+            p.lighting.sky_sun().color.length() > 0.1,
+            "studio preset is lit"
+        );
+        assert!(
+            p.layers.contains(&StageLayer::Skinned),
             "the doll itself must be a layer"
         );
         assert!(
-            p.layers.iter().any(|l| matches!(l, Layer::Ring { .. })),
+            p.layers
+                .iter()
+                .any(|l| matches!(l, StageLayer::Ring { .. })),
             "the portrait stands on a ground ring"
         );
-        // The turntable is the wider shot over a floor grid.
-        let t = &sources["turntable"];
         assert!(
-            t.dist > p.dist,
-            "the turntable frames wider than the portrait"
+            p.layers_outside(DOLL_LAYERS).is_empty(),
+            "every authored layer is one the doll rig draws"
         );
-        assert!(t.layers.iter().any(|l| matches!(l, Layer::Grid { .. })));
     }
 
-    /// Token refs are resolved to rgba before the parser sees them, and an active ring
+    /// Token refs are resolved to rgba before the compiler sees them, and an active ring
     /// swaps colour — the one piece of per-slot state the geometry carries.
     #[test]
     fn ring_lights_when_active() {
-        let sources = parse_sources(&real_styles());
+        let sources = flicker::ui::stage_defs(&real_styles());
         let layers = &sources["portrait"].layers;
         let idle = line_layers(layers, false);
         let lit = line_layers(layers, true);
@@ -529,36 +400,23 @@ mod tests {
         assert!(idle[0].1.iter().all(|c| c.is_finite()));
     }
 
-    /// Authored JSON reaches the parser unvalidated; a malformed source must degrade to
-    /// defaults rather than panic or emit non-finite camera/geometry values.
+    /// A layer the rig does not draw contributes no lines, and a degenerate ring yields
+    /// no geometry rather than a panic (guarded in flicker-render's `ring_segments`).
     #[test]
-    fn malformed_sources_degrade_to_defaults() {
-        let styles: Json = serde_json::json!({
-            "stages": {
-                "_comment": "not a source",
-                "broken": {
-                    "lighting": "no_such_preset",
-                    "camera": { "dist": "nonsense", "yaw": null },
-                    "layers": [
-                        { "draw": "ring", "radius": -1.0, "segments": 24 },
-                        { "draw": "unheard_of" },
-                        { "no_draw_key": true }
-                    ]
-                }
-            }
-        });
-        let sources = parse_sources(&styles);
-        let b = &sources["broken"];
-        assert!(b.dist.is_finite() && b.dist > 0.0, "bad dist falls back");
-        assert!(b.yaw.is_finite());
-        assert_eq!(
-            b.layers.len(),
-            1,
-            "only the ring parsed; unknown kinds dropped"
-        );
-        // A negative radius yields no geometry rather than a panic (guarded upstream in
-        // flicker-render's ring_segments).
-        assert!(line_layers(&b.layers, false)[0].0.is_empty());
+    fn undrawn_and_degenerate_layers_yield_no_lines() {
+        let layers = vec![
+            StageLayer::Graticule { radius_scale: 1.0 },
+            StageLayer::Ring {
+                radius: -1.0,
+                y: 0.0,
+                segments: 24,
+                color: [1.0; 4],
+                color_active: [1.0; 4],
+            },
+        ];
+        let lines = line_layers(&layers, false);
+        assert_eq!(lines.len(), 1, "only the ring is a line layer");
+        assert!(lines[0].0.is_empty(), "a negative radius is no ring");
     }
 
     fn bone(name: &str) -> Bone {

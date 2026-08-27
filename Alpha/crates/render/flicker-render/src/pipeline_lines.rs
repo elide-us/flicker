@@ -5,8 +5,9 @@
 //! (and any future gizmo helpers); on `prepare` the accumulated
 //! vertices are uploaded to a single `LineList` vertex buffer, and on
 //! `render` a single non-indexed draw call emits every line for the
-//! frame. The pipeline shares the mesh pipeline's camera uniform so
-//! both 3D meshes and lines see the same view-projection.
+//! frame. The pipeline binds the renderer's ONE per-frame group
+//! ([`FrameBindGroup`](crate::pipeline_mesh::FrameBindGroup)) at `@group(0)`, so both
+//! 3D meshes and lines see the same view-projection from the same buffer.
 //!
 //! Depth: shares the depth attachment with the mesh pipeline. Tests
 //! depth with `LessEqual` (so lines get occluded by 3D geometry in
@@ -16,7 +17,7 @@
 use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
 
-use crate::pipeline_mesh::DEPTH_FORMAT;
+use crate::pipeline_mesh::{FrameBindGroup, DEPTH_FORMAT};
 
 /// One vertex of an immediate-mode line. Position in world space,
 /// color is the line's per-vertex color (segments use the same color
@@ -32,8 +33,10 @@ const LINE_VERTEX_ATTRS: [wgpu::VertexAttribute; 2] =
     wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x4];
 
 pub struct LinesPipeline {
-    pipeline: wgpu::RenderPipeline,
-    bind_group: wgpu::BindGroup,
+    /// Baked for both colour formats (swapchain + [`crate::HDR_FORMAT`]) over the one
+    /// shared frame bind group + vertex buffer; [`Self::render`] selects by
+    /// [`crate::TargetColor`].
+    pipeline: [wgpu::RenderPipeline; 2],
     vertex_buffer: wgpu::Buffer,
     vertex_buffer_capacity: u64,
     vertices: Vec<LineVertex>,
@@ -42,8 +45,8 @@ pub struct LinesPipeline {
 impl LinesPipeline {
     pub fn new(
         device: &wgpu::Device,
+        frame: &FrameBindGroup,
         surface_format: wgpu::TextureFormat,
-        camera_buf: &wgpu::Buffer,
         depth_compare: wgpu::CompareFunction,
     ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -51,33 +54,10 @@ impl LinesPipeline {
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/lines.wgsl").into()),
         });
 
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("flicker.lines.bgl"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
-
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("flicker.lines.pipeline_layout"),
-            bind_group_layouts: &[&bind_group_layout],
+            bind_group_layouts: &[frame.layout()],
             push_constant_ranges: &[],
-        });
-
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("flicker.lines.bind_group"),
-            layout: &bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: camera_buf.as_entire_binding(),
-            }],
         });
 
         let vertex_layout = wgpu::VertexBufferLayout {
@@ -86,48 +66,53 @@ impl LinesPipeline {
             attributes: &LINE_VERTEX_ATTRS,
         };
 
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("flicker.lines.pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: "vs_main",
-                buffers: std::slice::from_ref(&vertex_layout),
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: "fs_main",
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: surface_format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::LineList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                unclipped_depth: false,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                conservative: false,
-            },
-            // Depth-tested but not depth-writing: lines should be
-            // occluded by 3D geometry in front of them, but should not
-            // themselves occlude later draws in the same pass.
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: false,
-                depth_compare,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
+        // Bake for both colour formats over the one shared layout; only the colour-target
+        // format differs. `render` picks the variant by `TargetColor`.
+        let make = |fmt: wgpu::TextureFormat| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("flicker.lines.pipeline"),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: "vs_main",
+                    buffers: std::slice::from_ref(&vertex_layout),
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: "fs_main",
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: fmt,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::LineList,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    cull_mode: None,
+                    unclipped_depth: false,
+                    polygon_mode: wgpu::PolygonMode::Fill,
+                    conservative: false,
+                },
+                // Depth-tested but not depth-writing: lines should be
+                // occluded by 3D geometry in front of them, but should not
+                // themselves occlude later draws in the same pass.
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: false,
+                    depth_compare,
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+                multisample: wgpu::MultisampleState::default(),
+                multiview: None,
+                cache: None,
+            })
+        };
+        let pipeline = [make(surface_format), make(crate::HDR_FORMAT)];
 
         let initial_capacity = (std::mem::size_of::<LineVertex>() * 64) as u64;
         let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -139,7 +124,6 @@ impl LinesPipeline {
 
         Self {
             pipeline,
-            bind_group,
             vertex_buffer,
             vertex_buffer_capacity: initial_capacity,
             vertices: Vec::new(),
@@ -210,12 +194,17 @@ impl LinesPipeline {
         queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&self.vertices));
     }
 
-    pub fn render<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {
+    pub fn render<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        frame: &'a FrameBindGroup,
+        target: crate::TargetColor,
+    ) {
         if self.vertices.is_empty() {
             return;
         }
-        pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &self.bind_group, &[]);
+        pass.set_pipeline(&self.pipeline[target as usize]);
+        pass.set_bind_group(0, frame.bind_group(), &[]);
         let bytes = (self.vertices.len() * std::mem::size_of::<LineVertex>()) as u64;
         pass.set_vertex_buffer(0, self.vertex_buffer.slice(0..bytes));
         pass.draw(0..self.vertices.len() as u32, 0..1);

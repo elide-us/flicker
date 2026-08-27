@@ -8,6 +8,7 @@
         "title": "$ap_character",
         "steps": [
           { "id": "task", "title": "$wf_step_task", "yields": ["source", "class"] },
+          { "id": "prep", "title": "$wf_step_prep", "needs": ["source"] },
           { "id": "conform", "title": "$wf_step_rig", "needs": ["source"], "yields": ["rig"] },
           { "id": "preview", "title": "$wf_step_preview", "needs": ["rig"] },
           { "id": "attach", "title": "$wf_step_attach", "needs": ["rig"], "yields": ["attach"] },
@@ -112,8 +113,8 @@
         "fill_bot": "$seam"
       },
       "holder": {
-        "fill_top": [0, 0, 0, 0],
-        "fill_bot": [0, 0, 0, 0],
+        "fill_top": "$stage_void",
+        "fill_bot": "$stage_void",
         "border": "$bronze_deep",
         "border_w": 1,
         "radius": 3
@@ -224,6 +225,8 @@
             "align": "center",
             "children": [
               { "component": "button", "id": "ap_chip_task", "label_bind": "wf_task_title", "style_bind": "wf_task_style", "visible_bind": "wf_task_show", "size": 110, "size_class": "sm" },
+              { "component": "cell", "style": "assetpipeline.seam", "visible_bind": "wf_prep_show", "size": 18, "height": 1 },
+              { "component": "button", "id": "ap_chip_prep", "label_bind": "wf_prep_title", "style_bind": "wf_prep_style", "visible_bind": "wf_prep_show", "size": 110, "size_class": "sm" },
               { "component": "cell", "style": "assetpipeline.seam", "visible_bind": "wf_conform_show", "size": 18, "height": 1 },
               { "component": "button", "id": "ap_chip_conform", "label_bind": "wf_conform_title", "style_bind": "wf_conform_style", "visible_bind": "wf_conform_show", "size": 110, "size_class": "sm" },
               { "component": "cell", "style": "assetpipeline.seam", "visible_bind": "wf_preview_show", "size": 18, "height": 1 },
@@ -266,7 +269,8 @@
                       { "component": "text", "text": "$ap_display", "text_size": 11, "font": "label", "color": "assetpipeline.col.rail", "size": 16 },
                       { "component": "checkbox", "id": "show_skeleton", "bind": "show_skeleton", "label": "$ap_skeleton", "box": 14, "size": 22, "style": "assetpipeline.checkbox", "tab_group": "ap_display", "nav_ordinal": 1 },
                       { "component": "checkbox", "id": "show_base", "bind": "show_base", "label": "$ap_reference_body", "box": 14, "size": 22, "style": "assetpipeline.checkbox", "tab_group": "ap_display", "nav_ordinal": 2 },
-                      { "component": "checkbox", "id": "show_collision", "bind": "show_collision", "label": "$ap_collision", "box": 14, "size": 22, "style": "assetpipeline.checkbox", "tab_group": "ap_display", "nav_ordinal": 3 }
+                      { "component": "checkbox", "id": "show_collision", "bind": "show_collision", "label": "$ap_collision", "box": 14, "size": 22, "style": "assetpipeline.checkbox", "tab_group": "ap_display", "nav_ordinal": 3 },
+                      { "component": "checkbox", "id": "show_wireframe", "bind": "show_wireframe", "label": "$ap_wireframe", "box": 14, "size": 22, "style": "assetpipeline.checkbox", "tab_group": "ap_display", "nav_ordinal": 4 }
                     ]
                   }
                 ]
@@ -303,6 +307,30 @@
                       { "component": "checkbox", "id": "as_provided", "bind": "as_provided", "label": "$ap_as_provided", "box": 14, "size": 22, "style": "assetpipeline.checkbox", "tab_group": "ap_insp", "nav_ordinal": 6 },
                       { "component": "text", "text": "$ap_as_provided_hint", "text_size": 10, "font": "label", "color": "assetpipeline.col.faint", "wrap": true, "size": 26 },
                       { "component": "text", "text": "$ap_select_a_workflow_to_begin", "text_size": 11, "font": "label", "color": "assetpipeline.col.faint", "size": 16 }
+                    ]
+                  },
+                  {
+                    "component": "cell",
+                    "id": "ap_prep_page",
+                    "visible_bind": "wf_step_prep",
+                    "gap": 8,
+                    "children": [
+                      { "component": "text", "text": "$ap_prep_head", "text_size": 12, "font": "label", "color": "assetpipeline.col.rail", "size": 18 },
+                      { "component": "text", "text": "$ap_prep_blurb", "text_size": 12, "font": "label", "color": "assetpipeline.col.dim", "wrap": true, "size": 44 },
+                      {
+                        "component": "cell",
+                        "id": "ap_prep_controls",
+                        "visible_bind": "prep_active",
+                        "gap": 8,
+                        "children": [
+                          { "component": "text", "text": "$ap_stature", "text_size": 11, "font": "label", "color": "assetpipeline.col.rail", "size": 16 },
+                          { "component": "slider", "id": "stature_cm", "bind": "stature_cm", "label": "$ap_height_cm", "min": 40, "max": 200, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 54, "size": 24, "style": "assetpipeline.slider", "tab_group": "ap_insp", "nav_ordinal": 20 },
+                          { "component": "text", "text_bind": "prep_height", "text_size": 11, "font": "label", "color": "assetpipeline.col.dim", "size": 16 },
+                          { "component": "text", "text": "$ap_decimate", "text_size": 11, "font": "label", "color": "assetpipeline.col.rail", "size": 16 },
+                          { "component": "slider", "id": "keep_pct", "bind": "keep_pct", "label": "$ap_keep_pct", "min": 50, "max": 100, "step": 5, "decimals": 0, "slider_h": 7, "value_w": 54, "size": 24, "style": "assetpipeline.slider", "tab_group": "ap_insp", "nav_ordinal": 21 }
+                        ]
+                      },
+                      { "component": "text", "text_bind": "prep_status", "text_size": 11, "font": "label", "color": "assetpipeline.col.dim", "wrap": true, "size": 34 }
                     ]
                   },
                   {

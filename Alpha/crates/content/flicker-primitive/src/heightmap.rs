@@ -52,6 +52,8 @@ use std::sync::OnceLock;
 
 use clayengine::CLUSTER_DIM;
 
+use crate::noise;
+
 /// Seed used when `FLICKER_SEED` is unset or unparseable.
 pub const DEFAULT_SEED: u64 = 0xCAFE_F00D_D15E_A5E5;
 
@@ -219,6 +221,86 @@ pub fn world_height(x: f32, z: f32) -> f32 {
 #[must_use]
 pub fn world_height_seeded(x: f32, z: f32, seed: u64) -> f32 {
     WaveField::from_seed(seed).sample(x, z)
+}
+
+// ───────────────────────── the Prism island fixture ─────────────────────────
+//
+// A second continuous surface function, distinct from the wave field above: a
+// single procedural DOME sitting in the middle of the Prism Test Room's 3×3
+// cluster field, so a low sea level in a later step turns it into an ISLAND.
+// This is the ONE definition of the island's shape — both the headless bake
+// tool (`flicker-voxel`'s `bake_island` bin) and the pocclusters live-contour
+// fallback build a `HeightField::island(offset)`, which samples this function,
+// so a missing bake file falls back to the SAME terrain rather than the wave
+// field. Do not fork the shape.
+
+/// Cluster count per axis of the Prism Test Room field — must equal
+/// `FIELD_DIM` in `flicker-pocclusters` (a 3×3 grid). The island is centered
+/// in it; [`island_center_at`] pins the coupling with a test.
+const ISLAND_FIELD_DIM: f32 = 3.0;
+
+/// World XZ coordinate the dome is centered on: the midpoint of the 3×3 field,
+/// `FIELD_DIM · CLUSTER_DIM / 2` = `3 · 256 / 2` = 384.
+const ISLAND_CENTER: f32 = ISLAND_FIELD_DIM * CLUSTER_DIM as f32 / 2.0;
+
+/// Flat seabed height, in voxels — the terrain floor the dome rises from and
+/// the field returns to beyond the dome radius. Sits below the intended sea
+/// level so the flanks flood.
+const ISLAND_SEABED: f32 = 96.0;
+
+/// Dome peak height at the center, in voxels — dry land well above the
+/// intended sea level. Kept clear of dual-contouring's steep-slope blind spot
+/// the same way the wave field's amplitude is (see the module doc): peak −
+/// seabed = 60 voxels over a 380-voxel radius is a gentle mean slope.
+const ISLAND_PEAK: f32 = 156.0;
+
+/// Dome radius, in voxels — just short of the field's half-width (384) so the
+/// dome fits inside the 3-cluster span with flat seabed reaching the edges.
+const ISLAND_RADIUS: f32 = 380.0;
+
+/// Peak amplitude of the light surface noise, in voxels. Low, so the dome
+/// reads as a dome (not a noise field) but isn't a perfect analytic shell.
+const ISLAND_NOISE_AMP: f32 = 3.0;
+
+/// World units per octave-0 lobe of the light noise — coarse undulation.
+const ISLAND_NOISE_WAVELENGTH: f64 = 48.0;
+
+/// Salt selecting the island's independent light-noise field under
+/// [`DEFAULT_SEED`] (see [`crate::noise`] — salt vs seed).
+const ISLAND_NOISE_SALT: u64 = 0x1514_4E44;
+
+/// Low-amplitude value-noise fBm reused from [`crate::noise`], mapped from
+/// `[0, 1)` to `[−AMP, AMP)`. Breaks the analytic dome so the shell looks
+/// natural; too small to create stray islands out on the seabed.
+fn island_noise(x: f32, z: f32) -> f32 {
+    let u = x as f64 / ISLAND_NOISE_WAVELENGTH;
+    let v = z as f64 / ISLAND_NOISE_WAVELENGTH;
+    let n = noise::fbm2(u, v, noise::Fbm::default(), ISLAND_NOISE_SALT, DEFAULT_SEED) as f32;
+    (n * 2.0 - 1.0) * ISLAND_NOISE_AMP
+}
+
+/// Surface elevation in voxel units at world `(x, z)` for the Prism island: a
+/// radial dome centered on [`ISLAND_CENTER`] plus light noise.
+///
+/// `h(x,z) = SEABED + (PEAK−SEABED)·falloff(t) + noise`, where
+/// `t = clamp(r / RADIUS, 0, 1)`, `r` is the distance from the field center,
+/// and `falloff(t) = cos²(½π·t)` is a raised-cosine (Hann) shoulder: 1 at the
+/// center, 0 at the rim, smooth (zero-slope) at both ends. Beyond the radius
+/// `t` saturates at 1 so `falloff = 0` and the surface is flat seabed.
+///
+/// Pure and deterministic in `(x, z)`: identical world columns return
+/// identical heights, so adjacent clusters agree at their shared seam with
+/// zero coordination — the same continuity property the wave field has.
+#[must_use]
+pub fn island_height(x: f32, z: f32) -> f32 {
+    let dx = x - ISLAND_CENTER;
+    let dz = z - ISLAND_CENTER;
+    let r = (dx * dx + dz * dz).sqrt();
+    let t = (r / ISLAND_RADIUS).clamp(0.0, 1.0);
+    let shoulder = (std::f32::consts::FRAC_PI_2 * t).cos();
+    let falloff = shoulder * shoulder;
+    let dome = ISLAND_SEABED + (ISLAND_PEAK - ISLAND_SEABED) * falloff;
+    dome + island_noise(x, z)
 }
 
 /// The world seed from the `FLICKER_SEED` environment variable, or
@@ -417,6 +499,91 @@ mod tests {
                 world_height(x, z).to_bits(),
                 world_height_seeded(x, z, DEFAULT_SEED).to_bits(),
                 "default seed mismatch at ({x},{z})"
+            );
+        }
+    }
+
+    // ---- the Prism island fixture ----
+
+    /// The dome center is the midpoint of the 3×3 Prism field. This pins the
+    /// coupling to `FIELD_DIM = 3` in flicker-pocclusters: if that field size
+    /// ever changes, this constant (and the island) must move with it.
+    #[test]
+    fn island_center_at() {
+        assert_eq!(ISLAND_CENTER, 384.0);
+        assert_eq!(ISLAND_CENTER, ISLAND_FIELD_DIM * CLUSTER_DIM as f32 / 2.0);
+    }
+
+    /// The whole point of the fixture: a dry peak at the center, flanks that
+    /// drop well below a ~120 waterline before the field edge, and flat seabed
+    /// out at the corners — so a low sea level in a later step makes an island.
+    #[test]
+    fn island_is_a_dome_that_floods_into_an_island() {
+        // Center: dry peak, clearly above the waterline.
+        let center = island_height(ISLAND_CENTER, ISLAND_CENTER);
+        assert!(
+            center > 150.0,
+            "center height {center} should be a dry peak (> 150)"
+        );
+
+        // Field edge (384, 20): a flank near the rim, well under the waterline.
+        let edge = island_height(384.0, 20.0);
+        assert!(
+            edge <= 100.0,
+            "edge height {edge} should flood under a ~120 waterline (≤ 100)"
+        );
+
+        // Field corner (0, 0): beyond the dome radius → flat seabed.
+        let corner = island_height(0.0, 0.0);
+        assert!(
+            (corner - ISLAND_SEABED).abs() <= ISLAND_NOISE_AMP + 0.5,
+            "corner height {corner} should be flat seabed (~{ISLAND_SEABED})"
+        );
+
+        // Center towers over both the flank and the seabed.
+        assert!(
+            center - edge > 40.0,
+            "dome relief {} too flat",
+            center - edge
+        );
+    }
+
+    /// Every column across the 3×3 field stays inside the band the bake relies
+    /// on: seabed − noise below, peak + noise above, all well within a cluster's
+    /// `[0, 256]` voxel range.
+    #[test]
+    fn island_heights_stay_in_band() {
+        let lo = ISLAND_SEABED - ISLAND_NOISE_AMP - 0.5; // ~92.5
+        let hi = ISLAND_PEAK + ISLAND_NOISE_AMP + 0.5; // ~159.5
+        let field = ISLAND_FIELD_DIM * CLUSTER_DIM as f32; // 768
+        let mut x = 0.0_f32;
+        while x <= field {
+            let mut z = 0.0_f32;
+            while z <= field {
+                let h = island_height(x, z);
+                assert!(
+                    h.is_finite() && (lo..=hi).contains(&h),
+                    "island height {h} at ({x},{z}) outside [{lo}, {hi}]"
+                );
+                z += 16.0;
+            }
+            x += 16.0;
+        }
+    }
+
+    /// Continuity across a cluster boundary: the island is one global function,
+    /// so sampling either side of the x = `CLUSTER_DIM` seam agrees — the
+    /// property that keeps baked clusters seam-continuous.
+    #[test]
+    fn island_has_no_seam_at_cluster_boundaries() {
+        let boundary = CLUSTER_DIM as f32;
+        for z in (0..768u32).step_by(29) {
+            let zf = z as f32;
+            let left = island_height(boundary - 0.01, zf);
+            let right = island_height(boundary + 0.01, zf);
+            assert!(
+                (left - right).abs() < 0.2,
+                "island seam at x={boundary}, z={zf}: {left} vs {right}"
             );
         }
     }

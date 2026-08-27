@@ -802,6 +802,204 @@ pub fn default_reference() -> std::path::PathBuf {
         .join("../../../content/package/characters/GolemBaseSkeleton/GolemBaseSkeleton.json")
 }
 
+/// What [`scale_mesh_to_stature`] did: the uniform factor and the source/target heights (cm).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ScaleReport {
+    pub scale: f32,
+    pub source_height: f32,
+    pub stature: f32,
+}
+
+/// Uniformly resize a mesh so its bounding height (Z-up) equals `stature_cm`, ground it on the
+/// floor (min-Z → 0) and plant it on the plumb line (bbox centre X/Y → 0) — the frame the
+/// authored canon lives in. Raw Meshy meshes arrive with no meaningful scale, so this is what
+/// makes a hi-res mesh and the stature-scaled canon co-located and rig-able.
+///
+/// Normals are untouched (a uniform positive scale preserves their direction). Idempotent up to
+/// the measured height; a degenerate (flat) mesh is left alone.
+pub fn scale_mesh_to_stature(model: &mut RawModel, stature_cm: f32) -> ScaleReport {
+    if model.vertices.is_empty() || stature_cm <= 0.0 {
+        return ScaleReport::default();
+    }
+    let mut lo = Vec3::splat(f32::MAX);
+    let mut hi = Vec3::splat(f32::MIN);
+    for v in &model.vertices {
+        let p = Vec3::from_array(v.p);
+        lo = lo.min(p);
+        hi = hi.max(p);
+    }
+    let height = hi.z - lo.z;
+    if height <= 1e-6 {
+        return ScaleReport::default();
+    }
+    let s = stature_cm / height;
+    let cx = (lo.x + hi.x) * 0.5;
+    let cy = (lo.y + hi.y) * 0.5;
+    for v in &mut model.vertices {
+        v.p = [(v.p[0] - cx) * s, (v.p[1] - cy) * s, (v.p[2] - lo.z) * s];
+    }
+    ScaleReport {
+        scale: s,
+        source_height: height,
+        stature: stature_cm,
+    }
+}
+
+/// Install the authored canonical skeleton onto a mesh that has NONE — the raw-mesh rig path
+/// (Aaron 2026-08-22). The bones are `baseline::golem_base_skeleton()` **uniformly scaled to
+/// `stature_cm`** and planted at the canonical origin (feet on the ground, plumb), so the bind
+/// IS the authored canon by construction (invariant BIND == AUTHORED CANON) — no mesh-fitting,
+/// no `pose_mesh_to_canon` transport (that mesh-warp path was rolled back).
+///
+/// Emits the 66-bone `RawModel` convention conform produces (root EXCLUDED — `bake_rig`
+/// synthesizes it and shifts +1; `pelvis`'s parent is `-1`). Pair with a prior
+/// [`scale_mesh_to_stature`] at the same stature so mesh and skeleton co-locate, then
+/// [`crate::bake::bake_skin`] derives weights from these bones.
+pub fn install_baseline_skeleton(model: &mut RawModel, stature_cm: f32) {
+    let s = stature_cm / crate::baseline::STATURE;
+    let pos = crate::baseline::world_positions();
+    // Output index per bone name, root excluded, in canonical hierarchy order.
+    let mut out_index: HashMap<&str, usize> = HashMap::new();
+    let mut i = 0usize;
+    for (name, _) in crate::baseline::TOPOLOGY.iter() {
+        if *name == "root" {
+            continue;
+        }
+        out_index.insert(*name, i);
+        i += 1;
+    }
+    let world = |name: &str| -> Vec3 { s * pos[name] };
+    let bones: Vec<RawBone> = crate::baseline::TOPOLOGY
+        .iter()
+        .filter(|(name, _)| *name != "root")
+        .map(|(name, parent)| {
+            let w = world(name);
+            let (parent_idx, parent_world) = if *parent == "-" || *parent == "root" {
+                (-1, Vec3::ZERO)
+            } else {
+                (out_index[*parent] as i32, world(parent))
+            };
+            let local_t = w - parent_world;
+            RawBone {
+                name: (*name).to_string(),
+                parent: parent_idx,
+                translation: local_t.to_array(),
+                rotation: [0.0, 0.0, 0.0, 1.0],
+                scale: [1.0, 1.0, 1.0],
+                inverse_bind: Mat4::from_translation(-w).to_cols_array(),
+            }
+        })
+        .collect();
+    model.bones = bones;
+}
+
+/// ROUGH-FIT the installed canon to a raw mesh's own geometry — the raw-mesh rig starting template
+/// (Aaron 2026-08-22, "rough auto-template + manual"). A rig-less mesh has no joint positions, so the
+/// bare canon lands generic (stocky shoulders, a wide bird A-pose that fits nothing). This measures
+/// the mesh and pulls the LIMB joints onto it, so the human's follow-up joint-drag is a nudge, not a
+/// rebuild. It NEVER touches the torso chain (pelvis/spine/neck/head stay plumb) — posture is the
+/// clip's job, and bending the body is the logged fundamental dead-end.
+///
+/// Fits the ARMS (weightless, from mesh geometry): shoulder width at `SHOULDER_FRACTION` of the
+/// shoulder-band flesh, and the whole arm chain remapped by a similarity (scale+rotate in XZ) from
+/// the canon shoulder→hand onto the fitted shoulder → the mesh's widest vertex (the A-posed hand).
+/// The LEGS are NOT fitted here — a Z-band at hip height catches the A-posed hands, so the hip is
+/// fitted by weight OWNERSHIP with [`derive_hip_placement`] after a rough skin (the caller's job).
+/// Requires the mesh already scaled to `stature_cm` (grounded, x-centred) — call after
+/// [`scale_mesh_to_stature`].
+pub fn fit_baseline_to_mesh(model: &mut RawModel, stature_cm: f32) {
+    install_baseline_skeleton(model, stature_cm);
+    if model.vertices.len() < 4 || stature_cm <= 0.0 {
+        return;
+    }
+    let h = stature_cm;
+    // The mesh's half-width (max |x|) among vertices in a Z band — the flesh extent at that height.
+    let band = |z0: f32, z1: f32| -> f32 {
+        model
+            .vertices
+            .iter()
+            .filter(|v| v.p[2] >= z0 && v.p[2] <= z1)
+            .map(|v| v.p[0].abs())
+            .fold(0.0_f32, f32::max)
+    };
+    let sh_w = band(0.78 * h, 0.86 * h);
+    // The widest vertex overall is the A-posed hand/fingertip — the arm's reach target.
+    let (mut hand_x, mut hand_z) = (0.0_f32, 0.5 * h);
+    for v in &model.vertices {
+        if v.p[0].abs() > hand_x {
+            hand_x = v.p[0].abs();
+            hand_z = v.p[2];
+        }
+    }
+
+    let idx: HashMap<String, usize> = model
+        .bones
+        .iter()
+        .enumerate()
+        .map(|(i, b)| (b.name.clone(), i))
+        .collect();
+    let mut w = model_world_frames(model);
+
+    // Bone indices of `root_name` and every descendant, by walking the parent table.
+    let subtree = |root_name: &str| -> Vec<usize> {
+        let Some(&r) = idx.get(root_name) else {
+            return Vec::new();
+        };
+        let mut out = vec![r];
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for (i, b) in model.bones.iter().enumerate() {
+                if b.parent >= 0 && out.contains(&(b.parent as usize)) && !out.contains(&i) {
+                    out.push(i);
+                    changed = true;
+                }
+            }
+        }
+        out
+    };
+
+    for (side, sign) in [("l", 1.0_f32), ("r", -1.0_f32)] {
+        // NB: the LEGS are deliberately NOT fitted here. A bare Z-band at hip height catches the
+        // A-posed HANDS (they hang at hip height), which shoved the legs out to the wrists. The hip
+        // is fitted by weight OWNERSHIP (`derive_hip_placement`) after a rough skin instead.
+        //
+        // ARM: map the canon (shoulder→hand) segment onto (fitted shoulder → the mesh hand) as a
+        // similarity in the XZ plane, applied to the whole arm subtree — so the arm points down the
+        // mesh's actual arm and reaches its hand instead of flailing past it.
+        let (Some(&ua), Some(&hd)) = (
+            idx.get(&format!("upperarm_{side}")),
+            idx.get(&format!("hand_{side}")),
+        ) else {
+            continue;
+        };
+        let (sx0, sz0) = (w[ua].w_axis.x, w[ua].w_axis.z); // canon shoulder
+        let (hx0, hz0) = (w[hd].w_axis.x, w[hd].w_axis.z); // canon hand
+        let sx1 = if sh_w > 1.0 {
+            sign * SHOULDER_FRACTION * sh_w
+        } else {
+            sx0
+        };
+        let (hx1, hz1) = (sign * hand_x, hand_z); // the mesh's hand
+        let (ax, az) = (hx0 - sx0, hz0 - sz0);
+        let (bx, bz) = (hx1 - sx1, hz1 - sz0);
+        let (alen, blen) = ((ax * ax + az * az).sqrt(), (bx * bx + bz * bz).sqrt());
+        if alen < 1e-3 || blen < 1e-3 {
+            continue;
+        }
+        let scale = blen / alen;
+        let dtheta = bz.atan2(bx) - az.atan2(ax);
+        let (c, s) = (dtheta.cos() * scale, dtheta.sin() * scale);
+        for bi in subtree(&format!("upperarm_{side}")) {
+            let (px, pz) = (w[bi].w_axis.x - sx0, w[bi].w_axis.z - sz0);
+            w[bi].w_axis.x = sx1 + c * px - s * pz;
+            w[bi].w_axis.z = sz0 + s * px + c * pz;
+        }
+    }
+
+    write_world_frames(&mut model.bones, &w);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1816,5 +2014,227 @@ mod tests {
             (d - forearm).length() < 1e-3,
             "without fingers the hand continues its forearm, got {d:?} vs {forearm:?}"
         );
+    }
+
+    /// A closed box mesh (non-deduped, one vertex per corner) — a stand-in raw character mesh.
+    fn box_mesh(x0: f32, x1: f32, y0: f32, y1: f32, z0: f32, z1: f32) -> RawModel {
+        let c = [
+            [x0, y0, z0],
+            [x1, y0, z0],
+            [x1, y1, z0],
+            [x0, y1, z0],
+            [x0, y0, z1],
+            [x1, y0, z1],
+            [x1, y1, z1],
+            [x0, y1, z1],
+        ];
+        let faces = [
+            ([0usize, 1, 2, 3], [0.0, 0.0, -1.0]),
+            ([4, 7, 6, 5], [0.0, 0.0, 1.0]),
+            ([0, 4, 5, 1], [0.0, -1.0, 0.0]),
+            ([3, 2, 6, 7], [0.0, 1.0, 0.0]),
+            ([0, 3, 7, 4], [-1.0, 0.0, 0.0]),
+            ([1, 5, 6, 2], [1.0, 0.0, 0.0]),
+        ];
+        let mut verts = Vec::new();
+        for (q, n) in faces {
+            for tri in [[q[0], q[1], q[2]], [q[0], q[2], q[3]]] {
+                for &vi in &tri {
+                    verts.push(RawVertex {
+                        p: c[vi],
+                        n,
+                        uv: [0.0, 0.0],
+                        joints: [0; 4],
+                        weights: [0.0; 4],
+                    });
+                }
+            }
+        }
+        let indices = (0..verts.len() as u32).collect();
+        RawModel {
+            vertices: verts,
+            indices,
+            bones: Vec::new(),
+        }
+    }
+
+    fn bbox(m: &RawModel) -> (Vec3, Vec3) {
+        let mut lo = Vec3::splat(f32::MAX);
+        let mut hi = Vec3::splat(f32::MIN);
+        for v in &m.vertices {
+            let p = Vec3::from(v.p);
+            lo = lo.min(p);
+            hi = hi.max(p);
+        }
+        (lo, hi)
+    }
+
+    #[test]
+    fn scale_mesh_to_stature_grounds_and_centres() {
+        // Arbitrary offset + unit scale: height 200, off-origin, off-plumb.
+        let mut model = box_mesh(10.0, 70.0, -5.0, 25.0, 100.0, 300.0);
+        let rep = scale_mesh_to_stature(&mut model, 170.0);
+        assert!((rep.source_height - 200.0).abs() < 1e-3);
+        assert!((rep.scale - 170.0 / 200.0).abs() < 1e-4);
+        let (lo, hi) = bbox(&model);
+        assert!((hi.z - lo.z - 170.0).abs() < 1e-2, "resized to stature");
+        assert!(lo.z.abs() < 1e-2, "grounded on the floor");
+        assert!(
+            ((lo.x + hi.x) * 0.5).abs() < 1e-2 && ((lo.y + hi.y) * 0.5).abs() < 1e-2,
+            "planted on the plumb line"
+        );
+    }
+
+    #[test]
+    fn install_baseline_skeleton_is_the_scaled_canon() {
+        let mut model = RawModel {
+            vertices: Vec::new(),
+            indices: Vec::new(),
+            bones: Vec::new(),
+        };
+        let stature = 190.0_f32; // an elf
+        install_baseline_skeleton(&mut model, stature);
+        let s = stature / crate::baseline::STATURE;
+        let pos = crate::baseline::world_positions();
+
+        // 66 bones, root excluded; pelvis leads and is the root of the set.
+        assert_eq!(model.bones.len(), crate::baseline::CANON_BONES - 1);
+        assert_eq!(model.bones[0].name, "pelvis");
+        assert_eq!(model.bones[0].parent, -1);
+
+        // Pelvis local == its scaled world (parent is the origin root); inverse_bind undoes it.
+        let pelvis_w = s * pos["pelvis"];
+        assert!((Vec3::from(model.bones[0].translation) - pelvis_w).length() < 1e-3);
+        let ib = Mat4::from_cols_array(&model.bones[0].inverse_bind);
+        assert!(
+            ib.transform_point3(pelvis_w).length() < 1e-3,
+            "inverse_bind maps the rest world back to the origin (bind == canon)"
+        );
+
+        // A child's local == the scaled parent→child offset.
+        let idx: std::collections::HashMap<&str, usize> = model
+            .bones
+            .iter()
+            .enumerate()
+            .map(|(i, b)| (b.name.as_str(), i))
+            .collect();
+        let spine = &model.bones[idx["spine_01"]];
+        let expect = s * (pos["spine_01"] - pos["pelvis"]);
+        assert!((Vec3::from(spine.translation) - expect).length() < 1e-3);
+
+        // bake_rig re-synthesizes the root → the full canon count.
+        let rig = crate::bake::bake_rig(&model, "Elf");
+        assert_eq!(rig.skeleton.bones.len(), crate::baseline::CANON_BONES);
+        assert_eq!(rig.skeleton.bones[0].name, "root");
+    }
+
+    #[test]
+    fn fit_baseline_pulls_limbs_onto_the_mesh() {
+        // A sparse humanoid cloud (already stature-scaled): hips ±10, shoulders ±15, hands ±25.
+        let h = 170.0_f32;
+        let v = |x: f32, z: f32| RawVertex {
+            p: [x, 0.0, z],
+            n: [0.0, 0.0, 1.0],
+            uv: [0.0, 0.0],
+            joints: [0; 4],
+            weights: [0.0; 4],
+        };
+        let verts = vec![
+            v(10.0, 0.54 * h),
+            v(-10.0, 0.54 * h),
+            v(15.0, 0.82 * h),
+            v(-15.0, 0.82 * h),
+            v(25.0, 0.45 * h),
+            v(-25.0, 0.45 * h),
+            v(0.0, 0.0),
+            v(0.0, h),
+        ];
+        let indices = (0..verts.len() as u32).collect();
+        let mut m = RawModel {
+            vertices: verts,
+            indices,
+            bones: Vec::new(),
+        };
+        fit_baseline_to_mesh(&mut m, h);
+
+        let w = model_world_frames(&m);
+        let idx: HashMap<&str, usize> = m
+            .bones
+            .iter()
+            .enumerate()
+            .map(|(i, b)| (b.name.as_str(), i))
+            .collect();
+        let wx = |n: &str| w[idx[n]].w_axis.x;
+        let wz = |n: &str| w[idx[n]].w_axis.z;
+
+        // fit_baseline_to_mesh does NOT touch the legs (the weight-based derive_hip does, after
+        // skinning — a band here would catch the A-posed hands). Thighs stay at the canon width.
+        let canon_thigh = 0.051 * h; // hip_x fraction, baseline.rs
+        assert!(
+            (wx("thigh_l") - canon_thigh).abs() < 1.0,
+            "thigh_l should stay canon ({canon_thigh}), got {}",
+            wx("thigh_l")
+        );
+        // Shoulder at SHOULDER_FRACTION of the shoulder flesh (0.70 · 15 = 10.5), NOT the wide canon.
+        assert!(
+            (wx("upperarm_l") - SHOULDER_FRACTION * 15.0).abs() < 1.0,
+            "upperarm_l x = {}",
+            wx("upperarm_l")
+        );
+        // The hand reaches the mesh's widest vertex (±25 at z = 0.45·170), not the canon's reach.
+        assert!(
+            (wx("hand_l") - 25.0).abs() < 1.5,
+            "hand_l x = {}",
+            wx("hand_l")
+        );
+        assert!(
+            (wz("hand_l") - 0.45 * h).abs() < 3.0,
+            "hand_l z = {}",
+            wz("hand_l")
+        );
+        // The torso is NEVER touched — spine and head stay on the plumb line.
+        assert!(
+            wx("spine_02").abs() < 1e-3 && wx("head").abs() < 1e-3,
+            "torso pulled off plumb"
+        );
+        // Mirror symmetry holds on the right side.
+        assert!(
+            (wx("hand_r") + 25.0).abs() < 1.5,
+            "hand_r x = {}",
+            wx("hand_r")
+        );
+    }
+
+    #[test]
+    fn boneless_mesh_rigs_and_bakes_to_a_valid_rig() {
+        let mut model = box_mesh(-30.0, 30.0, -15.0, 15.0, 0.0, 180.0);
+        assert!(model.bones.is_empty(), "starts with no skeleton");
+
+        scale_mesh_to_stature(&mut model, 170.0);
+        install_baseline_skeleton(&mut model, 170.0);
+        crate::bake::bake_skin(&mut model);
+
+        // Every vertex carries a normalised weight set pointing at real (66-set) bones.
+        for v in &model.vertices {
+            let sum: f32 = v.weights.iter().sum();
+            assert!((sum - 1.0).abs() < 1e-3, "weights not normalised: {sum}");
+            for (k, &j) in v.joints.iter().enumerate() {
+                if v.weights[k] > 0.0 {
+                    assert!((j as usize) < model.bones.len(), "joint out of range");
+                }
+            }
+        }
+
+        let rig = crate::bake::bake_rig(&model, "Body");
+        assert_eq!(rig.skeleton.bones.len(), crate::baseline::CANON_BONES);
+        assert_eq!(rig.skeleton.bones[0].name, "root");
+        for v in &rig.mesh.vertices {
+            for &j in &v.joints {
+                assert!(
+                    (j as usize) < rig.skeleton.bones.len(),
+                    "baked joint out of range"
+                );
+            }
+        }
     }
 }

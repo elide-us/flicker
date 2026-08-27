@@ -155,7 +155,7 @@ impl Command for FileCommand {
 use std::path::PathBuf;
 use std::time::Duration;
 
-use flicker::render::{Renderer, Vec2};
+use flicker::render::{FrameGraph, Renderer, Vec2};
 use flicker::scene::{Scene, SceneInput, Transition};
 use flicker::script::{HudCommand, ScriptHost, UiNode, ValueMap};
 use flicker::ui::{render_hud, run_ui, SceneDef, UiInput, UiIntents, UiState, WalkerHandler};
@@ -1722,9 +1722,10 @@ impl Scene for Quartermaster {
         Transition::None
     }
 
-    fn render(&mut self, renderer: &mut Renderer) {
+    fn render<'f>(&'f mut self, _renderer: &mut Renderer, fg: &mut FrameGraph<'f>) {
         if let Some(white) = self.white {
-            render_hud(renderer, &self.hud_commands, white, &[]);
+            let hud_commands = &self.hud_commands;
+            fg.overlay(move |r| render_hud(r, hud_commands, white, &[]));
         }
     }
 }
@@ -1905,8 +1906,41 @@ mod tests {
     use super::*;
     use flicker_content::PackageClass;
 
-    fn scratch(name: &str) -> (Quartermaster, PathBuf) {
-        let d = std::env::temp_dir().join(format!("flicker_qmbench_{name}"));
+    /// A self-cleaning scratch directory. Derefs to `Path` (so `d.join(..)`
+    /// works) and impls `AsRef<Path>`; removes its tree on drop so a panicking
+    /// test still cleans up after itself.
+    struct Scratch(PathBuf);
+
+    impl std::ops::Deref for Scratch {
+        type Target = std::path::Path;
+        fn deref(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    impl AsRef<std::path::Path> for Scratch {
+        fn as_ref(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn scratch(name: &str) -> (Quartermaster, Scratch) {
+        // Unique per-process (pid) and per-call (atomic counter) so two
+        // concurrent `cargo test` processes never share a fixed dir and stomp
+        // each other's fixtures.
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let d = Scratch(std::env::temp_dir().join(format!(
+            "flicker_qmbench_{name}_{}_{seq}",
+            std::process::id(),
+        )));
         let _ = std::fs::remove_dir_all(&d);
         let roots = Roots {
             package: d.join("package"),

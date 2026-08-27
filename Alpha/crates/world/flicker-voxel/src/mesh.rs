@@ -286,7 +286,7 @@ impl ClusterMesh {
     /// + mesh pipeline is failing to close.
     pub fn edge_use_histogram(&self) -> std::collections::HashMap<(u32, u32), u32> {
         let mut out = std::collections::HashMap::new();
-        for tri in self.indices.chunks_exact(3) {
+        for tri in self.indices.as_chunks::<3>().0 {
             for &(a, b) in &[(tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])] {
                 let key = if a < b { (a, b) } else { (b, a) };
                 *out.entry(key).or_insert(0_u32) += 1;
@@ -1062,7 +1062,7 @@ mod tests {
         // have all three vertices on the y=128 plane and a face normal
         // pointing +Y, which is the top of the patch.
         let mut found = false;
-        for tri in m.indices.chunks_exact(3) {
+        for tri in m.indices.as_chunks::<3>().0 {
             let p0 = m.vertices[tri[0] as usize].position;
             let p1 = m.vertices[tri[1] as usize].position;
             let p2 = m.vertices[tri[2] as usize].position;
@@ -1085,7 +1085,9 @@ mod tests {
     /// world-X plane at `wx ± tol`. Used to find seam-plane geometry.
     fn tris_on_x_plane(m: &ClusterMesh, wx: f32, tol: f32) -> usize {
         m.indices
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .filter(|t| {
                 t.iter()
                     .all(|i| (m.vertices[*i as usize].position[0] - wx).abs() < tol)
@@ -1230,7 +1232,7 @@ mod tests {
         };
         for (i, m) in meshes.iter().enumerate() {
             let off = ids[i].world_offset();
-            for tri in m.indices.chunks_exact(3) {
+            for tri in m.indices.as_chunks::<3>().0 {
                 let mut idx = [0u32; 3];
                 for (k, &vi) in tri.iter().enumerate() {
                     let p = m.vertices[vi as usize].position;
@@ -1349,7 +1351,7 @@ mod tests {
         let mut verts_q: Vec<[i64; 3]> = Vec::new();
         let mut lookup: std::collections::HashMap<[i64; 3], u32> = std::collections::HashMap::new();
         let mut triangles: Vec<[u32; 3]> = Vec::new();
-        for tri in m.indices.chunks_exact(3) {
+        for tri in m.indices.as_chunks::<3>().0 {
             let mut idx = [0u32; 3];
             for (k, &vi) in tri.iter().enumerate() {
                 let key = q(m.vertices[vi as usize].position);
@@ -1459,7 +1461,7 @@ mod tests {
         let mut triangles: Vec<[u32; 3]> = Vec::new();
         for (i, m) in meshes.iter().enumerate() {
             let off = ids[i].world_offset();
-            for tri in m.indices.chunks_exact(3) {
+            for tri in m.indices.as_chunks::<3>().0 {
                 let mut idx = [0u32; 3];
                 for (k, &vi) in tri.iter().enumerate() {
                     let p = m.vertices[vi as usize].position;

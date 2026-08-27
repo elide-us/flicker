@@ -57,9 +57,9 @@ pub struct MeshDrawOptions {
     /// "no tint".
     pub tint: [f32; 4],
     /// Glossiness `0..1`: `0` is matte (Lambertian only, the default); higher adds a soft **limb
-    /// sheen** from the point light (a star) for liquid / icy / wet-looking surfaces — a
-    /// Fresnel grazing-edge brightening, *not* a mirror hot-spot (which reads as a marble at planet
-    /// scale). The sheen strengthens with gloss.
+    /// sheen** from the rig's FIRST non-directional light (a star, a fire) for liquid / icy /
+    /// wet-looking surfaces — a Fresnel grazing-edge brightening, *not* a mirror hot-spot
+    /// (which reads as a marble at planet scale). The sheen strengthens with gloss.
     pub gloss: f32,
 }
 
@@ -227,27 +227,189 @@ impl Default for Camera {
     }
 }
 
-/// Frame-global lighting & atmosphere — the day/night cycle state the mesh
-/// shader uses. Set once per frame with [`crate::Renderer::set_scene`];
-/// the renderer fills in the camera position itself (for fog distance), so
-/// callers only supply the lights, ambient, fog, and grade.
+/// How many lights one [`LightRig`] carries — the fixed roster the `Scene` uniform
+/// ships and the lit shaders loop over. Today's ceiling was 3 (sun/moon/point) and a
+/// fireplace room wants 4–6; the loop is `count`-bounded, so empty slots cost nothing
+/// per fragment, and raising this is a one-line change with no shader edit.
+pub const MAX_LIGHTS: usize = 8;
+
+/// What a [`Light`] *is* — which of `direction` / `position` / `cone_*` it reads.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum LightKind {
+    /// Parallel light from infinity (sun, moon). Reads `direction` only; no falloff.
+    Dir,
+    /// Omnidirectional light at `position`. Reads `position` + `radius`.
+    Point,
+    /// A cone from `position` along `direction`. Reads `position`, `direction`,
+    /// `radius`, `cone_inner`/`cone_outer`.
+    Spot,
+}
+
+/// How a [`Driver`] varies its light's intensity over the stage clock.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum DriverKind {
+    /// Seeded 1-D value noise that only ever DIMS — a fire, a failing lamp.
+    Flicker,
+    /// A sine — a beacon, a heartbeat.
+    Pulse,
+}
+
+/// A per-light intensity modulation, evaluated CPU-side once per stage per frame
+/// ([`LightRig::driven`]). CPU-only: what reaches the GPU is the already-driven
+/// intensity, so a shader never carries a clock.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct Driver {
+    pub kind: DriverKind,
+    /// Cycles (pulse) / noise samples (flicker) per second of stage clock.
+    pub speed: f32,
+    /// How deep the modulation cuts. `0.0` ⇒ the gain is the literal `1.0`, so the
+    /// light is bit-for-bit undriven.
+    pub depth: f32,
+    /// Seeds the noise / the pulse phase, so two lamps in a room are not in lockstep.
+    pub seed: u32,
+}
+
+impl Driver {
+    /// This driver's intensity gain at stage time `t` (seconds). Pure and
+    /// deterministic in `(kind, speed, depth, seed, t)` — no wall clock, no state.
+    ///
+    /// `depth == 0.0` returns the literal `1.0`, which is what makes an undriven
+    /// light's intensity survive [`LightRig::driven`] unchanged in every bit.
+    pub fn gain(&self, t: f32) -> f32 {
+        if self.depth == 0.0 {
+            return 1.0;
+        }
+        match self.kind {
+            // A sine about 1.0 — symmetric, so a pulse both brightens and dims.
+            DriverKind::Pulse => {
+                let phase = hash01(self.seed, -1) * std::f32::consts::TAU;
+                1.0 + self.depth * (std::f32::consts::TAU * self.speed * t + phase).sin()
+            }
+            // Seeded value noise, mapped so the gain never exceeds 1.0: a fire dims,
+            // it does not overshoot the radiance the author set.
+            DriverKind::Flicker => {
+                let u = t * self.speed;
+                let cell = u.floor();
+                let f = u - cell;
+                let i = cell as i32;
+                let (a, b) = (hash01(self.seed, i), hash01(self.seed, i.wrapping_add(1)));
+                let n = a + (b - a) * (f * f * (3.0 - 2.0 * f)); // smoothstep interpolation
+                1.0 - self.depth * (1.0 - n)
+            }
+        }
+    }
+}
+
+/// Integer hash → `[0, 1)`. A splitmix-style avalanche over `(seed, cell)`, so a
+/// driver's noise is reproducible from its seed alone on any machine.
+fn hash01(seed: u32, cell: i32) -> f32 {
+    let mut x = (cell as u32)
+        .wrapping_mul(0x9E37_79B9)
+        .wrapping_add(seed.wrapping_mul(0x85EB_CA6B));
+    x ^= x >> 16;
+    x = x.wrapping_mul(0x7FEB_352D);
+    x ^= x >> 15;
+    x = x.wrapping_mul(0x846C_A68B);
+    x ^= x >> 16;
+    // 24 bits of mantissa — exactly representable, so the division is exact.
+    (x >> 8) as f32 / 16_777_216.0
+}
+
+/// ONE light of a [`LightRig`]. The rig is a LIST: a sun is a `Dir` light and a
+/// brazier is a `Point` light, in the same array, shaded by the same loop.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct Light {
+    pub kind: LightKind,
+    /// Radiance hue (linear RGB). The magnitude an author wants rides `intensity`.
+    pub color: Vec3,
+    /// Scalar multiplier on `color`. `1.0` is the legacy convention (colour carries
+    /// the magnitude); a light with real falloff wants it in the tens.
+    pub intensity: f32,
+    /// World position — `Point` / `Spot` only.
+    pub position: Vec3,
+    /// `Dir`: the direction **toward** the light (normalized). `Spot`: the cone axis,
+    /// pointing **away** from the light.
+    pub direction: Vec3,
+    /// Falloff radius. `<= 0.0` ⇒ **no falloff at all** (the absence of an authored
+    /// radius, not a sentinel) — which is how today's falloff-less point light
+    /// survives the move to the list unchanged.
+    pub radius: f32,
+    /// Cone half-angle in RADIANS, `Spot` only: full brightness inside it.
+    pub cone_inner: f32,
+    /// Cone half-angle in RADIANS, `Spot` only: zero outside it, `smoothstep` from
+    /// `cone_outer` to `cone_inner` between.
+    pub cone_outer: f32,
+    /// Optional intensity modulation, applied by [`LightRig::driven`].
+    pub driver: Option<Driver>,
+}
+
+impl Default for Light {
+    /// A black directional light pointing straight up: present, states every term,
+    /// contributes nothing. The rig's empty slots and its "off" lights are this.
+    fn default() -> Self {
+        Self {
+            kind: LightKind::Dir,
+            color: Vec3::ZERO,
+            intensity: 1.0,
+            position: Vec3::ZERO,
+            direction: Vec3::Y,
+            radius: 0.0,
+            cone_inner: 0.0,
+            cone_outer: 0.0,
+            driver: None,
+        }
+    }
+}
+
+impl Light {
+    /// A directional light: `direction` points TOWARD the light.
+    pub fn dir(direction: Vec3, color: Vec3) -> Self {
+        Self {
+            kind: LightKind::Dir,
+            color,
+            direction,
+            ..Self::default()
+        }
+    }
+
+    /// A point light at `position`. `radius <= 0` ⇒ no distance falloff.
+    pub fn point(position: Vec3, color: Vec3) -> Self {
+        Self {
+            kind: LightKind::Point,
+            color,
+            position,
+            ..Self::default()
+        }
+    }
+
+    /// What actually reaches a surface before falloff: `color * intensity`. With the
+    /// legacy `intensity = 1.0` this is `color` in every bit.
+    pub fn radiance(&self) -> Vec3 {
+        self.color * self.intensity
+    }
+}
+
+/// Frame-global lighting & atmosphere — the LIGHT LIST plus the sky/fog state one
+/// stage renders under. Set once per frame with [`crate::Renderer::set_scene`]; the
+/// renderer fills in the camera position itself (for fog distance), so callers supply
+/// only the lights, ambient, and fog.
 ///
-/// Two directional lights (`sun` + `moon`) each contribute a matte
-/// Lambertian term; `*_dir` points **toward** the light and should be
-/// normalized. A light below the horizon is faded by handing it a near-black
-/// colour (no explicit night branch in the shader). `fog_*` and `grade_*`
-/// are reserved for the fog / colour-grade slices and default to inert.
+/// The rig is ONE representation: there is no separate sun/moon/point — a sun is
+/// `lights[0]` with [`LightKind::Dir`], and the sky pass reads that SLOT back through
+/// [`LightRig::sky_sun`]. Slots 0 and 1 are the sky slots in one addressing scheme:
+/// what `sky_sun`/`sky_moon` read, and what a celestial cycle composing over the rig
+/// overwrites by index. A light below the horizon is faded by handing it a near-black
+/// colour (no explicit night branch in the shader). `fog_*` IS implemented (the mesh
+/// shaders apply it; `fog_density` 0 leaves it inert). The colour GRADE is not here at
+/// all — it is pass-owned by [`TonemapGradePass`](crate::TonemapGradePass), the ONE
+/// representation of it.
 #[derive(Copy, Clone, Debug)]
-pub struct SceneLighting {
-    /// Direction toward the sun (normalized).
-    pub sun_dir: Vec3,
-    /// Sun radiance (linear RGB). Black ⇒ the sun is effectively off.
-    pub sun_color: Vec3,
-    /// Direction toward the moon (normalized).
-    pub moon_dir: Vec3,
-    /// Moon radiance (linear RGB). Black ⇒ the moon is effectively off.
-    pub moon_color: Vec3,
-    /// Flat ambient floor added before the directional terms.
+pub struct LightRig {
+    /// The roster. Only the first `count` entries are lit; the rest are inert.
+    pub lights: [Light; MAX_LIGHTS],
+    /// How many of `lights` this rig actually carries (`<= MAX_LIGHTS`).
+    pub count: u8,
+    /// Flat ambient floor added before the light terms.
     pub ambient: Vec3,
     /// Procedural-sky colour straight up (linear RGB). Used by the sky pass
     /// ([`crate::Renderer::draw_sky`]); ignored when no sky is requested.
@@ -255,21 +417,11 @@ pub struct SceneLighting {
     /// Procedural-sky colour at the horizon band (linear RGB). The sky pass
     /// gradients `sky_horizon`→`sky_zenith` by view elevation.
     pub sky_horizon: Vec3,
-    /// Distance-fog colour (linear RGB). Reserved — applied in a later slice.
+    /// Distance-fog colour (linear RGB) — the exponential distance fog the mesh
+    /// shaders apply (`mesh.wgsl`); `fog_density` 0 leaves it inert.
     pub fog_color: Vec3,
-    /// Distance-fog density. `0.0` ⇒ no fog. Reserved for a later slice.
+    /// Distance-fog density. `0.0` ⇒ no fog.
     pub fog_density: f32,
-    /// Colour-grade tint (linear RGB). Reserved for a later slice.
-    pub grade: Vec3,
-    /// Colour-grade strength in `0..1`. `0.0` ⇒ no grade. Later slice.
-    pub grade_strength: f32,
-    /// World position of a **point light** (e.g. a central star). Each fragment is lit from
-    /// `normalize(point_pos − world_position)`, so bodies at different positions are correctly
-    /// lit from their own direction — unlike the parallel `sun`/`moon`. No distance falloff.
-    pub point_pos: Vec3,
-    /// Point-light radiance (linear RGB). Black ⇒ the point light is off (the default), so
-    /// scenes that don't set it are unchanged.
-    pub point_color: Vec3,
     /// World→celestial rotation for the procedural night sky (stars + Milky
     /// Way). A view ray transformed by this lands in a sky-fixed frame, so the
     /// stars rotate with time of day and tilt with latitude. Identity leaves
@@ -277,26 +429,121 @@ pub struct SceneLighting {
     pub star_rotation: Mat4,
 }
 
-impl Default for SceneLighting {
-    /// Matches the renderer's seeded default — the pre-uniform hardcoded
-    /// look: a warm-white sun over a `0.3` ambient, no moon, no fog/grade.
+impl Default for LightRig {
+    /// Matches the renderer's seeded default — the pre-uniform hardcoded look, stated
+    /// as the three lights the legacy `sun`/`moon`/`point` keys have always meant: a
+    /// warm-white sun over a `0.3` ambient, a black moon, a black point light.
     fn default() -> Self {
+        let mut lights = [Light::default(); MAX_LIGHTS];
+        lights[0] = Light::dir(Vec3::new(0.5, 1.0, 0.3).normalize(), Vec3::splat(0.7));
+        lights[1] = Light::dir(Vec3::Y, Vec3::ZERO);
+        lights[2] = Light::point(Vec3::ZERO, Vec3::ZERO);
         Self {
-            sun_dir: Vec3::new(0.5, 1.0, 0.3).normalize(),
-            sun_color: Vec3::splat(0.7),
-            moon_dir: Vec3::Y,
-            moon_color: Vec3::ZERO,
+            lights,
+            count: 3,
             ambient: Vec3::splat(0.3),
             sky_zenith: Vec3::new(0.012, 0.016, 0.030),
             sky_horizon: Vec3::new(0.030, 0.040, 0.085),
             fog_color: Vec3::ZERO,
             fog_density: 0.0,
-            grade: Vec3::ZERO,
-            grade_strength: 0.0,
-            point_pos: Vec3::ZERO,
-            point_color: Vec3::ZERO, // off by default — scenes opt in
             star_rotation: Mat4::IDENTITY,
         }
+    }
+}
+
+impl LightRig {
+    /// Append one light. `false` (and a warn) when the roster is already full — a
+    /// dropped light is loud, never silent.
+    pub fn push(&mut self, light: Light) -> bool {
+        let i = self.count as usize;
+        if i >= MAX_LIGHTS {
+            tracing::warn!("LightRig: {MAX_LIGHTS} lights already — {light:?} is dropped");
+            return false;
+        }
+        self.lights[i] = light;
+        self.count += 1;
+        true
+    }
+
+    /// This rig at stage time `t`: every driven light's `intensity` scaled by its
+    /// driver's gain. Pure, `Copy` → `Copy`, no allocation — called once per stage per
+    /// frame by [`FrameGraph::surface`](crate::FrameGraph::surface). A rig with no
+    /// drivers comes back bit-for-bit identical.
+    pub fn driven(&self, t: f32) -> Self {
+        let mut out = *self;
+        for light in out.lights.iter_mut().take(self.count as usize) {
+            if let Some(driver) = light.driver {
+                light.intensity *= driver.gain(t);
+            }
+        }
+        out
+    }
+
+    /// The rig's KEY light for the sky pass: **slot 0**.
+    ///
+    /// The sun and the moon are SLOTS, not a filtered order. `lights[0]` IS the sun and
+    /// `lights[1]` IS the moon — ONE addressing scheme, the one the legacy compile order
+    /// (`sun`→slot 0, `moon`→slot 1), the `hearth` idiom and
+    /// `CelestialState::over` (which overwrites those two by INDEX every frame) all
+    /// already assume. A slot past `count`, or one holding a non-[`LightKind::Dir`]
+    /// light, yields a black [`Light`] so the sky darkens rather than reading something
+    /// that is not a sky light. Parking a fixed light in slot 0 or 1 is reported as a
+    /// problem by the preset compiler, so an eaten light is loud rather than missing.
+    pub fn sky_sun(&self) -> Light {
+        self.sky_slot(0)
+    }
+
+    /// The rig's moon for the sky pass: **slot 1**. See [`Self::sky_sun`].
+    pub fn sky_moon(&self) -> Light {
+        self.sky_slot(1)
+    }
+
+    fn sky_slot(&self, slot: usize) -> Light {
+        let light = self.lights[slot];
+        if slot < self.count as usize && light.kind == LightKind::Dir {
+            light
+        } else {
+            Light::default()
+        }
+    }
+
+    /// The orthographic view-projection of a directional light's SHADOW MAP — **the ONE
+    /// matrix** the producer stage renders the casters with and the consumer's lit passes
+    /// sample against, so the two can never disagree. `light_index` is the rig slot (a
+    /// [`LightKind::Dir`] light, whose `direction` points TOWARD the light); `center` is
+    /// the world point the box is fitted around (the field centre); `extent` is the
+    /// half-size of the SQUARE box (world units). Reuses [`Camera`]'s orthographic
+    /// projection at aspect 1 (shadow maps are square) — the projection is LINEAR in
+    /// depth, so the generous near/far costs no precision. A slot holding a black/absent
+    /// light falls back to a straight-down view rather than a degenerate matrix.
+    pub fn shadow_view_proj(&self, light_index: usize, center: Vec3, extent: f32) -> Mat4 {
+        let dir = self
+            .lights
+            .get(light_index)
+            .map(|l| l.direction)
+            .unwrap_or(Vec3::Y)
+            .normalize_or_zero();
+        let dir = if dir == Vec3::ZERO { Vec3::Y } else { dir };
+        let extent = if extent.is_finite() && extent > 0.0 {
+            extent
+        } else {
+            1.0
+        };
+        // Eye placed back along the toward-light direction; the box is 2·extent per side.
+        let dist = extent * 2.0;
+        let eye = center + dir * dist;
+        // An up vector that is not parallel to the view direction (a near-vertical sun).
+        let up = if dir.y.abs() > 0.99 { Vec3::Z } else { Vec3::Y };
+        let cam = Camera {
+            position: eye,
+            target: center,
+            up,
+            near: 0.1,
+            far: dist + extent * 2.0,
+            ..Camera::default()
+        }
+        .with_ortho_height(extent * 2.0);
+        cam.view_projection(1.0)
     }
 }
 
@@ -380,5 +627,137 @@ mod pick_tests {
             ray_triangle(o, d, a, b, c).is_none(),
             "geometry behind the ray must miss"
         );
+    }
+}
+
+#[cfg(test)]
+mod rig_tests {
+    use super::*;
+
+    /// The default rig IS the legacy sun/moon/point trio, in that order — the ONE
+    /// mapping every legacy preset compiles through, so a slot that moved would be
+    /// caught here rather than by a stage rendering from the wrong light.
+    #[test]
+    fn the_default_rig_is_the_legacy_trio_in_slot_order() {
+        let rig = LightRig::default();
+        assert_eq!(rig.count, 3, "sun, moon, point — black ones included");
+        assert_eq!(rig.lights[0].kind, LightKind::Dir);
+        assert_eq!(rig.lights[1].kind, LightKind::Dir);
+        assert_eq!(rig.lights[2].kind, LightKind::Point);
+        assert_eq!(rig.lights[2].radius, 0.0, "no falloff, exactly as before");
+        for l in &rig.lights[..3] {
+            assert_eq!(l.intensity, 1.0, "the colour carries the magnitude");
+        }
+        // The sky reads SLOTS 0 and 1 — the one addressing scheme.
+        assert_eq!(rig.sky_sun(), rig.lights[0]);
+        assert_eq!(rig.sky_moon(), rig.lights[1]);
+        assert_eq!(rig.sky_sun().radiance(), rig.lights[0].color, "intensity 1");
+    }
+
+    /// **GATE — the sky slots are SLOTS.** A rig whose slot 0 is not a directional
+    /// light hands the sky a black [`Light`] rather than hunting down some later
+    /// directional one: `sky_sun`/`sky_moon` and a celestial cycle's index writes are
+    /// ONE scheme, so the sky can never read a light the cycle is about to overwrite.
+    /// A slot past `count` is black for the same reason. And `push` fills the roster
+    /// then refuses, loudly.
+    #[test]
+    fn the_roster_is_bounded_and_a_missing_key_light_is_black() {
+        let mut rig = LightRig {
+            lights: [Light::default(); MAX_LIGHTS],
+            count: 0,
+            ..LightRig::default()
+        };
+        assert!(rig.push(Light::point(Vec3::ZERO, Vec3::ONE)));
+        assert_eq!(
+            rig.sky_sun().color,
+            Vec3::ZERO,
+            "slot 0 is a point light ⇒ black sun"
+        );
+        assert_eq!(
+            rig.sky_moon().color,
+            Vec3::ZERO,
+            "slot 1 is past `count` ⇒ black moon"
+        );
+        // A directional light LATER in the roster is NOT the sun — slot 0 still is.
+        assert!(rig.push(Light::dir(Vec3::Y, Vec3::ONE)));
+        assert_eq!(
+            rig.sky_sun().color,
+            Vec3::ZERO,
+            "a dir light in slot 1 is not promoted to the sun"
+        );
+        assert_eq!(rig.sky_moon(), rig.lights[1], "…it is the MOON slot");
+        while rig.count < MAX_LIGHTS as u8 {
+            assert!(rig.push(Light::point(Vec3::ZERO, Vec3::ONE)));
+        }
+        assert!(
+            !rig.push(Light::point(Vec3::ZERO, Vec3::ONE)),
+            "past the cap"
+        );
+        assert_eq!(rig.count, MAX_LIGHTS as u8);
+    }
+
+    /// **GATE — drivers are deterministic in their seed, and inert at depth 0.**
+    /// A flicker must reproduce from `(seed, t)` alone (no wall clock, no state), two
+    /// seeds must differ, a flicker must only ever DIM, and `depth == 0` must return
+    /// the literal `1.0` — the proof that an undriven rig reaches the GPU unchanged in
+    /// every bit.
+    #[test]
+    fn drivers_are_deterministic_for_a_seed() {
+        let d = |kind, depth, seed| Driver {
+            kind,
+            speed: 7.0,
+            depth,
+            seed,
+        };
+        let a = d(DriverKind::Flicker, 0.35, 1);
+        let b = d(DriverKind::Flicker, 0.35, 2);
+        let mut differ = false;
+        for step in 0..64 {
+            let t = step as f32 * 0.031;
+            assert_eq!(
+                a.gain(t).to_bits(),
+                a.gain(t).to_bits(),
+                "same (seed, t) ⇒ same bits"
+            );
+            let g = a.gain(t);
+            assert!(
+                (1.0 - 0.35..=1.0).contains(&g),
+                "a flicker only dims: {g} at t={t}"
+            );
+            differ |= a.gain(t).to_bits() != b.gain(t).to_bits();
+            // Depth 0 is the literal 1.0, for both kinds — no epsilon.
+            assert_eq!(
+                d(DriverKind::Flicker, 0.0, 1).gain(t).to_bits(),
+                1.0f32.to_bits()
+            );
+            assert_eq!(
+                d(DriverKind::Pulse, 0.0, 1).gain(t).to_bits(),
+                1.0f32.to_bits()
+            );
+        }
+        assert!(differ, "two seeds must not run in lockstep");
+
+        // …and the rig-level proof: an undriven rig, and a depth-0 driven one, come
+        // back from `driven` with their intensities bit-identical.
+        let rig = LightRig::default();
+        for t in [0.0, 1.0, 12.75] {
+            for (before, after) in rig.lights.iter().zip(rig.driven(t).lights.iter()) {
+                assert_eq!(before.intensity.to_bits(), after.intensity.to_bits());
+            }
+        }
+        let mut driven = LightRig::default();
+        driven.lights[2].driver = Some(d(DriverKind::Pulse, 0.0, 9));
+        assert_eq!(
+            driven.driven(3.5).lights[2].intensity.to_bits(),
+            driven.lights[2].intensity.to_bits(),
+            "depth 0 leaves the intensity untouched"
+        );
+        // A real driver actually moves it.
+        driven.lights[2].driver = Some(d(DriverKind::Flicker, 0.5, 9));
+        let moved = (0..40).any(|i| {
+            driven.driven(i as f32 * 0.05).lights[2].intensity.to_bits()
+                != driven.lights[2].intensity.to_bits()
+        });
+        assert!(moved, "a depth-0.5 flicker must actually modulate");
     }
 }

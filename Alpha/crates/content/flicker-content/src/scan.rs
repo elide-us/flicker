@@ -360,6 +360,14 @@ pub enum PackageClass {
     /// recipe is the authored artifact and the maps are its rebuildable output,
     /// so the browser must not present them as the same kind of thing.
     TextureRecipe,
+    /// A prop VARIATION SET (`flicker.propset`, on-disk `<Name>.set.json`) — an
+    /// authored grouping of props with pick weights that set-dressing and the
+    /// scatter consume. The props it references are baked [`Self::Rig`]s; the
+    /// set is the authored artifact composing them, so the browser must present
+    /// it as its own kind rather than an unrecognized blob. `id() == "propset"`
+    /// matches the `class: "propset"` provenance string the promotion manifest
+    /// already writes.
+    PropSet,
     /// A font face.
     Font,
     /// A README / licence riding along in the tree.
@@ -389,6 +397,7 @@ impl PackageClass {
             Self::Epoch => "epoch",
             Self::Texture => "texture",
             Self::TextureRecipe => "texture_recipe",
+            Self::PropSet => "propset",
             Self::Font => "font",
             Self::Doc => "doc",
             Self::Manifest => "manifest",
@@ -483,6 +492,9 @@ pub fn classify_package(path: &Path) -> PackageClass {
     if logical.ends_with(".texture.json") {
         return PackageClass::TextureRecipe;
     }
+    if logical.ends_with(".set.json") {
+        return PackageClass::PropSet;
+    }
     if !logical.ends_with(".json") {
         return PackageClass::Unknown;
     }
@@ -531,6 +543,7 @@ pub fn classify_package_head(head: &[u8]) -> PackageClass {
     match declared_format(head) {
         Some(b"flicker.pack") => return PackageClass::CombatPack,
         Some(b"flicker.rbp") => return PackageClass::RetargetBasePose,
+        Some(b"flicker.propset") => return PackageClass::PropSet,
         // A cluster bake declares no `format` — its `lod` id is the shape.
         None if find_key(head, b"lod").is_some() => return PackageClass::Bake,
         _ => {}
@@ -802,15 +815,11 @@ mod tests {
 
     #[test]
     fn names_alone_settle_the_unambiguous_classes() {
-        // The `.gz` at-rest suffix must not hide the logical extension.
-        assert_eq!(
-            classify_package(Path::new("a/Foo_BaseColor.png")),
-            PackageClass::Texture
-        );
-        assert_eq!(
-            classify_package(Path::new("a/Cinzel.ttf")),
-            PackageClass::Font
-        );
+        // What actually needs pinning is the at-rest `.gz` strip revealing the logical,
+        // often MULTI-PART extension — a naive `Path::extension()` sees only `gz`/`json`
+        // and misclassifies every one of these. The plain single-extension classes
+        // (Texture/Font/Doc) are exercised on real content by
+        // `every_real_package_file_classifies`, so they need no synthetic restatement here.
         assert_eq!(
             classify_package(Path::new("a/intro.flight.gz")),
             PackageClass::Flight
@@ -827,7 +836,15 @@ mod tests {
             classify_package(Path::new("a/B.rbp.json.gz")),
             PackageClass::RetargetBasePose
         );
-        assert_eq!(classify_package(Path::new("a/OFL.txt")), PackageClass::Doc);
+        // A prop variation set is named by its `.set.json` extension, gz-at-rest.
+        assert_eq!(
+            classify_package(Path::new(
+                "props/environment/GrassField/GrassField.set.json.gz"
+            )),
+            PackageClass::PropSet
+        );
+        // An unrecognized extension fails honestly instead of guessing — the property
+        // the drift gate leans on.
         assert_eq!(
             classify_package(Path::new("a/thing.bin")),
             PackageClass::Unknown
@@ -869,6 +886,10 @@ mod tests {
         assert_eq!(
             classify_package_head(br#"{"format": "flicker.rbp", "pose": []}"#),
             PackageClass::RetargetBasePose
+        );
+        assert_eq!(
+            classify_package_head(br#"{"format": "flicker.propset", "variants": []}"#),
+            PackageClass::PropSet
         );
         // A cluster bake declares no `format` at all.
         assert_eq!(

@@ -41,9 +41,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use flicker::render::{
-    build_textured_verts, grid_segments_xy, Mat4, MeshDrawOptions, MeshHandle, MeshIndices,
-    MeshVertex, PbrMaps, QuadView, Rect, Renderer, SceneLighting, SkinnedMeshHandle, SkinnedVertex,
-    TextureHandle, TexturedMeshHandle, Vec2, Vec3, ViewportFiller, ViewportLayout,
+    build_textured_verts, grid_segments_xy, FrameGraph, LightRig, Mat4, MeshDrawOptions,
+    MeshHandle, MeshIndices, MeshVertex, PbrMaps, QuadView, Rect, Renderer, SkinnedMeshHandle,
+    SkinnedVertex, TextureHandle, TexturedMeshHandle, Vec2, Vec3, ViewportFiller, ViewportLayout,
 };
 use flicker::scene::{Scene, SceneInput, Transition};
 use flicker::script::{HudCommand, ScriptHost, UiNode, ValueMap};
@@ -58,10 +58,11 @@ use flicker_input_router::{Flow, InputEvent, InputHandler, RouteCtx, Router};
 use flicker_shell::{PauseScene, Theme};
 
 use flicker_content::{
-    attach_world, bake_rig, bake_skin, classify_asset, conform_to_canonical, default_reference,
-    fitting_base, garment_socket, parse_fbx, rename_to_canonical, reorient_to_canonical,
-    scan_folder, source_maps, write_garment, write_prop, write_rig, AssetClass, AssetReport,
-    ConformMode, ConformOutput, Fit, Kind, PropKind, RawModel, RenameReport, Scan, SourceMaps,
+    attach_world, bake_rig, bake_skin, classify_asset, conform_to_canonical, decimate_levels,
+    default_reference, fit_baseline_to_mesh, fitting_base, garment_socket, parse_fbx,
+    rename_to_canonical, reorient_to_canonical, scale_mesh_to_stature, scan_folder, source_maps,
+    write_garment, write_prop, write_rig, AssetClass, AssetReport, ConformMode, ConformOutput,
+    DecimateLevels, Fit, Kind, PropKind, RawModel, RenameReport, Scan, SourceMaps,
 };
 use flicker_mechanics::{
     autofit_capsules_from, closest_point_ray_segment, debug, drag_plane, gizmo_segments, GizmoMode,
@@ -1264,6 +1265,10 @@ pub struct AssetPipeline {
     /// posed rig — the `Display` panel's "Collision" toggle, off by default (a diagnostic, not the
     /// default read). The volumes themselves live on [`Parsed::collision`].
     show_collision: bool,
+    /// Draw the mesh as a WIREFRAME overlay (fill + wires) — the `Display` panel's "Wireframe"
+    /// toggle. Off by default, but the Prep stage forces it on so a decimation change is VISIBLE
+    /// (a well-decimated silhouette looks identical; the triangle grid is where the cut shows).
+    show_wireframe: bool,
     /// What the perspective view was framed on last draw. Cached rather than re-derived so the
     /// right-drag pan converts pixels to world units at exactly the scale the CAMERA used — the
     /// framing precedence (base body while fitting, else the parsed asset) lives in one place.
@@ -1272,7 +1277,11 @@ pub struct AssetPipeline {
     /// WHICH piece was picked, and its orientation. Keying on the folder alone meant turning the
     /// asset (or picking another piece in the same folder) silently kept showing the stale upload —
     /// the "ROT buttons do nothing" bug. Any change re-uploads.
-    preview: Option<(Uploaded, PreviewKey)>,
+    preview: Option<(Uploaded, PreviewKey, u64)>,
+    /// A FLAT mesh handle (positions+normals only) of the current working mesh, for the WIREFRAME
+    /// overlay — the textured/PBR draw ignores the wireframe flag, only the flat pipeline honours it,
+    /// so the wire pass needs its own handle. Keyed like `preview` (source identity + `mesh_gen`).
+    wire_mesh: Option<(MeshHandle, (PreviewKey, u64))>,
     /// The LIVE CPU-skinned character mesh for the Conform stage — re-skinned and re-uploaded when
     /// the authored pose (`pose_gen`) changes, so dragging a joint deforms the mesh in view. Keyed by
     /// the source identity AND `pose_gen`; other stages draw the cheap rest mesh via `preview`.
@@ -1280,6 +1289,9 @@ pub struct AssetPipeline {
     /// Bumped on every authored-offset write (a Conform slider or a gizmo drag) — the skinned-mesh
     /// cache key, so the live re-skin re-uploads exactly when the pose changes and never otherwise.
     pose_gen: u64,
+    /// Bumped when the working MESH GEOMETRY changes (Prep decimation / stature scale), so the rest
+    /// preview re-uploads exactly then — offset edits (which bump `pose_gen`) leave the rest mesh be.
+    mesh_gen: u64,
     /// The in-scene transform gizmo's mode (Translate is the only one that drags in slice 1; Rotate
     /// and Scale draw their handles but are inert). Toggled from the HUD.
     gizmo_mode: GizmoMode,
@@ -1289,6 +1301,14 @@ pub struct AssetPipeline {
     /// Symmetry: an ortho reposition of a left/right joint mirrors to its `_l`/`_r` twin. Default on;
     /// a HUD toggle turns it off to move one joint alone.
     mirror_joints: bool,
+    /// PREP stage: the target stature (cm) a raw mesh is resized to before rigging, and the
+    /// decimation keep-percent (100 = the source verbatim, floor 50). The two live sliders.
+    stature_cm: f32,
+    keep_pct: f32,
+    /// The progressive decimation levels for the current source — built once on Prep entry, keyed by
+    /// the source identity (folder + picked candidate). The slider selects a cached level. Boneless
+    /// (raw) meshes only; a mesh that arrives rigged is game-ready and Prep leaves it untouched.
+    decimate: Option<(PreviewKey, DecimateLevels)>,
 }
 
 /// What a cached preview upload was built from. Any difference means the GPU copy is stale.
@@ -1714,11 +1734,17 @@ impl AssetPipeline {
             textures: HashMap::new(),
             show_base: true,
             show_collision: false,
+            show_wireframe: false,
             view_radius: 100.0,
             preview: None,
+            wire_mesh: None,
             skinned: None,
             pose_gen: 0,
+            mesh_gen: 0,
             mirror_joints: true,
+            stature_cm: flicker_content::baseline::STATURE,
+            keep_pct: 100.0,
+            decimate: None,
             gizmo_mode: GizmoMode::default(),
             gizmo_drag: None,
         }
@@ -1988,6 +2014,11 @@ impl AssetPipeline {
         } else {
             ConformMode::Canonical
         };
+        // The raw-mesh rig path needs the target stature (set on Prep) and must wait until the user
+        // has passed the Prep stage — installing on the un-prepped mesh would rig the wrong scale and
+        // triangle count. Read both before borrowing `source`.
+        let stature = self.stature_cm;
+        let at_conform_step = self.wf.step() == "conform";
         let Some(src) = self.source.as_mut() else {
             return;
         };
@@ -2006,6 +2037,38 @@ impl AssetPipeline {
         let Some(parsed) = src.parsed.as_mut() else {
             return;
         };
+        // RAW MESH (no skeleton): install the authored canon scaled to the target stature and bake
+        // fresh skin — the boneless rig path (Aaron 2026-08-22). Deferred until the Prep stage is
+        // done so it rigs the decimated, stature-scaled geometry. The bind IS the authored canon by
+        // construction (uniform stature scale, no mesh-fit, no rolled-back pose_mesh_to_canon).
+        if parsed.model.bones.is_empty() {
+            if !at_conform_step {
+                return;
+            }
+            scale_mesh_to_stature(&mut parsed.model, stature);
+            fit_baseline_to_mesh(&mut parsed.model, stature);
+            // Rough skin first so the HIP fit reads flesh by OWNERSHIP: a bare Z-band at hip height
+            // catches the A-posed hands (they hang there), but the weight test excludes them because
+            // they belong to the hand bones. Then re-skin from the fitted hips.
+            bake_skin(&mut parsed.model);
+            let _ = flicker_content::derive_hip_placement(&mut parsed.model);
+            bake_skin(&mut parsed.model);
+            let n = parsed.model.bones.len();
+            parsed.rebuild(&[]);
+            tracing::info!("installed canon on raw mesh: {n} bones at {stature}cm, skinned");
+            src.rig = Some(Rig {
+                rename: RenameReport::default(),
+                out: ConformOutput::default(),
+                map: vec![MapState::Ok; n],
+                offsets: vec![BoneOffset::default(); n],
+                sel: 0,
+                focused: false,
+                window: 0,
+            });
+            src.resolve_attach();
+            src.error = None;
+            return;
+        }
         let rename = rename_to_canonical(&mut parsed.model);
         match conform_to_canonical(&mut parsed.model, &default_reference(), mode) {
             Ok(out) => {
@@ -2203,7 +2266,12 @@ impl AssetPipeline {
     /// THE PREVIEW PAGE: one full-rect view of the baked body playing the shared idle,
     /// GPU-skinned through the same palette path the runtime uses — the Rig stage's smoke
     /// test. Judge it, then go Back to adjust joints or Next toward Export.
-    fn render_bake_preview(&mut self, renderer: &mut Renderer, base_layer: f32) {
+    fn render_bake_preview<'f>(
+        &mut self,
+        renderer: &mut Renderer,
+        fg: &mut FrameGraph<'f>,
+        base_layer: f32,
+    ) {
         self.ensure_bake_preview(renderer);
         // The viewport is built in `enter` and seated in the walker's reserved rect every
         // frame in `update`, exactly like `clip` — never created here, where it would run
@@ -2239,19 +2307,25 @@ impl AssetPipeline {
             (Segments::new(), Segments::new())
         };
         let (mesh, bone_count) = (bp.mesh, bp.bone_count);
-        single.render(renderer, base_layer + 2.0, bp.radius, |r, _view| {
-            r.set_scene(SceneLighting::default());
-            if !ground.is_empty() {
-                r.draw_lines(&ground, GROUND);
-            }
-            r.draw_skinned_instanced(mesh, &[recentre], &palette, bone_count);
-            if !bones.is_empty() {
-                r.draw_lines_overlay(&bones, BONE);
-            }
-            if !balls.is_empty() {
-                r.draw_lines_overlay(&balls, JOINT);
-            }
-        });
+        single.declare(
+            renderer,
+            fg,
+            base_layer + 2.0,
+            bp.radius,
+            move |r, _view| {
+                r.set_scene(LightRig::default());
+                if !ground.is_empty() {
+                    r.draw_lines(&ground, GROUND);
+                }
+                r.draw_skinned_instanced(mesh, &[recentre], &palette, bone_count);
+                if !bones.is_empty() {
+                    r.draw_lines_overlay(&bones, BONE);
+                }
+                if !balls.is_empty() {
+                    r.draw_lines_overlay(&balls, JOINT);
+                }
+            },
+        );
     }
 
     fn commit(&mut self) {
@@ -2374,7 +2448,9 @@ impl AssetPipeline {
                 }
                 // Any other prop is a rigid static mesh; the authored fit is written into its attach.
                 Some(AssetClass::Prop) => {
-                    write_prop(&model, &fbx, &name, &out, &fit).map_err(|e| e.to_string())
+                    // POC flat-colour (bake_prop) flows through the headless `import_prop` example,
+                    // not the bench UI yet — textured props pass None here (unchanged behaviour).
+                    write_prop(&model, &fbx, &name, &out, &fit, None).map_err(|e| e.to_string())
                 }
                 // Animation never reaches this dispatch — routed to `commit_clip_to` above.
                 Some(AssetClass::Animation) => unreachable!("animation commits via commit_clip_to"),
@@ -2459,7 +2535,12 @@ impl AssetPipeline {
     /// own panel — ROOT MOTION through a frame widened to its planar travel, IN PLACE
     /// at rest framing. Same conventions as the 2×2 (recentre to origin, violet bones
     /// under cyan joint balls, depth-tested ground lattice).
-    fn render_clip(&mut self, renderer: &mut Renderer, base_layer: f32) {
+    fn render_clip<'f>(
+        &mut self,
+        renderer: &mut Renderer,
+        fg: &mut FrameGraph<'f>,
+        base_layer: f32,
+    ) {
         let Some(pair) = self.clip.as_ref() else {
             return;
         };
@@ -2495,12 +2576,13 @@ impl AssetPipeline {
             panel(&pose(&cp.ip), cp.ip_center, cp.radius),
         ];
         let radii = [cp.rm_radius, cp.radius];
-        pair.render_framed(
+        pair.declare_framed(
             renderer,
+            fg,
             base_layer + 2.0,
-            |i| radii[i],
-            |r, view| {
-                r.set_scene(SceneLighting::default());
+            move |i| radii[i],
+            move |r, view| {
+                r.set_scene(LightRig::default());
                 let (bones, balls, ground) = &panels[view];
                 if !ground.is_empty() {
                     r.draw_lines(ground, GROUND);
@@ -2639,7 +2721,7 @@ impl AssetPipeline {
     /// PLACED, never how it is built — so any folder `parse_fbx` reads previews the same way, with no
     /// per-model special-casing. Keyed by model identity, so re-picking a candidate or turning the
     /// orientation control re-uploads (freeing the previous upload first). `None` before a mesh
-    /// exists. Must run before `grid.render` borrows the renderer for the RTT passes.
+    /// exists. Must run before `grid.declare` borrows the renderer for the RTT passes.
     fn ensure_source_mesh(&mut self, r: &mut Renderer) -> Option<Uploaded> {
         let (key, has_mesh) = {
             let src = self.source.as_ref()?;
@@ -2655,11 +2737,11 @@ impl AssetPipeline {
             return None;
         }
         let need = match &self.preview {
-            Some((_, k)) => *k != key,
+            Some((_, k, g)) => *k != key || *g != self.mesh_gen,
             None => true,
         };
         if need {
-            if let Some((old, _)) = self.preview.take() {
+            if let Some((old, _, _)) = self.preview.take() {
                 old.free(r);
             }
             // Own the geometry + the map paths first, so the immutable borrow of `source` ends
@@ -2685,9 +2767,56 @@ impl AssetPipeline {
                 (verts, uvs, parsed.model.indices.clone(), maps)
             };
             let up = upload_preview(r, &mut self.textures, &maps, &verts, &uvs, &indices);
-            self.preview = Some((up, key));
+            self.preview = Some((up, key, self.mesh_gen));
         }
-        self.preview.as_ref().map(|(h, _)| *h)
+        self.preview.as_ref().map(|(h, _, _)| *h)
+    }
+
+    /// Upload (and cache) a FLAT mesh handle of the working mesh for the WIREFRAME overlay. Separate
+    /// from [`Self::ensure_source_mesh`] because the textured/PBR draw ignores the wireframe flag —
+    /// only the flat pipeline draws wires — so a textured body still needs a flat handle to wire over
+    /// it. Keyed by source identity + `mesh_gen`, so a re-decimate re-uploads it too.
+    fn ensure_wire_mesh(&mut self, r: &mut Renderer) -> Option<MeshHandle> {
+        let (key, has_mesh) = {
+            let src = self.source.as_ref()?;
+            let has = src
+                .parsed
+                .as_ref()
+                .map(|p| !p.model.vertices.is_empty())
+                .unwrap_or(false);
+            let key: PreviewKey = (src.dir.clone(), src.candidate_sel);
+            (key, has)
+        };
+        if !has_mesh {
+            return None;
+        }
+        let need = match &self.wire_mesh {
+            Some((_, k)) => *k != (key.clone(), self.mesh_gen),
+            None => true,
+        };
+        if need {
+            if let Some((old, _)) = self.wire_mesh.take() {
+                r.free_mesh(old);
+            }
+            let (verts, indices) = {
+                let src = self.source.as_ref()?;
+                let parsed = src.parsed.as_ref()?;
+                let verts: Vec<MeshVertex> = parsed
+                    .model
+                    .vertices
+                    .iter()
+                    .map(|v| MeshVertex {
+                        position: v.p,
+                        normal: v.n,
+                        material: 0,
+                    })
+                    .collect();
+                (verts, parsed.model.indices.clone())
+            };
+            let h = r.upload_mesh(&verts, MeshIndices::U32(&indices));
+            self.wire_mesh = Some((h, (key, self.mesh_gen)));
+        }
+        self.wire_mesh.as_ref().map(|(h, _)| *h)
     }
 
     /// The LIVE CPU-skinned character mesh, for the Conform stage: skins `parsed.model.vertices`
@@ -3143,6 +3272,7 @@ impl AssetPipeline {
         // strings gate), like the rail labels riding `$wf_step_*` via `publish` below.
         let role = self.conform_role();
         let (title, hint) = match step.as_str() {
+            "prep" => ("$ap_prep_title", "$ap_prep_hint"),
             "conform" => (role.title(), role.hint()),
             "preview" => ("$ap_preview_title", "$ap_preview_hint"),
             "attach" => (
@@ -3164,6 +3294,7 @@ impl AssetPipeline {
         m.set("show_skeleton", self.show_skeleton);
         m.set("show_base", self.show_base);
         m.set("show_collision", self.show_collision);
+        m.set("show_wireframe", self.show_wireframe);
         m.set("mirror", self.mirror_joints);
         // The Task page's staged-reload preference — checkbox state, mirrored like the toggles.
         m.set("prefer_staged", self.prefer_staged);
@@ -3186,6 +3317,18 @@ impl AssetPipeline {
         // The Clip page's variant pick — checkbox state, mirrored like the toggles above.
         m.set("variant_rm", self.variant_rm);
         m.set("variant_ip", self.variant_ip);
+        // The Prep stage: the two live sliders, the resolved readout, and whether the slider group
+        // shows (a boneless raw mesh being conditioned; a mesh that arrives rigged is game-ready).
+        m.set("keep_pct", self.keep_pct as f64);
+        m.set("stature_cm", self.stature_cm as f64);
+        m.set("prep_height", Self::height_readout(self.stature_cm));
+        let prep_active = self
+            .source
+            .as_ref()
+            .and_then(|s| s.parsed.as_ref())
+            .is_some_and(|p| p.model.bones.is_empty());
+        m.set("prep_active", prep_active);
+        m.set("prep_status", self.prep_status());
 
         // Rail chips are ENTIRELY the workflow runtime's: `publish` below writes each
         // step's `wf_<id>_title` (pre-localized), `wf_<id>_style` (workflow.chip.active /
@@ -4156,6 +4299,124 @@ impl AssetPipeline {
         edited
     }
 
+    /// PREP — build the progressive decimation levels once for a raw (boneless) mesh, then prep the
+    /// working geometry. Keyed by source identity so it runs once per piece; a mesh that already
+    /// ships a skeleton is game-ready and skipped (Prep is the raw-mesh conditioning stage).
+    fn ensure_decimate_levels(&mut self) {
+        // The source identity + whether the working mesh currently carries a skeleton, as owned
+        // values so the immutable borrow ends before the mutable rebuild below.
+        let Some((has_bones, key)) = self.source.as_ref().and_then(|s| {
+            s.parsed
+                .as_ref()
+                .map(|p| (!p.model.bones.is_empty(), (s.dir.clone(), s.candidate_sel)))
+        }) else {
+            return;
+        };
+        let built = self.decimate.as_ref().is_some_and(|(k, _)| *k == key);
+        if !built {
+            // A mesh that arrives rigged is game-ready — no levels, no decimation.
+            if has_bones {
+                return;
+            }
+            let levels = match self.source.as_ref().and_then(|s| s.parsed.as_ref()) {
+                Some(p) => decimate_levels(&p.model),
+                None => return,
+            };
+            tracing::info!(
+                "prep: built {} decimation levels from {} source triangles",
+                levels.levels.len(),
+                levels.source_tris
+            );
+            self.decimate = Some((key, levels));
+            self.rebuild_prepped_model();
+        } else if has_bones {
+            // Re-entered Prep after conforming a raw mesh: revert the working mesh to the boneless
+            // prepped geometry so the sliders act again (the rig re-installs on the next Conform).
+            self.rebuild_prepped_model();
+        }
+    }
+
+    /// Read the two Prep sliders (commit-on-release) and rebuild the mesh if either changed. Returns
+    /// whether an authored value changed this frame (arms the Back discard guard).
+    fn apply_prep(&mut self, results: &ValueMap) -> bool {
+        let mut changed = false;
+        if let Some(v) = results.number("keep_pct") {
+            let v = (v as f32).clamp(50.0, 100.0);
+            if (self.keep_pct - v).abs() > f32::EPSILON {
+                self.keep_pct = v;
+                changed = true;
+            }
+        }
+        if let Some(v) = results.number("stature_cm") {
+            let v = (v as f32).clamp(40.0, 200.0);
+            if (self.stature_cm - v).abs() > f32::EPSILON {
+                self.stature_cm = v;
+                changed = true;
+            }
+        }
+        if changed {
+            self.rebuild_prepped_model();
+        }
+        changed
+    }
+
+    /// Rebuild the working model from the cached decimation level + target stature, and invalidate
+    /// any conform result so the rig re-installs from the new geometry. Boneless meshes only (the
+    /// decimation levels are absent for a mesh that arrived rigged, so this is a no-op there).
+    fn rebuild_prepped_model(&mut self) {
+        let keep = self.keep_pct;
+        let stature = self.stature_cm;
+        let Some((_, levels)) = self.decimate.as_ref() else {
+            return;
+        };
+        let mut model = levels.model_for_keep_pct(keep).clone();
+        scale_mesh_to_stature(&mut model, stature);
+        let Some(src) = self.source.as_mut() else {
+            return;
+        };
+        if let Some(parsed) = src.parsed.as_mut() {
+            *parsed = Parsed::new(model);
+        }
+        src.rig = None; // geometry changed — the rig re-installs on entering Conform
+        self.pose_gen = self.pose_gen.wrapping_add(1);
+        self.mesh_gen = self.mesh_gen.wrapping_add(1);
+    }
+
+    /// A height as BOTH metric and imperial: "170 cm · 5′7″" (the unit is metric; the imperial is
+    /// shown alongside for reading).
+    fn height_readout(cm: f32) -> String {
+        let total_in = (cm / 2.54).max(0.0);
+        let mut feet = (total_in / 12.0).floor() as i32;
+        let mut inches = (total_in - feet as f32 * 12.0).round() as i32;
+        if inches >= 12 {
+            feet += 1;
+            inches = 0;
+        }
+        format!("{cm:.0} cm · {feet}′{inches}″")
+    }
+
+    /// The Prep readout: a raw mesh shows keep-% and the resolved triangle count; a mesh that arrives
+    /// rigged shows that it is game-ready and skipped.
+    fn prep_status(&self) -> String {
+        let Some(parsed) = self.source.as_ref().and_then(|s| s.parsed.as_ref()) else {
+            return String::new();
+        };
+        if !parsed.model.bones.is_empty() {
+            return strings::resolve("$ap_prep_rigged").into_owned();
+        }
+        match self.decimate.as_ref() {
+            Some((_, levels)) => format!(
+                "{} {:.0}% — {} / {} {}",
+                strings::resolve("$ap_prep_keep"),
+                self.keep_pct,
+                parsed.tris,
+                levels.source_tris,
+                strings::resolve("$ap_triangles"),
+            ),
+            None => String::new(),
+        }
+    }
+
     /// Attach-point markers for the viewport, split into (unselected, selected) so each draws in
     /// its own colour. Empty until the Attach stage is reached — a marker on the Analyze view
     /// would claim a placement that has not been authored.
@@ -4667,6 +4928,7 @@ impl Scene for AssetPipeline {
         self.show_skeleton = results.is_on("show_skeleton");
         self.show_base = results.is_on("show_base");
         self.show_collision = results.is_on("show_collision");
+        self.show_wireframe = results.is_on("show_wireframe");
         self.apply_gizmo_results(&results);
         // Joint symmetry — read only on Conform, where the checkbox lives (off the stage `is_on`
         // reads false and would clear it). Bake Skin re-weights the mesh to the repositioned rig.
@@ -4728,6 +4990,11 @@ impl Scene for AssetPipeline {
         if results.is_on("next_piece") {
             self.start_next_piece();
         }
+        // The Prep sliders (height + decimate) commit on release; a change rebuilds the working
+        // mesh and arms the Back discard guard, exactly like a stage edit.
+        if self.wf.step() == "prep" && self.apply_prep(&results) {
+            self.wf.set_dirty(true);
+        }
         // Step edits arm the Back discard guard; advancing clears it in the runtime.
         if self.apply_stage_results(&results) {
             self.wf.set_dirty(true);
@@ -4759,6 +5026,13 @@ impl Scene for AssetPipeline {
         // in `open`; the multi-mesh Load→Conform hop runs them here. Both are idempotent (analyze
         // no-ops once parsed, conform once rigged and early-returns for Prop/Animation), so this is
         // safe to reach every frame.
+        // Entering Prep: parse (a multi-mesh piece hop may not have yet), then build the decimation
+        // levels once and prep the working mesh. Boneless raw meshes only; a rigged mesh is
+        // game-ready and passes straight through (both calls are guarded no-ops there).
+        if self.wf.step() == "prep" {
+            self.analyze();
+            self.ensure_decimate_levels();
+        }
         if self.wf.step() == "conform" {
             self.analyze();
             self.conform();
@@ -4900,24 +5174,24 @@ impl Scene for AssetPipeline {
         Transition::None
     }
 
-    fn render(&mut self, renderer: &mut Renderer) {
-        let base_layer = renderer.layer();
+    fn render<'f>(&'f mut self, renderer: &mut Renderer, fg: &mut FrameGraph<'f>) {
+        let base_layer = fg.base_layer();
 
-        // THE CLIP PAGE swaps the 2×2 rig grid for the side-by-side variant pair.
-        // Exactly ONE grid drives the frame graph per frame — its offscreen passes
-        // reset the per-frame draw queues, so both running would discard each other.
+        // THE CLIP PAGE swaps the 2×2 rig grid for the side-by-side variant pair. Exactly
+        // ONE grid shows per frame — a PAGE exclusivity (the clip pair, the preview, or the
+        // rig grid, never two at once), product behaviour the page state keeps.
         let clip_active = self.clip_page() && self.clip_seat.is_some();
         if clip_active {
-            self.render_clip(renderer, base_layer);
+            self.render_clip(renderer, fg, base_layer);
         }
         // THE PREVIEW PAGE swaps the rig grid for the baked-idle smoke test — the same
-        // one-grid-per-frame exclusivity rule as the clip pair above. If the bake FAILED,
-        // fall through to the normal rig grid (the inspector shows the error) — the page
-        // must never be a dead frame with nothing rendering.
+        // one-grid-per-page exclusivity as the clip pair above. If the bake FAILED, fall
+        // through to the normal rig grid (the inspector shows the error) — the page must
+        // never be a dead frame with nothing rendering.
         let bake_active = if self.wf.step() == "preview" {
             self.ensure_bake_preview(renderer);
             if self.bake.is_some() && self.bake_seat.is_some() {
-                self.render_bake_preview(renderer, base_layer);
+                self.render_bake_preview(renderer, fg, base_layer);
                 true
             } else {
                 false
@@ -4930,13 +5204,12 @@ impl Scene for AssetPipeline {
             false
         };
 
-        // The four views FIRST. `QuadGrid::render` drives the shared `FrameGraph`, whose
-        // offscreen passes RESET the per-frame draw queues (the centralized "render RTTs
-        // before the main view" rule) — so anything queued before this is discarded, and
-        // the HUD must come after. The views composite one layer above the backdrop.
+        // The four views. `QuadGrid::declare` folds its passes + composites into the frame's
+        // shared graph; the views composite one layer above the backdrop, and the HUD chrome
+        // rides the overlay after them.
         // The skeleton is drawn as an overlay so it reads through anything in front of it.
         // Prop/garment fit preview (the base rig + the imported mesh at socket·fit). Built FIRST —
-        // its mesh upload needs `&mut Renderer` before grid.render borrows it for the RTT passes.
+        // its mesh upload needs `&mut Renderer` before grid.declare borrows it for the RTT passes.
         let preview = if clip_active || bake_active {
             None
         } else {
@@ -4963,6 +5236,15 @@ impl Scene for AssetPipeline {
             } else {
                 None
             }
+        };
+        // Wireframe overlay: the Display toggle, and ALWAYS on the Prep stage so a decimation
+        // change is visible (a good cut keeps the silhouette; the triangle grid is where it shows).
+        // Uses its OWN flat handle — the textured draw ignores the wireframe flag.
+        let show_wire = self.show_wireframe || self.wf.step() == "prep";
+        let wire = if show_wire {
+            self.ensure_wire_mesh(renderer)
+        } else {
+            None
         };
 
         // Frame on the base body when previewing a piece (a prop skeleton has no extent). The
@@ -5106,8 +5388,8 @@ impl Scene for AssetPipeline {
             // One camera PER VIEW, each from its own orbit (independent pan + zoom) — the
             // filler frames the ortho views at `radius · zoom`, the perspective one at
             // `radius · dist_scale · zoom`.
-            quad.render(renderer, base_layer + 2.0, radius, |r, view| {
-                r.set_scene(SceneLighting::default());
+            quad.declare(renderer, fg, base_layer + 2.0, radius, move |r, view| {
+                r.set_scene(LightRig::default());
                 // Ground in the PERSPECTIVE view only (index 0 of `EDITOR_QUADS`): the three
                 // ortho views look straight down an axis, where the lattice collapses to a
                 // single line or a moiré of edge-on rows and only obscures the measurement.
@@ -5120,6 +5402,16 @@ impl Scene for AssetPipeline {
                 // flat subject clay. Under the skeleton overlay, which reads through on top.
                 if let Some(cm) = char_mesh {
                     cm.draw(r, recentre, SUBJECT_TINT);
+                }
+                if let Some(wh) = wire {
+                    r.draw_mesh(
+                        wh,
+                        recentre,
+                        MeshDrawOptions {
+                            wireframe: true,
+                            ..Default::default()
+                        },
+                    );
                 }
                 // Skeleton rig-view: violet octahedral diamond bones under cyan per-joint scaled
                 // balls — two hues, so structure and grab points read apart at a glance.
@@ -5170,31 +5462,36 @@ impl Scene for AssetPipeline {
             });
         }
 
-        // Opaque window backdrop at the base layer, under everything. Drawn AFTER the frame graph, or
-        // the offscreen passes above would discard it; it fills the transparent gaps of the workbench
-        // Column (the body margins around the holder and the rail).
-        let screen = renderer.size();
-        renderer.draw_ui_panel(
-            Vec2::ZERO,
-            screen,
-            [0.03, 0.03, 0.04, 1.0],
-            [0.03, 0.03, 0.04, 1.0],
-            0.0,
-            0.0,
-            0.0,
-            [0.0; 4],
-            0.0,
-        );
-
-        // The HUD chrome — header, tab bar, the holder FRAME, the editor rail, footer — at `base+1`.
-        // The four RTT views composite ABOVE it at `base+2`, so they land INSIDE the holder frame (a
-        // HUD panel) at its inset, while the rail sits BESIDE the holder rather than under the
+        // The screen surface's final 2D — the opaque window backdrop, then the HUD chrome
+        // — as ONE overlay run after the view composites. The backdrop sits at the base
+        // layer under everything (it fills the transparent gaps of the workbench Column —
+        // the body margins around the holder and the rail); the HUD chrome (header, tab
+        // bar, the holder FRAME, the editor rail, footer) sits at `base+1`. The four RTT
+        // views composite ABOVE it at `base+2`, so they land INSIDE the holder frame (a HUD
+        // panel) at its inset, while the rail sits BESIDE the holder rather than under the
         // composite — the panels read as first-class regions of a tiled layout, not overlays.
-        if let Some(white) = self.hud_white {
-            renderer.set_layer(base_layer + 1.0);
-            render_hud(renderer, &self.hud_commands, white, &[]);
-            renderer.set_layer(base_layer);
-        }
+        let hud_white = self.hud_white;
+        let hud_commands = &self.hud_commands;
+        fg.overlay(move |r| {
+            r.set_layer(base_layer);
+            let screen = r.size();
+            r.draw_ui_panel(
+                Vec2::ZERO,
+                screen,
+                [0.03, 0.03, 0.04, 1.0],
+                [0.03, 0.03, 0.04, 1.0],
+                0.0,
+                0.0,
+                0.0,
+                [0.0; 4],
+                0.0,
+            );
+            if let Some(white) = hud_white {
+                r.set_layer(base_layer + 1.0);
+                render_hud(r, hud_commands, white, &[]);
+                r.set_layer(base_layer);
+            }
+        });
     }
 }
 
@@ -6704,8 +7001,8 @@ mod tests {
         ed.apply_workflow_results(&fired("wf_back"));
         assert_eq!(
             ed.wf.step(),
-            "task",
-            "wf_back — the declared Cancel/TabPrev result — steps the rail"
+            "prep",
+            "wf_back — the declared Cancel/TabPrev result — steps the rail (conform → prep)"
         );
     }
 
@@ -6761,8 +7058,10 @@ mod tests {
         park(&mut ed, "conform"); // the rig-edit view, reached right after choosing a workflow
         let m = ed.hud_model();
         // Load / Analyze / Classify are gone (the workflow selector + inline parse/conform
-        // replaced them), so the character rail reads Workflow · Rig · Attach · Review.
+        // replaced them); a Prep stage now sits before the rig, so the character rail reads
+        // Workflow · Prep · Rig · Preview · Attach · Review.
         assert_eq!(m.text("wf_task_title"), Some("Workflow"));
+        assert_eq!(m.text("wf_prep_title"), Some("Prep"));
         assert_eq!(
             m.text("wf_conform_title"),
             Some("Rig"),
@@ -6774,12 +7073,13 @@ mod tests {
         // the pair script turns each into its `workflow.chip.*` path (gated below).
         assert_eq!(m.text("wf_conform_state"), Some("active"));
         assert_eq!(m.text("wf_task_state"), Some("visited"));
+        assert_eq!(m.text("wf_prep_state"), Some("visited"));
         assert_eq!(m.text("wf_attach_state"), Some("todo"));
-        // All five chips of the character definition are shown, and the footer counts them.
-        for id in ["task", "conform", "preview", "attach", "review"] {
+        // All six chips of the character definition are shown, and the footer counts them.
+        for id in ["task", "prep", "conform", "preview", "attach", "review"] {
             assert!(m.is_on(&format!("wf_{id}_show")), "{id} chip shown");
         }
-        assert_eq!(m.number("wf_step_n"), Some(5.0));
+        assert_eq!(m.number("wf_step_n"), Some(6.0));
         // The step SURFACES (namespaced `wf_step_<id>`) gate the content subtrees,
         // exclusively on the current step.
         assert!(
@@ -6835,8 +7135,8 @@ mod tests {
         );
         assert_eq!(
             ed.wf_def.steps.len(),
-            5,
-            "…and the default (character) definition is restored"
+            6,
+            "…and the default (character) definition is restored (task·prep·conform·preview·attach·review)"
         );
     }
 
@@ -7089,7 +7389,11 @@ mod tests {
         assert!(!ed.hud_model().is_on("wf_discard"));
         ed.apply_workflow_results(&fired("wf_back"));
         ed.apply_workflow_results(&fired("wf_discard_yes"));
-        assert_eq!(ed.wf.step(), "task", "discard steps back and disarms");
+        assert_eq!(
+            ed.wf.step(),
+            "prep",
+            "discard steps back and disarms (conform → prep)"
+        );
     }
 
     #[test]
