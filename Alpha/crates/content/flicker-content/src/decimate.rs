@@ -218,7 +218,7 @@ impl WeldedMesh {
         let n = pos.len();
         let mut tris: Vec<[u32; 3]> = Vec::with_capacity(model.indices.len() / 3);
         let mut incident: Vec<Vec<u32>> = vec![Vec::new(); n];
-        for t in model.indices.chunks_exact(3) {
+        for t in model.indices.as_chunks::<3>().0 {
             let a = corner_wedge[t[0] as usize];
             let b = corner_wedge[t[1] as usize];
             let c = corner_wedge[t[2] as usize];

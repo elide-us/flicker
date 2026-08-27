@@ -137,14 +137,20 @@ fn encode_png(kind: MapKind, rgba: &[u8], size: u32) -> Result<Vec<u8>, image::I
     let (color, pixels) = match kind {
         _ if kind.is_color() || kind == MapKind::Normal => (
             image::ColorType::Rgb8,
-            rgba.chunks_exact(4)
+            rgba.as_chunks::<4>()
+                .0
+                .iter()
                 .flat_map(|p| [p[0], p[1], p[2]])
                 .collect::<Vec<u8>>(),
         ),
         // Scalar: one channel is the whole map.
         _ => (
             image::ColorType::L8,
-            rgba.chunks_exact(4).map(|p| p[0]).collect::<Vec<u8>>(),
+            rgba.as_chunks::<4>()
+                .0
+                .iter()
+                .map(|p| p[0])
+                .collect::<Vec<u8>>(),
         ),
     };
     let mut out = std::io::Cursor::new(Vec::new());
@@ -333,8 +339,10 @@ mod tests {
             let got = img.to_rgba8();
             let want = set.get(kind).unwrap();
             for (i, (g, w)) in got
-                .chunks_exact(4)
-                .zip(want.pixels.chunks_exact(4))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(want.pixels.as_chunks::<4>().0.iter())
                 .enumerate()
             {
                 assert_eq!(g[0], w[0], "{kind:?} texel {i} red changed");

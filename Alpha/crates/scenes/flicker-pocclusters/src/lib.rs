@@ -723,7 +723,7 @@ impl GameScene {
         let (origin, dir) = self.build_pick_ray(cursor, viewport);
         let mut best: Option<(f32, ClusterId)> = None;
         for (id, verts, indices) in &self.pick_meshes {
-            for tri in indices.chunks_exact(3) {
+            for tri in indices.as_chunks::<3>().0 {
                 let a = verts[tri[0] as usize];
                 let b = verts[tri[1] as usize];
                 let c = verts[tri[2] as usize];

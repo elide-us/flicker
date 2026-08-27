@@ -163,7 +163,7 @@ pub fn cursor_image() -> Option<flicker::app::CursorImage> {
     let (w, h) = img.dimensions();
     let tint = tok(CURSOR_TINT);
     let mut rgba = img.into_raw();
-    for px in rgba.chunks_exact_mut(4) {
+    for px in rgba.as_chunks_mut::<4>().0 {
         for (ch, t) in px[..3].iter_mut().zip(tint) {
             *ch = (f32::from(*ch) * t).round() as u8;
         }
@@ -413,7 +413,9 @@ mod tests {
         assert!(c.rgba[3] > 64, "hotspot pixel must be opaque art");
         let bright = c
             .rgba
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|p| p[3] > 200)
             .max_by_key(|p| p[0])
             .unwrap();
@@ -422,7 +424,7 @@ mod tests {
             "gold tint ordering r>g>b, got {bright:?}"
         );
         assert!(
-            c.rgba.chunks_exact(4).any(|p| p[3] == 0),
+            c.rgba.as_chunks::<4>().0.iter().any(|p| p[3] == 0),
             "a pointer keeps transparent surround"
         );
     }
