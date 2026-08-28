@@ -83,6 +83,29 @@ const RETICLE_INK: [f32; 4] = [1.0, 0.85, 0.30, 1.0];
 /// (1.0) and below the graticule (1.022), doubled because two strokes read BOLD
 /// where one reads like a stray grid line.
 const RETICLE_RINGS: [f32; 2] = [1.008, 1.016];
+/// The reticle RIDES its column (Aaron 2026-08-27: the highlight was getting
+/// buried once the era grew real mountains): the rings lift by the cell's own
+/// ground height plus this many tile-widths of clear margin, and corner POSTS
+/// run from the column top up to the rings so the mark reads from low angles
+/// and out of valleys.
+const RETICLE_LIFT: f32 = 0.6;
+/// A vein body's FIELD OUTLINE (Aaron 2026-08-27: "a field outline around a
+/// cluster of rubies or coal or calcium… making the node easier to see"):
+/// the boundary ring drawn in the kind's own ink, this many tile-widths
+/// above each boundary cell's own top.
+const VEIN_RING_LIFT: f32 = 0.35;
+// ── THE RIVERS (Aaron 2026-08-27: "highlighted in green water, to
+// distinguish from ocean blue") — every LAND tile carrying a live channel
+// wears a thin translucent green film on its column top; the ramp deepens
+// with the catchment so trunks read stronger than headwaters. ──
+const RIVER_COLOR: [f32; 3] = [0.24, 0.66, 0.32];
+const RIVER_DEEP_COLOR: [f32; 3] = [0.08, 0.42, 0.22];
+/// The film's thickness in tile-widths — a skin of water, not a cell.
+const RIVER_FILM: f32 = 0.1;
+const RIVER_ALPHA: f32 = 0.6;
+/// Discharge at which the river ink saturates to its deep end, as a
+/// multiple of the channel-live floor.
+const RIVER_FULL: f32 = 8.0;
 
 // ── the stack's provisional layer proportions (per cell width `w`) ──
 /// The molten cell's height (Aaron 2026-08-25: "significantly shorter,
@@ -167,10 +190,8 @@ const MAX_WATER: u32 = 100;
 const DEFAULT_WATER: u32 = 100;
 /// The bootstrap fast-forward's per-frame compute budget.
 const BOOTSTRAP_FRAME_MS: u128 = 12;
-/// The climate gauge's range (percent of the 0..1 climate scale) — the
-/// ice-age runner wanders around the baseline a write to it sets.
-const MIN_TEMP: u32 = 0;
-const MAX_TEMP: u32 = 100;
+// (The climate dial's MIN/MAX_TEMP range died with the dial — the climate
+// readout is a 0..1 gauge now and the baseline stays the era default.)
 /// Ice caps — the ink the frozen ground shades toward, in the view and stack.
 const ICE_COLOR: [f32; 3] = [0.86, 0.90, 0.94];
 /// The band depths, in tile-width units below the sea level: shallower than
@@ -350,6 +371,10 @@ pub struct PopulousBench {
     /// progress bar filling from `roll_from`; arrival bakes once and pauses.
     roll_until: u64,
     roll_from: u64,
+    /// Whether the open roll STANDS at its horizon (the TICK-1200 leap: the
+    /// world stops for inspection) or rolls THROUGH into the live clock (the
+    /// Run button's bootstrap fast-forward — RUN means RUN, Aaron 2026-08-27).
+    roll_pauses: bool,
     /// Planetary water coverage, percent of surface flooded — the sea-level
     /// dial. DISPLAY + classification level today; the three water layers'
     /// temperature and circulation arrive with the erosion era. Changing it
@@ -429,6 +454,7 @@ impl PopulousBench {
             evolve_unbaked: 0,
             roll_until: 0,
             roll_from: 0,
+            roll_pauses: false,
             show_arrows: true,
             hex,
             focus_tile: 0,
@@ -657,6 +683,40 @@ impl PopulousBench {
                             },
                         });
                     }
+                    // THE RIVERS (Aaron 2026-08-27: "highlighted in green
+                    // water, to distinguish from ocean blue"): every LAND
+                    // tile carrying a live channel wears a thin translucent
+                    // green film on its column top — the discharge network
+                    // made visible, trunks inked deeper than headwaters.
+                    // Frozen-solid ground shows ice, not running water.
+                    shells.push(ShellSpec {
+                        dirs: &map.grid().dirs,
+                        outlines: map.outlines(),
+                        radius: RADIUS,
+                        inset: 0.0,
+                        color: Box::new(move |i| {
+                            let t = i as TileId;
+                            let d = evolve.discharge(t);
+                            if d < crate::evolve::CHANNEL_LIVE
+                                || ground(t) < sea
+                                || evolve.ice(t) >= crate::evolve::ICE_SOLID
+                            {
+                                return None;
+                            }
+                            let full = crate::evolve::CHANNEL_LIVE * RIVER_FULL;
+                            let s = ((d - crate::evolve::CHANNEL_LIVE) / full).clamp(0.0, 1.0);
+                            Some(lerp3(RIVER_COLOR, RIVER_DEEP_COLOR, s))
+                        }),
+                        cell_radius: Some(Box::new(move |i| {
+                            RADIUS + (ground(i as TileId) + RIVER_FILM) * w
+                        })),
+                        depth: Some(Box::new(move |_| RIVER_FILM * w)),
+                        opts: MeshDrawOptions {
+                            tint: [1.0, 1.0, 1.0, RIVER_ALPHA],
+                            gloss: 0.5,
+                            ..MeshDrawOptions::default()
+                        },
+                    });
                     // THE ATMOSPHERE — the first two layers, as near-nothing
                     // fog cells: a low HAZE and the condensation-deck CLOUDS,
                     // brightness riding the moisture field the weathering
@@ -1020,6 +1080,22 @@ impl PopulousBench {
         hex.set_shells(shells);
     }
 
+    /// A roll's horizon ARRIVED: queue the bake and settle the clock. The
+    /// TICK-1200 leap STANDS at its goal for inspection (Aaron 2026-08-26);
+    /// a roll the Run button started — the bootstrap fast-forward — rolls
+    /// THROUGH into the live clock, because RUN means RUN (Aaron 2026-08-27:
+    /// "run doesn't actually run ticks, it runs 1200 like the button above
+    /// it" — no longer).
+    fn roll_arrived(&mut self) {
+        self.evolve_unbaked = EVOLVE_BAKE_TICKS;
+        if self.roll_pauses {
+            self.evolve_running = false;
+        }
+        self.roll_until = 0;
+        self.roll_from = 0;
+        self.roll_pauses = false;
+    }
+
     /// The line OVERLAYS on the globe, composed fresh each change: the
     /// centre-cell reticle (two raised bold rings) on any layer tab, and on
     /// the EVOLVE view the LOCAL motion arrows — each sampled tile's own
@@ -1036,16 +1112,80 @@ impl PopulousBench {
             ..
         } = self;
         let mut overlays: Arrows = Vec::new();
+        let w = map
+            .tiles()
+            .next()
+            .map(|t| tile_width(map.direction(t), map.outline(t), RADIUS))
+            .unwrap_or(1.0);
         if let Some(tile) = *highlight {
             let ring = map.outline(tile);
             let n = ring.len();
-            let mut segs = Vec::with_capacity(n * RETICLE_RINGS.len());
+            // The reticle RIDES its column: the rings lift by the cell's own
+            // grown height plus a clear margin, and corner posts run from
+            // the column top to the rings — never buried under a mountain.
+            let top = evolve.ground(tile) * w;
+            let lift = top + RETICLE_LIFT * w;
+            let mut segs = Vec::with_capacity(n * (RETICLE_RINGS.len() + 1));
             for scale in RETICLE_RINGS {
                 for k in 0..n {
-                    segs.push((ring[k] * RADIUS * scale, ring[(k + 1) % n] * RADIUS * scale));
+                    segs.push((
+                        ring[k] * (RADIUS * scale + lift),
+                        ring[(k + 1) % n] * (RADIUS * scale + lift),
+                    ));
                 }
             }
+            for v in ring {
+                segs.push((*v * (RADIUS + top), *v * (RADIUS * RETICLE_RINGS[1] + lift)));
+            }
             overlays.push((RETICLE_INK, segs));
+        }
+        if *shown_view == WorldView::Evolve {
+            // THE VEIN FIELD OUTLINES (Aaron 2026-08-27): every ore body
+            // wears its boundary ring in its own ink, lifted above its
+            // columns — rubies, coal, calcite each announce their field.
+            // Boundary = an edge whose far side is not the same KIND; the
+            // edge is found as the outline segment facing that neighbour.
+            let kinds = crate::evolve::vein_kinds();
+            for t in 0..map.len() as TileId {
+                let Some(k) = evolve.vein(t) else {
+                    continue;
+                };
+                let ring = map.outline(t);
+                let m = ring.len();
+                let p = map.direction(t);
+                let lift = (evolve.ground(t) + VEIN_RING_LIFT) * w;
+                for nb in map.neighbours(t) {
+                    if evolve.vein(*nb) == Some(k) {
+                        continue; // interior: the body continues
+                    }
+                    // The outline edge FACING this neighbour: the segment
+                    // whose midpoint leans furthest toward it.
+                    let toward = (map.direction(*nb) - p).normalize_or_zero();
+                    let e = (0..m)
+                        .max_by(|a, b| {
+                            let mid_a = (ring[*a] + ring[(*a + 1) % m]) * 0.5 - p;
+                            let mid_b = (ring[*b] + ring[(*b + 1) % m]) * 0.5 - p;
+                            mid_a
+                                .normalize_or_zero()
+                                .dot(toward)
+                                .total_cmp(&mid_b.normalize_or_zero().dot(toward))
+                        })
+                        .unwrap_or(0);
+                    let ink = kinds[k as usize].ink;
+                    let color = [ink[0], ink[1], ink[2], 1.0];
+                    let slot = match overlays.iter_mut().find(|(c, _)| *c == color) {
+                        Some(s) => &mut s.1,
+                        None => {
+                            overlays.push((color, Vec::new()));
+                            &mut overlays.last_mut().expect("just pushed").1
+                        }
+                    };
+                    slot.push((
+                        ring[e] * (RADIUS + lift),
+                        ring[(e + 1) % m] * (RADIUS + lift),
+                    ));
+                }
+            }
         }
         if *shown_view == WorldView::Evolve && *show_arrows {
             // THE LOCAL FIELD (Aaron 2026-08-25: the seams drive the crust —
@@ -1206,17 +1346,21 @@ impl PopulousBench {
             "pop_boot",
             (self.evolve.ticks().saturating_sub(self.roll_from) as f64 / span as f64).min(1.0),
         );
+        // The two LIVE READOUTS (Aaron 2026-08-27, godmode-gauge style —
+        // right panel, never interactive): each is a 0..1 gauge fill plus a
+        // pre-formatted percent.
+        let coverage = self.evolve.coverage();
+        m.set(ui::WATER_BIND, f64::from(coverage));
         m.set(
-            ui::WATER_BIND,
-            f64::from((self.evolve.coverage() * 100.0).round() as u32),
+            ui::WATER_VAL_BIND,
+            format!("{}%", (coverage * 100.0).round()),
         );
+        let climate = self.evolve.climate();
+        m.set(ui::TEMP_BIND, f64::from(climate));
+        m.set(ui::TEMP_VAL_BIND, format!("{}%", (climate * 100.0).round()));
         m.set(
             ui::WATER_TARGET_BIND,
             f64::from((self.evolve.water_target() * 100.0).round() as u32),
-        );
-        m.set(
-            ui::TEMP_BIND,
-            f64::from((self.evolve.climate() * 100.0).round() as u32),
         );
         m.set(ui::ARROWS_BIND, self.show_arrows);
         m.set(ui::TICKS_BIND, group_thousands(self.evolve.ticks()));
@@ -1247,6 +1391,74 @@ impl PopulousBench {
         }
         m.set(ui::PHASE_BIND, phase_token(self.evolve.current_phase()));
         m.set(ui::STRATA_BIND, group_thousands(self.evolve.strata_total()));
+        // THE HEX INSPECTOR (Aaron 2026-08-27): the focused column itemized —
+        // materials on the left pane, fluids on the right, every value
+        // pre-formatted here like the other readouts. "—" is the empty
+        // value; heights ride tile-width units; grades ride ×N.NN.
+        {
+            let t = self.focus_tile.min(self.map.len().saturating_sub(1) as TileId);
+            let e = &self.evolve;
+            let dash = || "—".to_string();
+            let opt = |v: f32| if v > 1e-3 { format!("{v:.2}") } else { dash() };
+            let graded = |h: f32, g: f32| {
+                if h > 1e-3 {
+                    format!("{h:.2} ×{g:.2}")
+                } else {
+                    dash()
+                }
+            };
+            m.set(ui::HEX_SED_BIND, opt(e.sediment(t)));
+            m.set(ui::HEX_ROCK_BIND, graded(e.rock(t), e.rock_hardness(t)));
+            let (g3, g4) = e.strata_hardness(t);
+            m.set(ui::HEX_L4_BIND, graded(e.layer4(t), g4));
+            m.set(ui::HEX_L3_BIND, graded(e.layer3(t), g3));
+            m.set(
+                ui::HEX_VEIN_BIND,
+                match e.vein(t) {
+                    Some(k) => crate::evolve::vein_kinds()[k as usize].label.clone(),
+                    None => dash(),
+                },
+            );
+            m.set(
+                ui::HEX_BASE_BIND,
+                format!("{:.2} ×{:.2}", e.base(t), e.bed_hardness(t)),
+            );
+            // The deep crust's provisional authored thickness (w units) —
+            // the honest value until the ledger authors real depths.
+            m.set(ui::HEX_BEDROCK_BIND, format!("{BEDROCK_H_FRAC:.2}"));
+            let sea = e.resolve_sea();
+            let depth = sea - e.ground(t);
+            m.set(
+                ui::HEX_MOIST_BIND,
+                format!("{}%", (e.moisture(t) * 100.0).round()),
+            );
+            m.set(
+                ui::HEX_RIVER_BIND,
+                if e.discharge(t) >= crate::evolve::CHANNEL_LIVE {
+                    format!("{:.1}", e.discharge(t))
+                } else {
+                    dash()
+                },
+            );
+            m.set(ui::HEX_ICE_BIND, opt(e.ice(t)));
+            m.set(
+                ui::HEX_WATER_BIND,
+                if depth > 0.0 { format!("{depth:.2}") } else { dash() },
+            );
+            let (sst, _, deep) = e.ocean_temps(t);
+            m.set(
+                ui::HEX_WTEMP_BIND,
+                if depth > 0.0 {
+                    format!("{:.0} / {:.0}", sst * 100.0, deep * 100.0)
+                } else {
+                    dash()
+                },
+            );
+            m.set(
+                ui::HEX_HEAT_BIND,
+                format!("{}%", (self.seams.heat(t) * 100.0).round()),
+            );
+        }
         m
     }
 
@@ -1362,30 +1574,18 @@ impl PopulousBench {
                 self.publish_hex();
             }
         }
-        // The water dial: the sea level's coverage. A LENS on the evolve
-        // view — it rebakes the picture and resets NOTHING: an hour of era is
-        // never the price of trying a different ocean.
-        // TWO SLIDERS (Aaron 2026-08-26): `pop_water` is the LIVE coverage
-        // GAUGE — display only, its knob rides the world and a hand on it
-        // changes nothing — and `pop_water_target` is the CONTROL: the
-        // coverage share the in-fall pursues. A plain dial: committed number
-        // lands, echo inert, wild clamps.
+        // THE ONE WATER CONTROL (Aaron 2026-08-27): the TARGET dial —
+        // horizontal on the left pane, d-pad left/right nudges it, up/down
+        // walks on to the buttons. The coverage and climate READOUTS moved
+        // to the right pane as godmode-style gauges: display only, no
+        // handler — the ice-age runner owns the climate number now and the
+        // baseline stays the era default (`Evolution::set_climate` remains
+        // the engine's own lever). A plain dial: committed number lands,
+        // echo inert, wild clamps, nothing resets.
         if let Some(v) = results.number(ui::WATER_TARGET_BIND) {
             let want = (v.round().max(0.0) as u32).clamp(MIN_WATER, MAX_WATER);
             if want != (self.evolve.water_target() * 100.0).round() as u32 {
                 self.evolve.set_water_target(want as f32 / 100.0);
-            }
-        }
-        // The climate gauge: the model publishes the runner's LIVE reading
-        // every frame (the knob moves with the glacials), so the echo returns
-        // that same number — only a write that DISAGREES with the live
-        // reading is a hand on the dial, and it sets the BASELINE the runner
-        // wanders around. A lens on the era's weather: nothing resets.
-        if let Some(v) = results.number(ui::TEMP_BIND) {
-            let live = f64::from((self.evolve.climate() * 100.0).round());
-            if (v - live).abs() > 0.6 {
-                let pct = (v.round().max(0.0) as u32).clamp(MIN_TEMP, MAX_TEMP);
-                self.evolve.set_climate(pct as f32 / 100.0);
             }
         }
         // The motion-arrows checkbox: a display lens — the overlays recompose,
@@ -1402,10 +1602,13 @@ impl PopulousBench {
             self.evolve_running = !self.evolve_running;
             self.evolve_accum = 0.0;
             // The FIRST click on a fresh world queues the bootstrap roll;
-            // pausing mid-roll keeps the goal, so Run resumes it.
+            // pausing mid-roll keeps the goal, so Run resumes it. RUN MEANS
+            // RUN (Aaron 2026-08-27): its roll continues into the live
+            // clock at the horizon — only the leap button stands there.
             if self.evolve_running && self.evolve.ticks() == 0 && self.roll_until == 0 {
                 self.roll_from = 0;
                 self.roll_until = crate::evolve::BOOTSTRAP_TICKS;
+                self.roll_pauses = false;
             }
         }
         // TICK 1200 (Aaron 2026-08-26: "what will it look like at 4500?
@@ -1415,6 +1618,7 @@ impl PopulousBench {
         if results.is_on(ui::EVOLVE_ROLL_ACTION) {
             self.roll_from = self.evolve.ticks();
             self.roll_until = self.evolve.ticks() + crate::evolve::BOOTSTRAP_TICKS;
+            self.roll_pauses = true; // the leap STANDS at its goal
             self.evolve_running = true;
             self.evolve_accum = 0.0;
         }
@@ -1435,6 +1639,7 @@ impl PopulousBench {
         if results.is_on(ui::EVOLVE_RESET_ACTION) {
             self.roll_until = 0;
             self.roll_from = 0;
+            self.roll_pauses = false;
             self.evolve.reset(&self.map, &self.seams);
             self.evolve.set_water(DEFAULT_WATER as f32);
             self.evolve_running = false;
@@ -1721,13 +1926,7 @@ impl Scene for PopulousBench {
                 }
                 if self.evolve.ticks() >= self.roll_until {
                     ticked = true; // the weld: bake and show the rolled world
-                    self.evolve_unbaked = EVOLVE_BAKE_TICKS;
-                    // …and the sim STOPS at the goal (Aaron 2026-08-26): the
-                    // world stands for inspection; Run resumes, TICK 1200
-                    // leaps again.
-                    self.evolve_running = false;
-                    self.roll_until = 0;
-                    self.roll_from = 0;
+                    self.roll_arrived();
                 }
                 self.evolve_accum = 0.0;
             } else {
@@ -1935,8 +2134,8 @@ mod tests {
         );
         assert_eq!(
             count("slider"),
-            6,
-            "the size, cells, spots, water-gauge, water-target and climate dials"
+            4,
+            "the size, cells, spots and water-target dials (coverage + climate are right-pane gauges now)"
         );
         // The rail hints (lt/rt/lb/rb) and the rule are now drawn BY the `paged_menu`
         // Component, not authored tree nodes — so NOTHING on the surface wears a glyph.
@@ -1999,6 +2198,13 @@ mod tests {
             want.push(ui::census_name_bind(i));
             want.push(ui::census_count_bind(i));
         }
+        // …plus the hex inspector's two panes, from the one shared roster,
+        // and the two right-pane readout gauges' percent texts.
+        for b in ui::HEX_MAT_BINDS.iter().chain(&ui::HEX_FLUID_BINDS) {
+            want.push((*b).to_string());
+        }
+        want.push(ui::WATER_VAL_BIND.to_string());
+        want.push(ui::TEMP_VAL_BIND.to_string());
         want.sort_unstable();
         assert_eq!(
             bound, want,
@@ -2261,7 +2467,7 @@ mod tests {
 
         // ALL slices are DECLARED in the one tree — the selection lights one, never
         // adds or removes structure. The map slice's dial, the seams slice's dial +
-        // button, and the hex page's placeholders coexist.
+        // button, and the hex page's inspector rows coexist.
         assert!(
             all.iter()
                 .any(|n| n.component == "slider" && n.bind.as_deref() == Some(ui::FREQ_BIND)),
@@ -2284,8 +2490,8 @@ mod tests {
             )
             .count();
         assert_eq!(
-            placeholders, 5,
-            "the seams stats pane, both crust panes and the hex page's two side panes rest on placeholders"
+            placeholders, 3,
+            "the seams stats pane and both crust panes rest on placeholders (the hex page's side panes are the inspector now)"
         );
 
         // The slices are gated on DIFFERENT keys, so a selection lights exactly one
@@ -2738,13 +2944,11 @@ mod tests {
                 f64::from(crate::seams::MIN_SPOTS),
                 f64::from(crate::seams::MAX_SPOTS),
             ),
-            (ui::WATER_BIND, f64::from(MIN_WATER), f64::from(MAX_WATER)),
             (
                 ui::WATER_TARGET_BIND,
                 f64::from(MIN_WATER),
                 f64::from(MAX_WATER),
             ),
-            (ui::TEMP_BIND, f64::from(MIN_TEMP), f64::from(MAX_TEMP)),
         ];
         let bench = test_bench();
         let tree = bench.build_tree();
@@ -2897,6 +3101,73 @@ mod tests {
     /// [now, now+1200); reset clears it; and the first Run on a fresh world
     /// queues the bootstrap window itself.
     #[test]
+    fn the_hex_inspector_itemizes_the_focused_column() {
+        // **The hex page reads as an INSPECTOR** (Aaron 2026-08-27): the
+        // model publishes every roster bind, pre-formatted — materials on
+        // the left, fluids on the right — and the values follow the ledger:
+        // an empty layer is "—", a planted ore body names itself.
+        let mut bench = test_bench();
+        let m = bench.model();
+        for b in ui::HEX_MAT_BINDS.iter().chain(&ui::HEX_FLUID_BINDS) {
+            assert!(
+                matches!(m.get(b), Some(Value::Text(_))),
+                "{b}: the inspector publishes a formatted value"
+            );
+        }
+        let text = |m: &ValueMap, b: &str| match m.get(b) {
+            Some(Value::Text(t)) => t.clone(),
+            _ => unreachable!(),
+        };
+        // A bare world: no ore, no strata at the focused cell.
+        let t = bench.focus_tile();
+        assert_eq!(text(&m, ui::HEX_VEIN_BIND), "—");
+        assert_eq!(text(&m, ui::HEX_L4_BIND), "—");
+        // Plant an ore body at the focus: the composition row names it.
+        bench.evolve.plant_vein(t, 3);
+        let m = bench.model();
+        assert_eq!(
+            text(&m, ui::HEX_VEIN_BIND),
+            crate::evolve::vein_kinds()[3].label,
+            "the ore body announces its registry label"
+        );
+        // The molten row reads the seam field at the focus, as a percent.
+        assert!(
+            text(&m, ui::HEX_HEAT_BIND).ends_with('%'),
+            "heat is a percent readout"
+        );
+    }
+
+    #[test]
+    fn run_rolls_through_the_horizon_and_the_leap_stands() {
+        // **RUN MEANS RUN** (Aaron 2026-08-27): the Run button's bootstrap
+        // fast-forward continues into the live clock at its horizon; only
+        // the TICK-1200 leap stands at its goal for inspection.
+        let mut bench = test_bench();
+        let fire = |name: &str| {
+            let mut r = ValueMap::default();
+            r.set(name, true);
+            r
+        };
+        bench.apply_results(&fire(ui::EVOLVE_RUN_ACTION));
+        assert!(bench.evolve_running() && bench.roll_window().is_some());
+        bench.roll_arrived();
+        assert!(
+            bench.evolve_running(),
+            "RUN's clock survives the bootstrap horizon"
+        );
+        assert_eq!(bench.roll_window(), None, "the window is spent");
+
+        bench.apply_results(&fire(ui::EVOLVE_ROLL_ACTION));
+        assert!(bench.evolve_running() && bench.roll_window().is_some());
+        bench.roll_arrived();
+        assert!(
+            !bench.evolve_running(),
+            "the leap stands at its goal for inspection"
+        );
+        assert_eq!(bench.roll_window(), None);
+    }
+
+    #[test]
     fn tick_1200_queues_a_leap_and_reset_clears_it() {
         let mut bench = test_bench();
         assert_eq!(bench.roll_window(), None);
@@ -2938,12 +3209,72 @@ mod tests {
         assert_eq!(bench.evolve().ticks(), 0);
     }
 
-    /// **Two sliders: the GAUGE shows, the TARGET controls** (Aaron
-    /// 2026-08-26). The live gauge opens at the water world and a hand on it
-    /// changes NOTHING — display only. The target dial is a plain control:
-    /// its committed number lands on the era's coverage target, its echo is
-    /// inert, a wild number clamps — and none of it touches the clock or any
-    /// roll: the IN-FALL, not a re-pour, walks the world toward the target.
+    /// **The evolve pane NAVIGATES up/down and the target rides left/right**
+    /// (Aaron 2026-08-27, QOL): the left pane's evolve slice is checkbox →
+    /// ONE horizontal target slider → the four buttons, each on its own
+    /// ascending ordinal — up/down walks the chain, left/right nudges only
+    /// the slider (the walker's SliderH contract). The coverage and climate
+    /// left as READOUT gauges on the right pane: resource_gauge fills on
+    /// 0..1 fractions beside pre-formatted percents.
+    #[test]
+    fn the_evolve_pane_navigates_and_the_readouts_moved_right() {
+        let bench = test_bench();
+        let tree = bench.build_tree();
+        let all = flatten(&tree);
+        // The one slider in the evolve slice is the TARGET, horizontal.
+        let sliders: Vec<&&UiNode> = all
+            .iter()
+            .filter(|n| {
+                n.component == "slider"
+                    && matches!(n.bind.as_deref(), Some(b) if b.starts_with("pop_water") || b == "pop_temp")
+            })
+            .collect();
+        assert_eq!(sliders.len(), 1, "one water control stands, not three");
+        let target = sliders[0];
+        assert_eq!(target.bind.as_deref(), Some(ui::WATER_TARGET_BIND));
+        assert!(
+            !matches!(target.props.get("vertical"), Some(Value::Bool(true))),
+            "the target dial lies HORIZONTAL: left/right nudges it"
+        );
+        // The buttons are reachable on their own ascending ordinals.
+        let mut ords: Vec<u32> = all
+            .iter()
+            .filter(|n| n.action.as_deref().map(|a| a.starts_with("pop_evolve")) == Some(true))
+            .map(|n| n.nav_ordinal)
+            .collect();
+        assert_eq!(ords.len(), 4, "all four era buttons carry ordinals");
+        let mut sorted = ords.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        ords.sort_unstable();
+        assert_eq!(ords, sorted, "every button has its OWN step in the walk");
+        // The readouts stand as right-pane gauges on 0..1 fractions.
+        for (gauge, frac) in [("pop_water_gauge", ui::WATER_BIND), ("pop_temp_gauge", ui::TEMP_BIND)] {
+            let g = all
+                .iter()
+                .find(|n| n.id == gauge)
+                .unwrap_or_else(|| panic!("{gauge} is declared"));
+            assert_eq!(g.component, "resource_gauge", "a READOUT, not a control");
+            assert_eq!(g.bind.as_deref(), Some(frac));
+        }
+        let m = bench.model();
+        for b in [ui::WATER_BIND, ui::TEMP_BIND] {
+            match m.get(b) {
+                Some(Value::Number(v)) => {
+                    assert!((0.0..=1.0).contains(v), "{b} is a gauge fraction: {v}")
+                }
+                other => panic!("{b} publishes a fraction: {other:?}"),
+            }
+        }
+    }
+
+    /// **The GAUGE shows, the TARGET controls** (Aaron 2026-08-26; re-cut
+    /// 2026-08-27: the gauge is a right-pane godmode-style READOUT now, no
+    /// handler at all). A write on the readout bind changes NOTHING. The
+    /// target dial is a plain control: its committed number lands on the
+    /// era's coverage target, its echo is inert, a wild number clamps — and
+    /// none of it touches the clock or any roll: the IN-FALL, not a
+    /// re-pour, walks the world toward the target.
     #[test]
     fn the_water_gauge_shows_and_the_target_dial_controls() {
         let mut bench = test_bench();
@@ -3001,6 +3332,75 @@ mod tests {
         assert_eq!(bench.evolve().resolve_sea(), sea, "a target is not a pour");
         assert_eq!(bench.evolve().ticks(), ticks, "the era's clock held");
         assert_eq!(bench.seams().seed(), molten_seed, "no molten re-roll");
+    }
+
+    /// **The reticle RIDES its column** — rings lifted by the focused
+    /// cell's own ground plus the margin, posts rooted at the column top.
+    #[test]
+    fn the_reticle_rides_its_column() {
+        // **The reticle RIDES its column** (Aaron 2026-08-27: the highlight
+        // was getting buried once the era grew mountains): the rings lift by
+        // the focused cell's own ground plus the margin, and the posts root
+        // at the column top — pinned to the ledger, whatever the height.
+        let mut bench = test_bench();
+        bench.shown_view = WorldView::Evolve;
+        let t: TileId = 42;
+        bench.highlight = Some(t);
+        bench.apply_overlays();
+        let w = tile_width(bench.map.direction(0), bench.map.outline(0), RADIUS);
+        let top = bench.evolve.ground(t) * w;
+        let want = RADIUS * RETICLE_RINGS[1] + top + RETICLE_LIFT * w;
+        let ring = bench
+            .world
+            .arrows()
+            .iter()
+            .find(|(c, _)| *c == RETICLE_INK)
+            .expect("the reticle group stands");
+        let peak = ring
+            .1
+            .iter()
+            .map(|(a, b)| a.length().max(b.length()))
+            .fold(0.0f32, f32::max);
+        assert!(
+            (peak - want).abs() < w * 0.05,
+            "the upper ring rides the column: {peak} vs {want}"
+        );
+        let foot = ring
+            .1
+            .iter()
+            .map(|(a, b)| a.length().min(b.length()))
+            .fold(f32::MAX, f32::min);
+        assert!(
+            (foot - (RADIUS + top)).abs() < w * 0.05,
+            "the posts root at the column top: {foot} vs {}",
+            RADIUS + top
+        );
+    }
+
+    #[test]
+    fn the_vein_bodies_wear_their_field_outlines() {
+        // **A vein body wears its field outline** in its own ink on the
+        // evolve view — the boundary ring that makes rubies, coal and
+        // calcium findable at a glance (Aaron 2026-08-27).
+        let mut bench = test_bench();
+        bench.shown_view = WorldView::Evolve;
+        let t: TileId = 100;
+        bench.evolve.plant_vein(t, 3);
+        bench.apply_overlays();
+        let ink = crate::evolve::vein_kinds()[3].ink;
+        let color = [ink[0], ink[1], ink[2], 1.0];
+        let outline = bench
+            .world
+            .arrows()
+            .iter()
+            .find(|(c, _)| *c == color)
+            .expect("the body's ink group stands");
+        // A single-cell body is ALL boundary: its whole hex ring draws.
+        assert!(
+            outline.1.len() >= 5,
+            "the outline surrounds the node: {} edges",
+            outline.1.len()
+        );
     }
 
     /// **The motion-arrows checkbox is a LENS with an arm.** Its committed

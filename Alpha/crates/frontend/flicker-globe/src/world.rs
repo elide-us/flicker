@@ -284,6 +284,12 @@ impl GlobeWorld {
         self.arrows.extend(arrows);
     }
 
+    /// The composed overlay list currently drawn (stage frame + the bench's
+    /// own groups) — what a gate inspects to prove an overlay really stands.
+    pub fn arrows(&self) -> &Arrows {
+        &self.arrows
+    }
+
     /// The data behind the picture moved; the shells no longer match it.
     pub fn mark_dirty(&mut self) {
         self.dirty = true;

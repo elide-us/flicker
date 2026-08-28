@@ -35,6 +35,7 @@ members = [
     "Alpha/crates/scenes/flicker-loomforge",
     "Alpha/crates/scenes/flicker-assetpipeline",
     "Alpha/crates/scenes/flicker-pocclusters",
+    "Alpha/crates/scenes/flicker-csgtest",
     "Alpha/crates/scenes/flicker-populous",
     "Alpha/crates/scenes/flicker-quartermaster",
     "Alpha/crates/scenes/flicker-sablework",

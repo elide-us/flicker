@@ -1061,6 +1061,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "flicker-csgtest"
+version = "0.1.9"
+dependencies = [
+ "flicker",
+ "flicker-content",
+ "flicker-core",
+ "flicker-input-core",
+ "flicker-input-router",
+ "flicker-materials",
+ "flicker-orrery",
+ "flicker-primitive",
+ "flicker-shell",
+ "flicker-skeletal",
+ "flicker-voxel",
+ "flicker-worker",
+ "glam",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "flicker-flight"
 version = "0.1.0"
 dependencies = [
@@ -3052,6 +3073,7 @@ dependencies = [
  "flicker-componentcatalog",
  "flicker-content",
  "flicker-controllertester",
+ "flicker-csgtest",
  "flicker-loomforge",
  "flicker-pocclusters",
  "flicker-populous",

@@ -28,6 +28,7 @@ flicker-controllertester = { version = "0.1.9", path = "../crates/scenes/flicker
 flicker-solarbirth = { version = "0.1.9", path = "../crates/scenes/flicker-solarbirth" }
 flicker-loomforge = { version = "0.1.9", path = "../crates/scenes/flicker-loomforge" }
 flicker-pocclusters = { version = "0.1.9", path = "../crates/scenes/flicker-pocclusters" }
+flicker-csgtest = { version = "0.1.9", path = "../crates/scenes/flicker-csgtest" }
 flicker-assetpipeline = { version = "0.1.9", path = "../crates/scenes/flicker-assetpipeline" }
 flicker-populous = { version = "0.1.9", path = "../crates/scenes/flicker-populous" }
 flicker-sablework = { version = "0.1.9", path = "../crates/scenes/flicker-sablework" }

@@ -242,29 +242,10 @@
                                   },
                                   {
                                     "component": "slider",
-                                    "id": "pop_water",
-                                    "style": "slider",
-                                    "bind": "pop_water",
-                                    "label": "$pop_water",
-                                    "vertical": true,
-                                    "min": 0,
-                                    "max": 100,
-                                    "step": 1,
-                                    "step_coarse": 5,
-                                    "decimals": 0,
-                                    "slider_h": 10,
-                                    "value_w": 44,
-                                    "grow": 1.0,
-                                    "tab_group": "pop_left",
-                                    "nav_ordinal": 2
-                                  },
-                                  {
-                                    "component": "slider",
                                     "id": "pop_water_target",
                                     "style": "slider",
                                     "bind": "pop_water_target",
                                     "label": "$pop_water_target",
-                                    "vertical": true,
                                     "min": 0,
                                     "max": 100,
                                     "step": 1,
@@ -272,27 +253,9 @@
                                     "decimals": 0,
                                     "slider_h": 10,
                                     "value_w": 44,
-                                    "grow": 1.0,
                                     "tab_group": "pop_left",
-                                    "nav_ordinal": 3
-                                  },
-                                    {
-                                    "component": "slider",
-                                    "id": "pop_temp",
-                                    "style": "slider",
-                                    "bind": "pop_temp",
-                                    "label": "$pop_temp",
-                                    "vertical": true,
-                                    "min": 0,
-                                    "max": 100,
-                                    "step": 1,
-                                    "step_coarse": 5,
-                                    "decimals": 0,
-                                    "slider_h": 10,
-                                    "value_w": 44,
-                                    "grow": 1.0,
-                                    "tab_group": "pop_left",
-                                    "nav_ordinal": 4
+                                    "nav_ordinal": 2,
+                                    "size": 40
                                   },
                                   {
                                     "component": "button",
@@ -306,7 +269,7 @@
                                     "component": "button",
                                     "action": "pop_evolve_run",
                                     "tab_group": "pop_left",
-                                    "nav_ordinal": 3,
+                                    "nav_ordinal": 4,
                                     "size_class": "md",
                                     "label": "$pop_evolve_run"
                                   },
@@ -314,7 +277,7 @@
                                     "component": "button",
                                     "action": "pop_evolve_step",
                                     "tab_group": "pop_left",
-                                    "nav_ordinal": 4,
+                                    "nav_ordinal": 5,
                                     "size_class": "md",
                                     "label": "$pop_evolve_step"
                                   },
@@ -322,7 +285,7 @@
                                     "component": "button",
                                     "action": "pop_evolve_reset",
                                     "tab_group": "pop_left",
-                                    "nav_ordinal": 5,
+                                    "nav_ordinal": 6,
                                     "size_class": "md",
                                     "label": "$pop_evolve_reset"
                                   }
@@ -332,10 +295,190 @@
                                 "component": "cell",
                                 "visible_bind": "shown_p1_t0",
                                 "grow": 1.0,
+                                "gap": 8,
                                 "children": [
                                   {
-                                    "component": "text",
-                                    "text": "$ui_pane_empty"
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$pop_hex_materials",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$pop_hex_sed",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_hex_sed",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 112
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$pop_hex_rock",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_hex_rock",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 112
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$pop_hex_l4",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_hex_l4",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 112
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$pop_hex_l3",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_hex_l3",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 112
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$pop_hex_vein",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_hex_vein",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 112
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$pop_hex_base",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_hex_base",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 112
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$pop_hex_bedrock",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_hex_bedrock",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 112
+                                      }
+                                    ]
                                   }
                                 ]
                               }
@@ -497,6 +640,84 @@
                                 "grow": 1.0,
                                 "gap": 8,
                                 "children": [
+                                  {
+                                    "component": "cell",
+                                    "size": 40,
+                                    "gap": 4,
+                                    "children": [
+                                      {
+                                        "component": "row",
+                                        "size": 16,
+                                        "gap": 8,
+                                        "children": [
+                                          {
+                                            "component": "text",
+                                            "text": "$pop_water",
+                                            "text_size": 11,
+                                            "font": "label",
+                                            "color": "panel.stat_label",
+                                            "grow": 1.0
+                                          },
+                                          {
+                                            "component": "text",
+                                            "text_bind": "pop_water_val",
+                                            "text_size": 15,
+                                            "font": "label",
+                                            "color": "panel.stat_value",
+                                            "align": "right",
+                                            "size": 56
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "component": "resource_gauge",
+                                        "id": "pop_water_gauge",
+                                        "bind": "pop_water",
+                                        "tone": "mana",
+                                        "style": "load.gauge",
+                                        "height": 5
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "cell",
+                                    "size": 40,
+                                    "gap": 4,
+                                    "children": [
+                                      {
+                                        "component": "row",
+                                        "size": 16,
+                                        "gap": 8,
+                                        "children": [
+                                          {
+                                            "component": "text",
+                                            "text": "$pop_temp",
+                                            "text_size": 11,
+                                            "font": "label",
+                                            "color": "panel.stat_label",
+                                            "grow": 1.0
+                                          },
+                                          {
+                                            "component": "text",
+                                            "text_bind": "pop_temp_val",
+                                            "text_size": 15,
+                                            "font": "label",
+                                            "color": "panel.stat_value",
+                                            "align": "right",
+                                            "size": 56
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "component": "resource_gauge",
+                                        "id": "pop_temp_gauge",
+                                        "bind": "pop_temp",
+                                        "tone": "health",
+                                        "style": "load.gauge",
+                                        "height": 5
+                                      }
+                                    ]
+                                  },
                                   {
                                     "component": "cell",
                                     "visible_bind": "pop_booting",
@@ -1038,10 +1259,166 @@
                                 "component": "cell",
                                 "visible_bind": "shown_p1_t0",
                                 "grow": 1.0,
+                                "gap": 8,
                                 "children": [
                                   {
-                                    "component": "text",
-                                    "text": "$ui_pane_empty"
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$pop_hex_fluids",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$pop_hex_moist",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_hex_moist",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 112
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$pop_hex_river",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_hex_river",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 112
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$pop_hex_ice",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_hex_ice",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 112
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$pop_hex_water",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_hex_water",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 112
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$pop_hex_wtemp",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_hex_wtemp",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 112
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$pop_hex_heat",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_hex_heat",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 112
+                                      }
+                                    ]
                                   }
                                 ]
                               }
@@ -1085,28 +1462,60 @@
       ],
       "_hdr": "HDR: the `scene` pass (the globe's two shells + graticule, the layers above) renders into the LINEAR rgba16f `hdr` working attachment and `tonemap_grade` resolves it (ACES roll-off) into the sRGB `color` last. grade_strength 0 = tonemap only, no invented tint — an art grade is Aaron's to author in-window. Alpha passes through, so the transparent clear the holder panel shows through survives.",
       "attachments": {
-        "hdr": { "format": "rgba16f" },
-        "color": { "format": "surface" },
-        "depth": { "format": "depth32" }
+        "hdr": {
+          "format": "rgba16f"
+        },
+        "color": {
+          "format": "surface"
+        },
+        "depth": {
+          "format": "depth32"
+        }
       },
       "passes": [
-        { "pass": "scene", "writes": ["hdr", "depth"] },
-        { "pass": "tonemap_grade" }
+        {
+          "pass": "scene",
+          "writes": [
+            "hdr",
+            "depth"
+          ]
+        },
+        {
+          "pass": "tonemap_grade"
+        }
       ]
     },
     "populous_hex": {
       "_comment": "The HEX-STACK inspector — one column of the world, up close. Authors NO shell layers and no graticule: the column is published data (the scene's own shells), alone under the stage's light; the camera is the scene's orbit, aimed at the stack. Same HDR resolve as the globe so the heat ramp reads identically in both panes.",
       "lighting": "studio",
       "clear": "$stage_void",
-      "layers": [{ "draw": "shells" }],
+      "layers": [
+        {
+          "draw": "shells"
+        }
+      ],
       "attachments": {
-        "hdr": { "format": "rgba16f" },
-        "color": { "format": "surface" },
-        "depth": { "format": "depth32" }
+        "hdr": {
+          "format": "rgba16f"
+        },
+        "color": {
+          "format": "surface"
+        },
+        "depth": {
+          "format": "depth32"
+        }
       },
       "passes": [
-        { "pass": "scene", "writes": ["hdr", "depth"] },
-        { "pass": "tonemap_grade" }
+        {
+          "pass": "scene",
+          "writes": [
+            "hdr",
+            "depth"
+          ]
+        },
+        {
+          "pass": "tonemap_grade"
+        }
       ]
     }
   },

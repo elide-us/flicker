@@ -63,10 +63,17 @@ pub const TICKS_BIND: &str = "pop_ticks";
 /// step runs; the tick counts once per completed cycle of them.
 pub const PHASE_BIND: &str = "pop_phase";
 /// The evolve tab's water-coverage dial — percent of the surface flooded.
+/// The LIVE water-coverage READOUT (Aaron 2026-08-27: the godmode-style
+/// gauge, right panel, never interactive): a 0..1 fraction the
+/// resource_gauge fills by, beside its pre-formatted percent text.
 pub const WATER_BIND: &str = "pop_water";
+pub const WATER_VAL_BIND: &str = "pop_water_val";
 /// The climate gauge — the ice-age runner's live temperature, published every
 /// frame (the knob MOVES with the glacials); a user write sets the baseline.
+/// The LIVE climate READOUT (0..1 fraction + percent text) — display only;
+/// the ice-age runner owns the number, the baseline stays the era default.
 pub const TEMP_BIND: &str = "pop_temp";
+pub const TEMP_VAL_BIND: &str = "pop_temp_val";
 /// The water TARGET dial — the coverage share the in-fall pursues. Its
 /// sibling `WATER_BIND` is the live gauge beside it (display, never a
 /// control).
@@ -86,6 +93,45 @@ pub fn census_count_bind(i: usize) -> String {
 /// The evolve tab's motion-arrows checkbox — show each plate's Euler velocity.
 pub const ARROWS_BIND: &str = "pop_arrows";
 pub const STRATA_BIND: &str = "pop_strata";
+
+/// THE HEX INSPECTOR (Aaron 2026-08-27): the focused column itemized on the
+/// hex page — LEFT pane the MATERIAL layers top-down (sediment … deep
+/// crust), RIGHT pane the fluids standing on and over it (atmosphere,
+/// stream, ice, sea, lava). Labels are tree tokens; every value is a bind
+/// the scene pre-formats ("—" is the empty value; heights ride tile-width
+/// units, grades ride ×N.NN).
+pub const HEX_SED_BIND: &str = "pop_hex_sed";
+pub const HEX_ROCK_BIND: &str = "pop_hex_rock";
+pub const HEX_L4_BIND: &str = "pop_hex_l4";
+pub const HEX_L3_BIND: &str = "pop_hex_l3";
+pub const HEX_VEIN_BIND: &str = "pop_hex_vein";
+pub const HEX_BASE_BIND: &str = "pop_hex_base";
+pub const HEX_BEDROCK_BIND: &str = "pop_hex_bedrock";
+pub const HEX_MOIST_BIND: &str = "pop_hex_moist";
+pub const HEX_RIVER_BIND: &str = "pop_hex_river";
+pub const HEX_ICE_BIND: &str = "pop_hex_ice";
+pub const HEX_WATER_BIND: &str = "pop_hex_water";
+pub const HEX_WTEMP_BIND: &str = "pop_hex_wtemp";
+pub const HEX_HEAT_BIND: &str = "pop_hex_heat";
+/// The two rosters — what the tree authors and the model publishes; the
+/// drift gate walks these so the sides cannot part.
+pub const HEX_MAT_BINDS: [&str; 7] = [
+    HEX_SED_BIND,
+    HEX_ROCK_BIND,
+    HEX_L4_BIND,
+    HEX_L3_BIND,
+    HEX_VEIN_BIND,
+    HEX_BASE_BIND,
+    HEX_BEDROCK_BIND,
+];
+pub const HEX_FLUID_BINDS: [&str; 6] = [
+    HEX_MOIST_BIND,
+    HEX_RIVER_BIND,
+    HEX_ICE_BIND,
+    HEX_WATER_BIND,
+    HEX_WTEMP_BIND,
+    HEX_HEAT_BIND,
+];
 
 /// Model keys the rails bind to. The `paged_menu` proto names these as its
 /// `@page_bind` / `@tab_bind` / `@tabs_shown` defaults; stated once here so the

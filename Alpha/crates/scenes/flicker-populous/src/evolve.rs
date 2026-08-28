@@ -145,6 +145,37 @@ const PRESSURE_DECAY: f32 = 0.995;
 /// Pressure saturates — a boundary can only be so jammed.
 const PRESSURE_MAX: f32 = 1.0;
 const PRESSURE_FORM: f32 = 0.6;
+// THE COLLISION EDGES (Aaron 2026-08-27: "not like plates as much as a more
+// formal detection of edges where pressure from these motions encounter each
+// other… as it starts to collide, as it continues to collide, as it stops
+// colliding"): the crust-side corollary of the molten seams. Every jam
+// deposits its flux into a per-tile ledger; the ledger is an EMA the cycle
+// folds, an edge is LIVE while the EMA holds, and its AGE counts the ticks
+// of persistence — birth, life and death tracked, plate-like behaviour left
+// to EMERGE from where the flows actually keep meeting.
+/// EMA fold per tick on the collision-flux ledger.
+const EDGE_BLEND: f32 = 0.04;
+/// The intensity at which an edge counts as LIVE (age runs while held).
+const EDGE_LIVE: f32 = 0.004;
+/// Ticks of persistence at which an edge's uplift leverage saturates.
+const EDGE_AGE_REF: f32 = 400.0;
+/// A mature edge's extra uplift leverage (quantum ×(1+gain) at saturation) —
+/// a long-lived convergence line builds a RANGE where a young jam lifts a
+/// hill; still gather-only, never a mint.
+const EDGE_GAIN: f32 = 2.0;
+/// OROGENIC SHORTENING: the share of the foreland's loose pile a stalled
+/// mover SCRAPES onto itself each time its drift fires into the jam — two
+/// columns become one taller one (conserved transfer), and the emptied
+/// foreland is the foredeep in front of the range.
+const STACK_SHARE: f32 = 0.4;
+/// UPLIFT METAMORPHISM: converted rock hardens by the bed grade under the
+/// jam (an indurated old marine floor collides into hard mountains), floored
+/// at the plain uplift grade and clamped at the scale's ceiling.
+const UPLIFT_HARD: f32 = 1.2;
+pub const META_HARD_CAP: f32 = 2.4;
+/// The grade sediment consolidates at — sedimentary beds are the soft end
+/// of the spectrum until the marine press indurates them.
+const SED_GRADE: f32 = 0.85;
 // (The opening-boundary ridge-rock leak is gone for the same reason — an
 // opening edge exposes newborn floor when a column actually vacates; it does
 // not rain free rock along the line.)
@@ -199,10 +230,34 @@ const COND_SCALE: f32 = 1.5;
 const CARVE_GAIN: f32 = 0.30;
 /// Discharge above this keeps a tile eroding even when nothing else touches
 /// it -- rivers stay live and keep cutting their valleys.
-const CHANNEL_LIVE: f32 = 8.0;
+pub const CHANNEL_LIVE: f32 = 8.0;
 /// The share of spoil that follows the STEEPEST neighbour (the channel); the
 /// rest fans drop-weighted as before.
 const CHANNEL_SHARE: f32 = 0.65;
+// THE RIVERS CARRY (Aaron 2026-08-27, erosion pass 2 of the collision-edge
+// plan): fluvial spoil no longer dumps on the ring — it RIDES the stream
+// network with a finite capacity ∝ discharge × slope. What the water cannot
+// carry deposits at the capacity break (fans at the range fronts, deltas
+// and beds at the sea), and a live channel FLUSHES its own standing bed
+// into any spare capacity — valleys stay open instead of refilling the
+// same tick they are cut. Mass wasting (talus, rockfall) keeps the local
+// fan: dry skirts do not ride rivers.
+const CARRY_K: f32 = 0.5;
+const FLUSH_FRAC: f32 = 0.5;
+/// A base-level deposit SPREADS (the 21600-tick sediment towers: a trunk
+/// river dumping its whole load on ONE cell out-ran the repose flow's
+/// intake caps — and where ice damped the drain, the growing altitude froze
+/// the summit harder and the ratchet climbed): the receiving cell keeps
+/// this share, the rest fans drop-weighted to its lower ICE-FREE
+/// neighbours — deltas at the sea, moraine fans at a glacier's gate,
+/// braids at a capacity break.
+const DELTA_KEEP: f32 = 0.35;
+// HARD PROVINCES (Aaron: ranges, not speckle): each vent's characteristic
+// grade draws from a SMOOTH seeded field over the sphere, so neighbouring
+// vents pour kindred rock and hardness contrast arrives in belt-sized
+// provinces; a small per-vent jitter keeps a province from being uniform.
+const PROVINCE_FREQ: f32 = 4.0;
+const PROVINCE_JITTER: f32 = 0.1;
 /// The vent-output SPECTRUM (Aaron: "a spectrum of what materials are
 /// emitted, like a stream -- not tick to tick"): each vent's characteristic
 /// hardness is a seeded draw over this range, drifting slowly with its
@@ -723,6 +778,10 @@ pub struct Evolution {
     /// Cumulative emission per VENT (indexed as `crust.vents()`), the phase
     /// of each vent's slow output drift along its stream.
     emitted: Vec<f32>,
+    /// Each vent's characteristic PROVINCE grade — drawn from a smooth
+    /// seeded field over the sphere (rebuilt beside `emitted`), so kindred
+    /// vents pour kindred rock: hardness in belts, not speckle.
+    vent_grade: Vec<f32>,
     /// Last tick's DISCHARGE per tile — rainfall accumulated down the
     /// steepest-descent network: the streams. State for the carving and for
     /// a future river view.
@@ -758,6 +817,32 @@ pub struct Evolution {
     /// write it until the fine-erosion/biosphere pass exists.
     l3_h: Vec<f32>,
     l4_h: Vec<f32>,
+    /// The formed slots' GRADES — the hardness a stratum inherited from the
+    /// material that consolidated into it, mass-blended like `rock_hard`.
+    /// This is what makes the spectrum PERMANENT: hard-vent country forms
+    /// hard strata and stands as massifs while soft country washes out.
+    l3_hard: Vec<f32>,
+    l4_hard: Vec<f32>,
+    /// **SUSPENDED LOAD** per tile, in area-weighted VOLUME units — carried
+    /// sediment the ground REFUSED (the 32400-tick relapse: spread fans and
+    /// wake laws only slowed the towers, because the carry was the one
+    /// transport exempt from Aaron's flood-control law — a trunk river
+    /// could still land multi-unit loads around a constriction while every
+    /// drain is rate-limited). A cell settles at most INTAKE_CAP of carried
+    /// load per tick; the refusal stays here — water-borne, NO height, no
+    /// act — and re-enters the flow at this tile next tick. Talus
+    /// (0.5·over-slope) now always outruns delivery past slope ~1.1: no
+    /// needle can be manufactured.
+    suspend: Vec<f32>,
+    /// **THE COLLISION-EDGE LEDGER** — the crust-side corollary of the
+    /// molten seams. `edge_flux` collects this cycle's jam flux (Spread's
+    /// refused arrivals, Push's stalled piles); the Weld arm folds it into
+    /// `edge` (an EMA — the tracked intensity) and runs `edge_age`: ticks of
+    /// consecutive persistence while the edge holds ≥ EDGE_LIVE, zero when
+    /// it dies. SILENT state — tracking moves no material.
+    edge_flux: Vec<f32>,
+    edge: Vec<f32>,
+    edge_age: Vec<u32>,
     /// Per-tile vein: 0 = none, else `1 + index` into [`vein_kinds`].
     vein: Vec<u8>,
     /// Per-tile node membership: 0 = none, else `1 + index` into
@@ -832,6 +917,7 @@ impl Evolution {
             rock: Vec::new(),
             rock_hard: Vec::new(),
             emitted: Vec::new(),
+            vent_grade: Vec::new(),
             discharge: Vec::new(),
             water_volume: 0.0,
             sediment: Vec::new(),
@@ -844,6 +930,12 @@ impl Evolution {
             cursor: 0,
             l3_h: Vec::new(),
             l4_h: Vec::new(),
+            l3_hard: Vec::new(),
+            l4_hard: Vec::new(),
+            suspend: Vec::new(),
+            edge_flux: Vec::new(),
+            edge: Vec::new(),
+            edge_age: Vec::new(),
             vein: Vec::new(),
             vein_node_of: Vec::new(),
             vein_nodes: Vec::new(),
@@ -879,6 +971,7 @@ impl Evolution {
         self.rock = vec![0.0; map.len()];
         self.rock_hard = vec![1.0; map.len()];
         self.emitted = Vec::new();
+        self.vent_grade = Vec::new();
         self.discharge = vec![0.0; map.len()];
         let _ = self.rock.len();
         self.sediment = vec![0.0; map.len()];
@@ -897,6 +990,12 @@ impl Evolution {
             .collect();
         self.l3_h = vec![0.0; map.len()];
         self.l4_h = vec![0.0; map.len()];
+        self.l3_hard = vec![1.0; map.len()];
+        self.l4_hard = vec![1.0; map.len()];
+        self.suspend = vec![0.0; map.len()];
+        self.edge_flux = vec![0.0; map.len()];
+        self.edge = vec![0.0; map.len()];
+        self.edge_age = vec![0; map.len()];
         self.vein = vec![0; map.len()];
         self.vein_node_of = vec![0; map.len()];
         self.vein_nodes.clear();
@@ -1088,6 +1187,21 @@ impl Evolution {
         }
     }
 
+    /// Plant a single-cell vein body by hand — the bench/test hook (the
+    /// [`Self::disturb`] pattern): the kind lands at `tile` and a node
+    /// registers, so the labels, lenses and census treat it as earned.
+    pub fn plant_vein(&mut self, tile: TileId, kind: u8) {
+        let i = tile as usize;
+        self.vein[i] = 1 + kind;
+        self.vein_nodes.push(VeinNode {
+            center: tile,
+            kind,
+            size: 1,
+            budget: 1,
+        });
+        self.vein_node_of[i] = self.vein_nodes.len() as u16;
+    }
+
     /// Loose rock height at `tile`, tile-width units.
     pub fn rock(&self, tile: TileId) -> f32 {
         self.rock.get(tile as usize).copied().unwrap_or(0.0)
@@ -1099,17 +1213,14 @@ impl Evolution {
         self.rock_hard.get(tile as usize).copied().unwrap_or(1.0)
     }
 
-    /// A vent's characteristic output grade: a seeded draw on the spectrum,
-    /// drifting slowly with its cumulative emission — the same vent pours a
-    /// consistent stream that wanders over geological spans, and different
-    /// vents pour different rock.
-    fn vent_hardness(&self, vent_idx: usize, seed: u64) -> f32 {
-        let base = fastrand::Rng::with_seed(
-            seed ^ ((vent_idx as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15)),
-        )
-        .f32();
+    /// A vent's characteristic output grade: its PROVINCE draw (a smooth
+    /// seeded field — neighbouring vents pour kindred rock), drifting slowly
+    /// with its cumulative emission — the same vent pours a consistent
+    /// stream that wanders over geological spans.
+    fn vent_hardness(&self, vent_idx: usize) -> f32 {
+        let base = self.vent_grade.get(vent_idx).copied().unwrap_or(1.0);
         let drift = (self.emitted.get(vent_idx).copied().unwrap_or(0.0) * 1.7).sin();
-        (VENT_HARD_MIN + VENT_HARD_SPAN * base + VENT_HARD_DRIFT * drift).clamp(0.4, 1.9)
+        (base + VENT_HARD_DRIFT * drift).clamp(0.4, 1.9)
     }
 
     /// Last tick's stream DISCHARGE at `tile` — rainfall accumulated down
@@ -1293,6 +1404,36 @@ impl Evolution {
     /// Collision pressure at `tile` — what the merge zones carry.
     pub fn pressure(&self, tile: TileId) -> f32 {
         self.pressure.get(tile as usize).copied().unwrap_or(0.0)
+    }
+
+    /// The tracked COLLISION-EDGE intensity at `tile` — the EMA of jam flux,
+    /// the crust-side corollary of the molten seams. ≥ the live threshold
+    /// means flows are meeting here NOW; what an edge lens draws.
+    pub fn collision_edge(&self, tile: TileId) -> f32 {
+        self.edge.get(tile as usize).copied().unwrap_or(0.0)
+    }
+
+    /// How many consecutive ticks the edge at `tile` has stayed live — its
+    /// PERSISTENCE, zero when the collision has stopped. Mature edges have
+    /// uplift leverage: this is where the ranges grow.
+    pub fn collision_age(&self, tile: TileId) -> u32 {
+        self.edge_age.get(tile as usize).copied().unwrap_or(0)
+    }
+
+    /// The SUSPENDED load at `tile` — carried sediment the ground has not
+    /// yet accepted (flood control), area-weighted volume units. Part of the
+    /// conserved material ledger; no height until it settles.
+    pub fn suspended(&self, tile: TileId) -> f32 {
+        self.suspend.get(tile as usize).copied().unwrap_or(0.0)
+    }
+
+    /// The formed slots' inherited GRADES at `tile`: (L3, L4) — what the
+    /// strata consolidated FROM, and what their erosion divides by.
+    pub fn strata_hardness(&self, tile: TileId) -> (f32, f32) {
+        (
+            self.l3_hard.get(tile as usize).copied().unwrap_or(1.0),
+            self.l4_hard.get(tile as usize).copied().unwrap_or(1.0),
+        )
     }
 
     /// Last tick's moisture at `tile`, `0..1` — what the atmosphere shows and
@@ -1668,12 +1809,49 @@ impl Evolution {
                 let vents = crust.vents();
                 if self.emitted.len() != vents.len() {
                     self.emitted = vec![0.0; vents.len()];
+                    // THE PROVINCES: a smooth seeded field over the sphere
+                    // hands each vent its characteristic grade — kindred
+                    // vents pour kindred rock, so hardness contrast arrives
+                    // in belts the size of ranges, not per-vent speckle.
+                    let mut pr = fastrand::Rng::with_seed(seams.seed() ^ 0x5052_4F56_494E_4345);
+                    let axes: Vec<(Vec3, f32)> = (0..3)
+                        .map(|_| {
+                            let v = Vec3::new(
+                                pr.f32() * 2.0 - 1.0,
+                                pr.f32() * 2.0 - 1.0,
+                                pr.f32() * 2.0 - 1.0,
+                            );
+                            let v = if v.length_squared() < 1e-6 { Vec3::X } else { v };
+                            (v.normalize(), pr.f32() * std::f32::consts::TAU)
+                        })
+                        .collect();
+                    self.vent_grade = vents
+                        .iter()
+                        .enumerate()
+                        .map(|(k, v)| {
+                            let d = map.direction(*v);
+                            let s = axes
+                                .iter()
+                                .map(|(a, ph)| (PROVINCE_FREQ * d.dot(*a) + ph).sin())
+                                .sum::<f32>()
+                                / 1.8;
+                            let s = s.clamp(-1.0, 1.0) * 0.5 + 0.5;
+                            let jit = (fastrand::Rng::with_seed(
+                                seams.seed() ^ ((k as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15)),
+                            )
+                            .f32()
+                                * 2.0
+                                - 1.0)
+                                * PROVINCE_JITTER;
+                            (VENT_HARD_MIN + VENT_HARD_SPAN * s + jit).clamp(0.4, 1.9)
+                        })
+                        .collect();
                 }
                 if !vents.is_empty() {
                     for _ in 0..(seams.cells() * UPWELL_PER_SEAM) {
                         let vi = rng.usize(..vents.len());
                         let t = vents[vi] as usize;
-                        let hard = self.vent_hardness(vi, seams.seed());
+                        let hard = self.vent_hardness(vi);
                         // The crust above insulates the pinch: mature columns
                         // choke their own vents.
                         let g = self.ground(t as TileId) / CRUST_INSULATION;
@@ -1692,7 +1870,7 @@ impl Evolution {
                 if !crust.vents().is_empty() && rng.f32() < PLANET_ERUPT_CHANCE {
                     let vi = rng.usize(..crust.vents().len());
                     let vent = crust.vents()[vi];
-                    let erupt_hard = self.vent_hardness(vi, seams.seed());
+                    let erupt_hard = self.vent_hardness(vi);
                     self.eruptions += 1;
                     // The flow: ring by ring out from the vent, one tick's whole
                     // lava field.
@@ -1798,11 +1976,14 @@ impl Evolution {
                     for nb in against {
                         let j = nb as usize;
                         // The collision: opposing streams jam — both sides gain the
-                        // pressure the resolve events will spend.
+                        // pressure the resolve events will spend, and the EDGE
+                        // LEDGER records the meeting (both sides of the seam).
                         self.pressure[t as usize] =
                             (self.pressure[t as usize] + each * RIM_PRESS).min(PRESSURE_MAX);
                         self.pressure[j] =
                             (self.pressure[j] + each * RIM_PRESS * 0.5).min(PRESSURE_MAX);
+                        self.edge_flux[t as usize] += each;
+                        self.edge_flux[j] += each * 0.5;
                     }
                 }
                 for (r, d) in self.rock.iter_mut().zip(&delta) {
@@ -1827,36 +2008,71 @@ impl Evolution {
                         self.pressure[i] -= UPLIFT_TRIGGER;
                         // The resolve: compaction-uplift — the quantum is
                         // GATHERED from the jam itself (this tile's loose,
-                        // then its neighbours'), hardened on site. Uplift
-                        // CONVERTS the pile that collided; it never mints.
-                        // (The first cut wrote `rock += QUANTUM` with no
-                        // debit — creation compounding with material flux
-                        // was the 3600-tick accelerating-growth disease.)
-                        let mut need = UPLIFT_QUANTUM;
+                        // then its ring, then the ring beyond — near supplies
+                        // first, and the sustained draw is what founders the
+                        // flanks into the foredeep). Uplift CONVERTS the pile
+                        // that collided; it never mints. (The first cut wrote
+                        // `rock += QUANTUM` with no debit — creation
+                        // compounding with material flux was the 3600-tick
+                        // accelerating-growth disease.)
+                        // A MATURE EDGE has LEVERAGE: the tracked persistence
+                        // scales the quantum — a long-lived convergence line
+                        // builds a range where a young jam lifts a hill.
+                        let lever = 1.0
+                            + EDGE_GAIN * (self.edge_age[i] as f32 / EDGE_AGE_REF).min(1.0);
+                        let quantum = UPLIFT_QUANTUM * lever;
+                        let mut need = quantum;
                         let from_sed = need.min(self.sediment[i]);
                         self.sediment[i] -= from_sed;
                         need -= from_sed;
                         if need > 0.0 {
-                            for nb in map.neighbours(i as TileId) {
-                                if need <= 0.0 {
-                                    break;
-                                }
-                                let j = *nb as usize;
-                                let take_s = need.min(self.sediment[j]);
-                                self.sediment[j] -= take_s;
-                                need -= take_s;
-                                let take_r = need.min(self.rock[j]);
-                                self.rock[j] -= take_r;
-                                need -= take_r;
+                            let ring: Vec<TileId> = map.neighbours(i as TileId).to_vec();
+                            let gather = |need: &mut f32,
+                                              slf: &mut Self,
+                                              act: &mut Vec<bool>,
+                                              j: usize| {
+                                let take_s = need.min(slf.sediment[j]);
+                                slf.sediment[j] -= take_s;
+                                *need -= take_s;
+                                let take_r = need.min(slf.rock[j]);
+                                slf.rock[j] -= take_r;
+                                *need -= take_r;
                                 if take_s + take_r > 0.0 {
                                     act[j] = true;
                                 }
+                            };
+                            for nb in &ring {
+                                if need <= 0.0 {
+                                    break;
+                                }
+                                gather(&mut need, self, act, *nb as usize);
+                            }
+                            for nb in &ring {
+                                if need <= 0.0 {
+                                    break;
+                                }
+                                for nb2 in map.neighbours(*nb) {
+                                    if need <= 0.0 {
+                                        break;
+                                    }
+                                    let j = *nb2 as usize;
+                                    if j == i || ring.contains(nb2) {
+                                        continue;
+                                    }
+                                    gather(&mut need, self, act, j);
+                                }
                             }
                         }
-                        let got = UPLIFT_QUANTUM - need;
+                        let got = quantum - need;
                         if got > 0.0 {
+                            // METAMORPHISM: the converted rock hardens by the
+                            // bed grade under the jam — an indurated old
+                            // marine floor collides into HARD mountains.
+                            let grade = (UPLIFT_HARD * self.bed_hard[i])
+                                .clamp(UPLIFT_HARD, META_HARD_CAP);
                             let old = self.rock[i].max(0.0);
-                            self.rock_hard[i] = (old * self.rock_hard[i] + got * 1.2) / (old + got);
+                            self.rock_hard[i] =
+                                (old * self.rock_hard[i] + got * grade) / (old + got);
                             self.rock[i] += got;
                             act[i] = true;
                         }
@@ -1923,6 +2139,32 @@ impl Evolution {
                                 self.pressure[i] = (self.pressure[i] + shove).min(PRESSURE_MAX);
                                 self.pressure[j] =
                                     (self.pressure[j] + shove * 0.5).min(PRESSURE_MAX);
+                                self.edge_flux[i] += shove;
+                                self.edge_flux[j] += shove * 0.5;
+                                // THE SHORTENING (Aaron 2026-08-27): the jam
+                                // finally CONSUMES ground — the stalled mover
+                                // scrapes a share of the foreland's ROCK onto
+                                // its own wedge. Two columns become one
+                                // taller one (a conserved transfer, area-true,
+                                // hardness blending in) and the emptied
+                                // foreland founders into the foredeep.
+                                // ROCK ONLY (the 32400-tick towers' last
+                                // feeder): sediment is the water cycle's
+                                // currency — a wedge beside a delta must not
+                                // vacuum the delta into a spike; the loose
+                                // sea-bed mud stays with the water system.
+                                let scrape_r = self.rock[j] * STACK_SHARE;
+                                if scrape_r > 0.0 {
+                                    let ar = self.area[j] / self.area[i];
+                                    let m = scrape_r * ar;
+                                    let old = self.rock[i].max(0.0);
+                                    self.rock_hard[i] = (old * self.rock_hard[i]
+                                        + m * self.rock_hard[j])
+                                        / (old + m).max(1e-6);
+                                    self.rock[i] += m;
+                                    self.rock[j] -= scrape_r;
+                                    act[j] = true;
+                                }
                                 act[i] = true;
                             } else {
                                 let ar = self.area[i] / self.area[j];
@@ -1932,9 +2174,14 @@ impl Evolution {
                                     + m * self.rock_hard[i])
                                     / (old + m).max(1e-6);
                                 self.rock[j] += m;
-                                self.sediment[j] += self.sediment[i] * ar;
                                 self.rock[i] = 0.0;
-                                self.sediment[i] = 0.0;
+                                // Sediment STAYS — the water cycle's
+                                // currency, the one law everywhere (Weld,
+                                // the scrape, and now the conveyor): the
+                                // drift carries CRUST; only water moves
+                                // mud. (The 32400-tick towers' last feeder:
+                                // conveyor chains swept whole delta sheets
+                                // into the jams, uncapped.)
                                 act[i] = true;
                                 act[j] = true;
                             }
@@ -1962,15 +2209,27 @@ impl Evolution {
                         // up; past L4 the mass stays loose above (the
                         // semi-permanent layers, L5 reserved untouched).
                         let mut mass = FORM_HEIGHT * FORM_KEEP;
+                        // THE GRADE RIDES IN: a stratum inherits the hardness
+                        // of the rock that consolidated into it, mass-blended
+                        // — this is what makes the spectrum PERMANENT.
+                        let g = self.rock_hard[t];
                         if pressured {
                             let room = (L3_CAP - self.l3_h[t]).max(0.0);
                             let take = mass.min(room);
-                            self.l3_h[t] += take;
+                            if take > 0.0 {
+                                self.l3_hard[t] = (self.l3_h[t] * self.l3_hard[t] + take * g)
+                                    / (self.l3_h[t] + take);
+                                self.l3_h[t] += take;
+                            }
                             mass -= take;
                         }
                         let room = (L4_CAP - self.l4_h[t]).max(0.0);
                         let take = mass.min(room);
-                        self.l4_h[t] += take;
+                        if take > 0.0 {
+                            self.l4_hard[t] = (self.l4_h[t] * self.l4_hard[t] + take * g)
+                                / (self.l4_h[t] + take);
+                            self.l4_h[t] += take;
+                        }
                         self.rock[t] += mass - take;
 
                         // VEIN NUCLEATION under the ridges (canon A4:
@@ -2054,32 +2313,50 @@ impl Evolution {
                 // steepest-descent network — every tile hands its gathered water to
                 // its steepest lower neighbour, highest ground first. The discharge
                 // is what the carving cuts by, and what a river view will draw.
+                // The ORDER, each tile's flow TARGET and its drop are KEPT: the
+                // carry sweep below routes the spoil down this same tree.
+                let mut order: Vec<TileId> = (0..n as TileId).collect();
+                order.sort_unstable_by(|a, b| self.ground(*b).total_cmp(&self.ground(*a)));
+                let mut flow_to: Vec<u32> = vec![u32::MAX; n];
+                let mut flow_drop: Vec<f32> = vec![0.0; n];
                 {
-                    let mut order: Vec<TileId> = (0..n as TileId).collect();
-                    order.sort_unstable_by(|a, b| self.ground(*b).total_cmp(&self.ground(*a)));
                     let mut disch: Vec<f32> = self.moist.clone();
-                    for t in order {
-                        let h = self.ground(t);
+                    for t in &order {
+                        let h = self.ground(*t);
                         let mut best: Option<(f32, usize)> = None;
-                        for nb in map.neighbours(t) {
+                        for nb in map.neighbours(*t) {
                             let drop = h - self.ground(*nb);
                             if drop > 0.0 && best.is_none_or(|(d, _)| drop > d) {
                                 best = Some((drop, *nb as usize));
                             }
                         }
-                        if let Some((_, j)) = best {
-                            disch[j] += disch[t as usize];
+                        if let Some((drop, j)) = best {
+                            disch[j] += disch[*t as usize];
+                            flow_to[*t as usize] = j as u32;
+                            flow_drop[*t as usize] = drop;
                         }
                     }
                     self.discharge = disch;
                 }
                 let mut sed_delta = vec![0.0f32; n];
+                // Fluvial spoil per tile (height units) — collected by the take
+                // chain, ROUTED by the carry sweep instead of dumped on the ring.
+                let mut fluvial = vec![0.0f32; n];
                 for t in 0..n as TileId {
                     let i = t as usize;
-                    // Active ground weathers — and CHANNELS weather regardless: a
-                    // river keeps cutting its valley whether or not anything else
-                    // touched it this tick.
-                    if !act[i] && self.discharge[i] < CHANNEL_LIVE {
+                    // Active ground weathers — CHANNELS weather regardless (a
+                    // river keeps cutting its valley), and CLIFF-GRADE relief
+                    // NEVER SLEEPS: past the calving threshold a face is a
+                    // pending event whoever built it. (The 25200-tick towers:
+                    // a burst-built needle whose deliveries stopped fell out
+                    // of the frontier, and talus — gated on activity — never
+                    // tore it down. The steepest drop is on hand from the
+                    // stream pass; the WORKING slopes below the cliff line
+                    // stay frontier-gated, so the tick stays imperceptible.)
+                    if !act[i]
+                        && self.discharge[i] < CHANNEL_LIVE
+                        && flow_drop[i] <= STRATA_CLIFF
+                    {
                         continue;
                     }
                     let h = self.ground(t);
@@ -2178,7 +2455,7 @@ impl Evolution {
                     if budget > 0.0 && self.l4_h[i] > 0.0 {
                         take(
                             &mut self.l4_h[i],
-                            HARD_STRATA / self.bed_hard[i].max(0.1),
+                            HARD_STRATA / (self.bed_hard[i] * self.l4_hard[i]).max(0.1),
                             &mut budget,
                             &mut spoil,
                         );
@@ -2189,7 +2466,8 @@ impl Evolution {
                     if budget > 0.0 && self.l3_h[i] > 0.0 {
                         take(
                             &mut self.l3_h[i],
-                            HARD_STRATA * HARD_L3_FACTOR / self.bed_hard[i].max(0.1),
+                            HARD_STRATA * HARD_L3_FACTOR
+                                / (self.bed_hard[i] * self.l3_hard[i]).max(0.1),
                             &mut budget,
                             &mut spoil,
                         );
@@ -2218,7 +2496,9 @@ impl Evolution {
                     if glacial {
                         self.sediment[i] += spoil; // the till, held under the ice
                     } else {
-                        fan(&mut sed_delta, spoil);
+                        // Water-cut spoil is RIVER LOAD: it rides the stream
+                        // network (the carry sweep below), not the local ring.
+                        fluvial[i] += spoil;
                     }
                     // DRY mass wasting: past the talus angle a face sheds its excess
                     // no matter how dry the air is — loose needles collapse into
@@ -2261,6 +2541,130 @@ impl Evolution {
                     *sd += d;
                     if d.abs() > ACT_EPS {
                         act[i] = true; // spoil landed: the receiver is live too
+                    }
+                }
+                // THE CARRY (Aaron 2026-08-27): the river load rides DOWN the
+                // stream tree, highest first. Each tile's water has a finite
+                // capacity ∝ discharge × slope: what exceeds it deposits at
+                // the capacity break (fans at the range fronts, fills in the
+                // basins), a live channel FLUSHES its own standing bed into
+                // spare capacity (valleys stay open), and the SEA is base
+                // level — every load that reaches drowned ground lies down as
+                // the delta and bed the marine press will indurate. Volume
+                // rides area-true; the ledger only moves, never mints.
+                {
+                    let mut load = vec![0.0f32; n];
+                    // FLOOD CONTROL on the settle (the 32400-tick relapse:
+                    // spread fans and wake laws only SLOWED the towers — the
+                    // carry was the one transport exempt from the intake
+                    // law, still landing multi-unit loads around every
+                    // constriction while all the drains are rate-limited).
+                    // A cell settles at most INTAKE_CAP of carried load per
+                    // tick; what the ground refuses SUSPENDS at the
+                    // depositing tile — water-borne, no height — and
+                    // re-enters the flow next tick.
+                    let mut settled = vec![0.0f32; n];
+                    let place = |slf: &mut Self,
+                                 act: &mut Vec<bool>,
+                                 settled: &mut Vec<f32>,
+                                 j: usize,
+                                 vol: f32|
+                     -> f32 {
+                        let room = (INTAKE_CAP - settled[j]).max(0.0);
+                        let want = vol / slf.area[j];
+                        let put = want.min(room);
+                        if put > 0.0 {
+                            slf.sediment[j] += put;
+                            settled[j] += put;
+                            if put > ACT_EPS {
+                                act[j] = true;
+                            }
+                        }
+                        (want - put) * slf.area[j]
+                    };
+                    // Every deposit SPREADS (the sediment-tower fix): the
+                    // cell keeps DELTA_KEEP, the rest fans drop-weighted to
+                    // its lower ICE-FREE neighbours; every share obeys the
+                    // settle budget, and the closure returns what the ground
+                    // REFUSED so the caller can suspend it.
+                    let deposit = |slf: &mut Self,
+                                   act: &mut Vec<bool>,
+                                   settled: &mut Vec<f32>,
+                                   i: usize,
+                                   vol: f32|
+                     -> f32 {
+                        if vol <= 0.0 {
+                            return 0.0;
+                        }
+                        let t = i as TileId;
+                        let h = slf.ground(t);
+                        let downs: Vec<(usize, f32)> = map
+                            .neighbours(t)
+                            .iter()
+                            .filter_map(|nb| {
+                                let j = *nb as usize;
+                                let drop = h - slf.ground(*nb);
+                                (drop > 0.0 && slf.ice[j] < ICE_ERODE_MIN).then_some((j, drop))
+                            })
+                            .collect();
+                        let drop_sum: f32 = downs.iter().map(|(_, d)| d).sum();
+                        let keep = if drop_sum > 1e-6 {
+                            vol * DELTA_KEEP
+                        } else {
+                            vol
+                        };
+                        let mut refused = place(slf, act, settled, i, keep);
+                        if drop_sum > 1e-6 {
+                            let rest = vol - keep;
+                            for (j, dr) in &downs {
+                                refused += place(slf, act, settled, *j, rest * dr / drop_sum);
+                            }
+                        }
+                        refused
+                    };
+                    for t in &order {
+                        let i = *t as usize;
+                        let mut vol = load[i] + fluvial[i] * self.area[i] + self.suspend[i];
+                        self.suspend[i] = 0.0;
+                        if vol <= 0.0 {
+                            continue;
+                        }
+                        let target = flow_to[i];
+                        let drowned = self.ground(*t) < sea;
+                        // ICE IS A GATE like the sea (the tower autopsy: the
+                        // carry delivered trunk loads ONTO glaciers, whose
+                        // damped drain trapped them while the altitude froze
+                        // the summit harder): a load never rides onto an
+                        // iced cell — it lies down at the glacier's gate as
+                        // the moraine fan.
+                        let blocked = target == u32::MAX
+                            || self.ice[target as usize] >= ICE_ERODE_MIN;
+                        if drowned || blocked {
+                            let refused = deposit(self, act, &mut settled, i, vol);
+                            self.suspend[i] += refused;
+                            continue;
+                        }
+                        let cap = CARRY_K * self.discharge[i] * flow_drop[i];
+                        if vol < cap && self.discharge[i] >= CHANNEL_LIVE {
+                            // The river scours its own bed into the spare
+                            // capacity — the flush that keeps a valley open.
+                            let take =
+                                ((cap - vol) * FLUSH_FRAC).min(self.sediment[i] * self.area[i]);
+                            if take > 0.0 {
+                                self.sediment[i] -= take / self.area[i];
+                                vol += take;
+                                if take / self.area[i] > ACT_EPS {
+                                    act[i] = true;
+                                }
+                            }
+                        } else if vol > cap {
+                            // The capacity break: the excess lies down here,
+                            // spread like every deposit — the braid.
+                            let refused = deposit(self, act, &mut settled, i, vol - cap);
+                            self.suspend[i] += refused;
+                            vol = cap;
+                        }
+                        load[target as usize] += vol;
                     }
                 }
                 // SEDIMENT KEEPS MOVING — the aggressive distribution: what landed
@@ -2362,15 +2766,24 @@ impl Evolution {
                         self.sediment[i] -= SED_FORM;
                         // Sedimentary strata are VEIN-layer mass (L3): the
                         // buried beds players dig to; overflow climbs the
-                        // ladder.
+                        // ladder. They form at the SOFT end of the spectrum —
+                        // the marine press is what indurates them later.
                         let mut mass = SED_FORM * SED_KEEP;
                         let room = (L3_CAP - self.l3_h[i]).max(0.0);
                         let take = mass.min(room);
-                        self.l3_h[i] += take;
+                        if take > 0.0 {
+                            self.l3_hard[i] = (self.l3_h[i] * self.l3_hard[i] + take * SED_GRADE)
+                                / (self.l3_h[i] + take);
+                            self.l3_h[i] += take;
+                        }
                         mass -= take;
                         let room4 = (L4_CAP - self.l4_h[i]).max(0.0);
                         let take4 = mass.min(room4);
-                        self.l4_h[i] += take4;
+                        if take4 > 0.0 {
+                            self.l4_hard[i] = (self.l4_h[i] * self.l4_hard[i] + take4 * SED_GRADE)
+                                / (self.l4_h[i] + take4);
+                            self.l4_h[i] += take4;
+                        }
                         self.rock[i] += mass - take4;
                         // THE SEDIMENTARY DEPOSITS (coal + calcium, no
                         // biosphere modelled): a sparse lottery on marine
@@ -2440,10 +2853,19 @@ impl Evolution {
                         self.rock[t] -= from_rock;
                         take -= from_rock;
                         self.sediment[t] -= take.min(self.sediment[t]);
+                        // The pressed mass carries its blend: the rock part
+                        // at the pile's grade, the sediment part soft.
+                        let g = (from_rock * self.rock_hard[t]
+                            + (LOOSE_CAP - from_rock) * SED_GRADE)
+                            / LOOSE_CAP;
                         let mut mass = LOOSE_CAP * DENSIFY;
                         let room = (L4_CAP - self.l4_h[t]).max(0.0);
                         let take = mass.min(room);
-                        self.l4_h[t] += take;
+                        if take > 0.0 {
+                            self.l4_hard[t] = (self.l4_h[t] * self.l4_hard[t] + take * g)
+                                / (self.l4_h[t] + take);
+                            self.l4_h[t] += take;
+                        }
                         mass -= take;
                         // Past a full volcanic slot the excess stays LOOSE —
                         // L5 is reserved; the ladder ends at the working
@@ -2481,6 +2903,21 @@ impl Evolution {
                         self.base[t] += weld;
                         self.rock[t] -= weld;
                     }
+                }
+
+                // THE EDGE LEDGER FOLDS (Aaron 2026-08-27): this cycle's
+                // collision flux into the EMA; a live edge AGES, a quiet one
+                // DIES — the crust-side seams, tracked from first contact to
+                // last. SILENT state: the tracking itself moves no material.
+                for i in 0..n {
+                    self.edge[i] =
+                        self.edge[i] * (1.0 - EDGE_BLEND) + self.edge_flux[i] * EDGE_BLEND;
+                    self.edge_flux[i] = 0.0;
+                    self.edge_age[i] = if self.edge[i] >= EDGE_LIVE {
+                        self.edge_age[i].saturating_add(1)
+                    } else {
+                        0
+                    };
                 }
 
                 // THE FRONTIER REBUILDS from what actually changed: a tile whose
@@ -2598,11 +3035,13 @@ mod tests {
         let mut e = Evolution::new(&map, &seams);
         e.set_climate(1.0);
         // A planted TWO-TIER world with LOW relief (highs under the hot-world
-        // glaciation altitude): a bone-dry world at max heat pools its first
-        // water as highland ice — honest physics, but this gate isolates the
-        // in-fall itself, so it stages terrain no glacier can claim.
+        // glaciation altitude AND under the cliff line, so the never-sleeps
+        // law leaves the staging alone): a bone-dry world at max heat pools
+        // its first water as highland ice — honest physics, but this gate
+        // isolates the in-fall itself, so it stages terrain no glacier can
+        // claim and no talus will level.
         for i in (0..map.len()).step_by(2) {
-            e.base[i] += 2.0;
+            e.base[i] += 1.2;
         }
         e.set_water_target(0.70);
         let start = e.coverage();
@@ -3988,7 +4427,7 @@ mod tests {
         e.set_water(76.0);
         let material = |e: &Evolution| -> f32 {
             (0..map.len() as TileId)
-                .map(|t| e.base(t) + e.grown(t))
+                .map(|t| e.base(t) + e.grown(t) + e.suspended(t) / e.area[t as usize])
                 .sum()
         };
         let mut prev = material(&e);
@@ -4082,7 +4521,10 @@ mod tests {
         );
         grades.sort_by(f32::total_cmp);
         let (lo, hi) = (grades[0], grades[grades.len() - 1]);
-        assert!((0.4..=1.9).contains(&lo) && (0.4..=1.9).contains(&hi));
+        // The scale's floor is the vents' clamp; its ceiling is the
+        // METAMORPHIC cap — uplift through an indurated bed out-hardens
+        // any vent pour.
+        assert!((0.4..=META_HARD_CAP).contains(&lo) && (0.4..=META_HARD_CAP).contains(&hi));
         assert!(
             hi - lo > 0.25,
             "a real spectrum across the fields: {lo} .. {hi}"
@@ -4137,6 +4579,531 @@ mod tests {
         assert!(
             below * 2 > total,
             "channels run below their banks: {below} of {total}"
+        );
+    }
+
+    /// **The vents pour in PROVINCES, not speckle**: the grade field is
+    /// smooth over the sphere, so vents near each other pour kindred rock —
+    /// hardness contrast arrives in belts the size of ranges. Near vent
+    /// pairs must agree far better than distant ones.
+    #[test]
+    fn vent_grades_come_in_provinces_not_speckle() {
+        let (map, seams, crust, _plates) = world();
+        let mut e = Evolution::new(&map, &seams);
+        let sea = e.resolve_sea();
+        e.tick(&map, &seams, &crust, sea); // populates the vent grades
+        let vents = crust.vents();
+        assert!(vents.len() > 10, "vents exist: {}", vents.len());
+        let (mut near, mut near_n) = (0.0f32, 0usize);
+        let (mut far, mut far_n) = (0.0f32, 0usize);
+        for a in 0..vents.len() {
+            for b in a + 1..vents.len() {
+                let dot = map.direction(vents[a]).dot(map.direction(vents[b]));
+                let diff = (e.vent_grade[a] - e.vent_grade[b]).abs();
+                if dot > 0.96 {
+                    near += diff;
+                    near_n += 1;
+                } else if dot < 0.0 {
+                    far += diff;
+                    far_n += 1;
+                }
+            }
+        }
+        assert!(near_n >= 5 && far_n >= 5, "both pair pools exist: {near_n}/{far_n}");
+        let (near, far) = (near / near_n as f32, far / far_n as f32);
+        assert!(
+            near < far * 0.6,
+            "provinces: near pairs agree, far pairs differ ({near} vs {far})"
+        );
+    }
+
+    /// **The rivers CARRY to base level and the relief ORGANIZES** (Aaron
+    /// 2026-08-27: mountains, valleys, drainage): after a long run the land
+    /// is not a plain — the hypsometric spread is real; channels run
+    /// INCISED below their banks; and the carry deposits on the way — land
+    /// off the channels holds fans and floodplains, not just the sea beds.
+    #[test]
+    fn the_rivers_carry_and_the_relief_organizes() {
+        let (map, seams, crust, _plates) = world();
+        let mut e = Evolution::new(&map, &seams);
+        e.set_water(76.0);
+        for _ in 0..600 {
+            let sea = e.resolve_sea();
+            e.tick(&map, &seams, &crust, sea);
+        }
+        let sea = e.resolve_sea();
+        let mut land: Vec<f32> = (0..map.len() as TileId)
+            .filter(|t| e.ground(*t) > sea)
+            .map(|t| e.ground(t) - sea)
+            .collect();
+        assert!(land.len() > 100, "land stands: {}", land.len());
+        land.sort_by(f32::total_cmp);
+        let spread = land[land.len() * 9 / 10] - land[land.len() / 10];
+        assert!(
+            spread > 0.25,
+            "the land has RELIEF, not a plain: p90-p10 {spread}"
+        );
+        // Channel incision: land channels sit below their banks by a real
+        // margin on average — valleys, not paint.
+        let (mut cut, mut cut_n) = (0.0f32, 0usize);
+        for t in 0..map.len() as TileId {
+            if e.discharge(t) < CHANNEL_LIVE || e.ground(t) <= sea {
+                continue;
+            }
+            let mut bank = 0.0f32;
+            let mut nb_n = 0usize;
+            for nb in map.neighbours(t) {
+                if e.discharge(*nb) < CHANNEL_LIVE {
+                    bank += e.ground(*nb);
+                    nb_n += 1;
+                }
+            }
+            if nb_n > 0 {
+                cut += bank / nb_n as f32 - e.ground(t);
+                cut_n += 1;
+            }
+        }
+        assert!(cut_n > 5, "land channels exist: {cut_n}");
+        assert!(
+            cut / cut_n as f32 > 0.0,
+            "channels run INCISED on average: {}",
+            cut / cut_n as f32
+        );
+        // The carry deposits along the way: sediment stands on quiet LAND
+        // (fans, floodplains), not only on the drowned beds.
+        let land_sed = (0..map.len() as TileId)
+            .filter(|t| e.ground(*t) > sea && e.discharge(*t) < CHANNEL_LIVE)
+            .map(|t| e.sediment(t))
+            .fold(0.0f32, f32::max);
+        assert!(
+            land_sed > 0.05,
+            "fans and floodplains hold sediment: max {land_sed}"
+        );
+    }
+
+    #[test]
+    fn the_carry_spreads_at_base_level_and_ice_is_a_gate() {
+        // **The sediment-tower fix** (found by the 36000-tick probe: trunk
+        // rivers dumping whole loads on single cells, worst where the
+        // target had ICED and the damped drain trapped the pile): a load
+        // whose flow target is a glacier lies down BEFORE it — spread as a
+        // fan over the cell and its lower ice-free neighbours, never onto
+        // the ice and never all in one cell.
+        let (map, seams, crust, _plates) = world();
+        let mut e = Evolution::new(&map, &seams);
+        let quiet = |t: TileId| {
+            seams.heat(t) <= 0.0
+                && !crust.is_vent(t)
+                && map.neighbours(t).iter().all(|nb| !crust.is_vent(*nb))
+        };
+        let t = (0..map.len() as TileId)
+            .find(|t| quiet(*t) && map.neighbours(*t).iter().all(|nb| quiet(*nb)))
+            .expect("cold vent-free ground exists");
+        let i = t as usize;
+        let j = map.neighbours(t)[0] as usize;
+        // A modest column (below the talus angle) whose steepest descent is
+        // the ICED neighbour j — j sits lowest by a hair.
+        e.rock[i] = 0.7;
+        e.base[j] -= 0.05;
+        e.ice[j] = 0.5;
+        e.disturb(&map, t);
+        let sea = e.resolve_sea();
+        e.tick(&map, &seams, &crust, sea);
+        // The carry never TARGETS the glacier — j sees only the repose
+        // flow's intake-capped creep, a fraction of the gate's own take
+        // (before the fix the whole trunk load landed on the iced cell).
+        assert!(
+            e.sediment[j] < 0.06,
+            "only the capped creep reaches the ice: {}",
+            e.sediment[j]
+        );
+        assert!(
+            e.sediment[i] + e.sediment[j] > 0.02,
+            "the fan landed at the gate: {} + {}",
+            e.sediment[i],
+            e.sediment[j]
+        );
+        let spread: f32 = map
+            .neighbours(t)
+            .iter()
+            .filter(|nb| **nb as usize != j)
+            .map(|nb| e.sediment[*nb as usize])
+            .sum();
+        assert!(
+            spread > 0.005,
+            "the rest fans to the ice-free ring: {spread}"
+        );
+    }
+
+    #[test]
+    fn an_oversteep_needle_never_sleeps() {
+        // **Over-steep ground never sleeps** (the 25200-tick towers): a
+        // needle built by a burst and then abandoned — no activity, no
+        // channel — must still shed, because the talus law now runs on
+        // steepness itself, not on the frontier's memory.
+        let (map, seams, crust, _plates) = world();
+        let mut e = Evolution::new(&map, &seams);
+        let quiet = |t: TileId| {
+            seams.heat(t) <= 0.0
+                && !crust.is_vent(t)
+                && map.neighbours(t).iter().all(|nb| !crust.is_vent(*nb))
+        };
+        let t = (0..map.len() as TileId)
+            .find(|t| quiet(*t) && map.neighbours(*t).iter().all(|nb| quiet(*nb)))
+            .expect("cold vent-free ground exists");
+        let i = t as usize;
+        // The abandoned tower: planted directly, NO disturb — the frontier
+        // has never heard of it.
+        e.sediment[i] = 6.0;
+        let total = |e: &Evolution| {
+            std::iter::once(t)
+                .chain(map.neighbours(t).iter().copied())
+                .map(|x| e.ground(x) * e.area[x as usize])
+                .sum::<f32>()
+        };
+        let before_h = e.ground(t);
+        let before_m = total(&e);
+        let sea = e.resolve_sea();
+        e.tick(&map, &seams, &crust, sea);
+        assert!(
+            e.ground(t) < before_h - 0.5,
+            "the sleeping needle sheds anyway: {} -> {}",
+            before_h,
+            e.ground(t)
+        );
+        let _ = (before_m, &total);
+        let ring_sed: f32 = map
+            .neighbours(t)
+            .iter()
+            .map(|nb| e.sediment[*nb as usize])
+            .sum();
+        assert!(
+            ring_sed > 0.3,
+            "the shed lands on the ring (and rides on from there): {ring_sed}"
+        );
+    }
+
+    #[test]
+    fn no_delivery_outruns_flood_control() {
+        // **The carry obeys the intake law** (the 32400-tick relapse): a
+        // huge suspended load over a blocked target settles at most
+        // INTAKE_CAP per cell per tick — the rest stays water-borne with no
+        // height — so talus can always outrun delivery and no needle can be
+        // manufactured, while the material ledger stays whole.
+        let (map, seams, crust, _plates) = world();
+        let mut e = Evolution::new(&map, &seams);
+        let quiet = |t: TileId| {
+            seams.heat(t) <= 0.0
+                && !crust.is_vent(t)
+                && map.neighbours(t).iter().all(|nb| !crust.is_vent(*nb))
+        };
+        let t = (0..map.len() as TileId)
+            .find(|t| quiet(*t) && map.neighbours(*t).iter().all(|nb| quiet(*nb)))
+            .expect("cold vent-free ground exists");
+        let i = t as usize;
+        let j = map.neighbours(t)[0] as usize;
+        e.base[j] -= 0.05;
+        e.ice[j] = 0.5; // the blocked target
+        e.suspend[i] = 5.0; // a trunk delivery's worth, water-borne
+        let sea = e.resolve_sea();
+        e.tick(&map, &seams, &crust, sea);
+        assert!(
+            e.sediment[i] <= INTAKE_CAP + 0.02,
+            "one tick settles at most the intake cap: {}",
+            e.sediment[i]
+        );
+        assert!(
+            e.suspend[i] > 3.5,
+            "the refusal stays in suspension: {}",
+            e.suspend[i]
+        );
+        // The suspension DRAINS over the following ticks — capped settling,
+        // never a tower: the site's prominence stays under the needle line.
+        for _ in 0..40 {
+            let sea = e.resolve_sea();
+            e.tick(&map, &seams, &crust, sea);
+        }
+        let nb_hi = map
+            .neighbours(t)
+            .iter()
+            .map(|n| e.ground(*n))
+            .fold(0.0f32, f32::max);
+        assert!(
+            e.ground(t) - nb_hi < 1.5,
+            "no needle was manufactured: prominence {}",
+            e.ground(t) - nb_hi
+        );
+        assert!(
+            e.suspend[i] < 5.0,
+            "the suspension is settling out: {}",
+            e.suspend[i]
+        );
+    }
+
+    #[test]
+    #[ignore = "diagnostic probe — run with --ignored"]
+    fn probe_spikes() {
+        // BENCH-TRUE: the shipped world size, the water-world start, and the
+        // geological drift cadence the scene runs (seams breathe, vents
+        // re-derive, motion follows — every 12 ticks).
+        let map = HexMap::new(96);
+        let mut seams = SeamField::new(&map, 6, 4, 42);
+        let mut crust = CrustField::derive(&map, &seams);
+        let mut e = Evolution::new(&map, &seams);
+        e.set_climate(0.63);
+        e.set_water(66.0);
+        for k in 0..=36000u32 {
+            if k > 0 {
+                let sea = e.resolve_sea();
+                e.tick(&map, &seams, &crust, sea);
+                if k % 12 == 0 {
+                    seams.drift(&map, 0.06);
+                    crust = CrustField::derive(&map, &seams);
+                    e.derive_motion(&map, &seams);
+                }
+            }
+            if k % 3600 == 0 {
+                let sea = e.resolve_sea();
+                let (mut hi, mut prom, mut t_prom) = (0.0f32, 0.0f32, 0 as TileId);
+                let mut needles = 0usize;
+                for t in 0..map.len() as TileId {
+                    let g = e.ground(t);
+                    hi = hi.max(g);
+                    let nb_hi = map
+                        .neighbours(t)
+                        .iter()
+                        .map(|n| e.ground(*n))
+                        .fold(0.0f32, f32::max);
+                    let p = g - nb_hi;
+                    if p > prom {
+                        prom = p;
+                        t_prom = t;
+                    }
+                    if p > 1.5 {
+                        needles += 1;
+                    }
+                }
+                let i = t_prom as usize;
+                eprintln!(
+                    "PROBE k={k} tallest={hi:.2} maxprom={prom:.2} needles={needles} sea={sea:.2} @prom: ice={:.2} sed={:.2} rock={:.2} base={:.2} l3={:.2} l4={:.2} hard={:.2} disch={:.1} vent={} age={}",
+                    e.ice[i], e.sediment[i], e.rock[i], e.base[i], e.l3_h[i], e.l4_h[i],
+                    e.rock_hard[i], e.discharge[i], crust.is_vent(t_prom) as u8, e.edge_age[i]
+                );
+            }
+        }
+    }
+
+    /// **The collision edges are TRACKED — born, persistent, dead** (Aaron
+    /// 2026-08-27: "keeping track of where material is colliding as it
+    /// starts to collide, as it continues to collide, as it stops
+    /// colliding"): after a run the ledger holds live edges where the flows
+    /// keep meeting, with real AGES (persistence, not one-tick flashes); and
+    /// when the motion stops, the edges DIE — intensity decays below the
+    /// live line and the ages reset. The crust-side corollary of the seams.
+    #[test]
+    fn collision_edges_are_born_persist_and_die() {
+        let (map, seams, crust, _plates) = world();
+        let mut e = Evolution::new(&map, &seams);
+        e.set_water(76.0);
+        for _ in 0..250 {
+            let sea = e.resolve_sea();
+            e.tick(&map, &seams, &crust, sea);
+        }
+        let live: Vec<TileId> = (0..map.len() as TileId)
+            .filter(|t| e.collision_edge(*t) >= EDGE_LIVE)
+            .collect();
+        assert!(!live.is_empty(), "flows meet somewhere: live edges exist");
+        let oldest = live.iter().map(|t| e.collision_age(*t)).max().unwrap();
+        assert!(oldest > 30, "an edge PERSISTS across ticks: oldest {oldest}");
+        // Kill the motion: no flows, no meetings — every edge must DIE.
+        e.push = vec![Vec3::ZERO; map.len()];
+        for _ in 0..150 {
+            let sea = e.resolve_sea();
+            e.tick(&map, &seams, &crust, sea);
+        }
+        for t in &live {
+            assert!(
+                e.collision_edge(*t) < EDGE_LIVE && e.collision_age(*t) == 0,
+                "a stopped collision's edge dies: tile {t}"
+            );
+        }
+    }
+
+    /// **The jam SCRAPES the foreland onto the wedge** (orogenic shortening,
+    /// Aaron 2026-08-27: "we aren't ever really jamming any material cells
+    /// together"): a stalled mover takes a share of the opposing column's
+    /// loose pile — two columns become one taller one, a conserved transfer
+    /// — the meeting lands in the edge ledger, and the uplift that follows
+    /// is METAMORPHIC: pressed through an indurated bed, the converted rock
+    /// hardens past its old grade.
+    #[test]
+    fn the_jam_scrapes_the_foreland_and_uplift_metamorphoses() {
+        let (map, seams, crust, _plates) = world();
+        let mut e = Evolution::new(&map, &seams);
+        // A hand-built head-on meeting on cold, vent-free ground: the mover
+        // t drives straight at its neighbour j, which drives straight back.
+        let quiet = |e: &Evolution, t: TileId| {
+            seams.heat(t) <= 0.0
+                && !crust.is_vent(t)
+                && map.neighbours(t).iter().all(|nb| !crust.is_vent(*nb))
+                && e.rock(t) == 0.0
+        };
+        let t = (0..map.len() as TileId)
+            .find(|t| quiet(&e, *t) && map.neighbours(*t).iter().all(|nb| quiet(&e, *nb)))
+            .expect("cold vent-free ground exists");
+        let j = map.neighbours(t)[0];
+        let (ti, ji) = (t as usize, j as usize);
+        let p = map.direction(t);
+        let toward = map.direction(j) - p;
+        let dir = (toward - p * p.dot(toward)).normalize();
+        e.rock[ti] = 0.75;
+        e.rock[ji] = 0.6;
+        e.sediment[ji] = 0.3;
+        e.bed_hard[ti] = 2.0;
+        e.bed_hard[ji] = 2.0;
+        e.push[ti] = dir * RATE_MAX;
+        e.push[ji] = -dir * RATE_MAX;
+        e.drift[ti] = 1.0; // fires this tick
+        e.disturb(&map, t);
+        let pair = |e: &Evolution| e.grown(t) * e.area[ti] + e.grown(j) * e.area[ji];
+        let before = pair(&e);
+        let sea = e.resolve_sea();
+        e.tick(&map, &seams, &crust, sea);
+        // The scrape: the foreland's loose pile moved onto the wedge — and
+        // the jammed, pressured pile promptly CONSOLIDATED: the collision
+        // built a stratum where the columns met.
+        assert!(
+            e.grown(t) > 0.7,
+            "the wedge holds the shortened column: {}",
+            e.grown(t)
+        );
+        assert!(
+            e.l3_h[ti] > 0.5,
+            "the jam formed a stratum on the wedge: {}",
+            e.l3_h[ti]
+        );
+        assert!(e.rock[ji] < 0.45, "the foreland foundered: {}", e.rock[ji]);
+        assert!(
+            e.sediment[ti] < 0.1,
+            "the scrape took ROCK only — sediment is the water cycle's currency: {}",
+            e.sediment[ti]
+        );
+        assert!(
+            e.grown(t) > e.grown(j) * 1.5,
+            "two columns became one taller one: {} vs {}",
+            e.grown(t),
+            e.grown(j)
+        );
+        assert!(
+            e.pressure(t) > 0.3 && e.pressure(j) > 0.15,
+            "both sides jammed into pressure"
+        );
+        assert!(
+            e.collision_edge(t) >= EDGE_LIVE && e.collision_age(t) >= 1,
+            "the meeting is on the edge ledger"
+        );
+        // Conserved: the pair only LOST material (erosion fans a little to
+        // the ring) — the jam never minted any.
+        assert!(
+            pair(&e) <= before + 1e-3,
+            "shortening is a transfer: {before} -> {}",
+            pair(&e)
+        );
+        // The follow-up resolve: uplift through the indurated bed HARDENS
+        // the wedge past the plain grade it carried.
+        let hard_before = e.rock_hardness(t);
+        let sea = e.resolve_sea();
+        e.tick(&map, &seams, &crust, sea);
+        assert!(
+            e.rock_hardness(t) > hard_before,
+            "metamorphic uplift raises the grade: {hard_before} -> {}",
+            e.rock_hardness(t)
+        );
+    }
+
+    /// **The strata INHERIT the grade — the spectrum becomes PERMANENT**:
+    /// two equal piles consolidate under equal pressure, one hard-fed, one
+    /// soft-fed; the formed layers carry those grades, and under the same
+    /// weathering the hard massif keeps more of its stratum than the soft
+    /// one — ranges of hard country stand while soft country washes out.
+    #[test]
+    fn strata_inherit_the_grade_and_the_hard_massif_outlives_the_soft() {
+        let (map, seams, crust, _plates) = world();
+        let mut e = Evolution::new(&map, &seams);
+        // A thin sheet of water for a sane climate; the piles stand DRY.
+        e.water_volume = map.len() as f32 * 0.02;
+        // Two equatorial, cold, vent-free sites well apart.
+        let mut far = vec![u8::MAX; map.len()];
+        let mut ring: Vec<TileId> = (0..map.len() as TileId)
+            .filter(|t| crust.is_vent(*t))
+            .collect();
+        for t in &ring {
+            far[*t as usize] = 0;
+        }
+        for d in 1..=4u8 {
+            let mut next = Vec::new();
+            for t in ring {
+                for nb in map.neighbours(t) {
+                    if far[*nb as usize] == u8::MAX {
+                        far[*nb as usize] = d;
+                        next.push(*nb);
+                    }
+                }
+            }
+            ring = next;
+        }
+        let ok = |t: TileId| {
+            far[t as usize] == u8::MAX
+                && seams.heat(t) <= 0.0
+                && map.direction(t).y.abs() < 0.3
+        };
+        let a = (0..map.len() as TileId).find(|t| ok(*t)).expect("a site");
+        let b = (0..map.len() as TileId)
+            .rev()
+            .find(|t| ok(*t) && map.direction(*t).dot(map.direction(a)) < 0.5)
+            .expect("a far site");
+        let (ai, bi) = (a as usize, b as usize);
+        e.rock[ai] = 1.0;
+        e.rock_hard[ai] = 1.8;
+        e.pressure[ai] = 0.7;
+        e.rock[bi] = 1.0;
+        e.rock_hard[bi] = 0.6;
+        e.pressure[bi] = 0.7;
+        e.disturb(&map, a);
+        e.disturb(&map, b);
+        let sea = e.resolve_sea();
+        e.tick(&map, &seams, &crust, sea);
+        // Both consolidated under pressure into the vein layer — and the
+        // GRADE rode in.
+        assert!(
+            e.l3_h[ai] > 0.5 && e.l3_h[bi] > 0.5,
+            "both piles formed strata: {} / {}",
+            e.l3_h[ai],
+            e.l3_h[bi]
+        );
+        let (ga, gb) = (e.strata_hardness(a).0, e.strata_hardness(b).0);
+        assert!(
+            ga > 1.5 && gb < 0.75,
+            "the strata inherited their grades: {ga} / {gb}"
+        );
+        // The same weathering, tick after tick: the soft stratum washes out
+        // faster than the hard one.
+        for _ in 0..80 {
+            e.disturb(&map, a);
+            e.disturb(&map, b);
+            let sea = e.resolve_sea();
+            e.tick(&map, &seams, &crust, sea);
+        }
+        assert!(
+            e.l3_h[bi] < e.l3_h[ai],
+            "the hard massif outlives the soft: hard {} vs soft {}",
+            e.l3_h[ai],
+            e.l3_h[bi]
+        );
+        assert!(
+            e.l3_h[bi] < 0.85,
+            "the soft stratum is actually wearing: {}",
+            e.l3_h[bi]
         );
     }
 }

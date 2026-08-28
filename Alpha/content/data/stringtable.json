@@ -2492,6 +2492,51 @@
   "pop_spots": {
     "en-us": "SPOTS"
   },
+  "pop_hex_materials": {
+    "en-us": "MATERIAL COLUMN"
+  },
+  "pop_hex_sed": {
+    "en-us": "SEDIMENT · W"
+  },
+  "pop_hex_rock": {
+    "en-us": "LOOSE ROCK · W ×HARD"
+  },
+  "pop_hex_l4": {
+    "en-us": "L4 VOLCANIC · W ×HARD"
+  },
+  "pop_hex_l3": {
+    "en-us": "L3 VEIN BED · W ×HARD"
+  },
+  "pop_hex_vein": {
+    "en-us": "ORE BODY"
+  },
+  "pop_hex_base": {
+    "en-us": "PLATE BASE · W ×PRESS"
+  },
+  "pop_hex_bedrock": {
+    "en-us": "DEEP CRUST · W"
+  },
+  "pop_hex_fluids": {
+    "en-us": "FLUIDS & SKY"
+  },
+  "pop_hex_moist": {
+    "en-us": "MOISTURE"
+  },
+  "pop_hex_river": {
+    "en-us": "STREAM FLOW"
+  },
+  "pop_hex_ice": {
+    "en-us": "ICE CAP · W"
+  },
+  "pop_hex_water": {
+    "en-us": "SEA DEPTH · W"
+  },
+  "pop_hex_wtemp": {
+    "en-us": "SEA TEMP · SFC / DEEP"
+  },
+  "pop_hex_heat": {
+    "en-us": "MOLTEN HEAT"
+  },
   "pop_stat_diameter": {
     "en-us": "DIAMETER · MI"
   },
