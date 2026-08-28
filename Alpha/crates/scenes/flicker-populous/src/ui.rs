@@ -78,6 +78,9 @@ pub const TEMP_VAL_BIND: &str = "pop_temp_val";
 /// sibling `WATER_BIND` is the live gauge beside it (display, never a
 /// control).
 pub const WATER_TARGET_BIND: &str = "pop_water_target";
+/// The GREEN TARGET dial — the share of standing land the flora should
+/// hold; the stock's thirst adapts until the greening meets it.
+pub const VEG_TARGET_BIND: &str = "pop_veg_target";
 /// The material census TABLE — a fixed roster of two-column rows (material |
 /// hex count), most-common first; unused rows publish empty strings and
 /// vanish. The last row overflows as "+K" with the remaining hexes summed.
@@ -108,6 +111,7 @@ pub const HEX_VEIN_BIND: &str = "pop_hex_vein";
 pub const HEX_BASE_BIND: &str = "pop_hex_base";
 pub const HEX_BEDROCK_BIND: &str = "pop_hex_bedrock";
 pub const HEX_MOIST_BIND: &str = "pop_hex_moist";
+pub const HEX_RAIN_BIND: &str = "pop_hex_rain";
 pub const HEX_RIVER_BIND: &str = "pop_hex_river";
 pub const HEX_ICE_BIND: &str = "pop_hex_ice";
 pub const HEX_WATER_BIND: &str = "pop_hex_water";
@@ -124,8 +128,9 @@ pub const HEX_MAT_BINDS: [&str; 7] = [
     HEX_BASE_BIND,
     HEX_BEDROCK_BIND,
 ];
-pub const HEX_FLUID_BINDS: [&str; 6] = [
+pub const HEX_FLUID_BINDS: [&str; 7] = [
     HEX_MOIST_BIND,
+    HEX_RAIN_BIND,
     HEX_RIVER_BIND,
     HEX_ICE_BIND,
     HEX_WATER_BIND,

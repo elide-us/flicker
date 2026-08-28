@@ -216,13 +216,11 @@ const RATE_SCALE: f32 = 0.4;
 // drains to one neighbour and never fails a consolidated face makes SPIKES,
 // not mountains): spoil fans over every downhill neighbour, cliffs of strata
 // calve, and sediment keeps flowing until the land lies near flat. ──
-/// Moisture everywhere (the air is never bone dry), the extra a SUBMERGED
-/// tile soaks in, and the OROGRAPHIC term: height above the sea line, scaled
-/// by COND_SCALE tile-widths, is the condensation the uplift already gives us.
+/// Moisture everywhere (the air is never bone dry) and the extra a
+/// SUBMERGED tile soaks in. (The old conjured orographic term is the
+/// WEATHER engine's job now — rain is earned, not assumed.)
 const BASE_WET: f32 = 0.12;
 const SUBMERGED_WET: f32 = 0.3;
-const OROGRAPHIC_WET: f32 = 0.85;
-const COND_SCALE: f32 = 1.5;
 // CARVING (Aaron 2026-08-25: "the erosion isn't carving hard enough --
 // channels and valleys"): rainfall accumulates down the steepest-descent
 // network into DISCHARGE, the erosion budget scales with its square root,
@@ -343,6 +341,93 @@ const MARINE_FORM_BUMP: f32 = 0.08;
 // sines over the tick count around the dial's baseline. ──
 /// The oscillation's two periods, in ticks — offset primes so the beat
 /// pattern never repeats on a short cycle: real glacials and interglacials.
+// ── THE WEATHER ENGINE (Aaron 2026-08-28: "we should be moving air through
+// layers… there's no mountains blocking moisture to interiors, there's no
+// motion consideration or concentration of moisture into pressure zones and
+// weather systems") — three ATMOSPHERIC layers of in-flight moisture over
+// the stack. The sea evaporates into the boundary layer; each layer ADVECTS
+// along its own wind (banded circulation: trades, westerlies, polar
+// easterlies, a seeded meander so no band is compass-drawn); rising ground
+// LIFTS and RAINS the windward wall and SHADOWS the interior; convergence
+// zones (ITCZ, the polar fronts) concentrate and rain, the subtropical
+// divergences subside and dry — deserts and plains are where the rain never
+// goes. RAIN, not conjured moisture, drives the weathering and seeds the
+// streams. Moisture is a FIELD (it gates erosion budgets); it never adds
+// material to a column. ──
+pub const AIR_LAYERS: usize = 3;
+/// Each deck's altitude above the sea (tile-widths): boundary, condensation,
+/// high. Ground taller than a deck BLOCKS that layer's advection — the wall
+/// rains, the interior dries.
+pub const DECK_ALT: [f32; 3] = [1.2, 2.6, 4.2];
+/// Evaporation into the boundary layer: open sea per tick (×local warmth),
+/// and the land's recycle share of its standing rain.
+const EVAP_SEA: f32 = 0.020;
+const EVAP_LAND: f32 = 0.25;
+/// The share of a layer's moisture that advects downwind per tick — upper
+/// decks run faster.
+const ADV_FRAC: [f32; 3] = [0.35, 0.50, 0.65];
+/// Orographic machinery: the rise (tile-widths) that counts as a wall, the
+/// share of arriving moisture that RAINS on the windward wall, and the
+/// share that lifts to the next deck instead of crossing.
+const OROG_RISE: f32 = 0.35;
+const OROG_RAIN: f32 = 0.45;
+const OROG_LIFT: f32 = 0.35;
+/// Convergence: the share of standing moisture a convergence zone rains per
+/// tick (×conv), the share divergence subsides a deck down, and the share
+/// warm ground convects a deck up.
+const CONV_RAIN: f32 = 0.10;
+const SUBSIDE: f32 = 0.06;
+const CONVECT_LIFT: f32 = 0.08;
+/// Saturation: a deck holds only so much; the excess rains where it stands.
+const AIR_CAP: [f32; 3] = [1.6, 1.2, 0.9];
+const SAT_RAIN: f32 = 0.5;
+/// THE DRIZZLE (Aaron 2026-08-28, the unreachable green target): every deck
+/// precipitates this share of what it carries as it passes, so the upper
+/// decks WATER THE INTERIORS. Without it, half the land measured rain
+/// 0.000 forever — no thirst could green ground the sky never touched, and
+/// the vegetation dial saturated near 20% whatever it asked.
+const DECK_DRIZZLE: [f32; 3] = [0.004, 0.008, 0.010];
+/// The rain ledger's EMA fold — what the erosion drinks and the map tints.
+const RAIN_BLEND: f32 = 0.05;
+/// How strongly the rain EMA feeds the erosion budget's wetness.
+const RAIN_ERODE: f32 = 6.0;
+/// How strongly the rain EMA seeds the stream network's rainfall — scaled
+/// so a well-watered tile seeds like the old conjured moisture did, and
+/// CHANNEL_LIVE keeps its calibration.
+const RAIN_DISCH: f32 = 10.0;
+/// The seeded meander rotating the banded winds (radians at full field).
+const WIND_MEANDER: f32 = 0.25;
+/// The boundary-layer moisture that reads as FULL on the display scale.
+const AIR_VIS: f32 = 0.8;
+// ── VEGETATION (Aaron 2026-08-28: "the greening and the assumed resistance
+// to erosion that would come from it"): COVER grows where the rain sustains
+// it (measured land-rain p90 ≈ 0.016, p99 ≈ 0.054 — full cover near the
+// wet tail) and dies back to desert where the rain stops; standing cover
+// BINDS the soil, damping the erosion budget — the Langbein-Schumm shape:
+// deserts starve of rain, forests hold their ground, and the semi-arid
+// middle erodes hardest. The sea drowns cover. ──
+/// The sustained rain EMA that grows FULL cover.
+const VEG_RAIN_FULL: f32 = 0.03;
+/// Cover's approach rate toward its rain-set target, per tick — slow:
+/// forests take geological beats to establish, and to die.
+const VEG_GROW: f32 = 0.012;
+/// How much of the erosion budget full cover holds back.
+const VEG_SHIELD: f32 = 0.65;
+/// THE GREEN TARGET (Aaron 2026-08-28: "a vegetation target… a slider for
+/// tuning how much greening we get"): the dial's share of standing land the
+/// flora should hold. The stock's THIRST adapts toward it — below target
+/// the flora grows more drought-tolerant (full cover on less rain), above
+/// it thirstier — so the green expands or contracts along the rain
+/// gradient, still under the weather's bands, never painted on.
+const DEFAULT_VEG_TARGET: f32 = 0.35;
+/// Cover above this counts as GREENED land for the share the dial steers.
+const GREEN_COVER: f32 = 0.35;
+/// The thirst's proportional gain (per-tick step clamped ±2%) and the
+/// working range — flora can be only so hardy, and only so thirsty.
+const VEG_ADAPT: f32 = 0.5;
+const VEG_THIRST_MIN: f32 = 0.15;
+const VEG_THIRST_MAX: f32 = 4.0;
+
 const ICE_AGE_PERIODS: [f32; 2] = [830.0, 2210.0];
 /// Each sine's amplitude on the 0..1 climate scale — deep enough that
 /// glacials drag the caps toward the mid-latitudes, shallow enough that the
@@ -693,6 +778,8 @@ const GLACIAL_SOFT_PILE: f32 = 1.5;
 pub enum Phase {
     /// The ice-age runner: temperature, caps, locked water.
     Climate,
+    /// The atmosphere: evaporation, winds, lift, convergence — the RAIN.
+    Weather,
     /// Volcanism: upwell pinches and the occasional eruption.
     Upwell,
     /// Hot rock spills outward from its sources.
@@ -712,8 +799,9 @@ pub enum Phase {
 }
 
 /// The cycle, in order. `PHASES.len()` is what a display divides by.
-pub const PHASES: [Phase; 9] = [
+pub const PHASES: [Phase; 10] = [
     Phase::Climate,
+    Phase::Weather,
     Phase::Upwell,
     Phase::Spread,
     Phase::Collide,
@@ -890,10 +978,41 @@ pub struct Evolution {
     /// How many tiles' material actually changed last tick — the honest
     /// imperceptibility readout.
     changed: usize,
-    /// The MOISTURE field of the last tick — base wet + soak + the uplift's
-    /// orographic condensation. What the atmosphere layers display, and what
-    /// drives the weathering.
+    /// The near-ground MOISTURE display field — the boundary air layer on
+    /// the visibility scale. What the haze shows, what the snowfall is
+    /// limited by. (The weathering drinks RAIN now, not this.)
     moist: Vec<f32>,
+    /// **THE AIR** — in-flight moisture per atmospheric layer per tile
+    /// (boundary, condensation, high). Evaporation fills it, the winds move
+    /// it, lift raises it, rain empties it. A field over the world, never
+    /// column material.
+    air: Vec<Vec<f32>>,
+    /// **THE RAIN ledger** — precipitation per tile, EMA-folded: what the
+    /// erosion budget drinks, what seeds the streams, what tints the land
+    /// green or leaves it desert.
+    rain: Vec<f32>,
+    /// VEGETATION cover per tile (0..1) — grows toward the rain's target,
+    /// dies back without it, drowns under the sea; binds the soil against
+    /// the erosion budget and paints the continents green.
+    veg: Vec<f32>,
+    /// The GREEN TARGET the dial pursues (share of standing land greened),
+    /// the flora's adapting THIRST (multiplier on the rain a full cover
+    /// needs), and the last tick's measured green share — the gauge.
+    veg_target: f32,
+    veg_thirst: f32,
+    green_share: f32,
+    /// The WINDS, precomputed per layer at reset (banded circulation +
+    /// seeded meander — static like the seams' push): each tile's downwind
+    /// neighbour and its speed scale — plus the SECOND-best neighbour and
+    /// the primary's share, so the flow splits instead of collapsing into
+    /// hex-axis lanes (the cloud streaks).
+    wind_to: Vec<Vec<u32>>,
+    wind_w: Vec<Vec<f32>>,
+    wind_to2: Vec<Vec<u32>>,
+    wind_frac: Vec<Vec<f32>>,
+    /// Surface CONVERGENCE per tile (+ concentrates and rains, − subsides
+    /// and dries) — the analytic band profile with the meander folded in.
+    conv: Vec<f32>,
     /// Each cell's area RELATIVE to the mean cell (pentagons ~0.85, ISEA
     /// crease cells a few percent under 1). The ledger's true quantity is
     /// VOLUME = height × area: every transfer between unequal cells converts
@@ -948,6 +1067,17 @@ impl Evolution {
             micro: Vec::new(),
             pressure: Vec::new(),
             moist: Vec::new(),
+            air: Vec::new(),
+            rain: Vec::new(),
+            veg: Vec::new(),
+            veg_target: DEFAULT_VEG_TARGET,
+            veg_thirst: 1.0,
+            green_share: 0.0,
+            wind_to: Vec::new(),
+            wind_w: Vec::new(),
+            wind_to2: Vec::new(),
+            wind_frac: Vec::new(),
+            conv: Vec::new(),
             area: Vec::new(),
             heals: 0,
             eruptions: 0,
@@ -1036,6 +1166,12 @@ impl Evolution {
         self.resources_ensured = false;
         self.pressure = vec![0.0; map.len()];
         self.moist = vec![0.0; map.len()];
+        self.air = vec![vec![0.0; map.len()]; AIR_LAYERS];
+        self.rain = vec![0.0; map.len()];
+        self.veg = vec![0.0; map.len()];
+        self.veg_thirst = 1.0;
+        self.green_share = 0.0;
+        self.derive_winds(map, seams.seed());
         let mean_area = map.grid().area.iter().sum::<f32>() / map.len().max(1) as f32;
         self.area = map.grid().area.iter().map(|a| a / mean_area).collect();
         self.ticks = 0;
@@ -1142,6 +1278,152 @@ impl Evolution {
         if self.drift.len() != n {
             self.drift = vec![0.0; n];
         }
+    }
+
+    /// The BANDED CIRCULATION, derived once per world (static, like the
+    /// seams' push): per layer, each tile's wind — trades, westerlies and
+    /// polar easterlies with the cells' meridional return, rotated by a
+    /// seeded MEANDER so no band is compass-drawn — reduced to a downwind
+    /// neighbour and a speed scale; plus the surface CONVERGENCE profile
+    /// (the ITCZ, the subtropical divergence, the polar front).
+    fn derive_winds(&mut self, map: &HexMap, seed: u64) {
+        let n = map.len();
+        let mut pr = fastrand::Rng::with_seed(seed ^ 0x5749_4E44_4D45_414E);
+        let axes: Vec<(Vec3, f32)> = (0..3)
+            .map(|_| {
+                let v = Vec3::new(
+                    pr.f32() * 2.0 - 1.0,
+                    pr.f32() * 2.0 - 1.0,
+                    pr.f32() * 2.0 - 1.0,
+                );
+                let v = if v.length_squared() < 1e-6 { Vec3::X } else { v };
+                (v.normalize(), pr.f32() * std::f32::consts::TAU)
+            })
+            .collect();
+        // Per-layer control points over |latitude|: (|lat|, zonal east+,
+        // meridional toward-equator+), lerped between — the boundary layer
+        // runs the classic bands, the middle deck transitions, the high
+        // deck runs the westerly return flow.
+        let bands: [&[(f32, f32, f32)]; AIR_LAYERS] = [
+            &[
+                (0.0, -0.9, 0.50),
+                (0.30, -0.6, 0.45),
+                (0.42, 1.0, -0.35),
+                (0.68, 0.9, -0.30),
+                (0.80, -0.7, 0.35),
+                (1.0, -0.4, 0.20),
+            ],
+            &[(0.0, -0.5, 0.15), (0.35, 0.2, 0.0), (0.55, 0.9, -0.1), (1.0, 0.2, 0.1)],
+            &[(0.0, 0.6, -0.50), (0.35, 0.9, -0.30), (0.65, 1.0, 0.20), (1.0, 0.5, 0.30)],
+        ];
+        const SPEEDS: [f32; AIR_LAYERS] = [1.0, 1.3, 1.7];
+        let bump = |a: f32, c: f32, w: f32| (1.0 - ((a - c) / w).powi(2)).max(0.0);
+        self.wind_to = vec![vec![u32::MAX; n]; AIR_LAYERS];
+        self.wind_w = vec![vec![0.0; n]; AIR_LAYERS];
+        self.wind_to2 = vec![vec![u32::MAX; n]; AIR_LAYERS];
+        self.wind_frac = vec![vec![1.0; n]; AIR_LAYERS];
+        self.conv = vec![0.0; n];
+        for t in 0..n as TileId {
+            let i = t as usize;
+            let p = map.direction(t);
+            let east = Vec3::Y.cross(p).normalize_or_zero();
+            let north = p.cross(east).normalize_or_zero();
+            let toward_eq = north * (-p.y.signum());
+            let a = p.y.abs();
+            let meander: f32 = axes
+                .iter()
+                .map(|(ax, ph)| (3.0 * p.dot(*ax) + ph).sin())
+                .sum::<f32>()
+                / 3.0;
+            let ang = WIND_MEANDER * meander;
+            for (l, pts) in bands.iter().enumerate() {
+                let (mut z, mut m) = (pts[0].1, pts[0].2);
+                for w in pts.windows(2) {
+                    let (a0, z0, m0) = w[0];
+                    let (a1, z1, m1) = w[1];
+                    if a >= a0 && a <= a1 {
+                        let f = (a - a0) / (a1 - a0).max(1e-6);
+                        z = z0 + (z1 - z0) * f;
+                        m = m0 + (m1 - m0) * f;
+                    }
+                }
+                let dir = east * z + toward_eq * m;
+                let dir = if dir.length_squared() < 1e-9 {
+                    continue; // becalmed (the exact poles)
+                } else {
+                    let d = dir.normalize();
+                    d * ang.cos() + p.cross(d) * ang.sin()
+                };
+                let mut best = (f32::MIN, i);
+                let mut second = (f32::MIN, i);
+                for nb in map.neighbours(t) {
+                    let toward = map.direction(*nb) - p;
+                    let along = (toward - p * p.dot(toward)).normalize_or_zero().dot(dir);
+                    if along > best.0 {
+                        second = best;
+                        best = (along, *nb as usize);
+                    } else if along > second.0 {
+                        second = (along, *nb as usize);
+                    }
+                }
+                if best.1 != i {
+                    self.wind_to[l][i] = best.1 as u32;
+                    self.wind_w[l][i] = SPEEDS[l];
+                    // THE LANE-BREAKER: the flow splits over the two most-
+                    // aligned neighbours, alignment-weighted — one-neighbour
+                    // advection collapsed the wind into hex-axis lanes and
+                    // the clouds streaked along them.
+                    if second.1 != i && second.0 > 0.0 {
+                        self.wind_to2[l][i] = second.1 as u32;
+                        self.wind_frac[l][i] =
+                            (best.0 / (best.0 + second.0)).clamp(0.5, 1.0);
+                    }
+                }
+            }
+            let c = bump(a, 0.0, 0.14) - 0.9 * bump(a, 0.35, 0.12)
+                + 0.55 * bump(a, 0.62, 0.11)
+                - 0.6 * bump(a, 0.95, 0.14);
+            self.conv[i] = c * (1.0 + 0.35 * meander);
+        }
+    }
+
+    /// In-flight moisture in atmospheric layer `l` at `tile` — what the
+    /// volumetric decks draw as concentrations.
+    pub fn air_layer(&self, l: usize, tile: TileId) -> f32 {
+        self.air
+            .get(l)
+            .and_then(|v| v.get(tile as usize))
+            .copied()
+            .unwrap_or(0.0)
+    }
+
+    /// The RAIN ledger at `tile` — precipitation, EMA-folded: what the
+    /// erosion drinks and the land's green/desert tint reads.
+    pub fn rainfall(&self, tile: TileId) -> f32 {
+        self.rain.get(tile as usize).copied().unwrap_or(0.0)
+    }
+
+    /// VEGETATION cover at `tile` (0..1) — what the sustained rain grew:
+    /// the greening, the soil's shield, and the map's green ink.
+    pub fn vegetation(&self, tile: TileId) -> f32 {
+        self.veg.get(tile as usize).copied().unwrap_or(0.0)
+    }
+
+    /// The GREEN TARGET the flora pursues (share of standing land greened).
+    pub fn veg_target(&self) -> f32 {
+        self.veg_target
+    }
+
+    /// Set the green target — the dial's write. The thirst converges on it;
+    /// nothing repaints instantly.
+    pub fn set_veg_target(&mut self, share: f32) {
+        self.veg_target = share.clamp(0.0, 1.0);
+    }
+
+    /// Last tick's measured GREEN SHARE of standing land — the live gauge
+    /// the target steers.
+    pub fn green_share(&self) -> f32 {
+        self.green_share
     }
 
     /// How many interior vacancies the safety-net heal has ever filled —
@@ -1786,6 +2068,214 @@ impl Evolution {
                     self.ice_locked = locked;
                 }
             }
+            Phase::Weather => {
+                // 0b — THE ATMOSPHERE (Aaron 2026-08-28): evaporation fills
+                // the boundary layer, each deck advects along its banded
+                // wind, walls rain their windward side and shadow the
+                // interior, convergence concentrates and rains, divergence
+                // subsides and dries, saturation spills — and the RAIN
+                // ledger folds what fell. SILENT state: a field over the
+                // world; no material moves, no frontier wakes.
+                let mut rain_now = vec![0.0f32; n];
+                // EVAPORATION: the open sea by its warmth; the land recycles
+                // a share of its standing rain (evapotranspiration).
+                for t in 0..n as TileId {
+                    let i = t as usize;
+                    if self.ground(t) < sea {
+                        let warmth = (0.25 + self.sst[i]).clamp(0.2, 1.3);
+                        self.air[0][i] += EVAP_SEA * warmth;
+                    } else {
+                        self.air[0][i] += EVAP_LAND * self.rain[i];
+                    }
+                }
+                // LIFT + DRIZZLE + ADVECTION + THE WALLS, deck by deck,
+                // bottom-up. One carry serves both downwind branches.
+                let carry = |slf: &mut Self,
+                             delta: &mut Vec<f32>,
+                             rain_now: &mut Vec<f32>,
+                             l: usize,
+                             deck: f32,
+                             i: usize,
+                             j: usize,
+                             mv: f32| {
+                    if mv <= 1e-6 {
+                        return;
+                    }
+                    if slf.ground(j as TileId) >= deck {
+                        // THE WALL: ground past this deck blocks the
+                        // crossing — the windward side rains a share, lifts
+                        // a share toward the deck above, and the interior
+                        // beyond stays DRY (the rain shadow).
+                        let shed = mv * OROG_RAIN;
+                        let up = mv * OROG_LIFT;
+                        rain_now[i] += shed;
+                        delta[i] -= shed + up;
+                        if l + 1 < AIR_LAYERS {
+                            slf.air[l + 1][i] += up;
+                        } else {
+                            rain_now[i] += up;
+                        }
+                        return;
+                    }
+                    let rise = slf.ground(j as TileId) - slf.ground(i as TileId);
+                    if l == 0 && rise > OROG_RISE {
+                        // Rising ground short of the wall SQUEEZES rain out
+                        // on the climb — windward slopes drink.
+                        let squeeze = mv * OROG_RAIN * (rise / (OROG_RISE * 3.0)).min(1.0);
+                        rain_now[j] += squeeze;
+                        delta[i] -= mv;
+                        delta[j] += mv - squeeze;
+                    } else {
+                        delta[i] -= mv;
+                        delta[j] += mv;
+                    }
+                };
+                for l in 0..AIR_LAYERS {
+                    let deck = sea + DECK_ALT[l];
+                    let mut delta = vec![0.0f32; n];
+                    for t in 0..n as TileId {
+                        let i = t as usize;
+                        let m = self.air[l][i];
+                        if m <= 1e-5 {
+                            continue;
+                        }
+                        // THE DRIZZLE: every deck precipitates a little of
+                        // what it carries as it passes — the upper decks
+                        // water the interiors no wall ever rains on.
+                        let dz = m * DECK_DRIZZLE[l];
+                        delta[i] -= dz;
+                        rain_now[i] += dz;
+                        if l == 0 {
+                            // Convection off warm ground lifts the boundary
+                            // layer into the condensation deck.
+                            let warm =
+                                (self.local_temp(t, map.direction(t), sea) - 0.55).max(0.0);
+                            let up = m * CONVECT_LIFT * warm.min(0.5);
+                            if up > 0.0 {
+                                delta[i] -= up;
+                                self.air[1][i] += up;
+                            }
+                        }
+                        let j = self.wind_to[l][i];
+                        if j == u32::MAX {
+                            continue;
+                        }
+                        let mv = m * ADV_FRAC[l] * self.wind_w[l][i] * 0.5;
+                        // The flow SPLITS over the two most-aligned
+                        // neighbours — the lane-breaker.
+                        let frac = self.wind_frac[l][i];
+                        carry(
+                            self,
+                            &mut delta,
+                            &mut rain_now,
+                            l,
+                            deck,
+                            i,
+                            j as usize,
+                            mv * frac,
+                        );
+                        let j2 = self.wind_to2[l][i];
+                        if j2 != u32::MAX {
+                            carry(
+                                self,
+                                &mut delta,
+                                &mut rain_now,
+                                l,
+                                deck,
+                                i,
+                                j2 as usize,
+                                mv * (1.0 - frac),
+                            );
+                        }
+                    }
+                    for (a, d) in self.air[l].iter_mut().zip(&delta) {
+                        *a = (*a + d).max(0.0);
+                    }
+                }
+                // CONVERGENCE RAIN · SUBSIDENCE DRYING · SATURATION SPILL ·
+                // the fold. The display moisture is the boundary deck.
+                #[allow(clippy::needless_range_loop)] // parallel stores, one index
+                for i in 0..n {
+                    let c = self.conv[i];
+                    if c > 0.0 {
+                        for l in 0..AIR_LAYERS {
+                            let r = self.air[l][i] * CONV_RAIN * c;
+                            self.air[l][i] -= r;
+                            rain_now[i] += r;
+                        }
+                    } else if c < 0.0 {
+                        for l in (1..AIR_LAYERS).rev() {
+                            let down = self.air[l][i] * SUBSIDE * (-c);
+                            self.air[l][i] -= down;
+                            self.air[l - 1][i] += down;
+                        }
+                    }
+                    for l in 0..AIR_LAYERS {
+                        let over = self.air[l][i] - AIR_CAP[l];
+                        if over > 0.0 {
+                            let r = over * SAT_RAIN;
+                            self.air[l][i] -= r;
+                            rain_now[i] += r;
+                        }
+                    }
+                }
+                // THE STORM FOOTPRINT: rain falls in WEATHER, not on a
+                // single hex — each tick's fall spreads half over its ring
+                // before folding, so windward walls water their valleys,
+                // catchments connect, and rivers grow long enough to live.
+                {
+                    let mut spread = vec![0.0f32; n];
+                    for t in 0..n as TileId {
+                        let i = t as usize;
+                        let r = rain_now[i];
+                        if r <= 1e-6 {
+                            continue;
+                        }
+                        spread[i] += r * 0.5;
+                        let nbs = map.neighbours(t);
+                        let share = r * 0.5 / nbs.len() as f32;
+                        for nb in nbs {
+                            spread[*nb as usize] += share;
+                        }
+                    }
+                    rain_now = spread;
+                }
+                // THE FOLD: the spread fall into the rain EMA, the display
+                // moisture, and the vegetation's slow answer.
+                let full = VEG_RAIN_FULL * self.veg_thirst;
+                let (mut land_n, mut green_n) = (0usize, 0usize);
+                #[allow(clippy::needless_range_loop)] // parallel stores, one index
+                for i in 0..n {
+                    self.rain[i] =
+                        self.rain[i] * (1.0 - RAIN_BLEND) + rain_now[i] * RAIN_BLEND;
+                    self.moist[i] = (self.air[0][i] / AIR_VIS).clamp(0.0, 1.0);
+                    // VEGETATION: cover creeps toward what the sustained
+                    // rain can feed AT THE STOCK'S CURRENT THIRST — greening
+                    // where the weather delivers, desertification where it
+                    // stops, drowned under the sea.
+                    let target = if self.ground(i as TileId) < sea {
+                        0.0
+                    } else {
+                        land_n += 1;
+                        if self.veg[i] >= GREEN_COVER {
+                            green_n += 1;
+                        }
+                        (self.rain[i] / full).clamp(0.0, 1.0)
+                    };
+                    self.veg[i] += (target - self.veg[i]) * VEG_GROW;
+                }
+                // THE GREEN TARGET's controller: the flora's thirst walks
+                // until the greened share of standing land meets the dial —
+                // hardier stock reaches further down the rain gradient,
+                // thirstier stock retreats toward the wet cores.
+                if land_n > 0 {
+                    self.green_share = green_n as f32 / land_n as f32;
+                    let err = self.veg_target - self.green_share;
+                    self.veg_thirst = (self.veg_thirst
+                        * (1.0 - (VEG_ADAPT * err).clamp(-0.02, 0.02)))
+                    .clamp(VEG_THIRST_MIN, VEG_THIRST_MAX);
+                }
+            }
             Phase::Upwell => {
                 // 1 — UPWELLING + ERUPTIONS, in the MANTLE's frame — a moving plate
                 // slides away from the sources, which is the whole chain story.
@@ -2299,16 +2789,9 @@ impl Evolution {
                 // MOISTURE is atmospheric — a cheap global state pass (no material
                 // moves, no tile "changes"): the sky does not care which ground was
                 // busy this tick.
-                for t in 0..n as TileId {
-                    let i = t as usize;
-                    let h = self.ground(t);
-                    let wet = if h < sea {
-                        BASE_WET + SUBMERGED_WET
-                    } else {
-                        BASE_WET + OROGRAPHIC_WET * (((h - sea) / COND_SCALE).clamp(0.0, 1.0))
-                    };
-                    self.moist[i] = wet.clamp(0.0, 1.0);
-                }
+                // (The moisture field is the WEATHER's now — evaporation,
+                // winds, lift and convergence write it; the weathering
+                // below drinks the RAIN ledger instead of conjuring wet.)
                 // THE STREAMS (state, not material): rainfall accumulates down the
                 // steepest-descent network — every tile hands its gathered water to
                 // its steepest lower neighbour, highest ground first. The discharge
@@ -2320,7 +2803,17 @@ impl Evolution {
                 let mut flow_to: Vec<u32> = vec![u32::MAX; n];
                 let mut flow_drop: Vec<f32> = vec![0.0; n];
                 {
-                    let mut disch: Vec<f32> = self.moist.clone();
+                    // The seed is the RAIN (a drowned tile's water routes
+                    // nowhere useful — a token seed keeps the network sane).
+                    let mut disch: Vec<f32> = (0..n)
+                        .map(|i| {
+                            if self.ground(i as TileId) < sea {
+                                0.05
+                            } else {
+                                self.rain[i] * RAIN_DISCH + 0.02
+                            }
+                        })
+                        .collect();
                     for t in &order {
                         let h = self.ground(*t);
                         let mut best: Option<(f32, usize)> = None;
@@ -2417,10 +2910,24 @@ impl Evolution {
                     // A GLACIER needs no rain and out-cuts any stream (Aaron: more
                     // aggressive) — but its spoil is FROZEN IN PLACE (more static):
                     // the till stays under the ice and releases only on retreat.
+                    // The wetness is EARNED now: standing water soaks as
+                    // ever; dry land weathers only as hard as the rain the
+                    // weather actually delivers — deserts and rain-shadow
+                    // interiors keep their plains.
+                    let wet = if h < sea {
+                        BASE_WET + SUBMERGED_WET
+                    } else {
+                        // The COVER binds the soil: full vegetation holds
+                        // back most of the budget — deserts starve of rain,
+                        // forests hold their ground, and the semi-arid
+                        // middle erodes hardest.
+                        (BASE_WET * 0.3 + RAIN_ERODE * self.rain[i]).min(1.0)
+                            * (1.0 - VEG_SHIELD * self.veg[i])
+                    };
                     let mut budget = if glacial {
                         ERODE_RATE * ICE_SCOUR * slope
                     } else {
-                        ERODE_RATE * self.moist[i] * slope * carve
+                        ERODE_RATE * wet * slope * carve
                     };
                     let mut spoil = 0.0f32;
                     let take =
@@ -4104,25 +4611,21 @@ mod tests {
             "an apron forms at the tallest pile"
         );
 
-        // Orographic: the high ground is wetter than low DRY ground, and a
-        // drowned tile soaks above the dry base.
-        let high_wet = e.moisture(lofty);
-        let low_dry = (0..map.len() as TileId)
-            .filter(|t| {
-                let h = e.ground(*t);
-                h >= sea && h < sea + 0.2
-            })
-            .map(|t| e.moisture(t))
-            .next()
-            .unwrap_or(0.0);
-        assert!(
-            high_wet > low_dry,
-            "condensation rides the uplift: {high_wet} vs {low_dry}"
-        );
+        // The WEATHER delivers: rain has fallen somewhere on the world (the
+        // engine earned it — evaporation, winds, lift), and the sea keeps
+        // the boundary air breathing.
+        let rained = (0..map.len() as TileId)
+            .map(|t| e.rainfall(t))
+            .fold(0.0f32, f32::max);
+        assert!(rained > 1e-3, "the weather rains somewhere: {rained}");
         let drowned = (0..map.len() as TileId)
             .find(|t| e.ground(*t) < sea)
             .unwrap();
-        assert!(e.moisture(drowned) > BASE_WET, "standing water soaks");
+        assert!(
+            e.moisture(drowned) > 0.05,
+            "the sea breathes into the boundary layer: {}",
+            e.moisture(drowned)
+        );
 
         // No runaway spikes: the trim keeps the loftiest column bounded.
         assert!(
@@ -4152,8 +4655,10 @@ mod tests {
         // A REAL flood (76%): at 71% on the young tiered world the line sits
         // a film above the raw bed tier — any sediment lifts its tile "above
         // sea" and marine physics cannot exist by definition. 76% puts the
-        // line into the shelf tier: the beds are genuinely deep.
-        for _ in 0..150 {
+        // line into the shelf tier: the beds are genuinely deep. (260 ticks:
+        // the weather engine's rain spins up over its EMA before the
+        // erosion can shed marine sediment in quantity.)
+        for _ in 0..260 {
             let sea = e.sea_level(76.0);
             e.tick(&map, &seams, &crust, sea);
         }
@@ -4547,22 +5052,28 @@ mod tests {
         let max_d = (0..map.len() as TileId)
             .map(|t| e.discharge(t))
             .fold(0.0f32, f32::max);
+        // (Rain-localized weather waters less of the world than the old
+        // conjured moisture did, and the drizzle smooths what falls — the
+        // claim is concentration OVER THE LIVE LINE: channels exist.)
         assert!(
-            max_d > CHANNEL_LIVE * 2.0,
+            max_d > CHANNEL_LIVE,
             "the network concentrates real catchments: max {max_d}"
         );
         // A channel runs below its banks: among high-discharge LAND tiles,
         // most sit lower than the mean of their non-channel neighbours.
+        // (Stats at half the display live-line — the small test world's
+        // catchments top out near CHANNEL_LIVE under the smoothed rain.)
+        let live = CHANNEL_LIVE * 0.5;
         let sea = e.resolve_sea();
         let (mut below, mut total) = (0usize, 0usize);
         for t in 0..map.len() as TileId {
-            if e.discharge(t) < CHANNEL_LIVE || e.ground(t) <= sea {
+            if e.discharge(t) < live || e.ground(t) <= sea {
                 continue;
             }
             let mut bank = 0.0f32;
             let mut nb_n = 0usize;
             for nb in map.neighbours(t) {
-                if e.discharge(*nb) < CHANNEL_LIVE {
+                if e.discharge(*nb) < live {
                     bank += e.ground(*nb);
                     nb_n += 1;
                 }
@@ -4626,8 +5137,11 @@ mod tests {
     fn the_rivers_carry_and_the_relief_organizes() {
         let (map, seams, crust, _plates) = world();
         let mut e = Evolution::new(&map, &seams);
-        e.set_water(76.0);
-        for _ in 0..600 {
+        // 70%: enough standing land for a channel population once the
+        // weather, the vegetation and the streams have spun up (76% drowns
+        // the small test world's land down to fragments by tick ~1000).
+        e.set_water(70.0);
+        for _ in 0..900 {
             let sea = e.resolve_sea();
             e.tick(&map, &seams, &crust, sea);
         }
@@ -4645,15 +5159,19 @@ mod tests {
         );
         // Channel incision: land channels sit below their banks by a real
         // margin on average — valleys, not paint.
+        // Stats live-line at half the display threshold: the SMALL test
+        // world's land catchments top out near CHANNEL_LIVE (the shipped
+        // world's run 4x deeper) — concentration is what the stat needs.
+        let live = CHANNEL_LIVE * 0.5;
         let (mut cut, mut cut_n) = (0.0f32, 0usize);
         for t in 0..map.len() as TileId {
-            if e.discharge(t) < CHANNEL_LIVE || e.ground(t) <= sea {
+            if e.discharge(t) < live || e.ground(t) <= sea {
                 continue;
             }
             let mut bank = 0.0f32;
             let mut nb_n = 0usize;
             for nb in map.neighbours(t) {
-                if e.discharge(*nb) < CHANNEL_LIVE {
+                if e.discharge(*nb) < live {
                     bank += e.ground(*nb);
                     nb_n += 1;
                 }
@@ -4784,6 +5302,122 @@ mod tests {
     }
 
     #[test]
+    fn mountains_cast_rain_shadows() {
+        // **The wall rains its windward side and shadows the interior**
+        // (Aaron 2026-08-28: "there's no mountains blocking moisture to
+        // interiors"): a hand-built wall taller than the boundary deck, set
+        // square across the precomputed wind, dries the tile beyond it.
+        let (map, seams, crust, _plates) = world();
+        let mut e = Evolution::new(&map, &seams);
+        e.set_water(100.0); // a sea to evaporate from
+        // A windward chain in a real wind lane: u → wall → shadow.
+        let u = (0..map.len() as TileId)
+            .find(|t| {
+                let i = *t as usize;
+                let j = e.wind_to[0][i];
+                if j == u32::MAX || crust.is_vent(*t) {
+                    return false;
+                }
+                let k = e.wind_to[0][j as usize];
+                k != u32::MAX && k != i as u32 && !crust.is_vent(j as TileId)
+            })
+            .expect("a wind lane exists");
+        let wall = e.wind_to[0][u as usize] as usize;
+        let shadow = e.wind_to[0][wall] as usize;
+        e.base[wall] += 3.0; // past sea + DECK_ALT[0]: a true wall
+        for _ in 0..120 {
+            let sea = e.resolve_sea();
+            e.tick(&map, &seams, &crust, sea);
+        }
+        let (wet, dry) = (e.rain[u as usize], e.rain[shadow]);
+        // The drizzle spills SOME lifted moisture over the wall (real
+        // weather) — the shadow is a real deficit, not a void, and a
+        // single-tile wall is the weakest staging of it.
+        assert!(
+            wet > dry * 1.25 + 1e-4,
+            "the windward side drinks, the interior lies in the shadow: {wet} vs {dry}"
+        );
+    }
+
+    #[test]
+    fn the_rain_comes_in_belts() {
+        // **Convergence concentrates, divergence dries** — on a pure water
+        // world (no orography at all) the rain still BANDS: the ITCZ out-
+        // rains the subtropical divergence — deserts are a latitude before
+        // they are a landform.
+        let (map, seams, crust, _plates) = world();
+        let mut e = Evolution::new(&map, &seams);
+        e.set_water(100.0);
+        for _ in 0..150 {
+            let sea = e.resolve_sea();
+            e.tick(&map, &seams, &crust, sea);
+        }
+        let band_mean = |lo: f32, hi: f32| {
+            let (mut s, mut n) = (0.0f32, 0usize);
+            for t in 0..map.len() as TileId {
+                let a = map.direction(t).y.abs();
+                if a >= lo && a < hi {
+                    s += e.rain[t as usize];
+                    n += 1;
+                }
+            }
+            s / n.max(1) as f32
+        };
+        let itcz = band_mean(0.0, 0.12);
+        let horse = band_mean(0.28, 0.42);
+        assert!(
+            itcz > horse * 1.5,
+            "the ITCZ out-rains the subtropical divergence: {itcz} vs {horse}"
+        );
+    }
+
+    #[test]
+    fn deserts_erode_less_than_watered_country() {
+        // **Plains survive where the rain never goes** (Aaron: "we aren't
+        // getting plains because we're eroding everything in general"): two
+        // identical columns, one under standing rain, one bone dry — the
+        // watered one sheds measurably more.
+        let (map, seams, crust, _plates) = world();
+        let mut e = Evolution::new(&map, &seams);
+        let quiet = |t: TileId| {
+            seams.heat(t) <= 0.0
+                && !crust.is_vent(t)
+                && map.neighbours(t).iter().all(|nb| !crust.is_vent(*nb))
+        };
+        // Both sites must be BECALMED: quiet heat AND no derived push —
+        // a heat-gradient shove would ride a pile away mid-experiment.
+        let still = |e: &Evolution, t: TileId| {
+            quiet(t) && e.push[t as usize].length_squared() < 1e-12
+        };
+        let a = (0..map.len() as TileId)
+            .find(|t| still(&e, *t))
+            .expect("a becalmed site");
+        let b = (0..map.len() as TileId)
+            .rev()
+            .find(|t| still(&e, *t) && map.direction(*t).dot(map.direction(a)) < 0.5)
+            .expect("a far becalmed site");
+        let (ai, bi) = (a as usize, b as usize);
+        e.rock[ai] = 0.6;
+        e.rock[bi] = 0.6;
+        for _ in 0..30 {
+            // Hold the contrast against the weather's own writes: a is
+            // WATERED, b is desert.
+            e.rain[ai] = 0.12;
+            e.rain[bi] = 0.0;
+            e.disturb(&map, a);
+            e.disturb(&map, b);
+            let sea = e.resolve_sea();
+            e.tick(&map, &seams, &crust, sea);
+        }
+        assert!(
+            e.rock[ai] < e.rock[bi] - 0.05,
+            "rain erodes, drought preserves: wet {} vs dry {}",
+            e.rock[ai],
+            e.rock[bi]
+        );
+    }
+
+    #[test]
     fn no_delivery_outruns_flood_control() {
         // **The carry obeys the intake law** (the 32400-tick relapse): a
         // huge suspended load over a blocked target settles at most
@@ -4837,6 +5471,139 @@ mod tests {
             e.suspend[i] < 5.0,
             "the suspension is settling out: {}",
             e.suspend[i]
+        );
+    }
+
+    #[test]
+    fn the_drizzle_gives_the_dial_its_reach() {
+        // **The upper decks water the interiors** (Aaron 2026-08-28: dialed
+        // 70% and the big continent stayed bare): before the drizzle, half
+        // the land measured rain 0.000 forever and the green share
+        // saturated near 20% whatever the dial asked. With every deck
+        // precipitating a little as it passes, a lush ask is reachable.
+        let (map, seams, crust, _plates) = world();
+        let mut e = Evolution::new(&map, &seams);
+        e.set_water(70.0);
+        e.set_veg_target(0.70);
+        for _ in 0..420 {
+            let sea = e.resolve_sea();
+            e.tick(&map, &seams, &crust, sea);
+        }
+        assert!(
+            e.green_share() > 0.35,
+            "the dial reaches past the old support ceiling: {}",
+            e.green_share()
+        );
+        // …and the rain SUPPORT itself is broad now: most land sees water.
+        let sea = e.resolve_sea();
+        let (mut dry, mut land) = (0usize, 0usize);
+        for t in 0..map.len() as TileId {
+            if e.ground(t) >= sea {
+                land += 1;
+                if e.rain[t as usize] < 1e-5 {
+                    dry += 1;
+                }
+            }
+        }
+        assert!(
+            (dry as f32) < land as f32 * 0.25,
+            "the sky touches most of the land: {dry} bone-dry of {land}"
+        );
+    }
+
+    #[test]
+    fn the_green_target_walks_the_flora() {
+        // **The GREEN TARGET is a dial, not paint** (Aaron 2026-08-28): the
+        // flora's thirst adapts until the greened share of land meets the
+        // ask — same world, same weather, a high target grows a wider
+        // green than a starved one, and the thirst walks opposite ways.
+        let run = |target: f32| {
+            let (map, seams, crust, _plates) = world();
+            let mut e = Evolution::new(&map, &seams);
+            e.set_water(70.0);
+            e.set_veg_target(target);
+            for _ in 0..420 {
+                let sea = e.resolve_sea();
+                e.tick(&map, &seams, &crust, sea);
+            }
+            (e.green_share(), e.veg_thirst)
+        };
+        let (lush_share, lush_thirst) = run(0.60);
+        let (starved_share, starved_thirst) = run(0.05);
+        assert!(
+            lush_share > starved_share + 0.05,
+            "the dial moves the green: {lush_share} vs {starved_share}"
+        );
+        assert!(
+            lush_thirst < starved_thirst,
+            "hardier stock under a high ask, thirstier under a low one: {lush_thirst} vs {starved_thirst}"
+        );
+        assert!(
+            (VEG_THIRST_MIN..=VEG_THIRST_MAX).contains(&lush_thirst),
+            "the thirst stays in its working range"
+        );
+    }
+
+    #[test]
+    fn vegetation_greens_and_binds_the_watered_country() {
+        // **The greening and its resistance** (Aaron 2026-08-28): cover
+        // grows where rain is sustained, and an established forest SHIELDS
+        // its column — same rain, same rock, the covered twin sheds less.
+        let (map, seams, crust, _plates) = world();
+        let mut e = Evolution::new(&map, &seams);
+        let quiet = |t: TileId| {
+            seams.heat(t) <= 0.0
+                && !crust.is_vent(t)
+                && map.neighbours(t).iter().all(|nb| !crust.is_vent(*nb))
+        };
+        let still = |e: &Evolution, t: TileId| {
+            quiet(t) && e.push[t as usize].length_squared() < 1e-12
+        };
+        let a = (0..map.len() as TileId)
+            .find(|t| still(&e, *t))
+            .expect("a becalmed site");
+        let b = (0..map.len() as TileId)
+            .rev()
+            .find(|t| still(&e, *t) && map.direction(*t).dot(map.direction(a)) < 0.5)
+            .expect("a far becalmed site");
+        let (ai, bi) = (a as usize, b as usize);
+        e.rock[ai] = 0.6;
+        e.rock[bi] = 0.6;
+        e.veg[ai] = 1.0; // an established forest
+        for _ in 0..30 {
+            e.rain[ai] = 0.05;
+            e.rain[bi] = 0.05;
+            e.veg[bi] = 0.0; // the bare twin: shield contrast, held
+            e.disturb(&map, a);
+            e.disturb(&map, b);
+            let sea = e.resolve_sea();
+            e.tick(&map, &seams, &crust, sea);
+        }
+        assert!(
+            e.veg[ai] > 0.9,
+            "held rain sustains the forest: {}",
+            e.veg[ai]
+        );
+        assert!(
+            e.rock[ai] > e.rock[bi] + 0.05,
+            "the cover binds the soil: forest {} vs bare {}",
+            e.rock[ai],
+            e.rock[bi]
+        );
+        // And growth is EARNED: a third site under the same held rain,
+        // never planted, greens on its own clock.
+        let c = (a + 1..map.len() as TileId)
+            .find(|t| still(&e, *t) && *t != b)
+            .expect("a third site");
+        for _ in 0..30 {
+            e.rain[c as usize] = 0.05;
+            let sea = e.resolve_sea();
+            e.tick(&map, &seams, &crust, sea);
+        }
+        assert!(
+            e.veg[c as usize] > 0.2,
+            "sustained rain grows cover from nothing: {}",
+            e.veg[c as usize]
         );
     }
 

@@ -37,6 +37,7 @@ const CONTINENT_FRAC: f32 = 0.35;
 /// is THICK crust riding high, an ocean bed a thin veneer. The scheme's OWN
 /// physicality: the views draw it, and the evolution era's ground ledger is
 /// seeded from it.
+#[allow(dead_code)] // the plates display tier — the era's LIVE class owns the line now
 pub const CONTINENT_H_FRAC: f32 = 0.5;
 pub const OCEAN_BED_H_FRAC: f32 = 0.125;
 /// The SHELF band's base height — between bed and continent, so the era's

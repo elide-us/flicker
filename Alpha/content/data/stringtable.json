@@ -2522,6 +2522,12 @@
   "pop_hex_moist": {
     "en-us": "MOISTURE"
   },
+  "pop_hex_rain": {
+    "en-us": "RAINFALL · MM"
+  },
+  "pop_phase_weather": {
+    "en-us": "Weather"
+  },
   "pop_hex_river": {
     "en-us": "STREAM FLOW"
   },
@@ -2560,6 +2566,9 @@
   },
   "pop_water_target": {
     "en-us": "TARGET"
+  },
+  "pop_veg_target": {
+    "en-us": "GREEN %"
   },
   "pop_tab_map": {
     "en-us": "Map"

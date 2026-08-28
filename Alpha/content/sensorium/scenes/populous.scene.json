@@ -258,10 +258,27 @@
                                     "size": 40
                                   },
                                   {
+                                    "component": "slider",
+                                    "id": "pop_veg_target",
+                                    "style": "slider",
+                                    "bind": "pop_veg_target",
+                                    "label": "$pop_veg_target",
+                                    "min": 0,
+                                    "max": 100,
+                                    "step": 1,
+                                    "step_coarse": 5,
+                                    "decimals": 0,
+                                    "slider_h": 10,
+                                    "value_w": 44,
+                                    "tab_group": "pop_left",
+                                    "nav_ordinal": 3,
+                                    "size": 40
+                                  },
+                                  {
                                     "component": "button",
                                     "action": "pop_evolve_roll",
                                     "tab_group": "pop_left",
-                                    "nav_ordinal": 3,
+                                    "nav_ordinal": 4,
                                     "size_class": "md",
                                     "label": "$pop_evolve_roll"
                                   },
@@ -269,7 +286,7 @@
                                     "component": "button",
                                     "action": "pop_evolve_run",
                                     "tab_group": "pop_left",
-                                    "nav_ordinal": 4,
+                                    "nav_ordinal": 5,
                                     "size_class": "md",
                                     "label": "$pop_evolve_run"
                                   },
@@ -277,7 +294,7 @@
                                     "component": "button",
                                     "action": "pop_evolve_step",
                                     "tab_group": "pop_left",
-                                    "nav_ordinal": 5,
+                                    "nav_ordinal": 6,
                                     "size_class": "md",
                                     "label": "$pop_evolve_step"
                                   },
@@ -285,7 +302,7 @@
                                     "component": "button",
                                     "action": "pop_evolve_reset",
                                     "tab_group": "pop_left",
-                                    "nav_ordinal": 6,
+                                    "nav_ordinal": 7,
                                     "size_class": "md",
                                     "label": "$pop_evolve_reset"
                                   }
@@ -1273,6 +1290,30 @@
                                         "font": "label",
                                         "color": "panel.stat_label",
                                         "grow": 1.0
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$pop_hex_rain",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "pop_hex_rain",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 112
                                       }
                                     ]
                                   },

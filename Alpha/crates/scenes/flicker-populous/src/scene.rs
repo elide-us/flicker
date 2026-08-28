@@ -63,7 +63,6 @@ use flicker_shell::{PauseScene, Theme};
 use crate::crust::CrustField;
 use crate::evolve::Evolution;
 use crate::map::{HexMap, TileId, DEFAULT_FREQ, MAX_FREQ, MIN_FREQ};
-use crate::plates::CONTINENT_H_FRAC;
 use crate::seams::{SeamField, DEFAULT_CELLS, DEFAULT_SPOTS};
 use crate::ui;
 
@@ -204,27 +203,50 @@ const DEEP_DEPTH: f32 = 0.7;
 // occlude; the point is only to SHOW the moisture the erosion drinks) ──
 /// The two layers' altitudes above the sea line and their cell thickness,
 /// in tile-width units — haze low and broad, clouds at the condensation deck.
-const HAZE_ALT: f32 = 1.1;
-const CLOUD_ALT: f32 = 2.1;
 const ATMO_THICK: f32 = 0.3;
-/// Presence thresholds on the moisture field: haze forms easily, a CLOUD is a
-/// condensation zone (the uplift's own).
-const HAZE_WET: f32 = 0.18;
-const CLOUD_WET: f32 = 0.5;
-/// The near-nothing alphas — see the ground THROUGH the weather, always.
-const HAZE_ALPHA: f32 = 0.08;
-const CLOUD_ALPHA: f32 = 0.15;
-
+/// The weather decks' fog cells: below AIR_FLOOR a cell is absent, at
+/// AIR_FULL it reads fully bright; per-deck alphas stay near-nothing
+/// (Aaron: the clouds barely occlude — they indicate).
+const AIR_FLOOR: f32 = 0.06;
+const AIR_FULL: f32 = 0.9;
+const DECK_ALPHA: [f32; 3] = [0.07, 0.14, 0.10];
+// ── THE RAIN TINT (Aaron 2026-08-28): wet land GREENS (a muted olive — the
+// river films keep the bright translucent green), dry land reads SANDY
+// where loose sediment leads its surface or STONY where rock and strata
+// do — plains, prairies and deserts at a glance. ──
+const GREEN_WET_COLOR: [f32; 3] = [0.22, 0.45, 0.16];
+const DRY_SAND_COLOR: [f32; 3] = [0.66, 0.50, 0.28];
+const DRY_STONE_COLOR: [f32; 3] = [0.51, 0.50, 0.48];
+/// The rain EMA that reads as FULLY watered (measured land-rain p90 ≈
+/// 0.016, p99 ≈ 0.054 — the first calibration, 0.1, greened nothing).
+const RAIN_TINT_SCALE: f32 = 33.0;
 /// The three water layers' inks, deep to surface.
-const DEEP_WATER_COLOR: [f32; 3] = [0.05, 0.10, 0.22];
 const SHALLOW_WATER_COLOR: [f32; 3] = [0.10, 0.22, 0.38];
 const SURFACE_WATER_COLOR: [f32; 3] = [0.20, 0.38, 0.52];
+// ── THE OPEN OCEAN (Aaron 2026-08-28: "significantly more blue… close to
+// the saturation of the green river knobs and the red lava knobs… anything
+// on the deep ocean outside of shelf region should be much darker, earth
+// blue"): water standing over a SHELF-class bed keeps the pale inks above;
+// water over open sea floor wears these — bold, saturated, dark from
+// orbit — with a lighter hand on the temperature wash so the blue holds. ──
+const OPEN_DEEP_COLOR: [f32; 3] = [0.010, 0.075, 0.30];
+const OPEN_SHALLOW_COLOR: [f32; 3] = [0.035, 0.22, 0.58];
+const OPEN_SURFACE_COLOR: [f32; 3] = [0.07, 0.33, 0.68];
+/// The temperature wash on shelf water (the old hand) and open ocean (the
+/// lighter one that keeps the blue saturated).
+const SHELF_TEMP_WASH: f32 = 0.45;
+const OPEN_TEMP_WASH: f32 = 0.22;
+/// Open-ocean alphas, band by band (deep, shallow, surface) — bolder than
+/// the shelf's 0.62 / 0.5 / 0.38.
+const OPEN_ALPHA: [f32; 3] = [0.78, 0.64, 0.50];
 /// DRY-land reclassification levels, in tile-width units of TOTAL height
 /// (Aaron: material that rises above the shelf and plate levels must take
-/// the correct colour): below SHELF_LEVEL a dry tile is still bare bed;
-/// between, it reads as shelf; above LAND_LEVEL it is land.
-const SHELF_LEVEL: f32 = 0.30;
-const LAND_LEVEL: f32 = CONTINENT_H_FRAC;
+/// the correct colour). LIVE classification (Aaron 2026-08-28: shorelines
+/// and shelves must reclassify as the sim advances): drowned ground is
+/// SHELF only while it stays in the shallow band AND under the induration
+/// grade — pushed deep, or pressed and sedimented hard enough, it is BED.
+const SHELF_DEPTH: f32 = 0.55;
+const SHELF_BED_GRADE: f32 = 1.6;
 
 /// What a tile's GROUND is, judged by its CURRENT total height — never by
 /// what it was rolled as: a seamount that grows past the levels becomes
@@ -238,11 +260,13 @@ enum Ground {
     Land,
 }
 
-/// Classify one tile's rock: `total` in tile-width units.
-fn ground_class(total: f32) -> Ground {
-    if total >= LAND_LEVEL {
+/// Classify one tile LIVE against the standing sea and its own marine
+/// grade: above the line is LAND; drowned ground is SHELF while shallow
+/// and young; deep water, or a bed the water has pressed hard, is BED.
+fn ground_class(total: f32, sea: f32, bed_hard: f32) -> Ground {
+    if total >= sea {
         Ground::Land
-    } else if total >= SHELF_LEVEL {
+    } else if sea - total < SHELF_DEPTH && bed_hard < SHELF_BED_GRADE {
         Ground::Shelf
     } else {
         Ground::Bed
@@ -590,7 +614,11 @@ impl PopulousBench {
                     top.color = Box::new(move |i| {
                         let t = i as TileId;
                         let total = era_h(t);
-                        let mut c = match ground_class(total) {
+                        // LIVE classification: the shoreline and the shelf
+                        // follow the standing sea and the marine press —
+                        // an old shelf pushed deep or indurated reclasses
+                        // (and recolours) as BED.
+                        let mut c = match ground_class(total, sea, evolve.bed_hardness(t)) {
                             Ground::Land => CONTINENT_COLOR,
                             Ground::Shelf => SHELF_COLOR,
                             Ground::Bed => OCEAN_BED_COLOR,
@@ -598,6 +626,25 @@ impl PopulousBench {
                         c = lerp3(c, ROCK_COLOR, (evolve.rock(t) * 1.2).clamp(0.0, 0.8));
                         let (n, _) = evolve.strata(t);
                         c = lerp3(c, STRATA_COLOR, (f32::from(n) / 3.0).clamp(0.0, 0.7));
+                        // THE GREENING (land only): VEGETATION paints the
+                        // watered country green — strongly, it is the land's
+                        // cover — while unwatered, uncovered land reads
+                        // sandy where sediment leads its surface, stony
+                        // where rock and strata do: desertification you can
+                        // see. Rivers keep their brighter translucent film.
+                        if total >= sea {
+                            let v = evolve.vegetation(t);
+                            let rain =
+                                (evolve.rainfall(t) * RAIN_TINT_SCALE).clamp(0.0, 1.0);
+                            let dry = (1.0 - v.max(rain)).clamp(0.0, 1.0);
+                            let dry_c = if evolve.sediment(t) >= evolve.rock(t) {
+                                DRY_SAND_COLOR
+                            } else {
+                                DRY_STONE_COLOR
+                            };
+                            c = lerp3(c, dry_c, dry * 0.55);
+                            c = lerp3(c, GREEN_WET_COLOR, v * 0.85);
+                        }
                         if crust.is_vent(t) {
                             c = lerp3(c, LAVA_COLOR, 0.5);
                         }
@@ -631,26 +678,55 @@ impl PopulousBench {
                     // lies below that band's ceiling. The ocean's top is
                     // FLAT — the one level the dial set.
                     let ground = era_h;
-                    let bands: [(f32, f32, [f32; 3], f32, f32); 3] = [
-                        // (ceiling below sea, floor marker, colour, alpha, gloss)
+                    // FIVE water shells now (Aaron 2026-08-28): the deep
+                    // band is always OPEN OCEAN — bold, dark, earth-blue —
+                    // and the shallow/surface bands each split per cell into
+                    // an open-ocean variant and a SHELF variant that keeps
+                    // the old pale inks, so coastal water reads as the
+                    // shallows it stands over. `over_shelf`: None = any bed,
+                    // Some(want) = only cells whose LIVE class matches.
+                    type Band = (usize, f32, f32, Option<bool>, [f32; 3], f32, f32);
+                    let bands: [Band; 5] = [
+                        // (band, ceiling, floor, over_shelf, colour, alpha, gloss)
                         (
+                            0,
                             sea - DEEP_DEPTH,
                             f32::NEG_INFINITY,
-                            DEEP_WATER_COLOR,
-                            0.62,
+                            None,
+                            OPEN_DEEP_COLOR,
+                            OPEN_ALPHA[0],
                             0.1,
                         ),
                         (
+                            1,
                             sea - SURFACE_DEPTH,
                             sea - DEEP_DEPTH,
+                            Some(false),
+                            OPEN_SHALLOW_COLOR,
+                            OPEN_ALPHA[1],
+                            0.2,
+                        ),
+                        (
+                            1,
+                            sea - SURFACE_DEPTH,
+                            sea - DEEP_DEPTH,
+                            Some(true),
                             SHALLOW_WATER_COLOR,
                             0.5,
                             0.2,
                         ),
-                        (sea, sea - SURFACE_DEPTH, SURFACE_WATER_COLOR, 0.38, 0.45),
+                        (
+                            2,
+                            sea,
+                            sea - SURFACE_DEPTH,
+                            Some(false),
+                            OPEN_SURFACE_COLOR,
+                            OPEN_ALPHA[2],
+                            0.45,
+                        ),
+                        (2, sea, sea - SURFACE_DEPTH, Some(true), SURFACE_WATER_COLOR, 0.38, 0.45),
                     ];
-                    for (band, (ceil, floor, colour, alpha, gloss)) in bands.into_iter().enumerate()
-                    {
+                    for (band, ceil, floor, over_shelf, colour, alpha, gloss) in bands {
                         shells.push(ShellSpec {
                             dirs: &map.grid().dirs,
                             outlines: map.outlines(),
@@ -663,13 +739,29 @@ impl PopulousBench {
                                 if ground(t) >= ceil || evolve.ice(t) >= crate::evolve::ICE_SOLID {
                                     return None;
                                 }
+                                if let Some(want) = over_shelf {
+                                    let shelf = matches!(
+                                        ground_class(ground(t), sea, evolve.bed_hardness(t)),
+                                        Ground::Shelf
+                                    );
+                                    if shelf != want {
+                                        return None;
+                                    }
+                                }
                                 // THE OCEAN'S OWN HEAT tints each band by ITS
                                 // temperature — surface tracked per tile,
                                 // deep the one global reservoir, shallow the
-                                // mix (bands are bottom-up: 0 deep, 2 surface).
+                                // mix (bands bottom-up: 0 deep, 2 surface) —
+                                // with a lighter wash on the open ocean so
+                                // the bold blue holds its saturation.
                                 let (sst, mid, deep) = evolve.ocean_temps(t);
                                 let bt = [deep, mid, sst][band];
-                                Some(lerp3(colour, water_temp_color(bt), 0.45))
+                                let wash = if over_shelf == Some(true) {
+                                    SHELF_TEMP_WASH
+                                } else {
+                                    OPEN_TEMP_WASH
+                                };
+                                Some(lerp3(colour, water_temp_color(bt), wash))
                             }),
                             cell_radius: None,
                             depth: Some(Box::new(move |i| {
@@ -717,18 +809,17 @@ impl PopulousBench {
                             ..MeshDrawOptions::default()
                         },
                     });
-                    // THE ATMOSPHERE — the first two layers, as near-nothing
-                    // fog cells: a low HAZE and the condensation-deck CLOUDS,
-                    // brightness riding the moisture field the weathering
-                    // drinks. A mountain taller than a deck pokes through it
-                    // (its cell simply is not there). Drawn last: the most
+                    // THE ATMOSPHERE — the weather engine's decks as
+                    // volumetric fog cells (Aaron 2026-08-28: "volumes of
+                    // moisture drawn as concentrations in various layers"):
+                    // each deck's cell present only where IN-FLIGHT moisture
+                    // actually stands, brightness riding the concentration —
+                    // cloud banks over the convergence zones, streets along
+                    // the winds, clear skies over the deserts. A mountain
+                    // taller than a deck pokes through. Drawn last: the most
                     // transparent thing in the scene.
-                    let atmo: [(f32, f32, f32); 2] = [
-                        (HAZE_ALT, HAZE_WET, HAZE_ALPHA),
-                        (CLOUD_ALT, CLOUD_WET, CLOUD_ALPHA),
-                    ];
-                    for (alt, wet_floor, alpha) in atmo {
-                        let deck = sea + alt;
+                    for (l, &alpha) in DECK_ALPHA.iter().enumerate() {
+                        let deck = sea + crate::evolve::DECK_ALT[l];
                         shells.push(ShellSpec {
                             dirs: &map.grid().dirs,
                             outlines: map.outlines(),
@@ -736,10 +827,10 @@ impl PopulousBench {
                             inset: 0.0,
                             color: Box::new(move |i| {
                                 let t = i as TileId;
-                                let m = evolve.moisture(t);
-                                (m >= wet_floor && ground(t) < deck).then(|| {
-                                    // Denser moisture = whiter fog.
-                                    let b = 0.55 + 0.45 * m;
+                                let m = evolve.air_layer(l, t);
+                                (m >= AIR_FLOOR && ground(t) < deck).then(|| {
+                                    // Denser moisture = whiter, thicker fog.
+                                    let b = 0.5 + 0.5 * (m / AIR_FULL).min(1.0);
                                     [b, b, b + 0.02]
                                 })
                             }),
@@ -988,23 +1079,40 @@ impl PopulousBench {
         // Each band wears ITS OWN temperature (the ocean's heat by depth:
         // surface tracked, deep the one global reservoir, shallow the mix).
         let (b_sst, b_mid, b_deep) = evolve.ocean_temps(tile);
+        // The stack's water wears the same class-aware inks as the globe:
+        // pale over a SHELF column, bold open-ocean blue elsewhere.
+        let shelfy = matches!(
+            ground_class(total, sea, evolve.bed_hardness(tile)),
+            Ground::Shelf
+        );
+        let (c_sh, c_sf, wash, a_sh, a_sf) = if shelfy {
+            (SHALLOW_WATER_COLOR, SURFACE_WATER_COLOR, SHELF_TEMP_WASH, 0.5, 0.38)
+        } else {
+            (
+                OPEN_SHALLOW_COLOR,
+                OPEN_SURFACE_COLOR,
+                OPEN_TEMP_WASH,
+                OPEN_ALPHA[1],
+                OPEN_ALPHA[2],
+            )
+        };
         let bands = [
             (
-                lerp3(DEEP_WATER_COLOR, water_temp_color(b_deep), 0.45),
+                lerp3(OPEN_DEEP_COLOR, water_temp_color(b_deep), OPEN_TEMP_WASH),
                 (depth - DEEP_DEPTH).max(0.0),
-                0.62,
+                OPEN_ALPHA[0],
                 0.1,
             ),
             (
-                lerp3(SHALLOW_WATER_COLOR, water_temp_color(b_mid), 0.45),
+                lerp3(c_sh, water_temp_color(b_mid), wash),
                 (depth.min(DEEP_DEPTH) - SURFACE_DEPTH).max(0.0),
-                0.5,
+                a_sh,
                 0.2,
             ),
             (
-                lerp3(SURFACE_WATER_COLOR, water_temp_color(b_sst), 0.45),
+                lerp3(c_sf, water_temp_color(b_sst), wash),
                 depth.min(SURFACE_DEPTH),
-                0.38,
+                a_sf,
                 0.45,
             ),
         ];
@@ -1052,16 +1160,17 @@ impl PopulousBench {
                 },
             });
         }
-        // The ATMOSPHERE's two cells over the column — near-nothing fog,
-        // present only where this tile's moisture reaches each layer's floor.
-        let m = evolve.moisture(tile);
-        for (wet_floor, alpha) in [(HAZE_WET, HAZE_ALPHA), (CLOUD_WET, CLOUD_ALPHA)] {
-            if m < wet_floor {
+        // The ATMOSPHERE's cells over the column — one per weather deck,
+        // present only where that deck actually holds in-flight moisture:
+        // the stack shows the VOLUMES, layer by layer.
+        for (l, &alpha) in DECK_ALPHA.iter().enumerate() {
+            let m = evolve.air_layer(l, tile);
+            if m < AIR_FLOOR {
                 continue;
             }
             let hw = ATMO_THICK * w;
             top += gap + hw;
-            let b = 0.55 + 0.45 * m;
+            let b = 0.5 + 0.5 * (m / AIR_FULL).min(1.0);
             shells.push(ShellSpec {
                 dirs: &dirs,
                 outlines: &outlines,
@@ -1362,6 +1471,10 @@ impl PopulousBench {
             ui::WATER_TARGET_BIND,
             f64::from((self.evolve.water_target() * 100.0).round() as u32),
         );
+        m.set(
+            ui::VEG_TARGET_BIND,
+            f64::from((self.evolve.veg_target() * 100.0).round() as u32),
+        );
         m.set(ui::ARROWS_BIND, self.show_arrows);
         m.set(ui::TICKS_BIND, group_thousands(self.evolve.ticks()));
         // The material census TABLE: two columns per row (label | hexes),
@@ -1431,6 +1544,10 @@ impl PopulousBench {
             m.set(
                 ui::HEX_MOIST_BIND,
                 format!("{}%", (e.moisture(t) * 100.0).round()),
+            );
+            m.set(
+                ui::HEX_RAIN_BIND,
+                format!("{:.0}", (e.rainfall(t) * 1000.0).round()),
             );
             m.set(
                 ui::HEX_RIVER_BIND,
@@ -1588,6 +1705,14 @@ impl PopulousBench {
                 self.evolve.set_water_target(want as f32 / 100.0);
             }
         }
+        // The GREEN TARGET dial: same plain-dial contract — the flora's
+        // thirst walks toward the committed share; nothing repaints.
+        if let Some(v) = results.number(ui::VEG_TARGET_BIND) {
+            let want = (v.round().max(0.0) as u32).clamp(MIN_WATER, MAX_WATER);
+            if want != (self.evolve.veg_target() * 100.0).round() as u32 {
+                self.evolve.set_veg_target(want as f32 / 100.0);
+            }
+        }
         // The motion-arrows checkbox: a display lens — the overlays recompose,
         // nothing resets.
         if let Some(flicker::script::Value::Bool(v)) = results.get(ui::ARROWS_BIND) {
@@ -1665,6 +1790,7 @@ fn phase_token(p: crate::evolve::Phase) -> &'static str {
     use crate::evolve::Phase;
     match p {
         Phase::Climate => "$pop_phase_climate",
+        Phase::Weather => "$pop_phase_weather",
         Phase::Upwell => "$pop_phase_upwell",
         Phase::Spread => "$pop_phase_spread",
         Phase::Collide => "$pop_phase_collide",
@@ -2134,8 +2260,8 @@ mod tests {
         );
         assert_eq!(
             count("slider"),
-            4,
-            "the size, cells, spots and water-target dials (coverage + climate are right-pane gauges now)"
+            5,
+            "the size, cells, spots, water-target and green-target dials (coverage + climate are right-pane gauges now)"
         );
         // The rail hints (lt/rt/lb/rb) and the rule are now drawn BY the `paged_menu`
         // Component, not authored tree nodes — so NOTHING on the surface wears a glyph.
@@ -2949,6 +3075,11 @@ mod tests {
                 f64::from(MIN_WATER),
                 f64::from(MAX_WATER),
             ),
+            (
+                ui::VEG_TARGET_BIND,
+                f64::from(MIN_WATER),
+                f64::from(MAX_WATER),
+            ),
         ];
         let bench = test_bench();
         let tree = bench.build_tree();
@@ -3048,9 +3179,24 @@ mod tests {
     fn height_reclassifies_the_surface_and_the_dial_floods_its_share() {
         // The rock ladder: bed → shelf → land as the material grows — wet or
         // dry, the GROUND is rock (the water is its own transparent cells).
-        assert_eq!(ground_class(SHELF_LEVEL - 0.05), Ground::Bed);
-        assert_eq!(ground_class(SHELF_LEVEL + 0.05), Ground::Shelf);
-        assert_eq!(ground_class(LAND_LEVEL + 0.05), Ground::Land);
+        // LIVE classification: the sea line and the marine press decide.
+        let sea = 2.0;
+        assert_eq!(ground_class(sea + 0.1, sea, 1.0), Ground::Land);
+        assert_eq!(
+            ground_class(sea - SHELF_DEPTH * 0.5, sea, 1.0),
+            Ground::Shelf,
+            "shallow young drowned ground is shelf"
+        );
+        assert_eq!(
+            ground_class(sea - SHELF_DEPTH - 0.2, sea, 1.0),
+            Ground::Bed,
+            "a shelf pushed deep reclasses as bed"
+        );
+        assert_eq!(
+            ground_class(sea - SHELF_DEPTH * 0.5, sea, SHELF_BED_GRADE + 0.1),
+            Ground::Bed,
+            "enough pressure and sedimentation makes bed even in the shallows"
+        );
 
         // The percentile over the era's own heights. At TICK ZERO the crust
         // is three flat tiers (bed / shelf / continent), so exact coverage is
