@@ -257,7 +257,7 @@ fn is_ui_signal(s: ActionSignal) -> bool {
     use ActionSignal::*;
     match s {
         Confirm | Cancel | NavUp | NavDown | NavLeft | NavRight | TabNext | TabPrev
-        | ItemSelect | Yes | No | Activate | SubmitText | CancelText => true,
+        | ItemSelect | Yes | No | Activate | SubmitText | CancelText | EnterText => true,
         MoveForward | MoveBackward | StrafeLeft | StrafeRight | MoveUp | MoveDown | LookUp
         | LookDown | LookLeft | LookRight | PrimaryAction | SecondaryAction | Jump | Sprint
         | Crouch | Interact | Reload | AttackLight | AttackHeavy | Defend | Special | Dodge
@@ -824,8 +824,6 @@ impl Scene for ControllerTester {
                 down: input.mouse_left,
                 right_down: input.mouse_right,
                 screen: renderer.size(),
-                typed: String::new(),
-                backspace: false,
                 wheel: input.mouse_wheel_delta,
                 exclusive: false,
                 motion: Default::default(),

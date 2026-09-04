@@ -8,14 +8,14 @@ publish = false
 # Populous Bench — the world as a MAP, built up from nothing. It starts with one
 # data structure (`HexMap`: tiles, each identified by its own index) and gains a
 # layer only when a layer earns its place. A GAME MASTER scene: this is where a
-# world is authored, not where an engine is tested.
+# world is authored, not where an engine is tested. The bench HOSTS the planet
+# sim — map, seams, crust, plates and the `Evolution` era all live in
+# flicker-worldengine (moved 2026-08-28); what is here is the screen.
 [lib]
 name = "flicker_populous"
 path = "src/lib.rs"
 
 [dependencies]
-# The hex topology — the same icosphere the world simulation stands on.
-flicker-worldgrid.workspace = true
 # The shared hex-globe view: mesh builder + graticule + orbit camera + the
 # offscreen viewport pass.
 flicker-globe = { version = "0.1.9", path = "../../frontend/flicker-globe" }
@@ -27,8 +27,14 @@ flicker-shell.workspace = true
 flicker-input-core.workspace = true
 flicker-input-router.workspace = true
 tracing.workspace = true
-# The seam field's roll — the one random source, seeded so a world is
-# reproducible from its seed.
+# The seed the bench rolls a new world from — the one random source, so a world
+# is reproducible from it.
 fastrand.workspace = true
+# THE PLANET: the map, the seam/crust/plate fields, the `Evolution` era the
+# bench drives, and the `.epoch` v2 format Commit captures the world into.
+flicker-worldengine.workspace = true
+# The staging root the committed planet lands under (bench → staging/ →
+# Content Manager promotes → package/, the sablework pattern).
+flicker-content.workspace = true
 # The scene holds the loaded `ui_theme.json` styles as a JSON value.
 serde_json.workspace = true

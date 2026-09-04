@@ -44,7 +44,7 @@ pub use conform::{
     splice_canonical_chain, AnkleReport, ConformMode, ConformOutput, ConformReport, HipReport,
     InferReport, ScaleReport, ShoulderReport,
 };
-pub use decimate::{decimate, decimate_levels, DecimateLevels};
+pub use decimate::decimate_to;
 pub use fbx::{
     apply_orientation, first_material_color, parse_fbx, quarter_turn, RawBone, RawModel, RawVertex,
 };

@@ -183,6 +183,12 @@ pub enum ActionSignal {
     SubmitText,
     /// Abandon the focused text field, keeping any draft (Esc).
     CancelText,
+    /// ENTER text entry — the ONE switch into `InputContext::TextEntry` (Aaron
+    /// 2026-09-03): a click into a text field, a pad Confirm on the selected
+    /// field, or a bound key/chord all resolve to this; the walker pushes the
+    /// context and focuses the target field. While the context is active the
+    /// keyboard is READ, not resolved — only `SubmitText`/`CancelText` remain.
+    EnterText,
 }
 
 impl ActionSignal {
@@ -254,6 +260,7 @@ impl ActionSignal {
         ActionSignal::No,
         ActionSignal::SubmitText,
         ActionSignal::CancelText,
+        ActionSignal::EnterText,
     ];
 
     /// The stable NAME of this signal — **exactly its serde variant name**, the
@@ -331,6 +338,7 @@ impl ActionSignal {
             Self::No => "No",
             Self::SubmitText => "SubmitText",
             Self::CancelText => "CancelText",
+            Self::EnterText => "EnterText",
             Self::ToggleMouseCapture => "ToggleMouseCapture",
         }
     }
@@ -409,6 +417,7 @@ impl ActionSignal {
             Self::No => "No",
             Self::SubmitText => "Submit",
             Self::CancelText => "Cancel text",
+            Self::EnterText => "Enter text",
             Self::ToggleMouseCapture => "Mouse Cap",
         }
     }
@@ -475,7 +484,7 @@ impl ActionSignal {
             | Self::Yes
             | Self::No => SignalGroup::EditorVerbs,
             Self::ToggleMouseCapture => SignalGroup::Camera,
-            Self::SubmitText | Self::CancelText => SignalGroup::Text,
+            Self::SubmitText | Self::CancelText | Self::EnterText => SignalGroup::Text,
         }
     }
 
@@ -544,7 +553,8 @@ impl ActionSignal {
             | Self::CreateFolder
             | Self::ContextMenu
             | Self::SubmitText
-            | Self::CancelText => RebindScope::Locked,
+            | Self::CancelText
+            | Self::EnterText => RebindScope::Locked,
             // Reserved: declared with zero engine bindings — hidden from
             // surfaces until wired.
             Self::Activate
@@ -646,6 +656,7 @@ impl fmt::Display for ActionSignal {
             Self::No => "No",
             Self::SubmitText => "Submit Text",
             Self::CancelText => "Cancel Text",
+            Self::EnterText => "Enter Text",
             Self::ToggleMouseCapture => "Toggle Mouse Capture",
         };
         write!(f, "{s}")
@@ -789,6 +800,7 @@ mod tests {
             ActionSignal::No,
             ActionSignal::SubmitText,
             ActionSignal::CancelText,
+            ActionSignal::EnterText,
         ] {
             assert!(ActionSignal::ALL.contains(&s), "{s:?} missing from ALL");
         }
@@ -889,7 +901,7 @@ mod tests {
                 RebindScope::Reserved => reserved += 1,
             }
         }
-        assert_eq!((player, locked, reserved), (29, 26, 7));
+        assert_eq!((player, locked, reserved), (29, 27, 7));
         assert_eq!(player + locked + reserved, ActionSignal::ALL.len());
     }
 

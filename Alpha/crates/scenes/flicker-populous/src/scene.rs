@@ -26,7 +26,7 @@
 //!
 //! # Two tabs of one world
 //!
-//! The centre pane hands the bench's data core ([`crate::map::HexMap`], the hex
+//! The centre pane hands the bench's data core ([`flicker_worldengine::HexMap`], the hex
 //! ledger's tiling) to ONE component — [`flicker_globe::GlobeWorld`] — which
 //! owns the meshes, the offscreen target, the authored stage and the camera. The
 //! scene names no colour, no radius and no inset: what the world LOOKS like is
@@ -54,16 +54,16 @@ use flicker::script::{HudCommand, ScriptHost, UiNode, ValueMap};
 use flicker::ui::{render_hud, run_ui, SceneDef, UiInput, UiIntents, UiState, WalkerHandler};
 use flicker_globe::{
     column_frame, lerp3, stippled, temp_color, tile_width, water_temp_color, Arrows, GlobeWorld,
-    ShellSpec, RADIUS,
+    HexSphereMap, ShellSpec, WorldMap, RADIUS,
 };
-use flicker_input_core::{AbstractControls, GamepadConfig, InputMap, InputState};
+use flicker_input_core::{AbstractControls, GamepadConfig, InputContext, InputMap, InputState};
 use flicker_input_router::{InputHandler, Router};
 use flicker_shell::{PauseScene, Theme};
+use flicker_worldengine::{
+    CrustField, Evolution, HexMap, SeamField, TileId, DEFAULT_CELLS, DEFAULT_FREQ, DEFAULT_SPOTS,
+    MAX_FREQ, MIN_FREQ,
+};
 
-use crate::crust::CrustField;
-use crate::evolve::Evolution;
-use crate::map::{HexMap, TileId, DEFAULT_FREQ, MAX_FREQ, MIN_FREQ};
-use crate::seams::{SeamField, DEFAULT_CELLS, DEFAULT_SPOTS};
 use crate::ui;
 
 /// The hex-stack view's opening framing — the framed region fills this share of
@@ -174,7 +174,10 @@ const MOTION_GAIN: f32 = 3.2;
 /// Arrowhead barb length, as a fraction of the shaft.
 const MOTION_BARB: f32 = 0.34;
 /// Radius the headings draw at — clear of the ground, under the graticule.
-const R_MOTION: f32 = 1.012;
+/// The arrows ride ABOVE the tallest column, like the reference frame does
+/// (Aaron 2026-08-29: "they get buried after a while — draw on top of the
+/// visible hex stack"), below the graticule's 1.2 so the frames stay layered.
+const R_MOTION: f32 = 1.16;
 
 // ── WATER (Aaron 2026-08-25: coverage dial; three layers — deep, shallow,
 // surface/shelf — whose temperature + circulation arrive with the erosion
@@ -187,8 +190,11 @@ const MAX_WATER: u32 = 100;
 /// (Aaron 2026-08-26) — it reads how much of the surface IS water (starting
 /// ~100 and falling as the land grows); a hand on it re-pours to that share.
 const DEFAULT_WATER: u32 = 100;
-/// The bootstrap fast-forward's per-frame compute budget.
-const BOOTSTRAP_FRAME_MS: u128 = 12;
+/// A RUN's per-frame compute budget: the engine ticks flat-out inside it and
+/// the UI keeps the rest of the frame. Once a tick costs more than this the
+/// loop admits one per frame, so throughput ≈ frame rate — keeping frames
+/// fast IS the fast path.
+const RUN_FRAME_MS: u128 = 12;
 // (The climate dial's MIN/MAX_TEMP range died with the dial — the climate
 // readout is a 0..1 gauge now and the baseline stays the era default.)
 /// Ice caps — the ink the frozen ground shades toward, in the view and stack.
@@ -275,11 +281,6 @@ fn ground_class(total: f32, sea: f32, bed_hard: f32) -> Ground {
 
 // (The sea level lives with the era now — `Evolution::sea_level`, the
 // percentile of the era's own heights — so the dial has one derivation.)
-/// The era's clock: ticks per second while running, and how many ticks pass
-/// between REBAKES of the evolve view (the mesh is the heavy part, so the sim
-/// steps faster than the picture).
-const EVOLVE_HZ: f32 = 3.0;
-const EVOLVE_BAKE_TICKS: u64 = 3;
 
 /// CONTINENTAL SHELF — the transitional zone where a bed meets a continent,
 /// the ONE edge the surface marks (plate joins between two beds or two
@@ -387,18 +388,21 @@ pub struct PopulousBench {
     /// The molten-fed views (heat/crust/plates) have drifted since their last
     /// bake — re-baked lazily on next entry, never mid-era.
     molten_views_stale: bool,
-    /// The clock's accumulator, and ticks since the view was last rebaked.
-    evolve_accum: f32,
-    evolve_unbaked: u64,
-    /// The FAST ROLL's goal and start (0/0 = none): while the era's clock is
-    /// under the goal the run loop computes flat-out with no baking, the
-    /// progress bar filling from `roll_from`; arrival bakes once and pauses.
+    /// PLAY-N's goal and start (0/0 = none): while the era's clock is under
+    /// the goal the run loop computes flat-out with no baking, the progress
+    /// bar filling from `roll_from`; arrival bakes once and stops. PLAY/PAUSE
+    /// runs with NO window (both zero) until the pause click bakes.
     roll_until: u64,
     roll_from: u64,
-    /// Whether the open roll STANDS at its horizon (the TICK-1200 leap: the
-    /// world stops for inspection) or rolls THROUGH into the live clock (the
-    /// Run button's bootstrap fast-forward — RUN means RUN, Aaron 2026-08-27).
-    roll_pauses: bool,
+    /// PLAY-N's count field, as typed (digits only, "1200" fresh) — the tick
+    /// contract (Aaron 2026-08-29): enter a number, click, run THAT many.
+    tick_count: String,
+    /// The world view's fluid lenses (Aaron 2026-08-29): atmosphere decks,
+    /// ocean bands (+ the shelf-ice stand-in), river films — each hides so
+    /// the ground reads bare. Lenses, never resets; a flip rebakes once.
+    show_air: bool,
+    show_water: bool,
+    show_rivers: bool,
     /// Planetary water coverage, percent of surface flooded — the sea-level
     /// dial. DISPLAY + classification level today; the three water layers'
     /// temperature and circulation arrive with the erosion era. Changing it
@@ -406,10 +410,22 @@ pub struct PopulousBench {
     /// Whether the plate MOTION ARROWS draw on the evolve view — a lens, like
     /// the water dial: toggling it resets nothing.
     show_arrows: bool,
+    /// The last COMMIT's result line — the staged `.epoch`'s path, or the
+    /// error. Published on [`ui::COMMIT_STATUS_BIND`]; empty until the first
+    /// commit (the footer text takes no ink).
+    commit_status: String,
     /// **One column of the world, up close** — the HEX page's view: the same
     /// component as `world`, framing the centre cell's molten column instead of
     /// the planet. A second VIEW, never a second world.
     hex: GlobeWorld,
+    /// **The world laid out FLAT** — the shared [`WorldMap`] component behind the
+    /// map modal (contract FF8A575D): the hex sphere cut on a seam, pole caps
+    /// trimmed at full zoom, locally re-projected once zoomed to a region. Its
+    /// cell colours are folded from the SAME shell list the globe bakes with.
+    worldmap: WorldMap<HexSphereMap>,
+    /// Whether the map modal stands. Rust owns the flag; `populous.lua`'s
+    /// `arrange()` reads it off the model and lights the modal's slice.
+    map_open: bool,
     /// The CENTRE cell — the fixed reticle: on the seams tab, whichever tile
     /// faces the camera; the hex page shows this cell's column.
     focus_tile: TileId,
@@ -450,6 +466,16 @@ impl PopulousBench {
         // frame one column instead of one world. It shares the viewport pane's
         // camera gate — only one of the two is ever on screen at a time.
         let hex = GlobeWorld::new(ui::HEX_STAGE_SOURCE, &ui_styles, None).in_panel(ui::VIEW_PANE);
+        // The flat map: the SAME tiling the globe draws, plugged into the shared
+        // WorldMap view; its authored look (seam ink, tile base + inset, the
+        // graticule) comes off its own stage exactly as the globe's does.
+        let mut worldmap = WorldMap::new(
+            ui::MAP_STAGE_SOURCE,
+            &ui_styles,
+            HexSphereMap::from_tiling(&map.grid().dirs, map.outlines()),
+        );
+        let look = worldmap.authored_look();
+        worldmap.content_mut().set_look(look);
         let seams = SeamField::new(&map, DEFAULT_CELLS, DEFAULT_SPOTS, fastrand::u64(..));
         let crust = CrustField::derive(&map, &seams);
         let mut evolve = Evolution::new(&map, &seams);
@@ -474,13 +500,17 @@ impl PopulousBench {
             evolve_running: false,
             drift_unticked: 0,
             molten_views_stale: false,
-            evolve_accum: 0.0,
-            evolve_unbaked: 0,
             roll_until: 0,
             roll_from: 0,
-            roll_pauses: false,
+            tick_count: flicker_worldengine::BOOTSTRAP_TICKS.to_string(),
+            show_air: true,
+            show_water: true,
+            show_rivers: true,
             show_arrows: true,
+            commit_status: String::new(),
             hex,
+            worldmap,
+            map_open: false,
             focus_tile: 0,
             highlight: None,
             shown_view: WorldView::Authored,
@@ -543,14 +573,43 @@ impl PopulousBench {
     /// the same pattern God Mode paints its fields with, radii and insets
     /// still the stage's. Baking never changes which view SHOWS.
     fn bake_view(&mut self, view: WorldView) {
-        let Self {
-            map,
-            world,
-            seams,
-            crust,
-            evolve,
-            ..
-        } = self;
+        {
+            let lenses = (self.show_air, self.show_water, self.show_rivers);
+            let Self {
+                map,
+                world,
+                seams,
+                crust,
+                evolve,
+                ..
+            } = self;
+            let shells = Self::view_shell_list(view, map, world, seams, crust, evolve, lenses);
+            world.bake(view.key(), shells);
+        }
+        // The flat map paints with the SAME shell list (contract FF8A575D):
+        // while it is open, a re-bake of the SHOWN view refreshes its cell
+        // colours too, so the map and the globe can never disagree.
+        if self.map_open && view == self.shown_view {
+            self.refresh_map_colors();
+        }
+    }
+
+    /// The one shell list a view is drawn from — built here for BOTH consumers:
+    /// [`Self::bake_view`] hands it to the globe, [`Self::refresh_map_colors`]
+    /// folds it flat for the world map. `lenses` is (air, water, rivers) —
+    /// the evolve view's fluid toggles; a false drops that family of shells
+    /// so the ground reads bare (the shelf ice rides the water lens: it
+    /// stands in for the sea it froze).
+    fn view_shell_list<'a>(
+        view: WorldView,
+        map: &'a HexMap,
+        world: &GlobeWorld,
+        seams: &'a SeamField,
+        crust: &'a CrustField,
+        evolve: &'a Evolution,
+        lenses: (bool, bool, bool),
+    ) -> Vec<ShellSpec<'a>> {
+        let (show_air, show_water, show_rivers) = lenses;
         let mut shells = world.authored_shells(&map.grid().dirs, map.outlines());
         if let Some(top) = shells.last_mut() {
             match view {
@@ -565,7 +624,7 @@ impl PopulousBench {
                         let h = seams.heat(t);
                         Some(if crust.is_vent(t) {
                             LAVA_GLOW // over-unit: the vent EMITS
-                        } else if h >= crate::crust::UPWELL_HEAT {
+                        } else if h >= flicker_worldengine::UPWELL_HEAT {
                             // THE GENERATION ZONE (Aaron 2026-08-25: the
                             // crust tab defines the places material is
                             // generated): everything above the upwell floor
@@ -573,8 +632,8 @@ impl PopulousBench {
                             // toward lava as the heat climbs — the seam
                             // zones read as zones, the vents burn inside
                             // them.
-                            let z =
-                                (h - crate::crust::UPWELL_HEAT) / (1.0 - crate::crust::UPWELL_HEAT);
+                            let z = (h - flicker_worldengine::UPWELL_HEAT)
+                                / (1.0 - flicker_worldengine::UPWELL_HEAT);
                             lerp3(UPWELL_ZONE_COLOR, LAVA_COLOR, z)
                         } else {
                             // Bedrock, blushed by the sub-floor heat: brown
@@ -634,8 +693,7 @@ impl PopulousBench {
                         // see. Rivers keep their brighter translucent film.
                         if total >= sea {
                             let v = evolve.vegetation(t);
-                            let rain =
-                                (evolve.rainfall(t) * RAIN_TINT_SCALE).clamp(0.0, 1.0);
+                            let rain = (evolve.rainfall(t) * RAIN_TINT_SCALE).clamp(0.0, 1.0);
                             let dry = (1.0 - v.max(rain)).clamp(0.0, 1.0);
                             let dry_c = if evolve.sediment(t) >= evolve.rock(t) {
                                 DRY_SAND_COLOR
@@ -643,7 +701,20 @@ impl PopulousBench {
                                 DRY_STONE_COLOR
                             };
                             c = lerp3(c, dry_c, dry * 0.55);
-                            c = lerp3(c, GREEN_WET_COLOR, v * 0.85);
+                            // THE TINT MATCHES THE METRIC (Aaron 2026-08-28:
+                            // 70% on the dial read as bare tan): a tile that
+                            // COUNTS as greened (cover ≥ GREEN_COVER) reads
+                            // clearly green — the ramp lands 0.5 blend AT the
+                            // counted threshold and saturates from there,
+                            // instead of the old linear cover × 0.85 that
+                            // left threshold-green land 70% sand.
+                            let cover = flicker_worldengine::GREEN_COVER;
+                            let g = if v < cover {
+                                0.5 * (v / cover)
+                            } else {
+                                0.5 + 0.35 * ((v - cover) / (1.0 - cover))
+                            };
+                            c = lerp3(c, GREEN_WET_COLOR, g);
                         }
                         if crust.is_vent(t) {
                             c = lerp3(c, LAVA_COLOR, 0.5);
@@ -652,7 +723,7 @@ impl PopulousBench {
                         // bench's x-ray on the buried ore bodies, inked per
                         // kind (gold amber, coal black, calcite chalk…).
                         if let Some(k) = evolve.vein(t) {
-                            c = lerp3(c, crate::evolve::vein_kinds()[k as usize].ink, 0.5);
+                            c = lerp3(c, flicker_worldengine::vein_kinds()[k as usize].ink, 0.5);
                         }
                         // THE CAPS: standing ice whitens the ground toward
                         // frozen-through — the ice ages read at a glance.
@@ -661,7 +732,7 @@ impl PopulousBench {
                             c = lerp3(
                                 c,
                                 ICE_COLOR,
-                                (ice / crate::evolve::ICE_SOLID).clamp(0.0, 1.0) * 0.92,
+                                (ice / flicker_worldengine::ICE_SOLID).clamp(0.0, 1.0) * 0.92,
                             );
                         }
                         Some(c)
@@ -724,129 +795,222 @@ impl PopulousBench {
                             OPEN_ALPHA[2],
                             0.45,
                         ),
-                        (2, sea, sea - SURFACE_DEPTH, Some(true), SURFACE_WATER_COLOR, 0.38, 0.45),
+                        (
+                            2,
+                            sea,
+                            sea - SURFACE_DEPTH,
+                            Some(true),
+                            SURFACE_WATER_COLOR,
+                            0.38,
+                            0.45,
+                        ),
                     ];
-                    for (band, ceil, floor, over_shelf, colour, alpha, gloss) in bands {
+                    if show_water {
+                        for (band, ceil, floor, over_shelf, colour, alpha, gloss) in bands {
+                            shells.push(ShellSpec {
+                                dirs: &map.grid().dirs,
+                                outlines: map.outlines(),
+                                radius: RADIUS + ceil * w,
+                                inset: 0.0,
+                                color: Box::new(move |i| {
+                                    let t = i as TileId;
+                                    // Frozen through: thick ice REPLACES its
+                                    // water column — the cap is solid, not sea.
+                                    if ground(t) >= ceil
+                                        || evolve.ice(t) >= flicker_worldengine::ICE_SOLID
+                                    {
+                                        return None;
+                                    }
+                                    if let Some(want) = over_shelf {
+                                        let shelf = matches!(
+                                            ground_class(ground(t), sea, evolve.bed_hardness(t)),
+                                            Ground::Shelf
+                                        );
+                                        if shelf != want {
+                                            return None;
+                                        }
+                                    }
+                                    // THE OCEAN'S OWN HEAT tints each band by ITS
+                                    // temperature — surface tracked per tile,
+                                    // deep the one global reservoir, shallow the
+                                    // mix (bands bottom-up: 0 deep, 2 surface) —
+                                    // with a lighter wash on the open ocean so
+                                    // the bold blue holds its saturation.
+                                    let (sst, mid, deep) = evolve.ocean_temps(t);
+                                    let bt = [deep, mid, sst][band];
+                                    let wash = if over_shelf == Some(true) {
+                                        SHELF_TEMP_WASH
+                                    } else {
+                                        OPEN_TEMP_WASH
+                                    };
+                                    Some(lerp3(colour, water_temp_color(bt), wash))
+                                }),
+                                cell_radius: None,
+                                depth: Some(Box::new(move |i| {
+                                    let g = ground(i as TileId).max(floor);
+                                    (ceil - g) * w
+                                })),
+                                opts: MeshDrawOptions {
+                                    tint: [1.0, 1.0, 1.0, alpha],
+                                    gloss,
+                                    ..MeshDrawOptions::default()
+                                },
+                            });
+                        }
+                        // THE SHELF ICE: a frozen-through sea tile dropped its
+                        // water columns above ("the cap is solid, not sea"), so
+                        // the cap itself must stand in — one cell at sea level
+                        // closing down to the bed, or the view shows the seabed
+                        // as a pit ringed by ocean cliffs. The stack draws this
+                        // same cap; here it keeps the ocean's surface unbroken.
                         shells.push(ShellSpec {
                             dirs: &map.grid().dirs,
                             outlines: map.outlines(),
-                            radius: RADIUS + ceil * w,
+                            radius: RADIUS + sea * w,
                             inset: 0.0,
                             color: Box::new(move |i| {
                                 let t = i as TileId;
-                                // Frozen through: thick ice REPLACES its
-                                // water column — the cap is solid, not sea.
-                                if ground(t) >= ceil || evolve.ice(t) >= crate::evolve::ICE_SOLID {
-                                    return None;
-                                }
-                                if let Some(want) = over_shelf {
-                                    let shelf = matches!(
-                                        ground_class(ground(t), sea, evolve.bed_hardness(t)),
-                                        Ground::Shelf
-                                    );
-                                    if shelf != want {
-                                        return None;
-                                    }
-                                }
-                                // THE OCEAN'S OWN HEAT tints each band by ITS
-                                // temperature — surface tracked per tile,
-                                // deep the one global reservoir, shallow the
-                                // mix (bands bottom-up: 0 deep, 2 surface) —
-                                // with a lighter wash on the open ocean so
-                                // the bold blue holds its saturation.
-                                let (sst, mid, deep) = evolve.ocean_temps(t);
-                                let bt = [deep, mid, sst][band];
-                                let wash = if over_shelf == Some(true) {
-                                    SHELF_TEMP_WASH
+                                if ground(t) < sea
+                                    && evolve.ice(t) >= flicker_worldengine::ICE_SOLID
+                                {
+                                    Some(ICE_COLOR)
                                 } else {
-                                    OPEN_TEMP_WASH
-                                };
-                                Some(lerp3(colour, water_temp_color(bt), wash))
+                                    None
+                                }
                             }),
                             cell_radius: None,
                             depth: Some(Box::new(move |i| {
-                                let g = ground(i as TileId).max(floor);
-                                (ceil - g) * w
+                                (sea - ground(i as TileId)).max(0.0) * w
                             })),
                             opts: MeshDrawOptions {
-                                tint: [1.0, 1.0, 1.0, alpha],
-                                gloss,
+                                tint: [1.0, 1.0, 1.0, 0.94],
+                                gloss: 0.5,
                                 ..MeshDrawOptions::default()
                             },
                         });
                     }
-                    // THE RIVERS (Aaron 2026-08-27: "highlighted in green
-                    // water, to distinguish from ocean blue"): every LAND
-                    // tile carrying a live channel wears a thin translucent
-                    // green film on its column top — the discharge network
-                    // made visible, trunks inked deeper than headwaters.
-                    // Frozen-solid ground shows ice, not running water.
-                    shells.push(ShellSpec {
-                        dirs: &map.grid().dirs,
-                        outlines: map.outlines(),
-                        radius: RADIUS,
-                        inset: 0.0,
-                        color: Box::new(move |i| {
-                            let t = i as TileId;
-                            let d = evolve.discharge(t);
-                            if d < crate::evolve::CHANNEL_LIVE
-                                || ground(t) < sea
-                                || evolve.ice(t) >= crate::evolve::ICE_SOLID
-                            {
-                                return None;
-                            }
-                            let full = crate::evolve::CHANNEL_LIVE * RIVER_FULL;
-                            let s = ((d - crate::evolve::CHANNEL_LIVE) / full).clamp(0.0, 1.0);
-                            Some(lerp3(RIVER_COLOR, RIVER_DEEP_COLOR, s))
-                        }),
-                        cell_radius: Some(Box::new(move |i| {
-                            RADIUS + (ground(i as TileId) + RIVER_FILM) * w
-                        })),
-                        depth: Some(Box::new(move |_| RIVER_FILM * w)),
-                        opts: MeshDrawOptions {
-                            tint: [1.0, 1.0, 1.0, RIVER_ALPHA],
-                            gloss: 0.5,
-                            ..MeshDrawOptions::default()
-                        },
-                    });
-                    // THE ATMOSPHERE — the weather engine's decks as
-                    // volumetric fog cells (Aaron 2026-08-28: "volumes of
-                    // moisture drawn as concentrations in various layers"):
-                    // each deck's cell present only where IN-FLIGHT moisture
-                    // actually stands, brightness riding the concentration —
-                    // cloud banks over the convergence zones, streets along
-                    // the winds, clear skies over the deserts. A mountain
-                    // taller than a deck pokes through. Drawn last: the most
-                    // transparent thing in the scene.
-                    for (l, &alpha) in DECK_ALPHA.iter().enumerate() {
-                        let deck = sea + crate::evolve::DECK_ALT[l];
+                    if show_rivers {
+                        // THE RIVERS (Aaron 2026-08-27: "highlighted in green
+                        // water, to distinguish from ocean blue"): every LAND
+                        // tile carrying a live channel wears a thin translucent
+                        // green film on its column top — the discharge network
+                        // made visible, trunks inked deeper than headwaters.
+                        // Frozen-solid ground shows ice, not running water.
                         shells.push(ShellSpec {
                             dirs: &map.grid().dirs,
                             outlines: map.outlines(),
-                            radius: RADIUS + deck * w,
+                            radius: RADIUS,
                             inset: 0.0,
                             color: Box::new(move |i| {
                                 let t = i as TileId;
-                                let m = evolve.air_layer(l, t);
-                                (m >= AIR_FLOOR && ground(t) < deck).then(|| {
-                                    // Denser moisture = whiter, thicker fog.
-                                    let b = 0.5 + 0.5 * (m / AIR_FULL).min(1.0);
-                                    [b, b, b + 0.02]
-                                })
+                                let d = evolve.discharge(t);
+                                if d < flicker_worldengine::CHANNEL_LIVE
+                                    || ground(t) < sea
+                                    || evolve.ice(t) >= flicker_worldengine::ICE_SOLID
+                                {
+                                    return None;
+                                }
+                                let full = flicker_worldengine::CHANNEL_LIVE * RIVER_FULL;
+                                let s = ((d - flicker_worldengine::CHANNEL_LIVE) / full)
+                                    .clamp(0.0, 1.0);
+                                Some(lerp3(RIVER_COLOR, RIVER_DEEP_COLOR, s))
                             }),
-                            cell_radius: None,
-                            depth: Some(Box::new(move |_| ATMO_THICK * w)),
+                            cell_radius: Some(Box::new(move |i| {
+                                RADIUS + (ground(i as TileId) + RIVER_FILM) * w
+                            })),
+                            depth: Some(Box::new(move |_| RIVER_FILM * w)),
                             opts: MeshDrawOptions {
-                                tint: [1.0, 1.0, 1.0, alpha],
-                                gloss: 0.0,
+                                tint: [1.0, 1.0, 1.0, RIVER_ALPHA],
+                                gloss: 0.5,
                                 ..MeshDrawOptions::default()
                             },
                         });
+                    }
+                    if show_air {
+                        // THE ATMOSPHERE — the weather engine's decks as
+                        // volumetric fog cells (Aaron 2026-08-28: "volumes of
+                        // moisture drawn as concentrations in various layers"):
+                        // each deck's cell present only where IN-FLIGHT moisture
+                        // actually stands, brightness riding the concentration —
+                        // cloud banks over the convergence zones, streets along
+                        // the winds, clear skies over the deserts. A mountain
+                        // taller than a deck pokes through. Drawn last: the most
+                        // transparent thing in the scene.
+                        for (l, &alpha) in DECK_ALPHA.iter().enumerate() {
+                            let deck = sea + flicker_worldengine::DECK_ALT[l];
+                            shells.push(ShellSpec {
+                                dirs: &map.grid().dirs,
+                                outlines: map.outlines(),
+                                radius: RADIUS + deck * w,
+                                inset: 0.0,
+                                color: Box::new(move |i| {
+                                    let t = i as TileId;
+                                    let m = evolve.air_layer(l, t);
+                                    (m >= AIR_FLOOR && ground(t) < deck).then(|| {
+                                        // Denser moisture = whiter, thicker fog.
+                                        let b = 0.5 + 0.5 * (m / AIR_FULL).min(1.0);
+                                        [b, b, b + 0.02]
+                                    })
+                                }),
+                                cell_radius: None,
+                                depth: Some(Box::new(move |_| ATMO_THICK * w)),
+                                opts: MeshDrawOptions {
+                                    tint: [1.0, 1.0, 1.0, alpha],
+                                    gloss: 0.0,
+                                    ..MeshDrawOptions::default()
+                                },
+                            });
+                        }
                     }
                 }
             }
         }
-        world.bake(view.key(), shells);
+        shells
+    }
+
+    /// Fold the SHOWN view's shell list into ONE colour per cell for the flat
+    /// map: each shell's colour lands where it answers, blended by its draw
+    /// alpha (the water films and fog decks), later shells over earlier — the
+    /// same order the globe draws them. Runs only while the map is open, on the
+    /// bake cadence, never per frame.
+    fn refresh_map_colors(&mut self) {
+        let colors = {
+            let Self {
+                map,
+                world,
+                seams,
+                crust,
+                evolve,
+                shown_view,
+                show_air,
+                show_water,
+                show_rivers,
+                ..
+            } = self;
+            let shells = Self::view_shell_list(
+                *shown_view,
+                map,
+                world,
+                seams,
+                crust,
+                evolve,
+                (*show_air, *show_water, *show_rivers),
+            );
+            // Loud-wrong magenta until a shell answers — an unpainted cell is a
+            // visible defect, never a quiet stand-in (rule 4BB12A75).
+            let mut colors = vec![[1.0f32, 0.0, 1.0]; map.len()];
+            for s in &shells {
+                let a = s.opts.tint[3];
+                for (i, c) in colors.iter_mut().enumerate() {
+                    if let Some(rgb) = (s.color)(i) {
+                        let rgb = rgb.map(|v| v.clamp(0.0, 1.0));
+                        *c = if a >= 0.999 { rgb } else { lerp3(*c, rgb, a) };
+                    }
+                }
+            }
+            colors
+        };
+        self.worldmap.content_mut().set_colors(colors);
     }
 
     /// Bake the views whose DATA the molten field feeds: the heat map, the
@@ -891,6 +1055,11 @@ impl PopulousBench {
             }
             self.world.show(self.shown_view.key());
             self.apply_overlays();
+            // The open map follows the view swap — its colours are the shown
+            // view's, refreshed here because a tab switch bakes nothing.
+            if self.map_open {
+                self.refresh_map_colors();
+            }
         }
     }
 
@@ -942,7 +1111,8 @@ impl PopulousBench {
         };
         // The marine grade shades every CONSOLIDATED cell of this column:
         // 1.0 = fresh, the cap = indurated sea-pressed rock.
-        let compact = ((evolve.bed_hardness(tile) - 1.0) / (crate::evolve::MARINE_HARD_CAP - 1.0))
+        let compact = ((evolve.bed_hardness(tile) - 1.0)
+            / (flicker_worldengine::MARINE_HARD_CAP - 1.0))
             .clamp(0.0, 1.0);
         let plate = lerp3(
             if continent {
@@ -1000,7 +1170,7 @@ impl PopulousBench {
             let ink = match evolve.vein(tile) {
                 Some(k) => lerp3(
                     lerp3(STRATA_COLOR, COMPACT_COLOR, compact),
-                    crate::evolve::vein_kinds()[k as usize].ink,
+                    flicker_worldengine::vein_kinds()[k as usize].ink,
                     0.65,
                 ),
                 None => lerp3(STRATA_COLOR, COMPACT_COLOR, compact),
@@ -1086,7 +1256,13 @@ impl PopulousBench {
             Ground::Shelf
         );
         let (c_sh, c_sf, wash, a_sh, a_sf) = if shelfy {
-            (SHALLOW_WATER_COLOR, SURFACE_WATER_COLOR, SHELF_TEMP_WASH, 0.5, 0.38)
+            (
+                SHALLOW_WATER_COLOR,
+                SURFACE_WATER_COLOR,
+                SHELF_TEMP_WASH,
+                0.5,
+                0.38,
+            )
         } else {
             (
                 OPEN_SHALLOW_COLOR,
@@ -1189,20 +1365,39 @@ impl PopulousBench {
         hex.set_shells(shells);
     }
 
-    /// A roll's horizon ARRIVED: queue the bake and settle the clock. The
-    /// TICK-1200 leap STANDS at its goal for inspection (Aaron 2026-08-26);
-    /// a roll the Run button started — the bootstrap fast-forward — rolls
-    /// THROUGH into the live clock, because RUN means RUN (Aaron 2026-08-27:
-    /// "run doesn't actually run ticks, it runs 1200 like the button above
-    /// it" — no longer).
-    fn roll_arrived(&mut self) {
-        self.evolve_unbaked = EVOLVE_BAKE_TICKS;
-        if self.roll_pauses {
-            self.evolve_running = false;
-        }
+    /// A run CAME TO REST — PLAY-N arrived, PAUSE was clicked, or TICK/STEP
+    /// finished its cycle work: the clock stops and the ONE bake of the tick
+    /// contract lands (Aaron 2026-08-29: "no bake, just run... when pause is
+    /// clicked, then bake"). Running never bakes; resting always does.
+    fn run_complete(&mut self) {
+        self.evolve_running = false;
         self.roll_until = 0;
         self.roll_from = 0;
-        self.roll_pauses = false;
+        self.bake_view(WorldView::Evolve);
+        self.publish_hex();
+        self.apply_overlays();
+    }
+
+    /// The stepping caveat (Aaron 2026-08-29): a run button clicked while a
+    /// stepped tick stands open first COMPLETES that tick — the cycle always
+    /// closes before the next begins, so no button ever forks a half-run
+    /// pipeline. A no-op when the cursor already rests between cycles.
+    fn complete_open_tick(&mut self) {
+        let mut closed = false;
+        while self.evolve.current_phase() != flicker_worldengine::PHASES[0] {
+            let Self {
+                map,
+                seams,
+                crust,
+                evolve,
+                ..
+            } = &mut *self;
+            let sea = evolve.resolve_sea();
+            closed = evolve.tick_phase(map, seams, crust, sea);
+        }
+        if closed {
+            self.drift_fields(); // the closed cycle counts like any other tick
+        }
     }
 
     /// The line OVERLAYS on the globe, composed fresh each change: the
@@ -1254,7 +1449,7 @@ impl PopulousBench {
             // columns — rubies, coal, calcite each announce their field.
             // Boundary = an edge whose far side is not the same KIND; the
             // edge is found as the outline segment facing that neighbour.
-            let kinds = crate::evolve::vein_kinds();
+            let kinds = flicker_worldengine::vein_kinds();
             for t in 0..map.len() as TileId {
                 let Some(k) = evolve.vein(t) else {
                     continue;
@@ -1442,9 +1637,12 @@ impl PopulousBench {
         m.set(ui::HEXES_BIND, group_thousands(self.map.len() as u64));
         m.set(
             ui::DIAMETER_BIND,
-            group_thousands(crate::map::diameter_mi(self.map.freq()).round() as u64),
+            group_thousands(flicker_worldengine::diameter_mi(self.map.freq()).round() as u64),
         );
-        m.set(ui::TILE_BIND, format!("{:.2}", crate::map::TILE_MI));
+        m.set(
+            ui::TILE_BIND,
+            format!("{:.2}", flicker_worldengine::TILE_MI),
+        );
         // The bootstrap roll's progress bar: visible while the era is running
         // toward the horizon, filled by the tick fraction.
         let booting =
@@ -1467,6 +1665,11 @@ impl PopulousBench {
         let climate = self.evolve.climate();
         m.set(ui::TEMP_BIND, f64::from(climate));
         m.set(ui::TEMP_VAL_BIND, format!("{}%", (climate * 100.0).round()));
+        // The MEASURED green share — what the target dial is actually
+        // steering: the eye can now check the ask against the world.
+        let green = self.evolve.green_share();
+        m.set(ui::GREEN_BIND, f64::from(green));
+        m.set(ui::GREEN_VAL_BIND, format!("{}%", (green * 100.0).round()));
         m.set(
             ui::WATER_TARGET_BIND,
             f64::from((self.evolve.water_target() * 100.0).round() as u32),
@@ -1476,14 +1679,26 @@ impl PopulousBench {
             f64::from((self.evolve.veg_target() * 100.0).round() as u32),
         );
         m.set(ui::ARROWS_BIND, self.show_arrows);
+        m.set(ui::SHOW_AIR_BIND, self.show_air);
+        m.set(ui::SHOW_WATER_BIND, self.show_water);
+        m.set(ui::SHOW_RIVERS_BIND, self.show_rivers);
+        // The PLAY-N count rides its field bind as typed; the parse-or-1200
+        // fallback lives on the click, so a half-typed field never fights.
+        m.set(ui::TICK_COUNT_BIND, self.tick_count.clone());
+        // The map modal's runtime flag: `arrange()` reads it and lights the
+        // modal's slice (`shown_map`) — the one visibility path.
+        m.set(ui::MAP_OPEN_BIND, self.map_open);
         m.set(ui::TICKS_BIND, group_thousands(self.evolve.ticks()));
+        // The nav footer's commit result: a path or an error, pre-formatted
+        // here like every readout; empty until the first commit.
+        m.set(ui::COMMIT_STATUS_BIND, self.commit_status.clone());
         // The material census TABLE: two columns per row (label | hexes),
         // most-common first — labels are registry notation, counts formatted
         // here like every readout. Rows past the roster fold into a final
         // "+K" row carrying the remaining hexes; unused rows publish empty
         // strings and take no ink.
         let census = self.evolve.vein_census();
-        let kinds = crate::evolve::vein_kinds();
+        let kinds = flicker_worldengine::vein_kinds();
         for i in 0..ui::CENSUS_ROWS {
             let (name, count) = if census.len() > ui::CENSUS_ROWS && i == ui::CENSUS_ROWS - 1 {
                 let rest = &census[ui::CENSUS_ROWS - 1..];
@@ -1509,7 +1724,9 @@ impl PopulousBench {
         // pre-formatted here like the other readouts. "—" is the empty
         // value; heights ride tile-width units; grades ride ×N.NN.
         {
-            let t = self.focus_tile.min(self.map.len().saturating_sub(1) as TileId);
+            let t = self
+                .focus_tile
+                .min(self.map.len().saturating_sub(1) as TileId);
             let e = &self.evolve;
             let dash = || "—".to_string();
             let opt = |v: f32| if v > 1e-3 { format!("{v:.2}") } else { dash() };
@@ -1528,7 +1745,7 @@ impl PopulousBench {
             m.set(
                 ui::HEX_VEIN_BIND,
                 match e.vein(t) {
-                    Some(k) => crate::evolve::vein_kinds()[k as usize].label.clone(),
+                    Some(k) => flicker_worldengine::vein_kinds()[k as usize].label.clone(),
                     None => dash(),
                 },
             );
@@ -1551,7 +1768,7 @@ impl PopulousBench {
             );
             m.set(
                 ui::HEX_RIVER_BIND,
-                if e.discharge(t) >= crate::evolve::CHANNEL_LIVE {
+                if e.discharge(t) >= flicker_worldengine::CHANNEL_LIVE {
                     format!("{:.1}", e.discharge(t))
                 } else {
                     dash()
@@ -1560,7 +1777,11 @@ impl PopulousBench {
             m.set(ui::HEX_ICE_BIND, opt(e.ice(t)));
             m.set(
                 ui::HEX_WATER_BIND,
-                if depth > 0.0 { format!("{depth:.2}") } else { dash() },
+                if depth > 0.0 {
+                    format!("{depth:.2}")
+                } else {
+                    dash()
+                },
             );
             let (sst, _, deep) = e.ocean_temps(t);
             m.set(
@@ -1600,11 +1821,17 @@ impl PopulousBench {
         self.highlight = None;
         self.apply_overlays();
         // A new tiling: the era restarts over it, and every view's geometry
-        // moved.
+        // moved — the flat map's atlas re-lays-out over the same new tiling.
+        let mut content = HexSphereMap::from_tiling(&self.map.grid().dirs, self.map.outlines());
+        content.set_look(self.worldmap.authored_look());
+        self.worldmap.replace_content(content);
         self.evolve.reset(&self.map, &self.seams);
         self.evolve.set_water(DEFAULT_WATER as f32);
         self.bake_view(WorldView::Authored);
         self.bake_molten_views();
+        if self.map_open {
+            self.refresh_map_colors();
+        }
         self.publish_hex();
         tracing::info!(
             "populous: {} tiles at freq {}",
@@ -1721,33 +1948,63 @@ impl PopulousBench {
                 self.apply_overlays();
             }
         }
-        // The era's three controls: run/pause the clock, one deliberate step,
-        // and back to the bare shell.
-        if results.is_on(ui::EVOLVE_RUN_ACTION) {
-            self.evolve_running = !self.evolve_running;
-            self.evolve_accum = 0.0;
-            // The FIRST click on a fresh world queues the bootstrap roll;
-            // pausing mid-roll keeps the goal, so Run resumes it. RUN MEANS
-            // RUN (Aaron 2026-08-27): its roll continues into the live
-            // clock at the horizon — only the leap button stands there.
-            if self.evolve_running && self.evolve.ticks() == 0 && self.roll_until == 0 {
-                self.roll_from = 0;
-                self.roll_until = crate::evolve::BOOTSTRAP_TICKS;
-                self.roll_pauses = false;
+        // The three fluid lenses (Aaron 2026-08-29): atmosphere, water,
+        // rivers each hide so the ground reads bare. A flip changes which
+        // shells the list carries, so the evolve view rebakes once — a lens
+        // with a heavier arm than the arrows', still never a reset.
+        let mut lens_flipped = false;
+        for (bind, flag) in [
+            (ui::SHOW_AIR_BIND, &mut self.show_air),
+            (ui::SHOW_WATER_BIND, &mut self.show_water),
+            (ui::SHOW_RIVERS_BIND, &mut self.show_rivers),
+        ] {
+            if let Some(flicker::script::Value::Bool(v)) = results.get(bind) {
+                if *v != *flag {
+                    *flag = *v;
+                    lens_flipped = true;
+                }
             }
         }
-        // TICK 1200 (Aaron 2026-08-26: "what will it look like at 4500?
-        // Let's FIND OUT!"): queue another bootstrap-sized leap from wherever
-        // the clock stands — computed flat-out, no baking, progress barred,
-        // baked once and paused on arrival.
-        if results.is_on(ui::EVOLVE_ROLL_ACTION) {
-            self.roll_from = self.evolve.ticks();
-            self.roll_until = self.evolve.ticks() + crate::evolve::BOOTSTRAP_TICKS;
-            self.roll_pauses = true; // the leap STANDS at its goal
-            self.evolve_running = true;
-            self.evolve_accum = 0.0;
+        if lens_flipped {
+            self.bake_view(WorldView::Evolve);
         }
-        if results.is_on(ui::EVOLVE_STEP_ACTION) {
+        // THE TICK CONTRACT (Aaron 2026-08-29): a tick is one complete run of
+        // the procedure list — the bake is NOT part of it. PLAY/PAUSE runs
+        // flat-out with no baking and bakes once on pause; PLAY-N runs the
+        // typed count the same way and bakes at arrival; TICK plays one cycle
+        // then bakes; STEP plays one procedure then bakes. Every run button
+        // first completes a tick STEP left open.
+        // The PLAY-N count field: digits only, remembered as typed; anything
+        // unparseable falls back to the 1200 default on use.
+        if let Some(t) = results.text(ui::TICK_COUNT_BIND) {
+            if t != self.tick_count {
+                self.tick_count = t.to_string();
+            }
+        }
+        if results.is_on(ui::EVOLVE_RUN_ACTION) {
+            if self.evolve_running {
+                self.run_complete(); // PAUSE: the run's one bake lands here
+            } else {
+                self.complete_open_tick();
+                self.roll_until = 0; // PLAY: no horizon — run until paused
+                self.roll_from = 0;
+                self.evolve_running = true;
+            }
+        }
+        if results.is_on(ui::EVOLVE_ROLL_ACTION) {
+            self.complete_open_tick();
+            let count = self
+                .tick_count
+                .parse::<u64>()
+                .ok()
+                .filter(|c| *c > 0)
+                .unwrap_or(flicker_worldengine::BOOTSTRAP_TICKS);
+            self.roll_from = self.evolve.ticks();
+            self.roll_until = self.evolve.ticks() + count;
+            self.evolve_running = true;
+        }
+        if results.is_on(ui::EVOLVE_TICK_ACTION) {
+            self.complete_open_tick();
             let Self {
                 map,
                 seams,
@@ -1758,13 +2015,25 @@ impl PopulousBench {
             let sea = evolve.resolve_sea();
             evolve.tick(map, seams, crust, sea);
             self.drift_fields();
-            self.bake_view(WorldView::Evolve);
-            self.publish_hex();
+            self.run_complete();
+        }
+        if results.is_on(ui::EVOLVE_STEP_ACTION) {
+            let Self {
+                map,
+                seams,
+                crust,
+                evolve,
+                ..
+            } = &mut *self;
+            let sea = evolve.resolve_sea();
+            if evolve.tick_phase(map, seams, crust, sea) {
+                self.drift_fields();
+            }
+            self.run_complete(); // one procedure, then the bake shows it
         }
         if results.is_on(ui::EVOLVE_RESET_ACTION) {
             self.roll_until = 0;
             self.roll_from = 0;
-            self.roll_pauses = false;
             self.evolve.reset(&self.map, &self.seams);
             self.evolve.set_water(DEFAULT_WATER as f32);
             self.evolve_running = false;
@@ -1781,13 +2050,98 @@ impl PopulousBench {
             self.bake_molten_views();
             self.publish_hex();
         }
+        // The nav footer's COMMIT — the bench's OUTPUT: the planet epoch,
+        // staged for the Content Manager's review.
+        if results.is_on(ui::COMMIT_ACTION) {
+            let staging = flicker_content::roots().staging();
+            self.commit_to(&staging);
+        }
+        // THE MAP MODAL (contract FF8A575D): the footer's MAP button toggles
+        // it, the modal's own Close button closes it. Opening paints the flat
+        // map with the shown view's colours — the one moment they could be
+        // stale (the closed map skips every bake).
+        if results.is_on(ui::MAP_TOGGLE_ACTION) {
+            self.map_open = !self.map_open;
+            if self.map_open {
+                self.refresh_map_colors();
+            }
+        }
+        if results.is_on(ui::MAP_CLOSE_ACTION) {
+            self.map_open = false;
+        }
+    }
+
+    /// The walker's scene-level Cancel (always scene-level under the implied panel
+    /// context — there is no pane to back out of): the scene pops its topmost
+    /// modal, and the map is the one this bench owns.
+    fn apply_cancel(&mut self, cancelled: bool) {
+        if cancelled && self.map_open {
+            self.map_open = false;
+        }
+    }
+
+    /// **COMMIT the planet** — capture the world into a v2 `.epoch`
+    /// ([`flicker_worldengine::PlanetEpoch`]) and write it under
+    /// `<staging_root>/worlds/`. An ingest bench writes to `staging/` and
+    /// STOPS (the sablework contract): nothing is visible to the running
+    /// game until the Content Manager reviews and promotes it.
+    ///
+    /// The era pauses and any queued leap stands down first — a committed
+    /// planet is a world at rest — and an open procedure cycle is run to its
+    /// close so the capture stands BETWEEN cycles (mid-cycle carry state has
+    /// no place in the file). The result line lands on
+    /// [`ui::COMMIT_STATUS_BIND`] either way: the staged path, or the error
+    /// — never silence.
+    fn commit_to(&mut self, staging_root: &std::path::Path) {
+        self.evolve_running = false;
+        self.roll_until = 0;
+        self.roll_from = 0;
+        let mid_cycle = self.evolve.current_phase() != flicker_worldengine::PHASES[0];
+        while self.evolve.current_phase() != flicker_worldengine::PHASES[0] {
+            let Self {
+                map,
+                seams,
+                crust,
+                evolve,
+                ..
+            } = &mut *self;
+            let sea = evolve.resolve_sea();
+            evolve.tick_phase(map, seams, crust, sea);
+        }
+        if mid_cycle {
+            // The close-out moved material: the views and the hex column
+            // follow the data, same as the step button's tick.
+            self.drift_fields();
+            self.bake_view(WorldView::Evolve);
+            self.publish_hex();
+        }
+        let comment = format!(
+            "Populous world: freq {}, seed {:#018x}, {} ticks.",
+            self.map.freq(),
+            self.seams.seed(),
+            self.evolve.ticks()
+        );
+        let file = self.evolve.capture(&self.map, &self.seams, comment);
+        // Identity in the name — recipe + clock — so successive commits of a
+        // world stand side by side instead of silently overwriting.
+        let name = format!(
+            "planet_f{}_s{:016x}_t{}.epoch.gz",
+            self.map.freq(),
+            self.seams.seed(),
+            self.evolve.ticks()
+        );
+        let path = staging_root.join("worlds").join(name);
+        self.commit_status = match file.save(&path) {
+            Ok(()) => path.display().to_string(),
+            Err(e) => e.to_string(),
+        };
     }
 }
 
 /// The PROCEDURE label's stringtable token for a pipeline phase — published
 /// on a bind, resolved by the walker like any `$token` (the godmode pattern).
-fn phase_token(p: crate::evolve::Phase) -> &'static str {
-    use crate::evolve::Phase;
+fn phase_token(p: flicker_worldengine::Phase) -> &'static str {
+    use flicker_worldengine::Phase;
     match p {
         Phase::Climate => "$pop_phase_climate",
         Phase::Weather => "$pop_phase_weather",
@@ -1818,6 +2172,14 @@ fn group_thousands(n: u64) -> String {
 }
 
 impl Scene for PopulousBench {
+    /// The PLAY-N count field owns the keyboard while its session is open: the pump then
+    /// resolves only the text exits and every other key reaches the field as text.
+    fn input_context(&self) -> Option<InputContext> {
+        self.ui_state
+            .text_entry()
+            .then_some(InputContext::TextEntry)
+    }
+
     fn enter(&mut self, renderer: &mut Renderer) {
         renderer.clear_color = [0.02, 0.03, 0.05, 1.0];
         let theme = Theme::build(renderer);
@@ -1832,6 +2194,7 @@ impl Scene for PopulousBench {
     fn exit(&mut self, renderer: &mut Renderer) {
         self.world.free(renderer);
         self.hex.free(renderer);
+        self.worldmap.free(renderer);
     }
 
     fn update(
@@ -1870,8 +2233,11 @@ impl Scene for PopulousBench {
             down: input.mouse_left,
             right_down: input.mouse_right,
             screen,
-            typed: String::new(),
-            backspace: false,
+            // The OS text stream rides through every frame; `fold_typed` is
+            // focus-gated, so it lands only while a text_field holds the
+            // walker's keyboard focus (the PLAY-N count) and is dropped
+            // otherwise. No TextEntry choreography: this bench binds no
+            // letter keys, so typing collides with nothing.
             wheel: input.mouse_wheel_delta,
             exclusive: false,
             motion: Default::default(),
@@ -1890,6 +2256,10 @@ impl Scene for PopulousBench {
         // reserved nothing, so its world seats `None` and costs nothing.
         self.world.seat(frame.surface(ui::VIEW_SLOT));
         self.hex.seat(frame.surface(ui::HEX_SLOT));
+        // The map modal's surface: reserved only while the modal's slice is lit,
+        // so a closed map seats `None` and costs nothing.
+        self.worldmap.seat(frame.surface(ui::MAP_SLOT));
+        let map_pointer = frame.surface_pointer(ui::MAP_SLOT).cloned();
         // The pointer SAMPLE for the globe's surface — the walker's barrier (A8C9F02B
         // §4b): present while the cursor is over the planet with no UI over it, or while
         // a press that began there is still held. The scene reads no device for it.
@@ -1926,7 +2296,7 @@ impl Scene for PopulousBench {
                     {
                         continue;
                     }
-                    let kind = &crate::evolve::vein_kinds()[k as usize];
+                    let kind = &flicker_worldengine::vein_kinds()[k as usize];
                     self.hud_commands.push(HudCommand::Text {
                         x: rect.pos.x + (ndc.x * 0.5 + 0.5) * rect.size.x,
                         y: rect.pos.y + (0.5 - ndc.y * 0.5) * rect.size.y,
@@ -1977,6 +2347,13 @@ impl Scene for PopulousBench {
         for name in walker.take_fired() {
             results.set(name, true);
         }
+        // Cancel with NO pane entered is the walker's "pop the scene's modal"
+        // seam (`WalkerHandler::cancelled`) — with the map open, that modal is
+        // the map, so the pad backs out of it exactly as Close does. (Read out
+        // before the walker's `ui_state` borrow ends with it.)
+        let cancelled = walker.cancelled();
+        drop(walker);
+        self.apply_cancel(cancelled);
         self.apply_results(&results);
 
         // One camera line, and it is the WORLD's: the look and zoom come from the PUMP's
@@ -1986,23 +2363,57 @@ impl Scene for PopulousBench {
         // (`look_from`).
         let dtf = dt.as_secs_f32();
         let look = GlobeWorld::look_from(|s| signals.axis(s, input));
-        // The globe answers look/zoom only while its pane is ENTERED (nav-tier contract
-        // 1B5F6BB8): merely highlighting the viewport pane no longer feeds the camera —
-        // Confirm locks into it, Cancel backs out. The LOCKED pane's `tab_group` IS the
-        // gate the globe matches against (`in_panel`); the walker owns it, the scene only
-        // reads it, never a second focus system (F2). Entering a DIFFERENT pane yields that
-        // pane's group, so the globe correctly stays quiet. Both centre-pane views name
-        // the same pane — the SELECTED PAGE decides which of the two the entered pane
-        // hands the camera to, and the dark one holds still.
-        let look_gate = self.ui_state.entered_group();
+        // The globe answers look/zoom while its pane is the FOCUSED pane (the implied
+        // panel context, Aaron 2026-09-02): the pane wearing the sapphire rim IS the
+        // context — the left stick switches it, no Confirm to enter, no Cancel to leave.
+        // The focused pane's `tab_group` IS the gate the globe matches against
+        // (`in_panel`); the walker owns it, the scene only reads it, never a second focus
+        // system (F2). Focusing a DIFFERENT pane yields that pane's group, so the globe
+        // correctly stays quiet. Both centre-pane views name the same pane — the
+        // SELECTED PAGE decides which of the two the focused pane hands the camera to,
+        // and the dark one holds still.
+        let look_gate = self.ui_state.focused_pane();
         let still = ((0.0, 0.0, 0.0), None::<&str>);
-        let ((w_look, w_gate), (h_look, h_gate)) = if self.hex_view() {
+        // The OPEN MAP owns the look channel (contract FF8A575D): the modal
+        // stands over the panes, so the globes hold still under it and the same
+        // stick that flies the planet pans the flat sheet.
+        let ((w_look, w_gate), (h_look, h_gate)) = if self.map_open {
+            (still, still)
+        } else if self.hex_view() {
             (still, (look, look_gate))
         } else {
             ((look, look_gate), still)
         };
         self.world.update(dtf, pointer.as_ref(), w_look, w_gate);
         self.hex.update(dtf, hex_pointer.as_ref(), h_look, h_gate);
+        self.worldmap.update(
+            dtf,
+            map_pointer.as_ref(),
+            if self.map_open { look } else { (0.0, 0.0, 0.0) },
+            self.map_open,
+        );
+        // A map PICK moves the shared centre cell: the hex inspector follows
+        // the tile clicked on the sheet, exactly as it follows the reticle. A
+        // pick outside the tiling is a content/consumer disagreement — warned
+        // and dropped, never clamped to a cell nobody chose (rule 4BB12A75).
+        if let Some(picked) = self.worldmap.take_pick() {
+            if picked >= self.map.len() as u64 {
+                tracing::warn!(
+                    "populous: map pick {picked} is outside the tiling ({} cells) — ignored",
+                    self.map.len()
+                );
+            } else {
+                let t = picked as TileId;
+                if t != self.focus_tile {
+                    self.focus_tile = t;
+                    if self.reticle_view() {
+                        self.highlight = Some(t);
+                        self.apply_overlays();
+                    }
+                    self.publish_hex();
+                }
+            }
+        }
 
         // The fixed reticle: on the LAYER tabs (seams + crust), the cell
         // facing the camera is the CENTRE cell — outlined bold on the globe,
@@ -2022,74 +2433,31 @@ impl Scene for PopulousBench {
             self.apply_overlays();
         }
 
-        // The era's clock: ticks only while its view is WATCHED and running —
-        // a slow iteration you see grow. The sim steps at EVOLVE_HZ; the mesh
-        // rebakes every few ticks (the picture is the heavy part).
+        // The era's clock (the 2026-08-29 tick contract): while RUNNING the
+        // engine computes full cycles flat-out under a per-frame budget and
+        // draws NOTHING new — no bake, no overlays, no hex publish, no other
+        // visual work in the procedural loop; the readouts (tick counter,
+        // gauges, the PLAY-N bar) stay live off the per-frame Model. The one
+        // bake lands when the run RESTS: PLAY-N's arrival here, or the pause
+        // click in `apply_results`.
         if self.shown_view == WorldView::Evolve && self.evolve_running {
-            self.evolve_accum += dtf;
-            let mut ticked = false;
-            if self.roll_until > 0 && self.evolve.ticks() < self.roll_until {
-                // THE BOOTSTRAP ROLL (Aaron 2026-08-26): from the first
-                // click the era runs FLAT-OUT to the horizon before the
-                // first weld and display — full cycles under a per-frame
-                // compute budget, no baking, the tick and procedure
-                // readouts spinning so the roll is visible. Arrival falls
-                // through to the normal cadence below, which bakes.
-                let start = std::time::Instant::now();
-                while self.evolve.ticks() < self.roll_until
-                    && start.elapsed().as_millis() < BOOTSTRAP_FRAME_MS
-                {
-                    let Self {
-                        map,
-                        seams,
-                        crust,
-                        evolve,
-                        ..
-                    } = &mut *self;
-                    let sea = evolve.resolve_sea();
-                    evolve.tick(map, seams, crust, sea);
-                    self.drift_fields();
-                }
-                if self.evolve.ticks() >= self.roll_until {
-                    ticked = true; // the weld: bake and show the rolled world
-                    self.roll_arrived();
-                }
-                self.evolve_accum = 0.0;
-            } else {
-                // The engine steps PROCEDURES: one pipeline phase per step,
-                // at a rate that keeps the completed-cycle (tick) cadence at
-                // EVOLVE_HZ — the phase label is a real live readout, and
-                // the sim's throughput is unchanged.
-                let step = 1.0 / (EVOLVE_HZ * crate::evolve::PHASES.len() as f32);
-                // At most two CYCLES' worth of steps a frame — a long frame
-                // never spirals.
-                for _ in 0..(2 * crate::evolve::PHASES.len()) {
-                    if self.evolve_accum < step {
-                        break;
-                    }
-                    self.evolve_accum -= step;
-                    let Self {
-                        map,
-                        seams,
-                        crust,
-                        evolve,
-                        ..
-                    } = &mut *self;
-                    let sea = evolve.resolve_sea();
-                    if evolve.tick_phase(map, seams, crust, sea) {
-                        ticked = true;
-                        self.drift_fields();
-                    }
-                }
+            let start = std::time::Instant::now();
+            while (self.roll_until == 0 || self.evolve.ticks() < self.roll_until)
+                && start.elapsed().as_millis() < RUN_FRAME_MS
+            {
+                let Self {
+                    map,
+                    seams,
+                    crust,
+                    evolve,
+                    ..
+                } = &mut *self;
+                let sea = evolve.resolve_sea();
+                evolve.tick(map, seams, crust, sea);
+                self.drift_fields();
             }
-            if ticked {
-                self.apply_overlays(); // the arrows fill toward the next step
-                self.evolve_unbaked += 1;
-                if self.evolve_unbaked >= EVOLVE_BAKE_TICKS {
-                    self.evolve_unbaked = 0;
-                    self.bake_view(WorldView::Evolve);
-                    self.publish_hex();
-                }
+            if self.roll_until > 0 && self.evolve.ticks() >= self.roll_until {
+                self.run_complete(); // PLAY-N arrived: the run's one bake
             }
         }
 
@@ -2123,6 +2491,7 @@ impl Scene for PopulousBench {
         let Self {
             world,
             hex,
+            worldmap,
             hud_commands,
             textures,
             ..
@@ -2130,6 +2499,9 @@ impl Scene for PopulousBench {
         let layer = fg.base_layer();
         world.render(renderer, fg, layer);
         hex.render(renderer, fg, layer);
+        // The map composites at its own slot layer — the modal's lifted band —
+        // so the sheet lands inside the popup's well, over the HUD scrim.
+        worldmap.render(renderer, fg, layer);
         if let Some(&white) = textures.first() {
             fg.overlay(move |r| render_hud(r, hud_commands, white, textures));
         }
@@ -2215,9 +2587,12 @@ mod tests {
             "pill_toggle",    // the PTT's authored page + tab rails
             "panel",          // UI Panel and RTT Panel
             "slider",         // the size dial
-            "checkbox",       // the evolve tab's motion-arrows lens
+            "checkbox",       // the evolve tab's lenses (arrows + the three fluids)
             "button",         // the seams action
+            "text_field",     // PLAY-N's tick-count entry (the tick contract)
             "resource_gauge", // the bootstrap roll's progress bar (the loading bar component)
+            "nav_footer",     // the bench nav band (map/menu/back/next — commit on evolve)
+            "popup_panel",    // the world-map modal's carved slab (contract FF8A575D)
             "text",
             "option", // localized strings
         ];
@@ -2255,8 +2630,8 @@ mod tests {
         assert_eq!(count("panel"), 3, "two UI Panels and one RTT Panel");
         assert_eq!(
             count("surface"),
-            3,
-            "the root surface + the globe's viewport + the hex stack's viewport"
+            4,
+            "the root surface + the globe's viewport + the hex stack's viewport + the map modal's sheet"
         );
         assert_eq!(
             count("slider"),
@@ -2331,6 +2706,9 @@ mod tests {
         }
         want.push(ui::WATER_VAL_BIND.to_string());
         want.push(ui::TEMP_VAL_BIND.to_string());
+        want.push(ui::GREEN_VAL_BIND.to_string());
+        // …plus the nav footer's commit result line.
+        want.push(ui::COMMIT_STATUS_BIND.to_string());
         want.sort_unstable();
         assert_eq!(
             bound, want,
@@ -2634,6 +3012,9 @@ mod tests {
             "shown_p0_t2",
             "shown_p0_t3",
             "shown_p1_t0",
+            // The nav footer's NEXT/COMMIT swap rides the same mechanism.
+            "shown_ft_next",
+            "shown_ft_commit",
         ] {
             assert!(gates.contains(key), "`{key}` gates its slice");
         }
@@ -2814,8 +3195,6 @@ mod tests {
             down,
             right_down: false,
             screen: Vec2::new(1600.0, 900.0),
-            typed: String::new(),
-            backspace: false,
             wheel: 0.0,
             exclusive: false,
             motion: Default::default(),
@@ -3006,7 +3385,7 @@ mod tests {
         let seed = bench.seams().seed();
         assert_eq!(
             bench.seams().cells(),
-            crate::seams::DEFAULT_CELLS,
+            flicker_worldengine::DEFAULT_CELLS,
             "opens at the default count"
         );
 
@@ -3028,7 +3407,7 @@ mod tests {
         bench.apply_results(&write(99.0));
         assert_eq!(
             bench.seams().cells(),
-            crate::seams::MAX_CELLS,
+            flicker_worldengine::MAX_CELLS,
             "a wild number clamps into the dial's range"
         );
         // …and the dial's own declaration carries the same range.
@@ -3039,11 +3418,11 @@ mod tests {
             .expect("the cells dial is declared");
         assert_eq!(
             dial.props.get("min"),
-            Some(&Value::Number(f64::from(crate::seams::MIN_CELLS)))
+            Some(&Value::Number(f64::from(flicker_worldengine::MIN_CELLS)))
         );
         assert_eq!(
             dial.props.get("max"),
-            Some(&Value::Number(f64::from(crate::seams::MAX_CELLS)))
+            Some(&Value::Number(f64::from(flicker_worldengine::MAX_CELLS)))
         );
         assert_eq!(dial.tab_group, ui::LEFT_PANE, "walker-focusable");
     }
@@ -3062,13 +3441,13 @@ mod tests {
             (ui::FREQ_BIND, f64::from(MIN_FREQ), f64::from(MAX_FREQ)),
             (
                 ui::CELLS_BIND,
-                f64::from(crate::seams::MIN_CELLS),
-                f64::from(crate::seams::MAX_CELLS),
+                f64::from(flicker_worldengine::MIN_CELLS),
+                f64::from(flicker_worldengine::MAX_CELLS),
             ),
             (
                 ui::SPOTS_BIND,
-                f64::from(crate::seams::MIN_SPOTS),
-                f64::from(crate::seams::MAX_SPOTS),
+                f64::from(flicker_worldengine::MIN_SPOTS),
+                f64::from(flicker_worldengine::MAX_SPOTS),
             ),
             (
                 ui::WATER_TARGET_BIND,
@@ -3141,8 +3520,8 @@ mod tests {
         assert!(!bench.evolve_running(), "…and toggles it off");
 
         assert_eq!(bench.evolve().ticks(), 0);
-        bench.apply_results(&fire(ui::EVOLVE_STEP_ACTION));
-        assert_eq!(bench.evolve().ticks(), 1, "STEP advances exactly one tick");
+        bench.apply_results(&fire(ui::EVOLVE_TICK_ACTION));
+        assert_eq!(bench.evolve().ticks(), 1, "TICK plays exactly one cycle");
         let grown: f32 = (0..bench.map().len() as TileId)
             .map(|t| bench.evolve().rock(t))
             .sum();
@@ -3167,6 +3546,80 @@ mod tests {
             assert_eq!(b.component, "button");
             assert_eq!(b.tab_group, ui::LEFT_PANE);
         }
+    }
+
+    /// **COMMIT stages the planet epoch** — the bench's OUTPUT contract, end
+    /// to end: a running, MID-CYCLE era commits; the clock pauses, the open
+    /// procedure cycle is run to its close (never captured half-done), and a
+    /// v2 `.epoch` lands under `<staging>/worlds/` that the format's own
+    /// loader validates. The result line is the staged path; a failure would
+    /// land the error on the same bind — never silence. Touches ONLY the
+    /// staging root it was given (the sablework rule: an ingest bench writes
+    /// to staging and stops).
+    ///
+    /// The footer's own wiring rides the tree: NEXT/COMMIT are gated
+    /// opposites over the same footer (the gates test covers the keys), and
+    /// BACK/NEXT fire the rail's own step names, which
+    /// `the_rails_own_their_stepping_and_the_scene_reads_the_index` already
+    /// proves step the strip from ANY source.
+    #[test]
+    fn commit_stages_a_valid_planet_epoch() {
+        let mut bench = test_bench();
+        let fire = |name: &str| {
+            let mut r = ValueMap::default();
+            r.set(name, true);
+            r
+        };
+        // A real stretch of era, left RUNNING and MID-CYCLE.
+        bench.apply_results(&fire(ui::EVOLVE_STEP_ACTION));
+        bench.apply_results(&fire(ui::EVOLVE_RUN_ACTION));
+        {
+            let PopulousBench {
+                map,
+                seams,
+                crust,
+                evolve,
+                ..
+            } = &mut bench;
+            let sea = evolve.resolve_sea();
+            evolve.tick_phase(map, seams, crust, sea);
+            assert_ne!(
+                evolve.current_phase(),
+                flicker_worldengine::PHASES[0],
+                "the era stands mid-cycle"
+            );
+        }
+
+        let dir = std::env::temp_dir().join("flicker_populous_commit_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        bench.commit_to(&dir);
+
+        assert!(!bench.evolve_running(), "commit pauses the era");
+        assert_eq!(
+            bench.evolve().current_phase(),
+            flicker_worldengine::PHASES[0],
+            "the open cycle was run to its close"
+        );
+        let expected = dir.join("worlds").join(format!(
+            "planet_f{}_s{:016x}_t{}.epoch.gz",
+            bench.map().freq(),
+            bench.seams().seed(),
+            bench.evolve().ticks()
+        ));
+        assert_eq!(
+            bench.commit_status,
+            expected.display().to_string(),
+            "the result line is the staged path"
+        );
+        assert!(
+            bench.model().text(ui::COMMIT_STATUS_BIND).is_some(),
+            "the result line is published on its bind"
+        );
+        let file = flicker_worldengine::PlanetEpoch::load(&expected)
+            .expect("the staged file is a valid planet epoch");
+        assert_eq!(file.recipe.freq, bench.map().freq());
+        assert_eq!(file.era.ticks, bench.evolve().ticks());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// **A tile is WHAT ITS HEIGHT SAYS, against the sea the dial asked for.**
@@ -3273,7 +3726,7 @@ mod tests {
         let m = bench.model();
         assert_eq!(
             text(&m, ui::HEX_VEIN_BIND),
-            crate::evolve::vein_kinds()[3].label,
+            flicker_worldengine::vein_kinds()[3].label,
             "the ore body announces its registry label"
         );
         // The molten row reads the seam field at the focus, as a percent.
@@ -3283,76 +3736,95 @@ mod tests {
         );
     }
 
+    /// **The tick contract (Aaron 2026-08-29).** PLAY runs with no horizon;
+    /// PAUSE stops it. PLAY-N runs the typed count. TICK plays one complete
+    /// cycle and rests. STEP plays ONE procedure — and any run button after a
+    /// step first completes the open tick before its own work.
     #[test]
-    fn run_rolls_through_the_horizon_and_the_leap_stands() {
-        // **RUN MEANS RUN** (Aaron 2026-08-27): the Run button's bootstrap
-        // fast-forward continues into the live clock at its horizon; only
-        // the TICK-1200 leap stands at its goal for inspection.
+    fn the_run_buttons_honour_the_tick_contract() {
         let mut bench = test_bench();
         let fire = |name: &str| {
             let mut r = ValueMap::default();
             r.set(name, true);
             r
         };
+        // PLAY: running, no window — until PAUSE, which stops the clock.
         bench.apply_results(&fire(ui::EVOLVE_RUN_ACTION));
-        assert!(bench.evolve_running() && bench.roll_window().is_some());
-        bench.roll_arrived();
-        assert!(
-            bench.evolve_running(),
-            "RUN's clock survives the bootstrap horizon"
-        );
-        assert_eq!(bench.roll_window(), None, "the window is spent");
+        assert!(bench.evolve_running(), "PLAY runs");
+        assert_eq!(bench.roll_window(), None, "PLAY has no horizon");
+        bench.apply_results(&fire(ui::EVOLVE_RUN_ACTION));
+        assert!(!bench.evolve_running(), "PAUSE stops");
 
-        bench.apply_results(&fire(ui::EVOLVE_ROLL_ACTION));
-        assert!(bench.evolve_running() && bench.roll_window().is_some());
-        bench.roll_arrived();
-        assert!(
-            !bench.evolve_running(),
-            "the leap stands at its goal for inspection"
-        );
-        assert_eq!(bench.roll_window(), None);
-    }
-
-    #[test]
-    fn tick_1200_queues_a_leap_and_reset_clears_it() {
-        let mut bench = test_bench();
-        assert_eq!(bench.roll_window(), None);
-        // First Run queues the bootstrap roll.
-        let mut run = ValueMap::default();
-        run.set(ui::EVOLVE_RUN_ACTION, true);
-        bench.apply_results(&run);
-        assert!(bench.evolve_running());
-        assert_eq!(
-            bench.roll_window(),
-            Some((0, crate::evolve::BOOTSTRAP_TICKS)),
-            "the first click queues the bootstrap window"
-        );
-        // Pausing keeps the goal (Run resumes the roll).
-        bench.apply_results(&run);
-        assert!(!bench.evolve_running());
-        assert!(bench.roll_window().is_some(), "pausing keeps the goal");
-
-        // A step moves the clock; TICK 1200 leaps from wherever it stands.
-        let mut step = ValueMap::default();
-        step.set(ui::EVOLVE_STEP_ACTION, true);
-        bench.apply_results(&step);
+        // PLAY-N: the typed count opens the window from the standing clock.
+        let mut n = ValueMap::default();
+        n.set(ui::TICK_COUNT_BIND, "2500".to_string());
+        n.set(ui::EVOLVE_ROLL_ACTION, true);
         let now = bench.evolve().ticks();
-        let mut roll = ValueMap::default();
-        roll.set(ui::EVOLVE_ROLL_ACTION, true);
-        bench.apply_results(&roll);
-        assert!(bench.evolve_running(), "the leap runs");
+        bench.apply_results(&n);
+        assert!(bench.evolve_running(), "PLAY-N runs");
         assert_eq!(
             bench.roll_window(),
-            Some((now, now + crate::evolve::BOOTSTRAP_TICKS)),
-            "the window opens at the standing clock"
+            Some((now, now + 2500)),
+            "the window is the typed count"
         );
 
-        // Reset clears the world AND the roll.
-        let mut reset = ValueMap::default();
-        reset.set(ui::EVOLVE_RESET_ACTION, true);
-        bench.apply_results(&reset);
+        // An unparseable count falls back to the 1200 default.
+        let mut junk = ValueMap::default();
+        junk.set(ui::TICK_COUNT_BIND, "".to_string());
+        junk.set(ui::EVOLVE_ROLL_ACTION, true);
+        let now = bench.evolve().ticks();
+        bench.apply_results(&junk);
+        assert_eq!(
+            bench.roll_window(),
+            Some((now, now + flicker_worldengine::BOOTSTRAP_TICKS)),
+            "empty field means the default leap"
+        );
+
+        // Reset clears the world AND the window.
+        bench.apply_results(&fire(ui::EVOLVE_RESET_ACTION));
+        assert!(!bench.evolve_running());
         assert_eq!(bench.roll_window(), None, "reset clears the goal");
         assert_eq!(bench.evolve().ticks(), 0);
+    }
+
+    /// STEP plays exactly one procedure; TICK plays one complete cycle; and a
+    /// run button clicked mid-step first COMPLETES the open tick (the cycle
+    /// always closes before the next begins).
+    #[test]
+    fn step_is_one_procedure_and_open_ticks_complete_first() {
+        let mut bench = test_bench();
+        let fire = |name: &str| {
+            let mut r = ValueMap::default();
+            r.set(name, true);
+            r
+        };
+        let phases = flicker_worldengine::PHASES.len();
+
+        // One STEP: the cursor moved one procedure, the tick has not counted.
+        bench.apply_results(&fire(ui::EVOLVE_STEP_ACTION));
+        assert_eq!(bench.evolve().ticks(), 0, "a step is less than a tick");
+        assert_ne!(
+            bench.evolve().current_phase(),
+            flicker_worldengine::PHASES[0],
+            "the tick stands open"
+        );
+
+        // TICK mid-step: the open tick completes FIRST, then one full cycle
+        // runs — two ticks on the clock, the cursor at rest between cycles.
+        bench.apply_results(&fire(ui::EVOLVE_TICK_ACTION));
+        assert_eq!(bench.evolve().ticks(), 2, "complete the open tick, then play one");
+        assert_eq!(
+            bench.evolve().current_phase(),
+            flicker_worldengine::PHASES[0],
+            "the cursor rests between cycles"
+        );
+
+        // Stepping a whole cycle by hand counts exactly one tick.
+        let before = bench.evolve().ticks();
+        for _ in 0..phases {
+            bench.apply_results(&fire(ui::EVOLVE_STEP_ACTION));
+        }
+        assert_eq!(bench.evolve().ticks(), before + 1, "N steps = one tick");
     }
 
     /// **The evolve pane NAVIGATES up/down and the target rides left/right**
@@ -3388,14 +3860,18 @@ mod tests {
             .filter(|n| n.action.as_deref().map(|a| a.starts_with("pop_evolve")) == Some(true))
             .map(|n| n.nav_ordinal)
             .collect();
-        assert_eq!(ords.len(), 4, "all four era buttons carry ordinals");
+        assert_eq!(ords.len(), 5, "all five era buttons carry ordinals");
         let mut sorted = ords.clone();
         sorted.sort_unstable();
         sorted.dedup();
         ords.sort_unstable();
         assert_eq!(ords, sorted, "every button has its OWN step in the walk");
         // The readouts stand as right-pane gauges on 0..1 fractions.
-        for (gauge, frac) in [("pop_water_gauge", ui::WATER_BIND), ("pop_temp_gauge", ui::TEMP_BIND)] {
+        for (gauge, frac) in [
+            ("pop_water_gauge", ui::WATER_BIND),
+            ("pop_temp_gauge", ui::TEMP_BIND),
+            ("pop_green_gauge", ui::GREEN_BIND),
+        ] {
             let g = all
                 .iter()
                 .find(|n| n.id == gauge)
@@ -3404,7 +3880,7 @@ mod tests {
             assert_eq!(g.bind.as_deref(), Some(frac));
         }
         let m = bench.model();
-        for b in [ui::WATER_BIND, ui::TEMP_BIND] {
+        for b in [ui::WATER_BIND, ui::TEMP_BIND, ui::GREEN_BIND] {
             match m.get(b) {
                 Some(Value::Number(v)) => {
                     assert!((0.0..=1.0).contains(v), "{b} is a gauge fraction: {v}")
@@ -3533,7 +4009,7 @@ mod tests {
         let t: TileId = 100;
         bench.evolve.plant_vein(t, 3);
         bench.apply_overlays();
-        let ink = crate::evolve::vein_kinds()[3].ink;
+        let ink = flicker_worldengine::vein_kinds()[3].ink;
         let color = [ink[0], ink[1], ink[2], 1.0];
         let outline = bench
             .world
@@ -3588,7 +4064,7 @@ mod tests {
         let seed = bench.seams().seed();
         assert_eq!(
             bench.seams().spots(),
-            crate::seams::DEFAULT_SPOTS,
+            flicker_worldengine::DEFAULT_SPOTS,
             "opens at the default count"
         );
 
@@ -3620,7 +4096,7 @@ mod tests {
         bench.apply_results(&write(99.0));
         assert_eq!(
             bench.seams().spots(),
-            crate::seams::MAX_SPOTS,
+            flicker_worldengine::MAX_SPOTS,
             "a wild number clamps into the dial's range"
         );
         // …and the dial's own declaration carries the same range.
@@ -3631,11 +4107,11 @@ mod tests {
             .expect("the spots dial is declared");
         assert_eq!(
             dial.props.get("min"),
-            Some(&Value::Number(f64::from(crate::seams::MIN_SPOTS)))
+            Some(&Value::Number(f64::from(flicker_worldengine::MIN_SPOTS)))
         );
         assert_eq!(
             dial.props.get("max"),
-            Some(&Value::Number(f64::from(crate::seams::MAX_SPOTS)))
+            Some(&Value::Number(f64::from(flicker_worldengine::MAX_SPOTS)))
         );
         assert_eq!(dial.tab_group, ui::LEFT_PANE, "walker-focusable");
     }
@@ -3710,8 +4186,6 @@ mod tests {
             down: false,
             right_down: false,
             screen: Vec2::new(1600.0, 900.0),
-            typed: String::new(),
-            backspace: false,
             wheel: 0.0,
             exclusive: false,
             motion: Default::default(),
@@ -3776,8 +4250,6 @@ mod tests {
             down,
             right_down: false,
             screen: Vec2::new(1600.0, 900.0),
-            typed: String::new(),
-            backspace: false,
             wheel: 0.0,
             exclusive: false,
             motion: Default::default(),
@@ -3994,8 +4466,6 @@ mod tests {
             down: false,
             right_down: false,
             screen: Vec2::new(1600.0, 900.0),
-            typed: String::new(),
-            backspace: false,
             wheel: 0.0,
             exclusive: false,
             motion: Default::default(),
@@ -4074,6 +4544,129 @@ mod tests {
             vec!["pause_open".to_string()],
             "the declared intent reaches the scene as its result name"
         );
+    }
+
+    /// **THE WORLD MAP MODAL is wired end to end** (contract FF8A575D): the
+    /// footer's MAP button toggles the engine flag, the model publishes it,
+    /// `arrange()` lights the modal's slice from it, the modal subtree is the
+    /// settings pattern (scrim cell → centred popup slab → the map's
+    /// `surface` + a Close button), the surface names its authored stage, and
+    /// the close arm shuts it. One flag, one visibility path, both
+    /// directions.
+    #[test]
+    fn the_map_modal_is_wired_end_to_end() {
+        use flicker::script::ScriptHost;
+
+        // The tree: the modal subtree, gated and shaped as declared.
+        let bench = test_bench();
+        let tree = bench.build_tree();
+        let all = flatten(&tree);
+        let modal = all
+            .iter()
+            .find(|n| n.id == "pop_map_modal")
+            .expect("the modal scrim cell is authored");
+        assert_eq!(modal.visible_bind.as_deref(), Some("shown_map"));
+        let popup = all
+            .iter()
+            .find(|n| n.id == "pop_map_popup")
+            .expect("the modal slab is authored");
+        assert_eq!(popup.component, "popup_panel");
+        let sheet = all
+            .iter()
+            .find(|n| n.id == ui::MAP_SLOT)
+            .expect("the map's surface is authored");
+        assert_eq!(sheet.component, "surface");
+        assert_eq!(
+            sheet.props.get("source"),
+            Some(&Value::Text(ui::MAP_STAGE_SOURCE.into())),
+            "the sheet names its authored stage"
+        );
+        let footer_map = all
+            .iter()
+            .find(|n| n.id == "pop_nav_map")
+            .expect("the footer's MAP button is authored");
+        assert_eq!(
+            footer_map.action.as_deref(),
+            Some(ui::MAP_TOGGLE_ACTION),
+            "the footer MAP button fires the toggle"
+        );
+        assert!(
+            all.iter()
+                .any(|n| n.action.as_deref() == Some(ui::MAP_CLOSE_ACTION)),
+            "the modal carries its Close"
+        );
+
+        // The stage: the map's authored look resolves out of the scene styles.
+        let def = SceneDef::parse("populous", POPULOUS_SCENE).expect("populous.scene.json loads");
+        let styles = load_shared_styles(def.styles.as_ref());
+        assert!(
+            flicker::ui::stage_def(&styles, ui::MAP_STAGE_SOURCE).is_some(),
+            "stages.populous_map compiles"
+        );
+
+        // The flag: toggle opens (and repaints), close shuts, model publishes.
+        let mut bench = test_bench();
+        assert!(!bench.map_open, "the bench opens with the map closed");
+        let mut r = ValueMap::default();
+        r.set(ui::MAP_TOGGLE_ACTION, true);
+        bench.apply_results(&r);
+        assert!(bench.map_open, "the footer MAP toggles it open");
+        assert!(
+            bench.model().is_on(ui::MAP_OPEN_BIND),
+            "the model publishes the flag arrange() reads"
+        );
+        let mut r = ValueMap::default();
+        r.set(ui::MAP_CLOSE_ACTION, true);
+        bench.apply_results(&r);
+        assert!(!bench.map_open, "Close shuts it");
+
+        // Cancel is the pad's Close: a REAL Cancel dispatched with no pane
+        // entered raises the walker's scene-level `cancelled`, and the bench
+        // pops the map with it. A cancel while the map is closed pops nothing.
+        let mut r = ValueMap::default();
+        r.set(ui::MAP_TOGGLE_ACTION, true);
+        bench.apply_results(&r);
+        assert!(bench.map_open);
+        let raw = InputState::new();
+        let events = [InputEvent::new(
+            ActionSignal::Cancel,
+            EventKind::Press,
+            InputContext::World,
+            &raw,
+        )];
+        let nav_tree = bench.build_tree();
+        let nav_model = ValueMap::default();
+        let mut ui = UiState::default();
+        let mut walker = WalkerHandler::hud(&mut ui, false).with_nav(&nav_tree, &nav_model);
+        let mut route = RouteCtx::default();
+        {
+            let mut chain: [&mut dyn InputHandler; 1] = [&mut walker];
+            Router::dispatch(&events, &mut chain, &mut route);
+        }
+        assert!(walker.cancelled(), "no pane entered: Cancel is scene-level");
+        bench.apply_cancel(walker.cancelled());
+        assert!(!bench.map_open, "Cancel backs out of the map");
+        bench.apply_cancel(true);
+        assert!(!bench.map_open, "a cancel with no modal up pops nothing");
+
+        // The Lua slice: `shown_map` follows the published flag, either way.
+        let host = ScriptHost::new(POPULOUS_SCRIPT, "populous.lua").expect("populous.lua loads");
+        let arrange_with = |open: bool| {
+            let mut m = ValueMap::default();
+            m.set(ui::PAGE_BIND, 0.0);
+            m.set(ui::TAB_BIND, 0.0);
+            m.set(ui::MAP_OPEN_BIND, open);
+            host.set_model(&m).expect("model publishes");
+            host.arrange()
+                .expect("arrange runs")
+                .expect("arrange is present")
+                .to_model()
+        };
+        assert!(
+            arrange_with(true).is_on("shown_map"),
+            "open lights the modal"
+        );
+        assert!(!arrange_with(false).is_on("shown_map"), "closed darkens it");
     }
 
     /// **`arrange()` lights exactly the selected tab's slice.** The Lua

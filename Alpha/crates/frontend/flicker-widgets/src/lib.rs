@@ -72,7 +72,9 @@ pub use scene_def::{
 /// The floating in-world **chat panel** builder — a bare `UiNode` builder (not a
 /// registered template) a scene rebuilds each frame with a live rect + log so the
 /// window can move/resize. See [`chat_panel`](chat_panel::chat_panel).
+pub mod chat_modal;
 pub mod chat_panel;
+pub use chat_modal::{ChatFrame, ChatModal};
 pub use chat_panel::{chat_panel, ChatLineKind, ChatLineView, ChatView, RosterEntry};
 
 /// The **Screen declaration** (S8) — a scene declares its screen's SECTIONS (the
@@ -94,6 +96,10 @@ pub mod strings;
 /// [`StageDef`](flicker_render::StageDef) every surface filler consumes, with every
 /// authoring problem reported as data (and gated on the shipped content). See [`stages`].
 pub mod stages;
+/// Data-driven rows: a `list` with `rows_from` expands its ONE prototype child into a
+/// clone per row the scene publishes — see [`rows`].
+pub mod rows;
+pub use rows::{instantiate_rows, Row};
 pub use stages::{
     compile_rate, compile_stage, is_source_key, lighting_preset, stage_def, stage_defs,
 };
@@ -156,6 +162,11 @@ const RUST_COMPONENT_KINDS: &[&str] = &[
     // `[ BACK ]`/`[ NEXT ]` as relevant). Stateless — its buttons fire the same result
     // names the screen's declared Next/Prev/Menu intents fire, one activation channel.
     "nav_footer",
+    // The tooltip BINDING ICON (Aaron 2026-09-02): give it an ActionSignal and it shows
+    // the CURRENT DEVICE's face of that signal's binding — the atlas glyph on a pad, the
+    // house keycap (bold black on a solid cap) on kbm — with an optional help label
+    // (`{Signal}` placeholders). Read-only chrome: never focusable, never a target.
+    "binding_icon",
 ];
 
 /// Whether `kind` is an interactive Component — i.e. one the engine draws and hit-tests
@@ -877,7 +888,9 @@ mod tests {
             ("STONE_BTN", "stone_btn"),
             ("MARKER", "stam_hi"),
             ("SIG_BLUE", "sig_blue"),
-            ("GOLD_RING", "gold_ring"),
+            ("KEYCAP_FACE", "ink"),
+            ("KEYCAP_EDGE", "dim"),
+            ("KEYCAP_INK", "stage_black"),
         ];
         // Consts with no `$token` twin — the authored block carries the literal. Listed
         // so the completeness check below stays honest about them.

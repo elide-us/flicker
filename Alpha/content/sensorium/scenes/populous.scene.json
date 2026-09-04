@@ -25,6 +25,7 @@
             "width_frac": 1.0,
             "height_frac": 1.0,
             "pad": 30,
+            "gap": 12,
             "children": [
               {
                 "component": "paged_menu",
@@ -56,7 +57,7 @@
                     ]
                   },
                   {
-                    "_comment": "One tab rail PER PAGE, each gated on its page's arrange() key and all binding the one `tab` value — the catalog's ratified per-page PTT pattern. An unplaced rail neither draws nor steps, so the shared step names never double-fire.",
+                    "_comment": "One tab rail PER PAGE, each gated on its page's arrange() key and all binding the one `tab` value \u2014 the catalog's ratified per-page PTT pattern. An unplaced rail neither draws nor steps, so the shared step names never double-fire.",
                     "component": "pill_toggle",
                     "id": "paged_tabs",
                     "visible_bind": "shown_page0",
@@ -241,6 +242,39 @@
                                     "nav_ordinal": 1
                                   },
                                   {
+                                    "component": "checkbox",
+                                    "id": "pop_show_air",
+                                    "bind": "pop_show_air",
+                                    "label": "$pop_show_air",
+                                    "box": 14,
+                                    "size": 22,
+                                    "style": "checkbox",
+                                    "tab_group": "pop_left",
+                                    "nav_ordinal": 2
+                                  },
+                                  {
+                                    "component": "checkbox",
+                                    "id": "pop_show_water",
+                                    "bind": "pop_show_water",
+                                    "label": "$pop_show_water",
+                                    "box": 14,
+                                    "size": 22,
+                                    "style": "checkbox",
+                                    "tab_group": "pop_left",
+                                    "nav_ordinal": 3
+                                  },
+                                  {
+                                    "component": "checkbox",
+                                    "id": "pop_show_rivers",
+                                    "bind": "pop_show_rivers",
+                                    "label": "$pop_show_rivers",
+                                    "box": 14,
+                                    "size": 22,
+                                    "style": "checkbox",
+                                    "tab_group": "pop_left",
+                                    "nav_ordinal": 4
+                                  },
+                                  {
                                     "component": "slider",
                                     "id": "pop_water_target",
                                     "style": "slider",
@@ -254,7 +288,7 @@
                                     "slider_h": 10,
                                     "value_w": 44,
                                     "tab_group": "pop_left",
-                                    "nav_ordinal": 2,
+                                    "nav_ordinal": 5,
                                     "size": 40
                                   },
                                   {
@@ -271,30 +305,60 @@
                                     "slider_h": 10,
                                     "value_w": 44,
                                     "tab_group": "pop_left",
-                                    "nav_ordinal": 3,
+                                    "nav_ordinal": 6,
                                     "size": 40
                                   },
                                   {
-                                    "component": "button",
-                                    "action": "pop_evolve_roll",
-                                    "tab_group": "pop_left",
-                                    "nav_ordinal": 4,
-                                    "size_class": "md",
-                                    "label": "$pop_evolve_roll"
+                                    "component": "row",
+                                    "size": 34,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text_field",
+                                        "id": "pop_tick_count",
+                                        "bind": "pop_tick_count",
+                                        "kind": "digits",
+                                        "max_len": 7,
+                                        "style": "settings.controls.field",
+                                        "placeholder": "1200",
+                                        "grow": 1.0,
+                                        "tab_group": "pop_left",
+                                        "nav_ordinal": 7,
+                                        "height": 30
+                                      },
+                                      {
+                                        "component": "button",
+                                        "action": "pop_evolve_roll",
+                                        "size": 120,
+                                        "tab_group": "pop_left",
+                                        "nav_ordinal": 8,
+                                        "size_class": "md",
+                                        "label": "$pop_evolve_roll"
+                                      }
+                                    ],
+                                    "align": "center"
                                   },
                                   {
                                     "component": "button",
                                     "action": "pop_evolve_run",
                                     "tab_group": "pop_left",
-                                    "nav_ordinal": 5,
+                                    "nav_ordinal": 9,
                                     "size_class": "md",
                                     "label": "$pop_evolve_run"
                                   },
                                   {
                                     "component": "button",
+                                    "action": "pop_evolve_tick",
+                                    "tab_group": "pop_left",
+                                    "nav_ordinal": 10,
+                                    "size_class": "md",
+                                    "label": "$pop_evolve_tick"
+                                  },
+                                  {
+                                    "component": "button",
                                     "action": "pop_evolve_step",
                                     "tab_group": "pop_left",
-                                    "nav_ordinal": 6,
+                                    "nav_ordinal": 11,
                                     "size_class": "md",
                                     "label": "$pop_evolve_step"
                                   },
@@ -302,7 +366,7 @@
                                     "component": "button",
                                     "action": "pop_evolve_reset",
                                     "tab_group": "pop_left",
-                                    "nav_ordinal": 7,
+                                    "nav_ordinal": 12,
                                     "size_class": "md",
                                     "label": "$pop_evolve_reset"
                                   }
@@ -730,6 +794,45 @@
                                         "id": "pop_temp_gauge",
                                         "bind": "pop_temp",
                                         "tone": "health",
+                                        "style": "load.gauge",
+                                        "height": 5
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "cell",
+                                    "size": 40,
+                                    "gap": 4,
+                                    "children": [
+                                      {
+                                        "component": "row",
+                                        "size": 16,
+                                        "gap": 8,
+                                        "children": [
+                                          {
+                                            "component": "text",
+                                            "text": "$pop_stat_green",
+                                            "text_size": 11,
+                                            "font": "label",
+                                            "color": "panel.stat_label",
+                                            "grow": 1.0
+                                          },
+                                          {
+                                            "component": "text",
+                                            "text_bind": "pop_green_val",
+                                            "text_size": 15,
+                                            "font": "label",
+                                            "color": "panel.stat_value",
+                                            "align": "right",
+                                            "size": 56
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "component": "resource_gauge",
+                                        "id": "pop_green_gauge",
+                                        "bind": "pop_green",
+                                        "tone": "green",
                                         "style": "load.gauge",
                                         "height": 5
                                       }
@@ -1470,6 +1573,121 @@
                     ]
                   }
                 ]
+              },
+              {
+                "_comment": "NAV FOOTER (the sablework/catalog band): the bench's flow controls in one right-aligned cluster. MENU fires the same `pause_open` the screen's on_menu does; BACK/NEXT fire the tab rail's own step names (`tab_prev`/`tab_next`), so the visible rail steps itself exactly as the shoulder intents already do. On the final EVOLVE tab, NEXT yields its place to COMMIT (arrange() gates the swap on `shown_ft_next`/`shown_ft_commit`): the era's world is captured as a v2 .epoch into staging/worlds/ for the Content Manager to promote. The status text carries the commit's result line. No glyph legend here \u2014 the paged_menu's own gutters already carry the pad hints, and a second copy would fork that chrome.",
+                "component": "nav_footer",
+                "id": "pop_nav",
+                "style": "nav_footer.frame",
+                "nav_ordinal": 4,
+                "size": 52,
+                "pad_x": 12,
+                "pad_y": 10,
+                "gap": 8,
+                "children": [
+                  {
+                    "component": "text",
+                    "text_bind": "pop_commit_status",
+                    "text_size": 12,
+                    "font": "label",
+                    "color": "panel.stat_value"
+                  },
+                  {
+                    "component": "button",
+                    "id": "pop_nav_map",
+                    "action": "pop_map_toggle",
+                    "label": "$pop_ft_map",
+                    "size": 90,
+                    "size_class": "md",
+                    "tab_group": "pop_nav",
+                    "nav_ordinal": 1
+                  },
+                  {
+                    "component": "button",
+                    "id": "pop_nav_menu",
+                    "action": "pause_open",
+                    "label": "$pop_ft_menu",
+                    "size": 90,
+                    "size_class": "md",
+                    "tab_group": "pop_nav",
+                    "nav_ordinal": 2
+                  },
+                  {
+                    "component": "button",
+                    "id": "pop_nav_back",
+                    "action": "tab_prev",
+                    "label": "$pop_ft_back",
+                    "size": 90,
+                    "size_class": "md",
+                    "tab_group": "pop_nav",
+                    "nav_ordinal": 3
+                  },
+                  {
+                    "component": "button",
+                    "id": "pop_nav_next",
+                    "action": "tab_next",
+                    "visible_bind": "shown_ft_next",
+                    "label": "$pop_ft_next",
+                    "size": 90,
+                    "size_class": "md",
+                    "tab_group": "pop_nav",
+                    "nav_ordinal": 4
+                  },
+                  {
+                    "component": "button",
+                    "id": "pop_nav_commit",
+                    "action": "pop_commit",
+                    "visible_bind": "shown_ft_commit",
+                    "label": "$pop_ft_commit",
+                    "size": 110,
+                    "size_class": "md",
+                    "tab_group": "pop_nav",
+                    "nav_ordinal": 4
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "_comment": "THE WORLD MAP MODAL (WorldMap contract FF8A575D; the settings in-scene modal pattern): a full-bleed scrim cell gated on arrange()'s `shown_map`, lifted over the whole bench, holding the centred popup slab. The popup's surface is the flat map \u2014 the shared WorldMap component seats into its reserved rect and composites at this lifted band, so the sheet lands inside the slab's well. The scrim and the slab both claim the pointer; the surface never does, so drag pans and wheel zooms the sheet through the walker's barrier.",
+        "component": "cell",
+        "id": "pop_map_modal",
+        "visible_bind": "shown_map",
+        "anchor": "top_left",
+        "width_frac": 1.0,
+        "height_frac": 1.0,
+        "layer": 4,
+        "style": "map_modal.scrim",
+        "children": [
+          {
+            "component": "popup_panel",
+            "id": "pop_map_popup",
+            "anchor": "center",
+            "panel_w": 980,
+            "panel_pad": 24,
+            "title": "$pop_map_title",
+            "title_size": 26,
+            "divider": true,
+            "panel_style": "map_modal.panel",
+            "children": [
+              {
+                "component": "surface",
+                "id": "pop_map_rtt",
+                "style": "rtt_holder",
+                "size": 560,
+                "source": "populous_map"
+              },
+              {
+                "component": "button",
+                "id": "pop_map_close",
+                "action": "pop_map_close",
+                "label": "$pop_map_close",
+                "size_class": "md",
+                "variant": "secondary",
+                "tab_group": "pop_map",
+                "nav_ordinal": 1
               }
             ]
           }
@@ -1480,7 +1698,7 @@
   "exits": {},
   "stages": {
     "populous_globe": {
-      "_comment": "The POPULOUS hex ledger globe — the authored world drawn into the multi-view's centre viewport. It deliberately has NO `camera` block: the map is flown by the game master, so the scene's own orbit camera owns the view and the stage authors only the light it is seen by (the default light source). `clear` is transparent so the node's holder panel shows through. This world has NO simulation publishing shells, so its whole appearance is authored here: the near-black under-shell, the inset tile shell over it (the seams between the tiles show the shell beneath, and those seams ARE the outlines — two static shells, no per-edge line geometry), and the shared reference frame above both.",
+      "_comment": "The POPULOUS hex ledger globe \u2014 the authored world drawn into the multi-view's centre viewport. It deliberately has NO `camera` block: the map is flown by the game master, so the scene's own orbit camera owns the view and the stage authors only the light it is seen by (the default light source). `clear` is transparent so the node's holder panel shows through. This world has NO simulation publishing shells, so its whole appearance is authored here: the near-black under-shell, the inset tile shell over it (the seams between the tiles show the shell beneath, and those seams ARE the outlines \u2014 two static shells, no per-edge line geometry), and the shared reference frame above both. THE GLOBE KEEPS ITS SEAMS (Aaron 2026-08-28): the outlines-off ruling was for the WorldMap flat sheet ONLY \u2014 on the globe the 0.12 inset stays.",
       "lighting": "studio",
       "clear": "$stage_void",
       "layers": [
@@ -1501,7 +1719,53 @@
           "radius_scale": 1.2
         }
       ],
-      "_hdr": "HDR: the `scene` pass (the globe's two shells + graticule, the layers above) renders into the LINEAR rgba16f `hdr` working attachment and `tonemap_grade` resolves it (ACES roll-off) into the sRGB `color` last. grade_strength 0 = tonemap only, no invented tint — an art grade is Aaron's to author in-window. Alpha passes through, so the transparent clear the holder panel shows through survives.",
+      "_hdr": "HDR: the `scene` pass (the globe's two shells + graticule, the layers above) renders into the LINEAR rgba16f `hdr` working attachment and `tonemap_grade` resolves it (ACES roll-off) into the sRGB `color` last. grade_strength 0 = tonemap only, no invented tint \u2014 an art grade is Aaron's to author in-window. Alpha passes through, so the transparent clear the holder panel shows through survives.",
+      "attachments": {
+        "hdr": {
+          "format": "rgba16f"
+        },
+        "color": {
+          "format": "surface"
+        },
+        "depth": {
+          "format": "depth32"
+        }
+      },
+      "passes": [
+        {
+          "pass": "scene",
+          "writes": [
+            "hdr",
+            "depth"
+          ]
+        },
+        {
+          "pass": "tonemap_grade"
+        }
+      ]
+    },
+    "populous_map": {
+      "_comment": "THE WORLD MAP's stage (WorldMap contract FF8A575D) \u2014 the flat sheet the map modal shows. Same authored vocabulary as the globe: the FIRST shell colour is the sheet's backdrop ink, the SECOND is the tile base, and the graticule layer asks for the shared reference frame drawn flat. TILE INSET IS 0 ON THE MAP ALONE (Aaron 2026-08-28: 'WorldMap black lines' \u2014 the flat sheet drops the seam outlines because at freq 96 they webbed it unreadable; the GLOBE keeps its 0.12 inset seams). The map paints its cells emissive (a data map's ink must read exactly), so the lighting rig mostly serves the clear; same HDR resolve as the globe so the two views' colours agree.",
+      "lighting": "studio",
+      "clear": "$stage_void",
+      "layers": [
+        {
+          "draw": "shell",
+          "radius_scale": 0.998,
+          "inset": 0.0,
+          "color": "$world_seam"
+        },
+        {
+          "draw": "shell",
+          "radius_scale": 1.0,
+          "inset": 0.0,
+          "color": "$world_tile"
+        },
+        {
+          "draw": "graticule",
+          "radius_scale": 1.0
+        }
+      ],
       "attachments": {
         "hdr": {
           "format": "rgba16f"
@@ -1527,7 +1791,7 @@
       ]
     },
     "populous_hex": {
-      "_comment": "The HEX-STACK inspector — one column of the world, up close. Authors NO shell layers and no graticule: the column is published data (the scene's own shells), alone under the stage's light; the camera is the scene's orbit, aimed at the stack. Same HDR resolve as the globe so the heat ramp reads identically in both panes.",
+      "_comment": "The HEX-STACK inspector \u2014 one column of the world, up close. Authors NO shell layers and no graticule: the column is published data (the scene's own shells), alone under the stage's light; the camera is the scene's orbit, aimed at the stack. Same HDR resolve as the globe so the heat ramp reads identically in both panes.",
       "lighting": "studio",
       "clear": "$stage_void",
       "layers": [
@@ -1561,8 +1825,32 @@
     }
   },
   "styles": {
+    "map_modal": {
+      "_comment": "The map modal's chrome: the dim full-bleed scrim and the carved slab, same shape as the shell's modal look, colours as palette tokens only.",
+      "scrim": {
+        "overlay": "$scrim"
+      },
+      "panel": {
+        "radius": 4,
+        "border_w": 1,
+        "fill_top": "$stone3",
+        "fill_bot": "$stone1",
+        "border": "$edge2"
+      }
+    },
     "load": {
       "_comment": "The bootstrap-roll progress bar reuses the loading-screen gauge look (same values as Loading.scene.json load.gauge); per-scene styles by design, palette tokens single-sourced in ui_theme.json.",
+      "field": {
+        "top": "$panel_bg",
+        "bot": "$panel_bg",
+        "border": "$edge2",
+        "border_w": 1,
+        "caret": "$mana_hi",
+        "focus_border_w": 2,
+        "label": "$ink_bright",
+        "placeholder": "$dim",
+        "radius": 4
+      },
       "gauge": {
         "track": "$well",
         "border": "$edge2",
@@ -1571,6 +1859,8 @@
         "pad": 0,
         "mana_top": "$mana_hi",
         "mana_bot": "$mana_lo",
+        "green_top": "$sig_green",
+        "green_bot": "$sig_green_glow",
         "sheen": "$sheen"
       }
     },
@@ -1691,8 +1981,22 @@
         "stick_r": 15
       }
     },
+    "nav_footer": {
+      "_comment": "Bench nav rail band (the sablework/catalog block, same values). `frame` = the node's own slab; `rule` (top hairline) + `label` (legend ink) resolve as the component's defaults.",
+      "frame": {
+        "fill_top": "$surface_top",
+        "fill_bot": "$stage_void",
+        "border": "$edge2",
+        "border_w": 1,
+        "radius": 6
+      },
+      "rule": {
+        "color": "$seam"
+      },
+      "label": "$dim"
+    },
     "rtt_holder": {
-      "_comment": "The framed RTT HOLDER every bench's rtt/viewport slot styles against — the shared chrome for an offscreen-view slot (replaced the per-scene assetpipeline holder block, same values).",
+      "_comment": "The framed RTT HOLDER every bench's rtt/viewport slot styles against \u2014 the shared chrome for an offscreen-view slot (replaced the per-scene assetpipeline holder block, same values).",
       "fill_top": "$well_top",
       "fill_bot": "$well_bot",
       "border": "$edge2",
@@ -1741,6 +2045,21 @@
       "fill_top": "$stone3",
       "fill_bot": "$stone1",
       "border": "$edge2"
+    },
+    "settings": {
+      "controls": {
+        "field": {
+          "top": "$surface_top",
+          "bot": "$surface_bot",
+          "border": "$edge4",
+          "hover_border": "$bronze_dim",
+          "radius": 3,
+          "h": 40,
+          "label": "$ink_button",
+          "label_size": 15,
+          "caret": "$rune_glow"
+        }
+      }
     }
   }
 }

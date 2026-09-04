@@ -2135,25 +2135,25 @@
   "pc_cell": {
     "en-us": "Cell"
   },
-  "pc_chat_connected": {
+  "chat_connected": {
     "en-us": "connected"
   },
-  "pc_chat_disconnected": {
+  "chat_disconnected": {
     "en-us": "disconnected"
   },
-  "pc_chat_is_now": {
+  "chat_is_now": {
     "en-us": "is now"
   },
-  "pc_chat_joined": {
+  "chat_joined": {
     "en-us": "joined"
   },
-  "pc_chat_left": {
+  "chat_left": {
     "en-us": "left"
   },
-  "pc_chat_you": {
+  "chat_you": {
     "en-us": "You"
   },
-  "pc_chat_you_are_now": {
+  "chat_you_are_now": {
     "en-us": "you are now"
   },
   "pc_cluster": {
@@ -2427,19 +2427,55 @@
     "en-us": "CELLS"
   },
   "pop_bootstrap": {
-    "en-us": "BAKING 1200 TICKS"
+    "en-us": "RUNNING TICKS"
   },
   "pop_evolve_reset": {
     "en-us": "RESET"
   },
+  "pop_stat_green": {
+    "en-us": "GREEN"
+  },
+  "pop_ft_menu": {
+    "en-us": "Menu"
+  },
+  "pop_ft_back": {
+    "en-us": "Back"
+  },
+  "pop_ft_next": {
+    "en-us": "Next"
+  },
+  "pop_ft_commit": {
+    "en-us": "Commit"
+  },
+  "pop_ft_map": {
+    "en-us": "Map"
+  },
+  "pop_map_title": {
+    "en-us": "World Map"
+  },
+  "pop_map_close": {
+    "en-us": "Close"
+  },
   "pop_evolve_roll": {
-    "en-us": "TICK 1200"
+    "en-us": "PLAY N"
   },
   "pop_evolve_run": {
-    "en-us": "RUN · PAUSE"
+    "en-us": "PLAY · PAUSE"
+  },
+  "pop_evolve_tick": {
+    "en-us": "TICK"
   },
   "pop_evolve_step": {
     "en-us": "STEP"
+  },
+  "pop_show_air": {
+    "en-us": "ATMOSPHERE"
+  },
+  "pop_show_water": {
+    "en-us": "WATER"
+  },
+  "pop_show_rivers": {
+    "en-us": "RIVERS"
   },
   "pop_page_hex": {
     "en-us": "Hex"
@@ -2728,6 +2764,9 @@
   },
   "qm_tree_header": {
     "en-us": "CONTENT TREES"
+  },
+  "qm_warn_epoch_invalid": {
+    "en-us": "world will not load — the .epoch is unreadable or fails its own validation"
   },
   "qm_warn_missing_textures": {
     "en-us": "referenced textures are missing beside the rig"
@@ -3372,7 +3411,7 @@
     "en-us": "Condition the mesh"
   },
   "ap_prep_blurb": {
-    "en-us": "Raw meshes arrive at any size and triangle count. Set the real-world height and trim the triangle budget, then rig."
+    "en-us": "Raw meshes arrive at any size and triangle count. Set the real-world height, type a triangle target and apply it, then rig."
   },
   "ap_stature": {
     "en-us": "Height"
@@ -3383,11 +3422,11 @@
   "ap_decimate": {
     "en-us": "Decimate"
   },
-  "ap_keep_pct": {
-    "en-us": "Keep %"
+  "ap_decimate_reset": {
+    "en-us": "RESET"
   },
-  "ap_prep_keep": {
-    "en-us": "Keeping"
+  "ap_decimate_apply": {
+    "en-us": "APPLY"
   },
   "ap_prep_rigged": {
     "en-us": "Already rigged — game-ready, no prep needed"
@@ -3400,6 +3439,21 @@
   },
   "cat_nav_surface": {
     "en-us": "Surface"
+  },
+  "cat_nav_binding_icon": {
+    "en-us": "Binding Icon"
+  },
+  "cat_bi_interact": {
+    "en-us": "Press {Interact} to interact"
+  },
+  "cat_bi_menu": {
+    "en-us": "{Menu} opens the pause menu"
+  },
+  "cat_bi_confirm": {
+    "en-us": "{Confirm} activates the focused control"
+  },
+  "cat_bi_note": {
+    "en-us": "Each row reads the live binding of its signal — a keycap on keyboard, the controller glyph on a pad. Never a control: it cannot be focused or clicked."
   },
   "cat_surface_note": {
     "en-us": "3D surface (quad layout) — left-drag a panel to orbit"
@@ -3637,6 +3691,9 @@
   },
   "sig_cancel_text": {
     "en-us": "Cancel Text"
+  },
+  "sig_enter_text": {
+    "en-us": "Enter Text"
   },
   "siggroup_movement": {
     "en-us": "MOVEMENT"
@@ -4102,5 +4159,41 @@
   },
   "load_footer_contact": {
     "en-us": "Discord @elideus · aaron@elideus.net"
+  },
+  "ap_ft_menu": {
+    "en-us": "MENU"
+  },
+  "ap_ft_select": {
+    "en-us": "Select"
+  },
+  "ap_ft_back": {
+    "en-us": "Back"
+  },
+  "ap_ft_steps": {
+    "en-us": "Walk steps"
+  },
+  "ap_ft_orbit": {
+    "en-us": "Right stick orbits the view"
+  },
+  "qm_ft_menu": {
+    "en-us": "MENU"
+  },
+  "qm_ft_open": {
+    "en-us": "Open / promote"
+  },
+  "qm_ft_up": {
+    "en-us": "Up / close"
+  },
+  "qm_ft_tabs": {
+    "en-us": "Switch tab"
+  },
+  "ap_step_source": {
+    "en-us": "Source"
+  },
+  "ap_facts_status": {
+    "en-us": "Status"
+  },
+  "ap_view_empty": {
+    "en-us": "Choose a workflow and open a folder to see the asset here."
   }
 }

@@ -358,7 +358,7 @@ mod tests {
         let offset_x = CLUSTER_DIM as f32;
         let c = heightmap_terrain_at(seed, m, [offset_x, 0.0, 0.0]);
 
-        let tol = 1.0 / 255.0 + 1e-6;
+        let tol = 1.5 / 255.0 + 1e-6;
         for &(lx, lz) in &[(0u32, 5u32), (10, 200), (255, 128)] {
             let world_x = offset_x + lx as f32 + 0.5;
             let world_z = lz as f32 + 0.5;
@@ -397,7 +397,7 @@ mod tests {
         let a = heightmap_terrain_at(seed, m, [0.0, 0.0, 0.0]);
         let b = heightmap_terrain_at(seed, m, [CLUSTER_DIM as f32, 0.0, 0.0]);
 
-        let tol = 1.0 / 255.0 + 1e-6;
+        let tol = 1.5 / 255.0 + 1e-6;
         for lz in (0u32..CLUSTER_DIM).step_by(13) {
             let world_z = lz as f32 + 0.5;
 

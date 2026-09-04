@@ -1,11 +1,12 @@
-//! `chat_panel` — the in-world comms window, built as a plain Rust `UiNode` tree.
+//! `chat_panel` — the in-world comms window's TREE, built as a plain Rust
+//! `UiNode` builder.
 //!
-//! Unlike a registered `template`, this is a bare builder the SCENE calls every
-//! frame with a live rect + the current channels/log/roster, then runs through a
-//! second `run_ui` pass layered over the HUD. That per-frame rebuild is what lets
-//! the window MOVE and RESIZE (walker geometry is otherwise static and the tree is
-//! cached), and it sidesteps the "dynamic list on a scalar model" problem — the
-//! log lines are baked straight into `text` children each frame.
+//! This is the [`crate::ChatModal`] component's view: the modal calls it every
+//! frame with its live rect + channels/log/roster and runs the result through
+//! its own `run_ui` pass layered over the HUD. That per-frame rebuild is what
+//! lets the window MOVE and RESIZE (walker geometry is otherwise static and the
+//! tree is cached), and it sidesteps the "dynamic list on a scalar model"
+//! problem — the log lines are baked straight into `text` children each frame.
 //!
 //! Every colour rides a dotted `style`/`color` path into the scene's `chat` style
 //! block (prefix e.g. `pocclusters.chat`); no colour crosses here, so the single
@@ -185,6 +186,13 @@ pub fn chat_panel(x: f32, y: f32, w: f32, h: f32, view: &ChatView) -> UiNode {
     let mut field = styled("text_field", &sty("input"));
     field.id = "chat_input".to_string();
     field.bind = Some("chat_input".to_string());
+    // The session's exits, as result names the host drains like any click; and the
+    // field `EnterText` (the bound key / chord) opens when nothing else is focused.
+    set_txt(&mut field, "submit_action", "chat_submit");
+    set_txt(&mut field, "cancel_action", "chat_cancel");
+    field
+        .props
+        .insert("default_text".to_string(), flicker_script::Value::Bool(true));
     set_txt(
         &mut field,
         "placeholder",
@@ -483,8 +491,6 @@ mod tests {
             down: false,
             right_down: false,
             screen: Vec2::new(1280.0, 720.0),
-            typed: String::new(),
-            backspace: false,
             wheel: 0.0,
             exclusive: false,
             motion: Default::default(),
@@ -526,8 +532,6 @@ mod tests {
             down: true,
             right_down: false,
             screen: Vec2::new(1280.0, 720.0),
-            typed: String::new(),
-            backspace: false,
             wheel: 0.0,
             exclusive: false,
             motion: Default::default(),

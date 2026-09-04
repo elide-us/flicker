@@ -968,9 +968,11 @@ dependencies = [
  "anyhow",
  "flicker",
  "flicker-content",
+ "flicker-globe",
  "flicker-input-core",
  "flicker-input-router",
  "flicker-mechanics",
+ "flicker-rigview",
  "flicker-shell",
  "flicker-skeletal",
  "glam",
@@ -1236,11 +1238,12 @@ version = "0.1.9"
 dependencies = [
  "fastrand",
  "flicker",
+ "flicker-content",
  "flicker-globe",
  "flicker-input-core",
  "flicker-input-router",
  "flicker-shell",
- "flicker-worldgrid",
+ "flicker-worldengine",
  "serde_json",
  "tracing",
 ]
@@ -1261,6 +1264,8 @@ dependencies = [
  "flicker-input-core",
  "flicker-input-router",
  "flicker-shell",
+ "flicker-worldengine",
+ "flicker-worldgrid",
  "serde_json",
  "tracing",
 ]
@@ -1280,6 +1285,20 @@ dependencies = [
  "tracing",
  "wgpu",
  "winit",
+]
+
+[[package]]
+name = "flicker-rigview"
+version = "0.1.0"
+dependencies = [
+ "flicker",
+ "flicker-globe",
+ "flicker-input-core",
+ "flicker-input-router",
+ "flicker-mechanics",
+ "glam",
+ "serde_json",
+ "tracing",
 ]
 
 [[package]]
@@ -1419,6 +1438,8 @@ version = "0.1.0"
 name = "flicker-worldengine"
 version = "0.1.0"
 dependencies = [
+ "clayengine",
+ "fastrand",
  "flicker-core",
  "flicker-materials",
  "flicker-worldgen",
@@ -1464,10 +1485,15 @@ dependencies = [
 name = "flicker-worldtile"
 version = "0.1.0"
 dependencies = [
+ "clayengine",
+ "flicker-core",
  "flicker-materials",
  "flicker-poc-chemistry",
+ "flicker-worldengine",
  "flicker-worldgrid",
  "glam",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

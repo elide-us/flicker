@@ -27,7 +27,7 @@
 
 use glam::DVec3;
 
-use flicker_poc_chemistry::{crust_thickness_m, World};
+use crate::source::TileSource;
 
 /// How far a column's influence reaches, as a multiple of the cell spacing.
 ///
@@ -75,12 +75,12 @@ pub struct Neighbourhood {
 
 impl Neighbourhood {
     /// Gather a cell and the two rings around it.
-    pub fn around(world: &World, cell: usize) -> Self {
-        let area = world.cell_area_m2();
+    pub fn around<S: TileSource>(src: &S, cell: usize) -> Self {
+        let grid = src.grid();
         let mut gathered: Vec<usize> = vec![cell];
-        for &j in &world.grid.neighbors[cell] {
+        for &j in &grid.neighbors[cell] {
             gathered.push(j as usize);
-            for &k in &world.grid.neighbors[j as usize] {
+            for &k in &grid.neighbors[j as usize] {
                 gathered.push(k as usize);
             }
         }
@@ -90,13 +90,10 @@ impl Neighbourhood {
         Self {
             dirs: gathered
                 .iter()
-                .map(|&i| world.grid.dirs[i].as_dvec3().normalize())
+                .map(|&i| grid.dirs[i].as_dvec3().normalize())
                 .collect(),
-            thickness: gathered
-                .iter()
-                .map(|&i| crust_thickness_m(&world.columns[i], area))
-                .collect(),
-            reach: grid_spacing(world.grid.len()) * REACH,
+            thickness: gathered.iter().map(|&i| src.thickness_m(i)).collect(),
+            reach: grid_spacing(grid.len()) * REACH,
         }
     }
 
@@ -141,8 +138,8 @@ impl Neighbourhood {
 
 /// The same read without the gathering, for a caller that has one position and no
 /// tile — the GM inspector asking "what is the ground here".
-pub fn relief_at(world: &World, cell: usize, p: DVec3) -> f64 {
-    Neighbourhood::around(world, cell).relief_at(p)
+pub fn relief_at<S: TileSource>(src: &S, cell: usize, p: DVec3) -> f64 {
+    Neighbourhood::around(src, cell).relief_at(p)
 }
 
 #[cfg(test)]
@@ -150,7 +147,8 @@ mod tests {
     use super::*;
     use flicker_materials::{JsonTableSource, Tables};
     use flicker_poc_chemistry::{
-        budget::Budget, config::content_data_dir, formation_stages, scheduler::Scheduler, World,
+        budget::Budget, config::content_data_dir, crust_thickness_m, formation_stages,
+        scheduler::Scheduler, World,
     };
     use flicker_worldgrid::icosphere;
     use std::sync::Arc;

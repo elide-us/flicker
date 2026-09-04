@@ -141,8 +141,13 @@ pub fn bake_rig(model: &RawModel, source_name: &str) -> RigFile {
 ///   * a bone must sit INSIDE the flesh it owns: a candidate whose nearest point lies outward
 ///     of the vertex along its normal is air, not anatomy — the A-posed forearms hang in
 ///     FRONT of the belly, and by raw distance they claimed a third of it (measured on the
-///     golem); the normal test rejects them while keeping every bone genuinely under the skin
-///     (a vert with no inside candidate falls back to plain distance, so nothing is orphaned);
+///     golem); the normal test rejects them while keeping every bone genuinely under the skin.
+///     The test is only trusted when it leaves a PLAUSIBLE bone (2026-09-03, ElfBaseA): if the
+///     nearest surviving bone is both twice as far as the nearest bone of all and more than
+///     15 cm out, the normals are lying for this vertex — an inward-facing inner shell, or a
+///     bone grazing a curved surface at a marginal angle — and the vertex falls back to plain
+///     distance. Before that guard, a rejected heel bone handed the toes to finger bones a
+///     metre away, which posed as long triangles trailing the feet;
 ///   * influences below 2% after normalisation are pruned and the rest renormalised, so a
 ///     distant bone never keeps a token grip on flesh it has no business moving.
 ///
@@ -190,6 +195,14 @@ pub fn bake_skin(model: &mut RawModel) {
     /// (a clavicle beside the neck); 1 would reject nothing. 0.25 keeps under-the-skin and
     /// alongside-the-skin bones while cutting the in-the-air limb in front of the torso.
     const OUTSIDE_COS: f32 = 0.25;
+    /// The normal test is DISTRUSTED for a vertex when its nearest inside bone sits further
+    /// than BOTH this multiple of the nearest bone overall AND `FAR_INSIDE_CM` — the A-posed
+    /// forearm in front of the belly (6 cm out, spine 13 cm in) stays rejected, while a
+    /// misread heel bone (7 cm, next inside bone at 25 cm+) is no longer overruled.
+    const FAR_INSIDE_RATIO: f32 = 2.0;
+    /// See [`FAR_INSIDE_RATIO`]; the absolute floor keeps a close call between two nearby
+    /// bones on the normal test's side.
+    const FAR_INSIDE_CM: f32 = 15.0;
     for v in &mut model.vertices {
         let p = Vec3::from_array(v.p);
         let normal = Vec3::from_array(v.n).normalize_or_zero();
@@ -199,26 +212,27 @@ pub fn bake_skin(model: &mut RawModel) {
             // A bone point ON the vertex, or a degenerate normal, can't be judged — allow it.
             len < 1e-4 || normal.dot(to_bone) / len <= OUTSIDE_COS
         };
-        let score = |filter_outside: bool| -> Vec<(usize, f32)> {
-            let mut s: Vec<(usize, f32)> = (0..n)
-                .filter(|&i| deform[i])
-                .filter_map(|i| {
-                    let cp = closest_point_segment(p, heads[i], tails[i]);
-                    if filter_outside && !inside(cp) {
-                        return None;
-                    }
-                    Some((i, (p - cp).length()))
-                })
-                .collect();
-            s.sort_by(|a, b| a.1.total_cmp(&b.1));
-            s
-        };
-        let mut scored = score(true);
-        if scored.is_empty() {
-            // Every candidate read as outside (a sliver, or junk normals) — plain distance
-            // is still better than an unskinned vertex.
-            scored = score(false);
-        }
+        // Every deform bone by distance, each tagged with the normal test's verdict.
+        let mut all: Vec<(usize, f32, bool)> = (0..n)
+            .filter(|&i| deform[i])
+            .map(|i| {
+                let cp = closest_point_segment(p, heads[i], tails[i]);
+                (i, (p - cp).length(), inside(cp))
+            })
+            .collect();
+        all.sort_by(|a, b| a.1.total_cmp(&b.1));
+        let nearest = all.first().map_or(0.0, |c| c.1);
+        let nearest_inside = all.iter().find(|c| c.2).map_or(f32::INFINITY, |c| c.1);
+        // Trust the normal test only while it leaves a plausible bone. No inside candidate
+        // at all (a sliver, junk normals), or the survivors implausibly far behind the
+        // nearest bone (an inward-facing shell, a heel bone grazing the skin at a marginal
+        // angle) — plain distance is still better than flesh bound a metre away.
+        let distrust = nearest_inside > (nearest * FAR_INSIDE_RATIO).max(FAR_INSIDE_CM);
+        let scored: Vec<(usize, f32)> = all
+            .iter()
+            .filter(|c| distrust || c.2)
+            .map(|c| (c.0, c.1))
+            .collect();
         let mut joints = [0u32; 4];
         let mut weights = [0.0f32; 4];
         let mut sum = 0.0;
@@ -985,6 +999,82 @@ mod tests {
         assert!(
             floor_legs > 0.99,
             "floor flesh falls to the legs once root is masked, got {floor_legs}"
+        );
+    }
+
+    /// A torso-and-foot fixture for the normal-test guard: an A-posed forearm segment 6 cm
+    /// in FRONT of the belly (the case the test exists for), a heel whose normal grazes the
+    /// foot bone at a marginal angle, and a chest vertex on an inward-facing inner shell.
+    fn normal_guard_fixture() -> RawModel {
+        let bone = |name: &str, parent: i32, t: [f32; 3]| RawBone {
+            name: name.to_string(),
+            parent,
+            translation: t,
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            scale: [1.0, 1.0, 1.0],
+            inverse_bind: IDENTITY16,
+        };
+        let vert = |p: [f32; 3], n: [f32; 3]| RawVertex {
+            p,
+            n,
+            uv: [0.0, 0.0],
+            joints: [0; 4],
+            weights: [0.0; 4],
+        };
+        RawModel {
+            bones: vec![
+                bone("root", -1, [0.0, 0.0, 0.0]),
+                bone("pelvis", 0, [0.0, 0.0, 100.0]),       // segment (0,0,100)→(0,0,120)
+                bone("spine_01", 1, [0.0, 0.0, 20.0]),      // segment (0,0,120)→(0,0,140)
+                bone("neck_01", 2, [0.0, 0.0, 20.0]),       // point (0,0,140)
+                bone("lowerarm_l", 0, [20.0, -14.0, 110.0]), // segment across the belly front
+                bone("hand_l", 4, [-40.0, 0.0, 0.0]),       // point (-20,-14,110)
+                bone("calf_l", 0, [8.0, 0.0, 30.0]),        // point
+                bone("foot_l", 0, [8.0, 0.0, 8.0]),         // segment (8,0,8)→(8,-12,2)
+                bone("ball_l", 7, [0.0, -12.0, -6.0]),      // point
+            ],
+            vertices: vec![
+                // Belly skin, facing forward: forearm 6 cm OUT in front, pelvis 8 cm under.
+                vert([0.0, -8.0, 110.0], [0.0, -1.0, 0.0]),
+                // Heel, side-facing with a forward-up tilt: the foot bone 7 cm away reads
+                // marginally outside (cos ≈ 0.43), so do ball and calf; the only "inside"
+                // bone is the pelvis a metre up.
+                vert([8.0, 5.0, 3.0], [0.9, -0.3, 0.3]),
+                // Chest on an inward-facing inner shell: spine 10 cm away but "outside" by
+                // the inverted normal; the nearest inside bone is the forearm 25 cm away.
+                vert([0.0, -10.0, 135.0], [0.0, 1.0, 0.0]),
+            ],
+            indices: vec![0, 1, 2],
+        }
+    }
+
+    /// THE NORMAL-TEST GUARD (2026-09-03, ElfBaseA stray polygons): the outside-the-flesh test
+    /// still rejects a forearm hanging in front of the belly, but is overruled when it would
+    /// leave only an implausibly far bone — a heel misread at a marginal angle no longer binds
+    /// to the pelvis, and an inward-facing chest shell no longer follows the arm.
+    #[test]
+    fn bake_skin_distrusts_the_normal_test_when_only_far_bones_survive() {
+        let mut m = normal_guard_fixture();
+        bake_skin(&mut m);
+        let nm: Vec<&str> = m.bones.iter().map(|b| b.name.as_str()).collect();
+        let dominant = |v: &RawVertex| -> &str {
+            let k = (0..4).max_by(|&a, &b| v.weights[a].total_cmp(&v.weights[b])).unwrap();
+            nm[v.joints[k] as usize]
+        };
+        assert_eq!(
+            dominant(&m.vertices[0]),
+            "pelvis",
+            "a forearm in the air in front of the belly must still lose to the spine"
+        );
+        assert_eq!(
+            dominant(&m.vertices[1]),
+            "foot_l",
+            "a heel whose foot bone grazes the normal test must not bind a metre away"
+        );
+        assert_eq!(
+            dominant(&m.vertices[2]),
+            "spine_01",
+            "an inward-facing chest shell must bind to the spine under it, not the arm"
         );
     }
 

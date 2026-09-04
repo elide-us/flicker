@@ -367,10 +367,8 @@ mod tests {
         // top under a SOLID vertical neighbor, no surface above the
         // floor qualifies either, so the unwalkable case is a true None.
         let pos_y = solid_cluster();
-        let neighbors = NeighborContext {
-            pos_y: Some((&pos_y, NAV_LOD)),
-            ..NeighborContext::none()
-        };
+        let mut neighbors = NeighborContext::none();
+        neighbors.set(0, 1, 0, &pos_y, NAV_LOD);
 
         // Helper: floor at y=30, `gap` empty cells, then a solid pillar
         // up to the top sample (63). The solid pos_y neighbor caps 63's
@@ -424,10 +422,8 @@ mod tests {
 
         let mut east = Cluster::empty();
         set_sample(&mut east, 0, 12, 5, true); // delta 2 → links
-        let neighbors = NeighborContext {
-            pos_x: Some((&east, NAV_LOD)),
-            ..NeighborContext::none()
-        };
+        let mut neighbors = NeighborContext::none();
+        neighbors.set(1, 0, 0, &east, NAV_LOD);
         let nav = ClusterNav::compute_nav(&here, &neighbors);
         assert_eq!(nav.floor_at(63, 5), Some(10));
         // The neighbor's edge-column floor is read through the reference,
@@ -441,10 +437,8 @@ mod tests {
         // Push the neighbor floor to delta 3 → the link breaks.
         let mut east_far = Cluster::empty();
         set_sample(&mut east_far, 0, 13, 5, true);
-        let neighbors_far = NeighborContext {
-            pos_x: Some((&east_far, NAV_LOD)),
-            ..NeighborContext::none()
-        };
+        let mut neighbors_far = NeighborContext::none();
+        neighbors_far.set(1, 0, 0, &east_far, NAV_LOD);
         let nav_far = ClusterNav::compute_nav(&here, &neighbors_far);
         assert!(!nav_far.linked_across(&here, &neighbors_far, (63, 5), FaceDir::PosX));
     }

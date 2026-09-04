@@ -1,0 +1,28 @@
+[package]
+name = "flicker-rigview"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# The RIG VIEW — the shared surface filler that draws a skeleton (and the meshes hung on
+# it) into a `surface` slot the walker reserved: one instance per panel of Clayworks'
+# four-panel view (perspective + the three orthographic projections). Mirrors the
+# GlobeWorld filler contract (new / in_panel / seat / rect / set_controls / update /
+# render + `InputHandler`) and renders through the SAME `GlobeView` stage pass, so a
+# rig-view stage is authored exactly like a globe's. KBM only for now (Aaron
+# 2026-09-03): the pad's look signals orbit the perspective panel; the ortho panels pan
+# and zoom from the pointer.
+[lib]
+name = "flicker_rigview"
+path = "src/lib.rs"
+
+[dependencies]
+flicker = { version = "0.1.0", path = "../../core/flicker" }
+flicker-globe = { version = "0.1.9", path = "../../frontend/flicker-globe" }
+flicker-mechanics.workspace = true
+flicker-input-core.workspace = true
+flicker-input-router.workspace = true
+glam.workspace = true
+serde_json.workspace = true
+tracing.workspace = true

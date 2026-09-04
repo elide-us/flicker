@@ -28,7 +28,7 @@ use flicker::script::{HudCommand, ScriptHost, UiNode, ValueMap};
 use flicker::ui::{
     render_hud, run_ui, SceneDef, SurfacePointer, UiInput, UiIntents, UiState, WalkerHandler,
 };
-use flicker_input_core::{AbstractControls, GamepadConfig, InputMap, InputState};
+use flicker_input_core::{AbstractControls, GamepadConfig, InputContext, InputMap, InputState};
 use flicker_input_router::{InputHandler, Router};
 use flicker_shell::{PauseScene, Theme};
 
@@ -211,6 +211,17 @@ impl ComponentCatalog {
             "input_device",
             flicker::input_device::last_input_context().token(),
         );
+        // The binding-icon card reads LIVE bindings (bind_<sig>/glyph_<sig>) from the
+        // profile's World map — the same channel every bench footer legend rides.
+        flicker_shell::publish_signal_bindings(
+            &mut raw,
+            &flicker_shell::current_world_map(),
+            [
+                flicker_input_core::ActionSignal::Interact,
+                flicker_input_core::ActionSignal::Menu,
+                flicker_input_core::ActionSignal::Confirm,
+            ],
+        );
         let mut m = raw.clone();
         if let Some(script) = &self.script {
             if let Err(e) = script.set_model(&raw) {
@@ -261,6 +272,13 @@ impl ComponentCatalog {
 }
 
 impl Scene for ComponentCatalog {
+    /// The text_field card owns the keyboard while its session is open.
+    fn input_context(&self) -> Option<InputContext> {
+        self.ui_state
+            .text_entry()
+            .then_some(InputContext::TextEntry)
+    }
+
     fn enter(&mut self, renderer: &mut Renderer) {
         renderer.clear_color = [0.02, 0.03, 0.05, 1.0];
         let theme = Theme::build(renderer);
@@ -289,8 +307,6 @@ impl Scene for ComponentCatalog {
             down: input.mouse_left,
             right_down: input.mouse_right,
             screen,
-            typed: String::new(),
-            backspace: false,
             wheel: input.mouse_wheel_delta,
             exclusive: false,
             motion: Default::default(),
@@ -710,8 +726,6 @@ mod tests {
             down: false,
             right_down: false,
             screen: flicker::render::Vec2::new(1920.0, 1080.0),
-            typed: String::new(),
-            backspace: false,
             wheel: 0.0,
             exclusive: false,
             motion: Default::default(),

@@ -579,8 +579,6 @@ mod tests {
             down: false,
             right_down: false,
             screen: Vec2::new(800.0, 600.0),
-            typed: String::new(),
-            backspace: false,
             wheel: 0.0,
             exclusive: false,
             motion: Default::default(),

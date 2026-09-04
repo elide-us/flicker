@@ -407,29 +407,91 @@ mod tests {
         assert!(list_dir(&r.package.join("nope"), SortKey::Name, false).is_empty());
         let _ = std::fs::remove_dir_all(r.package.parent().unwrap());
     }
+
+    /// `files_under` is the ONE seam the promote and the review facts reach an
+    /// item's content through, so a single-file asset has to flow through it
+    /// too — otherwise every consumer needs its own shape test.
+    #[test]
+    fn files_under_a_single_file_is_that_file() {
+        let r = scratch("filesunder");
+        let f = r.staging.join("worlds/planet_seam.epoch.gz");
+        std::fs::create_dir_all(f.parent().unwrap()).unwrap();
+        std::fs::write(&f, b"bytes").unwrap();
+        assert_eq!(files_under(&f), vec![f.clone()]);
+        assert_eq!(
+            files_under(&r.staging.join("worlds")),
+            vec![f],
+            "and a directory still walks to its files"
+        );
+        let _ = std::fs::remove_dir_all(r.package.parent().unwrap());
+    }
+
+    /// A committed world is a SINGLE self-describing FILE — no folder, no
+    /// primary json — so it has to enter the queue on its own. And the
+    /// classifier is the admission test: a stray `.DS_Store` beside it must
+    /// NOT become something a reviewer can promote.
+    #[test]
+    fn a_staged_world_file_is_a_single_file_queue_item() {
+        let r = scratch("worldqueue");
+        let physical = r.staging.join("worlds/planet_test.epoch.gz");
+        std::fs::create_dir_all(physical.parent().unwrap()).unwrap();
+        std::fs::write(&physical, b"a planet's bytes").unwrap();
+        std::fs::write(r.staging.join("worlds/.DS_Store"), b"junk").unwrap();
+
+        let q = staging_queue(&r);
+        assert_eq!(q.len(), 1, "only the world is an asset: {q:?}");
+        assert_eq!(q[0].class, PackageClass::Epoch);
+        assert_eq!(q[0].files, 1);
+        assert_eq!(q[0].bytes, 16);
+        assert_eq!(q[0].dir, physical, "the file itself IS the item");
+        assert_eq!(
+            q[0].name, "planet_test.epoch",
+            "the at-rest .gz is not part of the name"
+        );
+        assert_eq!(
+            q[0].rel,
+            PathBuf::from("worlds/planet_test.epoch.gz"),
+            "but rel carries the PHYSICAL name — it addresses the bytes that move"
+        );
+        let _ = std::fs::remove_dir_all(r.package.parent().unwrap());
+    }
 }
 
 // ─── the CM5 staging queue ───────────────────────────────────────────────────
 
 /// Where staged ASSETS live, relative to the staging root — one entry per ingest
-/// tier, mirroring exactly what the benches' commit roots write: an item is a
-/// DIRECT CHILD DIRECTORY of one of these (the asset FOLDER; its files are the
-/// dependencies that travel with it on promote).
-pub const ITEM_ROOTS: [&str; 4] = ["characters", "props", "materials", "retarget/clips"];
+/// tier, mirroring exactly what the benches' commit roots write. An item is a
+/// DIRECT CHILD of one of these: either the asset FOLDER (its files are the
+/// dependencies that travel with it on promote) or, for a self-describing
+/// SINGLE-FILE artifact like a Populous world's `.epoch`, the file itself.
+pub const ITEM_ROOTS: [&str; 5] = [
+    "characters",
+    "props",
+    "materials",
+    "retarget/clips",
+    "worlds",
+];
 
-/// One promotable asset sitting in staging: its folder, what it is, and its bulk.
+/// One promotable asset sitting in staging: what it is, where it goes, its bulk.
 #[derive(Debug, Clone)]
 pub struct QueueItem {
-    /// The asset directory (physical).
+    /// The asset directory (physical) — or the FILE itself for a single-file
+    /// asset, which is its own whole content.
     pub dir: PathBuf,
-    /// The folder name — the asset's name.
+    /// The asset's name on screen: the folder's name, or a single file's
+    /// LOGICAL name (the at-rest `.gz` dropped, like every other display name).
     pub name: String,
-    /// Path relative to the staging root (`characters/GolemBase_Low`) — mirrored
-    /// under `package/` by promote.
+    /// Path relative to the staging root (`characters/GolemBase_Low`,
+    /// `worlds/planet_f96_s….epoch.gz`) — mirrored under `package/` by promote.
+    /// A single file's segment is its PHYSICAL name, so the promote's
+    /// destination, the occupancy probe and the manifest row all address the
+    /// bytes that actually move; `name` is the display twin.
     pub rel: PathBuf,
-    /// Derived from the asset's primary json, never authored.
+    /// Derived from the asset's primary json — or, for a single-file asset,
+    /// from the file itself. Never authored.
     pub class: PackageClass,
     /// Files inside (the dependencies that travel), and their total bytes.
+    /// A single-file asset is one file.
     pub files: usize,
     pub bytes: u64,
 }
@@ -441,7 +503,14 @@ pub fn logical(physical: &Path) -> PathBuf {
 }
 
 /// Every file under `dir`, recursively (sorted for stable batches).
+///
+/// A FILE path is one file — a single-file asset IS its own content, so the
+/// promote and the review facts reach it through this one seam instead of
+/// forking on the item's shape.
 pub fn files_under(dir: &Path) -> Vec<PathBuf> {
+    if dir.is_file() {
+        return vec![dir.to_path_buf()];
+    }
     let mut out = Vec::new();
     let mut stack = vec![dir.to_path_buf()];
     while let Some(d) = stack.pop() {
@@ -469,43 +538,63 @@ pub fn staging_queue(roots: &Roots) -> Vec<QueueItem> {
         let Ok(rd) = std::fs::read_dir(&root) else {
             continue;
         };
-        let mut dirs: Vec<PathBuf> = rd
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.is_dir())
-            .collect();
-        dirs.sort();
-        for dir in dirs {
-            let files = files_under(&dir);
-            if files.is_empty() {
-                continue; // an empty folder is not an asset
-            }
-            let name = dir
+        let mut kids: Vec<PathBuf> = rd.flatten().map(|e| e.path()).collect();
+        kids.sort();
+        for path in kids {
+            // The on-disk segment: what `rel` must carry, so the promote moves
+            // the bytes that are actually there.
+            let physical = path
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_default();
-            // Classify off the primary json (the asset's own file where present).
-            let primary = files
-                .iter()
-                .find(|f| {
-                    f.to_string_lossy().contains(&name) && f.to_string_lossy().contains(".json")
-                })
-                .or_else(|| files.iter().find(|f| f.to_string_lossy().contains(".json")));
-            let class = primary
-                .map(|p| classify_package(p))
-                .unwrap_or(PackageClass::Unknown);
-            out.push(QueueItem {
-                rel: PathBuf::from(tier).join(&name),
-                name,
-                class,
-                files: files.len(),
-                bytes: files
+            let item = if path.is_dir() {
+                let files = files_under(&path);
+                if files.is_empty() {
+                    continue; // an empty folder is not an asset
+                }
+                // Classify off the primary json (the asset's own file where present).
+                let primary = files
                     .iter()
-                    .filter_map(|f| f.metadata().ok())
-                    .map(|m| m.len())
-                    .sum(),
-                dir,
-            });
+                    .find(|f| {
+                        f.to_string_lossy().contains(&physical)
+                            && f.to_string_lossy().contains(".json")
+                    })
+                    .or_else(|| files.iter().find(|f| f.to_string_lossy().contains(".json")));
+                QueueItem {
+                    rel: PathBuf::from(tier).join(&physical),
+                    class: primary
+                        .map(|p| classify_package(p))
+                        .unwrap_or(PackageClass::Unknown),
+                    files: files.len(),
+                    bytes: files
+                        .iter()
+                        .filter_map(|f| f.metadata().ok())
+                        .map(|m| m.len())
+                        .sum(),
+                    name: physical,
+                    dir: path,
+                }
+            } else {
+                // A SINGLE-FILE asset — self-describing, with no folder and no
+                // primary json to probe (a Populous world's `.epoch`). The
+                // classifier is the whole admission test: it reads the LOGICAL
+                // name internally, so the at-rest `.gz` is no obstacle, and a
+                // stray `.DS_Store` classifies Unknown and stays out of the
+                // queue rather than becoming a reviewable asset.
+                let class = classify_package(&path);
+                if class == PackageClass::Unknown {
+                    continue;
+                }
+                QueueItem {
+                    rel: PathBuf::from(tier).join(&physical),
+                    name: Row::display_name(&path),
+                    class,
+                    files: 1,
+                    bytes: path.metadata().map(|m| m.len()).unwrap_or(0),
+                    dir: path,
+                }
+            };
+            out.push(item);
         }
     }
     out

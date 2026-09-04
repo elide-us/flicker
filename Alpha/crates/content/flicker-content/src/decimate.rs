@@ -1,14 +1,16 @@
-//! Progressive triangle decimation for a [`RawModel`] — a hand-rolled QEM (quadric error
-//! metric) edge-collapse, structured as ONE pass that snapshots the mesh at each retention
-//! bucket so the Clayworks Prep slider can scrub between levels instantly (no per-frame
-//! re-decimation of a 100K mesh).
+//! Triangle decimation for a [`RawModel`] — a hand-rolled QEM (quadric error metric)
+//! edge-collapse that takes the mesh down to an ABSOLUTE triangle target.
 //!
-//! Design rulings (Aaron, 2026-08-22):
-//!   * reduction is a **percent OF THE SOURCE triangle count** — always relative to whatever
-//!     that mesh ships with (a 127K elf, a 180K lizard, a 98K dwarf are each their own 100%),
-//!     never an absolute target;
-//!   * the slider keeps **100% → 50% in 5% buckets** (11 levels). 100% is the mesh verbatim;
-//!     50% is the floor (remove at most half).
+//! Design rulings:
+//!   * (Aaron, 2026-09-03) the target is a **triangle COUNT**, typed on the Clayworks Prep step
+//!     and applied on a button — not a percent of the source. Percent was never precise
+//!     enough; the per-race counts vary and are made consistent by hand. This supersedes the
+//!     2026-08-22 percent-of-source ruling (100% → 50% in 5% buckets, one pass snapshotting
+//!     each bucket for a live slider): with an Apply button there is nothing to scrub, so the
+//!     mesh collapses once, to the typed count.
+//!   * a target at or above the source count is the source verbatim; there is no floor other
+//!     than what interior-only collapse can legally reach (see below), so the result may sit
+//!     ABOVE a very deep target — the caller reports the count it actually got.
 //!
 //! No dependency (no `meshopt`). This is a STANDALONE triangle-mesh path — it never touches the
 //! voxel QEF / dual-contouring LOD (`flicker-voxel`), a different algorithm Aaron ruled off-limits.
@@ -17,8 +19,7 @@
 //! welded by position+uv+normal into wedges, so a UV seam is a boundary in wedge space; only
 //! edges whose BOTH endpoints are interior (non-boundary) are collapsed. That preserves every
 //! UV seam and silhouette border — no texture cracks, no holes — at the cost of leaving
-//! seam-dense regions denser. At the ≤50% reduction this tool allows, interior collapses carry
-//! the budget on a character body.
+//! seam-dense regions denser, and of a deep target stopping early on a seam-dense mesh.
 
 use std::collections::HashMap;
 
@@ -26,91 +27,19 @@ use glam::Vec3;
 
 use crate::fbx::{RawModel, RawVertex};
 
-/// Slider bucket step: 5% of source.
-pub const BUCKET_STEP: f32 = 0.05;
-/// Floor retention: keep at least half the source triangles (Aaron: "min 50% decimation").
-pub const MIN_KEEP: f32 = 0.50;
-
-/// The precomputed retention levels for one mesh — index 0 is 100% (the source verbatim),
-/// then one snapshot per 5% bucket down to [`MIN_KEEP`]. Built once on Prep entry; the slider
-/// selects a level by keep-percent.
-#[derive(Debug, Clone)]
-pub struct DecimateLevels {
-    /// One `RawModel` per bucket, parallel to [`keep_fracs`](Self::keep_fracs).
-    pub levels: Vec<RawModel>,
-    /// The retention fraction of each level: 1.00, 0.95, … , 0.50.
-    pub keep_fracs: Vec<f32>,
-    /// The source triangle count (level 0's tri count) — the 100% every bucket is a fraction of.
-    pub source_tris: usize,
-}
-
-impl DecimateLevels {
-    /// The level index for a keep-PERCENT slider value (100 → 0, 95 → 1, … , 50 → last),
-    /// clamped to the range actually built.
-    pub fn level_for_keep_pct(&self, keep_pct: f32) -> usize {
-        let frac = (keep_pct / 100.0).clamp(MIN_KEEP, 1.0);
-        let idx = ((1.0 - frac) / BUCKET_STEP).round() as usize;
-        idx.min(self.levels.len().saturating_sub(1))
-    }
-
-    /// The mesh at a keep-percent (borrow); falls back to the source (level 0) if empty.
-    pub fn model_for_keep_pct(&self, keep_pct: f32) -> &RawModel {
-        &self.levels[self.level_for_keep_pct(keep_pct)]
-    }
-}
-
-/// Build the progressive retention levels for `model` (100% → 50% in 5% buckets). One QEM pass,
-/// snapshotting at each bucket boundary. The source mesh must be non-deduped with sequential
-/// indices (the `parse_fbx` convention); every returned level keeps that convention.
-pub fn decimate_levels(model: &RawModel) -> DecimateLevels {
+/// Decimate `model` down to at most `target_tris` triangles. A target at or above the source
+/// count returns the source verbatim (nothing to do — and a tiny mesh, under four triangles, is
+/// never touched). Below that the interior edges collapse cheapest-first until the count is
+/// reached or no legal collapse remains, so on a seam-dense mesh the result can stop ABOVE the
+/// target; it never drops below one triangle. The source must be non-deduped with sequential
+/// indices (the `parse_fbx` convention); the result keeps that convention.
+pub fn decimate_to(model: &RawModel, target_tris: usize) -> RawModel {
     let source_tris = model.indices.len() / 3;
-
-    // The bucket retention fractions: 1.00, 0.95, … , 0.50.
-    let mut keep_fracs = Vec::new();
-    let steps = ((1.0 - MIN_KEEP) / BUCKET_STEP).round() as usize; // 10
-    for k in 0..=steps {
-        keep_fracs.push(1.0 - BUCKET_STEP * k as f32);
-    }
-
-    // Level 0 is always the source verbatim.
-    let mut levels = vec![model.clone()];
-
-    // Nothing to collapse (degenerate / tiny mesh): every bucket is the source.
-    if source_tris < 4 {
-        while levels.len() < keep_fracs.len() {
-            levels.push(model.clone());
-        }
-        return DecimateLevels {
-            levels,
-            keep_fracs,
-            source_tris,
-        };
-    }
-
-    let mut mesh = WeldedMesh::from_raw(model);
-    // Walk the buckets below 100%; collapse down to each target, then snapshot.
-    for frac in keep_fracs.iter().copied().skip(1) {
-        let target = ((source_tris as f32) * frac).round() as usize;
-        mesh.collapse_to(target);
-        levels.push(mesh.to_raw(model));
-    }
-
-    DecimateLevels {
-        levels,
-        keep_fracs,
-        source_tris,
-    }
-}
-
-/// Convenience: the decimated mesh at one keep-fraction (0.5..=1.0), for headless/one-shot use.
-pub fn decimate(model: &RawModel, keep: f32) -> RawModel {
-    let keep = keep.clamp(MIN_KEEP, 1.0);
-    if model.indices.len() / 3 < 4 || keep >= 1.0 - 1e-4 {
+    if source_tris < 4 || target_tris >= source_tris {
         return model.clone();
     }
     let mut mesh = WeldedMesh::from_raw(model);
-    let target = ((model.indices.len() / 3) as f32 * keep).round() as usize;
-    mesh.collapse_to(target);
+    mesh.collapse_to(target_tris.max(1));
     mesh.to_raw(model)
 }
 
@@ -307,7 +236,7 @@ impl WeldedMesh {
 
     /// Collapse interior edges cheapest-first until the live triangle count reaches `target`
     /// (or no legal collapse remains). Re-scans edges in rounds — simple and robust; the pass
-    /// runs once per mesh at Prep entry, not per frame.
+    /// runs once per Apply on the Prep step, not per frame.
     fn collapse_to(&mut self, target: usize) {
         while self.live_tris > target {
             let edges = self.collect_edges();
@@ -494,36 +423,55 @@ mod tests {
         }
     }
 
-    #[test]
-    fn level_zero_is_the_source_verbatim() {
-        let m = grid(8);
-        let lv = decimate_levels(&m);
-        assert_eq!(lv.levels[0].indices.len(), m.indices.len());
-        assert_eq!(lv.levels[0].vertices.len(), m.vertices.len());
-        assert!((lv.keep_fracs[0] - 1.0).abs() < 1e-6);
-        assert!((lv.keep_fracs.last().unwrap() - MIN_KEEP).abs() < 1e-6);
-        assert_eq!(lv.levels.len(), lv.keep_fracs.len());
+    fn tris(m: &RawModel) -> usize {
+        m.indices.len() / 3
     }
 
     #[test]
-    fn buckets_reduce_monotonically_and_stay_nondeduped() {
+    fn a_target_at_or_above_the_source_is_the_source_verbatim() {
+        let m = grid(8);
+        let src = tris(&m);
+        for target in [src, src + 1, src * 10] {
+            let out = decimate_to(&m, target);
+            assert_eq!(out.indices.len(), m.indices.len(), "target {target}");
+            assert_eq!(out.vertices.len(), m.vertices.len(), "target {target}");
+        }
+    }
+
+    #[test]
+    fn targets_reduce_monotonically_and_stay_nondeduped() {
         let m = grid(12);
-        let lv = decimate_levels(&m);
+        let src = tris(&m);
         let mut prev = usize::MAX;
-        for (i, model) in lv.levels.iter().enumerate() {
+        for (i, target) in [src, src * 9 / 10, src * 3 / 4, src / 2].into_iter().enumerate() {
+            let model = decimate_to(&m, target);
             // Non-deduped invariant: sequential indices, one per corner.
             assert_eq!(model.indices.len(), model.vertices.len());
             for (k, &idx) in model.indices.iter().enumerate() {
                 assert_eq!(idx as usize, k);
             }
-            let tris = model.indices.len() / 3;
-            assert!(tris <= prev || i == 0, "level {i} grew");
-            prev = tris;
+            let got = tris(&model);
+            assert!(got <= prev || i == 0, "target {target} grew to {got}");
+            prev = got;
         }
-        // The 50% level actually shed a meaningful share of the interior.
-        let src = lv.source_tris as f32;
-        let last = (lv.levels.last().unwrap().indices.len() / 3) as f32;
-        assert!(last < 0.75 * src, "50% bucket barely reduced: {last}/{src}");
+        // The half target actually shed a meaningful share of the interior.
+        assert!(
+            (prev as f32) < 0.75 * src as f32,
+            "half target barely reduced: {prev}/{src}"
+        );
+    }
+
+    /// A seamed open grid cannot collapse its border, so a target of ONE stops at the last
+    /// legal collapse rather than tearing the mesh — and never panics or empties it.
+    #[test]
+    fn a_seamed_mesh_stops_at_its_last_legal_collapse() {
+        let m = grid(6);
+        let out = decimate_to(&m, 1);
+        let got = tris(&out);
+        assert!(got >= 1 && got < tris(&m), "got {got} of {}", tris(&m));
+        assert_eq!(out.indices.len(), out.vertices.len());
+        // Idempotent: asking again for the same (unreachable) target changes nothing.
+        assert_eq!(tris(&decimate_to(&out, 1)), got);
     }
 
     /// A CLOSED, watertight subdivided cube (no boundary, no UV seams) — the shape a character
@@ -578,33 +526,23 @@ mod tests {
     }
 
     #[test]
-    fn a_closed_mesh_decimates_to_the_floor() {
+    fn a_closed_mesh_reaches_a_deep_target() {
         let m = subdiv_cube(8); // 6 · 8 · 8 · 2 = 768 triangles
-        let lv = decimate_levels(&m);
-        let src = lv.source_tris as f32;
-        let last = (lv.levels.last().unwrap().indices.len() / 3) as f32;
-        // A closed manifold has no locked boundary, so the 50% bucket should land near 50% kept.
+        let src = tris(&m);
+        // A closed manifold has no locked boundary, so a deep target lands on (or just under) it.
+        let deep = decimate_to(&m, 200);
         assert!(
-            last <= 0.60 * src,
-            "closed mesh only reached {last}/{src} — collapse is not reducing"
+            tris(&deep) <= 200,
+            "closed mesh only reached {}/{src} — collapse is not reducing",
+            tris(&deep)
         );
-        // And an intermediate bucket sits between the source and the floor.
-        let mid = (lv.levels[5].indices.len() / 3) as f32; // 75% kept
+        assert!(tris(&deep) >= 100, "overshot the target: {}", tris(&deep));
+        // And an intermediate target sits between the source and the deep one.
+        let mid = tris(&decimate_to(&m, src / 2));
         assert!(
-            mid < src && mid > last,
-            "75% bucket {mid} not between {src} and {last}"
+            mid < src && mid > tris(&deep),
+            "half target {mid} not between {src} and {}",
+            tris(&deep)
         );
-    }
-
-    #[test]
-    fn keep_pct_maps_to_levels() {
-        let m = grid(10);
-        let lv = decimate_levels(&m);
-        assert_eq!(lv.level_for_keep_pct(100.0), 0);
-        assert_eq!(lv.level_for_keep_pct(95.0), 1);
-        assert_eq!(lv.level_for_keep_pct(50.0), lv.levels.len() - 1);
-        // Out-of-range clamps.
-        assert_eq!(lv.level_for_keep_pct(30.0), lv.levels.len() - 1);
-        assert_eq!(lv.level_for_keep_pct(150.0), 0);
     }
 }

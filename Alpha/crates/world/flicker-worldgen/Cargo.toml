@@ -8,8 +8,9 @@ license.workspace = true
 # epoch kernels that produce the foundational composition maps the runtime
 # material model (flicker-worldstate, tier ②) then runs on. Depends on the
 # vocabulary (flicker-materials) and the ledger types (flicker-worldstate);
-# the runtime links none of it. This slice is **Epoch 1** only — initial
-# per-hex element distribution; epochs 2-6 are deferred.
+# the runtime links none of it. All six epochs have landed: Epoch 1 seeds the
+# per-hex element distribution and Epochs 2-6 differentiate the crust, lay the
+# plates, flood the basins, mineralize the veins and erode the landscape.
 [dependencies]
 flicker-materials.workspace = true
 flicker-worldstate.workspace = true

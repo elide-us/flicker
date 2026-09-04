@@ -1,5 +1,6 @@
--- Pocclusters ("Cluster Editor") — the scene's LOGIC (the SceneName.lua half
--- of the pair, migration P6 2026-08-19).
+-- CSG Test — the scene's LOGIC (the SceneName.lua half of the pair). The
+-- proving ground for the new contouring engine and the buildout home for the
+-- voxel editing tools; forked from pocclusters.lua (migration P6 2026-08-19).
 --
 -- The engine publishes RAW runtime variables into `Model` each frame:
 --   cam_x/cam_y/cam_z, yaw_deg, pitch_deg        -- camera pose

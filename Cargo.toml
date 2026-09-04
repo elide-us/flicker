@@ -20,6 +20,7 @@ members = [
     "Alpha/crates/frontend/flicker-widgets",
     "Alpha/crates/animation/flicker-flight",
     "Alpha/crates/animation/flicker-skeletal",
+    "Alpha/crates/animation/flicker-rigview",
     "Alpha/crates/content/flicker-content",
     "Alpha/crates/content/flicker-materials",
     "Alpha/crates/content/flicker-primitive",
@@ -159,6 +160,7 @@ flicker-voxel = { version = "0.1.9", path = "Alpha/crates/world/flicker-voxel" }
 flicker-worker = { version = "0.1.0", path = "Alpha/crates/core/flicker-worker" }
 # Alpha crates (promoted, non-POC).
 flicker-skeletal = { version = "0.1.5", path = "Alpha/crates/animation/flicker-skeletal" }
+flicker-rigview = { version = "0.1.0", path = "Alpha/crates/animation/flicker-rigview" }
 # mechanics cluster (collision/combat).
 flicker-mechanics = { version = "0.1.9", path = "Alpha/crates/mechanics/flicker-mechanics" }
 # in-app content pipeline (folder scan → FBX parse → canonical rig → bake).

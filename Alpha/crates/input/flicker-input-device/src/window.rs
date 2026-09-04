@@ -24,7 +24,7 @@
 use flicker_input_core::{InputEdge, InputState, Key, MouseButton};
 use glam::Vec2;
 use winit::dpi::PhysicalPosition;
-use winit::event::{ElementState, MouseScrollDelta, WindowEvent};
+use winit::event::{ElementState, Ime, MouseScrollDelta, WindowEvent};
 use winit::keyboard::{KeyCode, PhysicalKey};
 
 use crate::DiscreteSource;
@@ -38,10 +38,18 @@ enum KbmOp {
     Wheel(f32),
     Key { key: Key, down: bool },
     Typed(String),
+    /// The IME's composition in progress (empty = cleared).
+    Preedit(String),
 }
 
 /// Keyboard + mouse source. Buffers translated events, then replays them into the
 /// snapshot at frame build.
+///
+/// Text reaches the snapshot on TWO channels that never overlap: a key event's own
+/// `text` (a plain keypress, on every platform), and `Ime::Commit` (a composition —
+/// dead keys, CJK — once the runner has allowed IME for the `TextEntry` context).
+/// Winit suppresses the key event's text while the IME handled the key, so each
+/// character arrives exactly once.
 #[derive(Default)]
 pub struct WindowSource {
     buffer: Vec<KbmOp>,
@@ -57,6 +65,18 @@ impl WindowSource {
     /// Replaces the inline arms at `runner.rs:104-152`.
     pub fn ingest(&mut self, event: &WindowEvent) {
         match event {
+            // The IME channel (Aaron 2026-09-03: the keyboard yields ALL input, Unicode by
+            // default, through the OS text path). Enabled/Disabled carry no text.
+            WindowEvent::Ime(ime) => match ime {
+                Ime::Preedit(text, _) => self.buffer.push(KbmOp::Preedit(text.clone())),
+                Ime::Commit(text) => {
+                    let printable: String = text.chars().filter(|c| !c.is_control()).collect();
+                    if !printable.is_empty() {
+                        self.buffer.push(KbmOp::Typed(printable));
+                    }
+                }
+                Ime::Enabled | Ime::Disabled => {}
+            },
             WindowEvent::CursorMoved { position, .. } => {
                 let PhysicalPosition { x, y } = *position;
                 self.buffer
@@ -154,6 +174,7 @@ fn apply_op(op: &KbmOp, out: &mut InputState) {
             out.set_key(*key, *down);
         }
         KbmOp::Typed(text) => out.push_typed(text),
+        KbmOp::Preedit(text) => out.set_preedit(text),
     }
 }
 

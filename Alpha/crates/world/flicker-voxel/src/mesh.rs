@@ -10,12 +10,12 @@
 //! face normal) so the result is flat-shaded with crisp facets.
 //!
 //! Solidity is `voxel.state().is_filled()` (anything that isn't `Empty`).
-//! Coordinates outside
-//! `[0, CLUSTER_DIM)` are looked up through the [`NeighborContext`]: a
-//! single-axis-OOB voxel routes to the matching face neighbor (so the
-//! quad emits at the seam); two or three coords OOB falls back to the
-//! cluster's base. With [`NeighborContext::none()`] every face is a world
-//! boundary and the cluster-border faces are intentionally left open.
+//! Coordinates outside `[0, CLUSTER_DIM)` are looked up through the
+//! [`NeighborContext`]: the per-axis OOB offset addresses the matching
+//! face, edge or corner neighbor (so seam quads emit even where four or
+//! eight clusters meet). With [`NeighborContext::none()`] every side is a
+//! world boundary and the cluster-border faces are intentionally left
+//! open.
 //!
 //! # Seam ownership (low-side)
 //!
@@ -62,27 +62,25 @@
 //! routed read, never a coarse-local sample) *structurally* — by what is
 //! in scope — rather than by reviewer vigilance.
 //!
-//! # Known limitation — cluster edge/corner seam gap (deferred)
+//! # Cluster edge/corner seams (closed 2026-08-28)
 //!
-//! A seam quad whose 4-cell gather reaches a cluster **edge** (2 axes
-//! OOB) or **corner** (3 axes OOB) hits [`FieldReader::cell_vertex`]'s
-//! multi-axis-OOB `None` and is dropped, because [`NeighborContext`]
-//! models only the 6 face neighbors — not the 12 edge or 8 corner
-//! neighbors. Observed symptom: two adjacent cells across such an edge
-//! fail to agree on the connecting quad, leaving a visible gap (this is
-//! the residual `delta <= 16` slack tolerated in
-//! `flat_field_3x3_centre_lod1_seam_counts`). Closing it requires
-//! extending the neighbor data model and is deferred to a future spec;
-//! it is deliberately **not** addressed here. Navigation is unaffected:
-//! nav derives from the dense state field (see [`crate::nav`]), not from
-//! this mesh, so it never inherits these holes.
+//! A seam quad's 4-cell gather can reach a cluster **edge** (2 axes
+//! OOB) or **corner** (3 axes OOB). [`NeighborContext`] models the
+//! full 26-neighborhood, and [`FieldReader::cell_vertex`] routes any
+//! OOB combination to its offset slot — decoded with that neighbor's
+//! own stride — so the quads at a 4- or 8-cluster junction emit like
+//! any seam quad. A slot the caller left `None` is a world boundary:
+//! the gather returns `None` and the quad stays open there, exactly as
+//! a missing face neighbor leaves a face open. (This closed the
+//! long-deferred corner gap: each cluster used to drop those quads,
+//! leaving a hole where four clusters met.)
 
 use clayengine::CLUSTER_DIM;
 
 use crate::cluster::Cluster;
 use crate::local_coord::LocalCoord;
 use crate::lod::Lod;
-use crate::neighbor::{read_corner, NeighborContext};
+use crate::neighbor::{axis_offset, read_corner, NeighborContext};
 
 /// The single neighbor-aware read surface for the mesher.
 ///
@@ -180,23 +178,20 @@ impl<'a> FieldReader<'a> {
     /// `voxel + corner·stride`, so all voxels in one footprint resolve to
     /// the same byte-equal world position.
     ///
-    /// `self_stride` is self's own LOD stride. A single-axis-OOB cell is
-    /// routed through [`read_corner`] to the neighbor and decoded with
+    /// `self_stride` is self's own LOD stride. An OOB cell — one, two
+    /// or three axes, i.e. across a face, edge or corner — is routed
+    /// through [`read_corner`] to its offset neighbor and decoded with
     /// the **neighbor's** stride (the corner was encoded in the
-    /// neighbor's frame). Two-or-three-axis OOB returns `None` — the
-    /// cluster edge/corner seam gap documented at the module level; it is
-    /// left as-is here (not a watertightness fix).
+    /// neighbor's frame). An OOB cell whose slot is absent returns
+    /// `None`: a world boundary, where the quad legitimately stays
+    /// open.
     fn cell_vertex(&self, cell_voxel: [i32; 3], self_stride: i32) -> Option<[f32; 3]> {
-        let dim = CLUSTER_DIM as i32;
-        let in_x = (0..dim).contains(&cell_voxel[0]);
-        let in_y = (0..dim).contains(&cell_voxel[1]);
-        let in_z = (0..dim).contains(&cell_voxel[2]);
-        let oob_count = u32::from(!in_x) + u32::from(!in_y) + u32::from(!in_z);
-        if oob_count >= 2 {
-            return None;
-        }
-
-        let (voxel, decode_stride) = if oob_count == 0 {
+        let off = [
+            axis_offset(cell_voxel[0]),
+            axis_offset(cell_voxel[1]),
+            axis_offset(cell_voxel[2]),
+        ];
+        let (voxel, decode_stride) = if off == [0, 0, 0] {
             let v = self.cluster.get(
                 LocalCoord::new(
                     cell_voxel[0] as u32,
@@ -206,11 +201,8 @@ impl<'a> FieldReader<'a> {
                 .expect("in range"),
             );
             (v, self_stride)
-        } else if !single_axis_face_neighbor_present(self.neighbors, cell_voxel) {
-            return None;
         } else {
-            let neighbor_lod = face_neighbor_lod(self.neighbors, cell_voxel)
-                .expect("single-axis OOB + neighbor present implies a face neighbor");
+            let (_, neighbor_lod) = self.neighbors.at(off[0], off[1], off[2])?;
             let v = read_corner(
                 self.cluster,
                 self.neighbors,
@@ -384,8 +376,10 @@ impl ClusterMesh {
 /// closure; pass [`NeighborContext::none`] for a free-standing cluster.
 /// `lod` is the cluster's level-of-detail: iteration steps in **sample
 /// indices** of `[0, sample_dim)` and each cell occupies `stride^3`
-/// voxels. Stored cell corners are in cell-units `[0, 1]`; decoded
-/// positions are in cluster-local voxel coords (`origin + corner·stride`).
+/// voxels. Stored cell corners are in cell-units within the
+/// `CornerVector` spec range `[-0.5, 2.5]` (a vertex may reach into
+/// neighbor space); decoded positions are in cluster-local voxel coords
+/// (`origin + corner·stride`).
 /// At LOD 0 (`stride = 1`) this reduces to the pre-§2 behavior exactly.
 #[must_use]
 pub fn mesh(cluster: &Cluster, neighbors: &NeighborContext<'_>, lod: Lod) -> ClusterMesh {
@@ -399,23 +393,20 @@ pub fn mesh(cluster: &Cluster, neighbors: &NeighborContext<'_>, lod: Lod) -> Clu
     let stride = lod.stride() as i32;
     let sample_dim = lod.sample_dim() as i32;
 
-    // ±1 LOD adjacency. The cross-LOD seam approach assumes the
-    // transition between any two adjacent clusters is 2:1 or smaller —
-    // higher steps would need recursive transition rows we don't build.
+    // ±1 LOD adjacency, over the WHOLE neighborhood (faces, edges,
+    // corners). The cross-LOD seam approach assumes the transition
+    // between any two adjacent clusters is 2:1 or smaller — higher
+    // steps would need recursive transition rows we don't build.
     // World-gen at the layer above is responsible for honouring this;
     // panic loudly here so a violation is impossible to miss.
-    for axis in 0..3 {
-        for positive in [false, true] {
-            if let Some((_, nl)) = neighbor_at(neighbors, axis, positive) {
-                let diff = nl.level() as i32 - lod.level() as i32;
-                assert!(
-                    diff.abs() <= 1,
-                    "neighbor LOD {} differs from self LOD {} by more than 1",
-                    nl.level(),
-                    lod.level()
-                );
-            }
-        }
+    for (_, _, nl) in neighbors.iter() {
+        let diff = nl.level() as i32 - lod.level() as i32;
+        assert!(
+            diff.abs() <= 1,
+            "neighbor LOD {} differs from self LOD {} by more than 1",
+            nl.level(),
+            lod.level()
+        );
     }
 
     // Per-face boundary stride: at each face that has a neighbor,
@@ -651,23 +642,26 @@ fn emit_boundary_face(
 
 /// At the overlap lines where two override-active face rows meet, the
 /// face with the lower axis index owns the emission. Returns `true`
-/// when `g_voxel` lies on the boundary row of some face whose axis is
-/// strictly less than `own_face_axis` and that face is currently
-/// overriding — i.e. this position is somebody else's responsibility.
+/// when `g_voxel` lies on the **−side** boundary row of some face whose
+/// axis is strictly less than `own_face_axis` and that face is
+/// currently overriding — i.e. this position is somebody else's
+/// responsibility.
+///
+/// ONLY −side rows can own: they are the only rows a boundary pass
+/// runs for (+side overrides have no pass — the main loop's coarse
+/// emissions stand there). Ceding a corner column to a +side row
+/// handed it to a pass that does not exist, which silently dropped the
+/// (+X, −Z)-style corner quads — the one-triangle pinhole at a
+/// mixed-LOD cluster corner.
 fn lower_face_owns(
     per_face_stride: &[i32; 6],
     self_stride: i32,
     own_face_axis: usize,
     g_voxel: [i32; 3],
 ) -> bool {
-    let dim = CLUSTER_DIM as i32;
     for other_axis in 0..own_face_axis {
         let s_neg = per_face_stride[2 * other_axis];
-        let s_pos = per_face_stride[2 * other_axis + 1];
         if s_neg < self_stride && g_voxel[other_axis] == 0 {
-            return true;
-        }
-        if s_pos < self_stride && g_voxel[other_axis] == dim - s_pos {
             return true;
         }
     }
@@ -679,51 +673,28 @@ fn sample_to_voxel(s: [i32; 3], stride: i32) -> [i32; 3] {
     [s[0] * stride, s[1] * stride, s[2] * stride]
 }
 
-/// Face neighbor on the OOB side of `coord` (if any), as the stored
-/// `(cluster, lod)` pair. Caller is expected to have already ensured
-/// exactly one OOB axis; multi-axis OOB returns `None`.
+/// Face neighbor across `axis` on the `positive` side, as the stored
+/// `(cluster, lod)` pair — sugar over the context's offset addressing
+/// for the mesher's per-face logic (seam ownership, per-face stride).
 fn neighbor_at<'a>(
     neighbors: &NeighborContext<'a>,
     axis: usize,
     positive: bool,
 ) -> Option<(&'a Cluster, Lod)> {
-    match (axis, positive) {
-        (0, false) => neighbors.neg_x,
-        (0, true) => neighbors.pos_x,
-        (1, false) => neighbors.neg_y,
-        (1, true) => neighbors.pos_y,
-        (2, false) => neighbors.neg_z,
-        (2, true) => neighbors.pos_z,
-        _ => None,
-    }
-}
-
-/// LOD of the face neighbor on the OOB side of `coord`. Returns `None`
-/// when no axis is OOB or the matching face neighbor is absent. Used
-/// by [`cell_vertex`] to scale the decoded corner by the neighbor's
-/// stride (the corner is stored in the neighbor's cell-units, which
-/// differ from self's at a cross-LOD face).
-fn face_neighbor_lod(neighbors: &NeighborContext<'_>, coord: [i32; 3]) -> Option<Lod> {
-    let dim = CLUSTER_DIM as i32;
-    for (axis, &c) in coord.iter().enumerate() {
-        if c < 0 {
-            return neighbor_at(neighbors, axis, false).map(|(_, l)| l);
-        }
-        if c >= dim {
-            return neighbor_at(neighbors, axis, true).map(|(_, l)| l);
-        }
-    }
-    None
+    let mut off = [0i32; 3];
+    off[axis] = if positive { 1 } else { -1 };
+    neighbors.at(off[0], off[1], off[2])
 }
 
 /// Resolve the 4-cell gather (cells in cluster-local voxel coords) to
 /// 4 vertex positions, all reads going through `reader`. A cell in
-/// `[0, CLUSTER_DIM)` on every axis reads self's storage; one with a
-/// single coord OOB is routed to the matching face neighbor and its
-/// stored corner is decoded into self's frame. Two-or-three-axis OOB
-/// returns `None` (the quad is skipped). `self_stride` is the in-self
-/// decode stride (the cluster's own LOD stride), independent of how
-/// the caller's iteration walks voxel space.
+/// `[0, CLUSTER_DIM)` on every axis reads self's storage; an OOB cell
+/// — across a face, edge or corner — is routed to its offset neighbor
+/// and its stored corner is decoded into self's frame. An OOB cell
+/// with no neighbor in that slot returns `None` (a world boundary; the
+/// quad is skipped). `self_stride` is the in-self decode stride (the
+/// cluster's own LOD stride), independent of how the caller's
+/// iteration walks voxel space.
 fn resolve_cell_vertices(
     reader: &FieldReader,
     cells_voxel: &[[i32; 3]; 4],
@@ -744,6 +715,20 @@ fn resolve_cell_vertices(
 /// Degenerate-collapse: if two adjacent perimeter vertices are byte-
 /// equal, the quad would split into a zero-area triangle and a real
 /// one. Drop the duplicate vertex and emit a single fan triangle.
+///
+/// Diagonal selection: a non-planar or non-convex quad has exactly one
+/// diagonal that triangulates it without overlap — splitting a "dart"
+/// (simple but non-convex perimeter) on the wrong diagonal produces one
+/// triangle outside the perimeter, which back-face-culls into a hole
+/// (the VoxelFarm-era edge artifact). Both diagonals are tested against
+/// `expected_normal` and the one whose two halves agree in sign is used;
+/// a uniformly-negative pair is the same split wound the other way.
+/// With every dual vertex strictly inside its own cell (the contour
+/// guarantees this), each quad's projected perimeter is simple, so an
+/// interior diagonal always exists — full coverage, no folds. The
+/// remaining mixed-sign-on-both-diagonals case is a near-collinear
+/// sliver of ~zero area: emit the least-bad split as-is and let culling
+/// hide the hairline rather than folding a triangle under the surface.
 fn push_quad(
     out: &mut ClusterMesh,
     positions: [[f32; 3]; 4],
@@ -776,32 +761,59 @@ fn push_quad(
         return;
     }
 
-    let v0 = positions[0];
-    let v1 = positions[1];
-    let v2 = positions[2];
-    let v3 = positions[3];
+    let v = positions;
 
-    let raw_normal = cross(sub(v1, v0), sub(v2, v0));
-    let mut face_normal = normalize(raw_normal);
+    // Alignment of each candidate half with the expected axis normal.
+    // d* = primary diagonal (v0·v2), e* = other diagonal (v1·v3).
+    let d1 = dot(cross(sub(v[1], v[0]), sub(v[2], v[0])), expected_normal);
+    let d2 = dot(cross(sub(v[2], v[0]), sub(v[3], v[0])), expected_normal);
+    let e1 = dot(cross(sub(v[2], v[1]), sub(v[3], v[1])), expected_normal);
+    let e2 = dot(cross(sub(v[3], v[1]), sub(v[0], v[1])), expected_normal);
 
-    let ordered = if dot(face_normal, expected_normal) < 0.0 {
-        face_normal = [-face_normal[0], -face_normal[1], -face_normal[2]];
-        // Keep v0 in place, reverse the rest: both triangles flip sign.
-        [v0, v3, v2, v1]
+    let primary = [[v[0], v[1], v[2]], [v[0], v[2], v[3]]];
+    let other = [[v[1], v[2], v[3]], [v[1], v[3], v[0]]];
+
+    let (tris, reverse) = if d1 >= 0.0 && d2 >= 0.0 {
+        (primary, false)
+    } else if d1 <= 0.0 && d2 <= 0.0 {
+        (primary, true)
+    } else if e1 >= 0.0 && e2 >= 0.0 {
+        (other, false)
+    } else if e1 <= 0.0 && e2 <= 0.0 {
+        (other, true)
     } else {
-        [v0, v1, v2, v3]
+        // Near-collinear sliver: neither diagonal splits cleanly. Pick
+        // the (diagonal, winding) whose worse half is least negative.
+        let cands = [
+            (primary, false, d1.min(d2)),
+            (primary, true, -(d1.max(d2))),
+            (other, false, e1.min(e2)),
+            (other, true, -(e1.max(e2))),
+        ];
+        let best = cands
+            .iter()
+            .max_by(|a, b| a.2.total_cmp(&b.2))
+            .expect("four candidates");
+        (best.0, best.1)
     };
 
-    let base = out.vertices.len() as u32;
-    for p in ordered {
-        out.vertices.push(ClusterVertex {
-            position: p,
-            normal: face_normal,
-            material,
-        });
+    for tri in tris {
+        let wound = if reverse {
+            [tri[0], tri[2], tri[1]]
+        } else {
+            tri
+        };
+        let normal = normalize(cross(sub(wound[1], wound[0]), sub(wound[2], wound[0])));
+        let base = out.vertices.len() as u32;
+        for p in wound {
+            out.vertices.push(ClusterVertex {
+                position: p,
+                normal,
+                material,
+            });
+        }
+        out.indices.extend_from_slice(&[base, base + 1, base + 2]);
     }
-    out.indices
-        .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
 }
 
 /// Append one oriented triangle (3 vertices, 3 indices). Same winding-
@@ -855,24 +867,6 @@ fn cell_coord(g: [i32; 3], axis_a: usize, db: i32, dc: i32) -> [i32; 3] {
 #[inline]
 fn has_face_neighbor(neighbors: &NeighborContext<'_>, axis: usize, positive: bool) -> bool {
     neighbor_at(neighbors, axis, positive).is_some()
-}
-
-/// `true` iff `coord` has exactly one OOB axis AND the matching face
-/// neighbor is present. (Caller is expected to have already filtered
-/// out multi-axis OOB.)
-fn single_axis_face_neighbor_present(neighbors: &NeighborContext<'_>, coord: [i32; 3]) -> bool {
-    let dim = CLUSTER_DIM as i32;
-    for (axis, &c) in coord.iter().enumerate() {
-        if c < 0 {
-            return has_face_neighbor(neighbors, axis, false);
-        }
-        if c >= dim {
-            return has_face_neighbor(neighbors, axis, true);
-        }
-    }
-    // No axis OOB — caller used this incorrectly, but treat as "yes,
-    // a read is possible" (it's all self-storage).
-    true
 }
 
 #[inline]
@@ -968,7 +962,9 @@ mod tests {
         let mut m = ClusterMesh::default();
         push_quad(&mut m, positions, [0.0, 1.0, 0.0], 42);
 
-        assert_eq!(m.vertices.len(), 4);
+        // Two triangles, three fresh vertices each (weld() merges the
+        // shared diagonal pair downstream).
+        assert_eq!(m.vertices.len(), 6);
         assert_eq!(m.indices.len(), 6);
         for v in &m.vertices {
             assert!((v.normal[0]).abs() < 1e-5);
@@ -1006,6 +1002,79 @@ mod tests {
             let p2 = m.vertices[tri[2] as usize].position;
             let n = tri_normal(p0, p1, p2);
             assert!(n[1] < 0.0, "triangle {:?} not facing -Y: {:?}", tri, n);
+        }
+    }
+
+    #[test]
+    fn push_quad_dart_splits_on_interior_diagonal() {
+        // A "dart": simple but non-convex perimeter around a Y-edge
+        // (vertices one per quadrant of the (z,x) plane, one pulled in
+        // toward the edge). The primary v0·v2 diagonal lies OUTSIDE the
+        // perimeter — splitting on it back-face-culls one half (the
+        // VoxelFarm-era hole). The mesher must pick the v1·v3 diagonal,
+        // and both halves must then face +Y without any winding tricks.
+        // Quadrant offsets taken from a real baked dart (cluster_0_0_0
+        // edge (126,114,31)).
+        let positions = [
+            [0.98_f32, 0.0, 0.49],
+            [0.21, 0.0, -0.10],
+            [-0.28, 0.0, -0.95],
+            [-1.00, 0.0, 0.16],
+        ];
+        let expected = [0.0_f32, 1.0, 0.0];
+
+        // Precondition: primary diagonal is exterior (halves disagree)…
+        let a = tri_normal(positions[0], positions[1], positions[2]);
+        let b = tri_normal(positions[0], positions[2], positions[3]);
+        assert!(a[1] * b[1] < 0.0, "fixture no longer a dart: {a:?} {b:?}");
+        // …and the other diagonal is interior (halves agree, facing +Y).
+        let c = tri_normal(positions[1], positions[2], positions[3]);
+        let d = tri_normal(positions[1], positions[3], positions[0]);
+        assert!(c[1] > 0.0 && d[1] > 0.0, "fixture broken: {c:?} {d:?}");
+
+        let mut m = ClusterMesh::default();
+        push_quad(&mut m, positions, expected, 9);
+
+        assert_eq!(m.indices.len(), 6, "two triangles");
+        for tri in m.indices.chunks(3) {
+            let p0 = m.vertices[tri[0] as usize].position;
+            let p1 = m.vertices[tri[1] as usize].position;
+            let p2 = m.vertices[tri[2] as usize].position;
+            let n = tri_normal(p0, p1, p2);
+            assert!(n[1] > 0.0, "triangle {tri:?} back-facing: {n:?}");
+        }
+        for v in &m.vertices {
+            assert!(
+                positions.contains(&v.position),
+                "new position invented: {:?}",
+                v.position
+            );
+        }
+    }
+
+    #[test]
+    fn push_quad_degenerate_sliver_emits_without_panic() {
+        // A true crossed (bowtie) perimeter: both diagonals split with
+        // mixed signs — unreachable from contoured data thanks to the
+        // strict-interior clamp, but editor-authored corners may produce
+        // it. The mesher emits the least-bad split as-is; nothing is
+        // invented and nothing panics.
+        let positions = [
+            [1.0_f32, 0.0, 1.0],
+            [1.0, 0.0, -1.0],
+            [-1.0, 0.0, 1.0],
+            [-1.0, 0.0, -1.0],
+        ];
+        let expected = [0.0_f32, 1.0, 0.0];
+        let mut m = ClusterMesh::default();
+        push_quad(&mut m, positions, expected, 9);
+        assert_eq!(m.indices.len(), 6, "two triangles");
+        for v in &m.vertices {
+            assert!(
+                positions.contains(&v.position),
+                "new position invented: {:?}",
+                v.position
+            );
         }
     }
 
@@ -1114,14 +1183,10 @@ mod tests {
         let a = contour(&FlatField::at_half(), grey(), ClusterId::new(0, 0, 0, 0));
         let b = contour(&FlatField::at_half(), grey(), ClusterId::new(0, 1, 0, 0));
 
-        let neighbors_a = NeighborContext {
-            pos_x: Some((&b, Lod::ZERO)),
-            ..NeighborContext::none()
-        };
-        let neighbors_b = NeighborContext {
-            neg_x: Some((&a, Lod::ZERO)),
-            ..NeighborContext::none()
-        };
+        let mut neighbors_a = NeighborContext::none();
+        neighbors_a.set(1, 0, 0, &b, Lod::ZERO);
+        let mut neighbors_b = NeighborContext::none();
+        neighbors_b.set(-1, 0, 0, &a, Lod::ZERO);
         let m_a = mesh(&a, &neighbors_a, Lod::ZERO);
         let m_b = mesh(&b, &neighbors_b, Lod::ZERO);
 
@@ -1159,10 +1224,8 @@ mod tests {
         // B's local frame is (-1 + dx, 127 + dy, 100 + dz), which
         // becomes world x = B.world_offset.x + (-1 + dx) = 256 + (-1 +
         // dx) = 255 + dx. Same world position as A's emission.
-        let neighbors_b = NeighborContext {
-            neg_x: Some((&a, Lod::ZERO)),
-            ..NeighborContext::none()
-        };
+        let mut neighbors_b = NeighborContext::none();
+        neighbors_b.set(-1, 0, 0, &a, Lod::ZERO);
         let voxel_via_b = read_corner(&b, &neighbors_b, -1, 127, 100);
         assert_eq!(voxel_via_b.corner(), v_a.corner());
 
@@ -1194,18 +1257,15 @@ mod tests {
 
         // Build a NeighborContext per cluster (only X-axis neighbors).
         let contexts: Vec<NeighborContext<'_>> = (0..3)
-            .map(|i| NeighborContext {
-                neg_x: if i > 0 {
-                    Some((&clusters[i - 1], Lod::ZERO))
-                } else {
-                    None
-                },
-                pos_x: if i < 2 {
-                    Some((&clusters[i + 1], Lod::ZERO))
-                } else {
-                    None
-                },
-                ..NeighborContext::none()
+            .map(|i| {
+                let mut nc = NeighborContext::none();
+                if i > 0 {
+                    nc.set(-1, 0, 0, &clusters[i - 1], Lod::ZERO);
+                }
+                if i < 2 {
+                    nc.set(1, 0, 0, &clusters[i + 1], Lod::ZERO);
+                }
+                nc
             })
             .collect();
 
@@ -1258,16 +1318,15 @@ mod tests {
             }
         }
 
-        // FlatField vertices sit at cell-centers (x+0.5, 128, z+0.5),
-        // but the corner's byte encoding pulls 0.5 to ≈0.5039 (byte
-        // 128 decodes to 128/255·2 − 0.5). Quantized at 1024: 516.
-        // The surface perimeter is at world x ∈ {0.504, 767.504} and
-        // z ∈ {0.504, 255.504}. Cluster-internal seams (world x ∈
-        // {256, 512}) are not on these planes — any 1-use edge there
-        // is an open seam.
-        let half_q: i64 = 516;
-        let x_max_q: i64 = (CLUSTER_DIM as i64 * 3 - 1) * 1024 + half_q; // 785924
-        let z_max_q: i64 = (CLUSTER_DIM as i64 - 1) * 1024 + half_q; // 261636
+        // FlatField vertices sit at cell-centers (x+0.5, 128, z+0.5);
+        // the default byte 85 decodes to 0.5 exactly (85/255·3 − 0.5),
+        // so quantized at 1024 the half offset is 512. The surface
+        // perimeter is at world x ∈ {0.5, 767.5} and z ∈ {0.5, 255.5}.
+        // Cluster-internal seams (world x ∈ {256, 512}) are not on
+        // these planes — any 1-use edge there is an open seam.
+        let half_q: i64 = 512;
+        let x_max_q: i64 = (CLUSTER_DIM as i64 * 3 - 1) * 1024 + half_q; // 785920
+        let z_max_q: i64 = (CLUSTER_DIM as i64 - 1) * 1024 + half_q; // 261632
         let on_world_boundary = |a: [i64; 3], b: [i64; 3]| -> bool {
             (a[0] == half_q && b[0] == half_q)
                 || (a[0] == x_max_q && b[0] == x_max_q)
@@ -1528,17 +1587,23 @@ mod tests {
                             Lod::new(lod_for(xx, zz)).expect("valid lod"),
                         ))
                     };
-                    let neg_x = if x > 0 { nb(x - 1, z) } else { None };
-                    let pos_x = if x < 2 { nb(x + 1, z) } else { None };
-                    let neg_z = if z > 0 { nb(x, z - 1) } else { None };
-                    let pos_z = if z < 2 { nb(x, z + 1) } else { None };
-                    let neighbors = NeighborContext {
-                        neg_x,
-                        pos_x,
-                        neg_z,
-                        pos_z,
-                        ..NeighborContext::none()
-                    };
+                    // The FULL in-plane neighborhood — faces and the four
+                    // diagonals, the way a real field wires it: the corner
+                    // junctions are part of what this test measures.
+                    let mut neighbors = NeighborContext::none();
+                    for dx in -1i32..=1 {
+                        for dz in -1i32..=1 {
+                            if dx == 0 && dz == 0 {
+                                continue;
+                            }
+                            let (nx, nz) = (x as i32 + dx, z as i32 + dz);
+                            if (0..3).contains(&nx) && (0..3).contains(&nz) {
+                                if let Some((c, l)) = nb(nx as u16, nz as u16) {
+                                    neighbors.set(dx, 0, dz, c, l);
+                                }
+                            }
+                        }
+                    }
                     mesh(
                         &clusters[i],
                         &neighbors,
@@ -1570,16 +1635,15 @@ mod tests {
         assert_eq!(co0, 0, "uniform LOD 0 combined over-shared");
         assert_eq!(co1, 0, "centre LOD 1 combined over-shared");
 
-        // Combined unshared = world-boundary perimeter. With the
-        // override working end-to-end the centre-LOD-1 case is within
-        // a small handful of edges of the uniform-LOD-0 baseline; the
-        // residual delta is the cluster-corner artifact from
-        // `cell_vertex` returning `None` on multi-axis OOB, which
-        // affects four 3-cluster-meet corners around the centre.
-        let delta = (cu1 as i64 - cu0 as i64).abs();
-        assert!(
-            delta <= 16,
-            "centre LOD 1 combined unshared {cu1} differs from baseline {cu0} by {delta} (>16 = real seam gap)"
+        // Combined unshared = world-boundary perimeter, EXACTLY. With
+        // the edge/corner neighborhood modeled (the 26-slot
+        // NeighborContext), the cluster-corner quads emit like any seam
+        // quad, so the centre-LOD-1 field's interior is as closed as
+        // the uniform baseline — the old `delta <= 16` corner slack is
+        // gone, and any reappearance is a real seam gap.
+        assert_eq!(
+            cu1, cu0,
+            "centre LOD 1 combined unshared must match the uniform-LOD-0 world perimeter"
         );
     }
 
@@ -1591,10 +1655,8 @@ mod tests {
         // at LOD 0 with an LOD-2 face neighbor must panic.
         let a = contour(&FlatField::at_half(), grey(), ClusterId::new(0, 0, 0, 0));
         let b = contour(&FlatField::at_half(), grey(), ClusterId::new(2, 1, 0, 0));
-        let neighbors = NeighborContext {
-            pos_x: Some((&b, Lod::new(2).unwrap())),
-            ..NeighborContext::none()
-        };
+        let mut neighbors = NeighborContext::none();
+        neighbors.set(1, 0, 0, &b, Lod::new(2).unwrap());
         let _ = mesh(&a, &neighbors, Lod::ZERO);
     }
 
@@ -1631,10 +1693,8 @@ mod tests {
         // read_corner to B at (0, 63, 0). But sample y=63 isn't a B
         // sample (B's samples are even y). Skip — use y=62 instead so
         // it's a B sample (62/s_B = 31).
-        let neighbors = NeighborContext {
-            pos_x: Some((&b, b_lod)),
-            ..NeighborContext::none()
-        };
+        let mut neighbors = NeighborContext::none();
+        neighbors.set(1, 0, 0, &b, b_lod);
         // Sample (256, 126, 0) — past A's +X face, lands on B at
         // b-voxel (0, 126, 0). This is B's surface-straddling cell at
         // sample (0, 63, 0) (y spans [126, 128]); B's contour stored a
@@ -1673,10 +1733,8 @@ mod tests {
         // stride.
         let a = contour(&FlatField::at_half(), grey(), ClusterId::new(0, 0, 0, 0));
         let b = contour(&FlatField::at_half(), grey(), ClusterId::new(0, 1, 0, 0));
-        let nb_b = NeighborContext {
-            neg_x: Some((&a, Lod::ZERO)),
-            ..NeighborContext::none()
-        };
+        let mut nb_b = NeighborContext::none();
+        nb_b.set(-1, 0, 0, &a, Lod::ZERO);
 
         // From A's side: cell at sample (255, 127, 100) — in-storage.
         let v_a = FieldReader::new(&a, &NeighborContext::none())

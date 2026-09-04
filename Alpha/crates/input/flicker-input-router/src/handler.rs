@@ -33,6 +33,13 @@ pub trait InputHandler {
         true
     }
 
+    /// Once per frame, BEFORE any event is offered — a handler's chance to reconcile
+    /// state that changes without a signal (the walker's text-entry owner: a click
+    /// that just focused a text field enters the context here, a focus that left the
+    /// field leaves it). Runs for every handler in chain order, on empty frames too.
+    /// Defaults to nothing.
+    fn frame(&mut self, _rc: &mut RouteCtx) {}
+
     /// Top-down first-refusal pass. Return [`Flow::Consumed`] to claim the event
     /// before any lower handler's [`handle`](Self::handle) can run. Defaults to
     /// [`Flow::Pass`] (capture-only layers like system/global override it).

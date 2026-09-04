@@ -33,6 +33,22 @@ pub const HEX_SLOT: &str = "pop_hex_rtt";
 /// the column is published data, alone under the stage's light.
 pub const HEX_STAGE_SOURCE: &str = "populous_hex";
 
+/// THE WORLD MAP MODAL (contract FF8A575D) — the shared flat-map component in a
+/// centred popup. The modal's `surface` node: the walker reserves its rect only
+/// while the modal's slice is lit, and the scene seats the [`flicker_globe::WorldMap`]
+/// into it.
+pub const MAP_SLOT: &str = "pop_map_rtt";
+/// The `stages.<source>` block the flat map is authored by — seam ink, tile base
+/// + inset, the graticule and the light, exactly as the globe's stage authors it.
+pub const MAP_STAGE_SOURCE: &str = "populous_map";
+/// The nav footer's MAP button — toggles the modal.
+pub const MAP_TOGGLE_ACTION: &str = "pop_map_toggle";
+/// The modal's own Close button.
+pub const MAP_CLOSE_ACTION: &str = "pop_map_close";
+/// The modal's runtime flag, published on the Model; `populous.lua`'s
+/// `arrange()` reads it and lights the `shown_map` slice.
+pub const MAP_OPEN_BIND: &str = "map_open";
+
 /// The size dial's two-way bind — the frequency the map is rebuilt at. Stated once
 /// so the tree, the Model and the dispatcher cannot drift apart.
 pub const FREQ_BIND: &str = "pop_freq";
@@ -48,14 +64,36 @@ pub const SEAMS_ACTION: &str = "pop_seams_randomize";
 pub const CELLS_BIND: &str = "pop_cells";
 /// The seams tab's hot-spot dial — how many mantle plumes the field rolls.
 pub const SPOTS_BIND: &str = "pop_spots";
-/// The evolve tab's three actions: run/pause the era, advance one tick, and
-/// reset to the bare shell.
+/// The evolve tab's run controls (Aaron 2026-08-29, the tick-contract ruling):
+/// PLAY/PAUSE runs ticks flat-out with NO baking — the bake lands once, on
+/// pause; TICK plays exactly one complete procedure cycle then bakes; STEP
+/// plays ONE procedure then bakes; RESET returns to the bare shell. Any run
+/// button clicked while a stepped tick stands open first completes that tick.
 pub const EVOLVE_RUN_ACTION: &str = "pop_evolve_run";
+pub const EVOLVE_TICK_ACTION: &str = "pop_evolve_tick";
 pub const EVOLVE_STEP_ACTION: &str = "pop_evolve_step";
 pub const EVOLVE_RESET_ACTION: &str = "pop_evolve_reset";
-/// The fast-roll button: another BOOTSTRAP_TICKS-sized leap without baking —
-/// the "what does 4500 look like?" control.
+/// PLAY-N: run exactly the typed number of ticks (no baking, progress barred,
+/// one bake at arrival). The count rides the field bind below; 1200 default.
 pub const EVOLVE_ROLL_ACTION: &str = "pop_evolve_roll";
+/// The PLAY-N count field — a `text_field` two-way bind; the scene sanitizes
+/// to digits and falls back to 1200 when unparseable.
+pub const TICK_COUNT_BIND: &str = "pop_tick_count";
+/// The world view's three fluid LENSES (display only, never a reset): the
+/// atmosphere decks, the ocean bands, and the river films each toggle off so
+/// the ground can be read bare. A change rebakes the shown view once.
+pub const SHOW_AIR_BIND: &str = "pop_show_air";
+pub const SHOW_WATER_BIND: &str = "pop_show_water";
+pub const SHOW_RIVERS_BIND: &str = "pop_show_rivers";
+/// **The nav footer's COMMIT** — the bench's OUTPUT action: pause the era,
+/// close any open procedure cycle, capture the planet into a v2 `.epoch`
+/// and write it under `staging/worlds/` (bench → staging → the Content
+/// Manager promotes — the sablework flow). Shown on the EVOLVE tab alone,
+/// where the footer's Next would otherwise stand.
+pub const COMMIT_ACTION: &str = "pop_commit";
+/// The commit's result line, pre-formatted by the scene: the staged file's
+/// path on success, the error on failure — never silent either way.
+pub const COMMIT_STATUS_BIND: &str = "pop_commit_status";
 /// The evolve tab's readouts: ticks run, and layers formed — pre-formatted
 /// strings the scene publishes.
 pub const TICKS_BIND: &str = "pop_ticks";
@@ -81,6 +119,12 @@ pub const WATER_TARGET_BIND: &str = "pop_water_target";
 /// The GREEN TARGET dial — the share of standing land the flora should
 /// hold; the stock's thirst adapts until the greening meets it.
 pub const VEG_TARGET_BIND: &str = "pop_veg_target";
+/// The MEASURED green share — the right-pane readout gauge beside water and
+/// climate (Aaron 2026-08-28: the dial asked 70% and the eye couldn't check
+/// it): a 0..1 fraction plus a pre-formatted percent, display only — the
+/// truth the target dial is steering toward.
+pub const GREEN_BIND: &str = "pop_green";
+pub const GREEN_VAL_BIND: &str = "pop_green_val";
 /// The material census TABLE — a fixed roster of two-column rows (material |
 /// hex count), most-common first; unused rows publish empty strings and
 /// vanish. The last row overflows as "+K" with the remaining hexes summed.

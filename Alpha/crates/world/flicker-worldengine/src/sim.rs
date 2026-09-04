@@ -1,3 +1,6 @@
+//! **LEGACY (frozen v1 toolbox — zero live consumers; the live planet driver is
+//! [`crate::Evolution`]).** Kept as engine inventory, not dead code.
+//!
 //! **The tick simulation** — stripped to Epoch 1 + Epoch 2.
 //!
 //! One evolving [`World`] is ticked forward. **Epoch 1** is the molten seed (the composition

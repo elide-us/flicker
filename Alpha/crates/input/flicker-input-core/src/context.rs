@@ -484,9 +484,9 @@ impl InputProfile {
         }
     }
 
-    /// The default profile: `World` = [`InputMap::wasd_and_mouse`], `TextEntry` = empty
-    /// (a text field owns the keyboard, so no gameplay signal resolves), and a small
-    /// `Menu` map (confirm / cancel / nav). Reuses the preset constructors — no
+    /// The default profile: `World` = [`InputMap::wasd_and_mouse`], `TextEntry` = the two
+    /// exits only (a text field owns the keyboard, so no gameplay signal resolves), and a
+    /// small `Menu` map (confirm / cancel / nav). Reuses the preset constructors — no
     /// hand-duplicated binding lists (spec §7.1).
     pub fn default_profile() -> Self {
         Self::from_world("default", InputMap::wasd_and_mouse())
@@ -500,7 +500,7 @@ impl InputProfile {
     }
 
     /// Assemble a profile from a `World` map + the shared non-World contexts
-    /// (`TextEntry` empty, a simple `Menu` map). The single place the built-in context
+    /// (`TextEntry` = its two exits, a simple `Menu` map). The single place the built-in context
     /// set is defined, so every preset stays consistent (spec §7.1 / `DDD070C7`).
     fn from_world(name: &str, world: InputMap) -> Self {
         Self {
@@ -510,7 +510,7 @@ impl InputProfile {
                 ("World".to_string(), ContextBindings::simple(world)),
                 (
                     "TextEntry".to_string(),
-                    ContextBindings::simple(InputMap::empty()),
+                    ContextBindings::simple(text_entry_map()),
                 ),
                 (
                     "Menu".to_string(),
@@ -559,8 +559,8 @@ impl InputProfile {
     /// is DEAD HARDWARE for anyone with a settings file — the bench rails,
     /// nav tier and chord all shipped that way once. User rebinds always win;
     /// only silence gains defaults; a profile with an unrecognised name is a
-    /// custom layout and is left exactly as saved. (`TextEntry` stays empty
-    /// through this by construction — its preset binds nothing.)
+    /// custom layout and is left exactly as saved. (`TextEntry` gains only its two
+    /// exits through this — its preset binds nothing else.)
     pub fn backfill_from_presets(&mut self) {
         let preset = match self.name.as_str() {
             "default" => Self::default_profile(),
@@ -593,6 +593,29 @@ impl Default for InputProfile {
     fn default() -> Self {
         Self::default_profile()
     }
+}
+
+/// The `TextEntry` context map — ONLY the two exits (Aaron 2026-09-03: while a text
+/// field owns the keyboard the engine READS key input through the text stream and
+/// resolves nothing else, so movement, menu and nav all fall silent). `SubmitText` on
+/// Enter / the pad's Start, `CancelText` on Escape / the pad's East — bindings like any
+/// other, so the terminals are rebindable and the tooltip legend can show them; no scene
+/// reads Enter or Escape raw any more.
+fn text_entry_map() -> InputMap {
+    use crate::device::{GamepadButton, Key};
+    let mut m = InputMap::empty();
+    m.bind(ActionSignal::SubmitText, InputBinding::Key(Key::Enter));
+    m.bind(ActionSignal::SubmitText, InputBinding::Key(Key::NumpadEnter));
+    m.bind(
+        ActionSignal::SubmitText,
+        InputBinding::GamepadButton(GamepadButton::Start),
+    );
+    m.bind(ActionSignal::CancelText, InputBinding::Key(Key::Escape));
+    m.bind(
+        ActionSignal::CancelText,
+        InputBinding::GamepadButton(GamepadButton::East),
+    );
+    m
 }
 
 /// A minimal `Menu` context map: confirm / cancel + directional nav on the arrow keys
@@ -701,11 +724,16 @@ mod tests {
             !world.bindings_for(ActionSignal::ChordBegin).is_empty(),
             "so does the chord modifier"
         );
+        let text = profile.context_map("TextEntry").expect("TextEntry map");
         assert!(
-            profile
-                .context_map("TextEntry")
-                .is_some_and(|m| m.bindings_for(ActionSignal::Confirm).is_empty()),
-            "TextEntry stays empty — its preset binds nothing"
+            text.bindings_for(ActionSignal::Confirm).is_empty()
+                && text.bindings_for(ActionSignal::Menu).is_empty(),
+            "TextEntry binds no gameplay or menu signal — the keyboard is read, not resolved"
+        );
+        assert!(
+            !text.bindings_for(ActionSignal::SubmitText).is_empty()
+                && !text.bindings_for(ActionSignal::CancelText).is_empty(),
+            "TextEntry binds exactly its two exits"
         );
 
         // A custom-named profile is left exactly as saved.

@@ -54,8 +54,6 @@ fn draw() -> Vec<HudCommand> {
         down: false,
         right_down: false,
         screen: Vec2::new(1920.0, 1080.0),
-        typed: String::new(),
-        backspace: false,
         wheel: 0.0,
         exclusive: false,
         motion: Default::default(),
@@ -669,14 +667,10 @@ fn the_material_rename_edits_a_bound_name_and_persists() {
     bench.begin_rename();
     assert!(bench.is_renaming(), "a bound material opens a rename");
 
-    // First keystroke replaces the name (pristine), then it appends.
-    bench.type_into_rename("X", false);
-    bench.type_into_rename("y", false);
-    assert_eq!(
-        bench.rename_draft(),
-        Some("Xy"),
-        "pristine replace then append"
-    );
+    // The field's edited text comes back on its bind (the preselect-replace is the
+    // component's `select_all_on_enter`, tested in flicker-widgets).
+    bench.set_rename_draft("Xy");
+    assert_eq!(bench.rename_draft(), Some("Xy"), "the draft follows the field");
 
     // Commit persists: the in-memory index and the temp file both carry the new name.
     bench.commit_rename();
@@ -691,7 +685,7 @@ fn the_material_rename_edits_a_bound_name_and_persists() {
 
     // An empty draft is refused — the field stays open, the material is not blanked.
     bench.begin_rename();
-    bench.type_into_rename("   ", false);
+    bench.set_rename_draft("   ");
     bench.commit_rename();
     assert!(bench.is_renaming(), "an empty name keeps the field open");
     bench.cancel_rename();
@@ -933,8 +927,6 @@ fn the_flattened_nav_topology_is_the_authored_surface() {
         down: false,
         right_down: false,
         screen: Vec2::new(1920.0, 1080.0),
-        typed: String::new(),
-        backspace: false,
         wheel: 0.0,
         exclusive: false,
         motion: Default::default(),
@@ -1042,8 +1034,6 @@ fn the_six_channel_cards_fit_the_rack() {
         down: false,
         right_down: false,
         screen: Vec2::new(1920.0, 1080.0),
-        typed: String::new(),
-        backspace: false,
         wheel: 0.0,
         exclusive: false,
         motion: Default::default(),
@@ -1080,8 +1070,6 @@ fn the_card_contents_flow_inside_the_tile() {
         down: false,
         right_down: false,
         screen: Vec2::new(1920.0, 1080.0),
-        typed: String::new(),
-        backspace: false,
         wheel: 0.0,
         exclusive: false,
         motion: Default::default(),
@@ -1409,8 +1397,6 @@ fn the_materials_page_tokens_resolve() {
         down: false,
         right_down: false,
         screen: Vec2::new(1920.0, 1080.0),
-        typed: String::new(),
-        backspace: false,
         wheel: 0.0,
         exclusive: false,
         motion: Default::default(),

@@ -1,19 +1,30 @@
-//! flicker-pocclusters: the first Alpha client, focused on CSG editing and cluster
-//! manipulation. Extracted from the `voxel-cluster` POC — same 3×3 cluster
-//! field, contour/mesh pipeline, and LOD wiring — but with the celestial
-//! day/night model dropped in favour of a single fixed studio light for the
-//! whole world (see `world_lighting`), so the voxel geometry stays legible
-//! while carving.
+//! flicker-csgtest: the CSG Test scene — the proving ground where the new
+//! contouring engine (QEF mesher + corner-vector stretch) was verified against
+//! the baked wave field, and the buildout home for the VOXEL EDITING TOOLS.
+//! Deliberately forked from `flicker-pocclusters` (same 3×3 cluster field,
+//! contour/mesh pipeline, and LOD wiring — lineage, not migration debt): a
+//! stripped one-light stage (no celestial model; see `world_lighting`) so the
+//! voxel geometry stays legible while carving.
 //!
-//! Each cluster contours its own region against the shared global primitive;
-//! meshing closes the four internal seams (and the interior cluster's all
-//! four faces) via the low-side-owns convention in `flicker_voxel::mesh`.
+//! The world is the SEEDED WAVE FIELD, loaded from the `bakes/` package set
+//! (written by `flicker-voxel`'s `bake_island -- wave`); the fly-cam spawn
+//! frames the whole field. Each cluster contours its own region; meshing
+//! closes the internal seams via the low-side-owns convention in
+//! `flicker_voxel::mesh`.
 //!
-//! Pipeline: 3×3 `ClusterId`s → `contour` per cluster → `ClusterMap`
-//! → per-cluster `NeighborContext` → `mesh` → upload one mesh handle
-//! per cluster, drawn at its `world_offset()`. The cluster boundary is
-//! drawn as a white wireframe box; two debug toggles let the user
-//! inspect the meshes interactively (see controls below).
+//! Pipeline: 3×3 `ClusterId`s → per-cluster derive + `mesh` jobs on the
+//! worker pool (against a `NeighborContext` over the LOD-0 `ClusterMap`
+//! source) → upload one mesh handle per cluster, drawn at its
+//! `world_offset()`. Debug toggles let the user inspect the meshes
+//! interactively (see controls below).
+//!
+//! NEXT HERE: the voxel editing tools — the generic 3D-manipulation gadget
+//! (Translate / Rotate / Scale / Flip) grown out of the Clayworks joint gizmo
+//! (`flicker_mechanics::gizmo`), driven by the controller-first Aim → Locked →
+//! Modify selection model, with per-surface enable/disable of each mode
+//! declared from the Lua side like every other walker behaviour control. The
+//! same gadget serves the voxel-Template construction flow (move/rotate a
+//! template before stamping). Design of record lives in MCP memory.
 //!
 //! Camera controls (rebindable via the `InputMap`):
 //!   * WASD: move forward/back/strafe in the camera's facing.
@@ -21,11 +32,10 @@
 //!   * Right-drag: free-look yaw + pitch.
 //!   * Escape: open the pause menu (Resume / Quit).
 //!
-//! Debug toggles are driven by a DECLARATIVE component-tree HUD
-//! (`Alpha/content/sensorium/scripts/shared/hud_pocclusters.lua`): the Lua declares the panel via
-//! `M.tree()` (checkboxes + the move-speed / sensitivity sliders) and the
-//! flicker-widgets Rust walker (`run_ui`) owns layout, hit-test, and draw. Six
-//! clickable checkboxes replace the old `1`/`2`/`\` key handling:
+//! Debug toggles are driven by a DECLARATIVE component-tree HUD authored in
+//! `csgtest.scene.json` (`tree` + folded `styles`): the flicker-widgets Rust
+//! walker (`run_ui`) owns layout, hit-test, and draw; the pair script
+//! (`csgtest.lua`) derives the display strings. Six clickable checkboxes:
 //!   * Wireframe overlay on top of the solid mesh.
 //!   * Corner-vector arrows — for every stored voxel whose
 //!     `CornerVector` differs from the default, draw a line from the
@@ -43,10 +53,9 @@
 //!   * LOD billboards — a digit per cluster, on the navmesh surface at
 //!     the cluster centre, showing that cluster's current LOD.
 //!
-//! A CSG-cluster POC PACKAGE (library only): the scene runs inside the unified
-//! `prism-alpha` launcher (`cargo run -p prism-alpha`), which lists it in the
-//! scene picker. This crate exposes a `scene()` factory and no longer builds a
-//! standalone binary.
+//! Library only: the scene runs inside the unified `prism-alpha` launcher
+//! (`cargo run -p prism-alpha`), which lists it in the scene picker. This
+//! crate exposes a `scene()` factory and builds no standalone binary.
 
 use std::cell::Cell;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -76,19 +85,7 @@ use flicker_voxel::{
 use flicker_worker::WorkerPool;
 
 mod route;
-use route::{CommandHandler, GameplayBase, RootHandler};
-
-/// Pack a linear RGB colour into the mesh shader's direct-RGB `material` word: the top bit marks
-/// "literal RGB", the low three bytes are r,g,b (mirrors `shaders/mesh.wgsl` `material_color`).
-/// Palette-independent flat colour for a static prop.
-fn pack_rgb(linear: &[f32]) -> u32 {
-    let byte = |c: f32| (c.clamp(0.0, 1.0) * 255.0).round() as u32;
-    let (r, g, b) = match linear {
-        [r, g, b, ..] => (*r, *g, *b),
-        _ => (0.12, 0.42, 0.15), // fallback green if the prop carried no colour
-    };
-    0x8000_0000 | (byte(b) << 16) | (byte(g) << 8) | byte(r)
-}
+use route::{GameplayBase, RootHandler};
 
 
 /// Side length of the cluster field, in clusters. A 3×3 row in XZ
@@ -97,16 +94,18 @@ fn pack_rgb(linear: &[f32]) -> u32 {
 /// on every face simultaneously.
 const FIELD_DIM: u16 = 3;
 
-/// The ROOT surface's stage source — `stages.pocclusters_world` in
-/// `pocclusters.scene.json`. A nested `surface` node names its source in the tree, but
+/// The ROOT surface's stage source — `stages.csgtest_world` in
+/// `csgtest.scene.json`. A nested `surface` node names its source in the tree, but
 /// the walker skips the ROOT node, so the scene names its own root stage here: the one
 /// spelling of the recipe that draws the world and the ground fog over it.
 const WORLD_STAGE: &str = "csgtest_world";
 
-/// The SUN-SHADOW producer stage — `stages.pocclusters_sun_shadow` in
-/// `pocclusters.scene.json`. Renders the cluster casters from the sun's view into a depth
-/// map the ROOT surface's `shadow_map` consumer samples. Its `extent`/`bias`/`rate` are
-/// authored knobs read out of the compiled stage — never spelled in Rust.
+/// The SUN-SHADOW producer stage. Still the POCCLUSTERS stage name — and
+/// `csgtest.scene.json` authors no `stages.pocclusters_sun_shadow` (its only stage is
+/// `csgtest_world`), so `enter`'s `stage_def` lookup misses and the stage compiles to
+/// `StageDef::default()`: the consumer binds the disabled default and the field draws
+/// UNSHADOWED. Deliberate for now (the Cargo.toml scope says "no shadow"); authoring a
+/// `csgtest_sun_shadow` stage in the scene file is all it takes to turn shadows on.
 const SHADOW_STAGE: &str = "pocclusters_sun_shadow";
 
 /// Side of the (square) sun-shadow depth map, in texels. A shadow map is square, so the
@@ -130,26 +129,8 @@ enum GamePhase {
     Active,
 }
 
-/// An in-flight drag of the floating chat window (scene-owned, since the walker
-/// has no window move/resize — its geometry is static). `Move` remembers the
-/// grab offset from the window's top-left so the window tracks the cursor.
-#[derive(Copy, Clone, PartialEq)]
-enum ChatDrag {
-    None,
-    Move { grab: Vec2 },
-    Resize,
-}
-
-// Chat-window hit regions + minimum size (device px). The grip is the top strip
-// that drags the window; the corner box resizes it. These are hit rects, so they
-// only need to roughly cover the drawn title bar / `◢` handle.
-const CHAT_GRIP_H: f32 = 34.0;
-const CHAT_CORNER: f32 = 22.0;
-const CHAT_MIN_W: f32 = 420.0;
-const CHAT_MIN_H: f32 = 180.0;
-
 struct GameScene {
-    /// LOD-0 source-of-truth cluster data (see `docs/architecture.md`):
+    /// LOD-0 source-of-truth cluster data:
     /// QEF corners + dense state for each cluster at full resolution.
     /// Populated once (bake or contour) and never re-derived at runtime;
     /// edits (a later slice) will mutate this. Keyed by LOD-0 `ClusterId`s.
@@ -225,10 +206,6 @@ struct GameScene {
     /// The fog's drift clock, seconds — real time, independent of the celestial speed.
     /// Published to the recipe as `fog_time`.
     fog_time: f32,
-    /// Soft white disc texture for the planet billboards, uploaded once in `enter`.
-    planet_disc: Option<TextureHandle>,
-    /// Star glow sprite (core + halo + glint) for the constellation stars.
-    star_tex: Option<TextureHandle>,
 
     /// Mouse-look tuning (sensitivity + invert) from the shell settings panel +
     /// the scene-owned `move_speed` (the HUD slider). The action MAPS live with
@@ -236,15 +213,15 @@ struct GameScene {
     controls: AbstractControls,
     /// Pad tuning handed to the pause overlay; the pump owns the live config.
     gamepad_config: GamepadConfig,
-    /// The pair script (`pocclusters.lua`) — derives the HUD display strings
+    /// The pair script (`csgtest.lua`) — derives the HUD display strings
     /// from the raw Model each frame (five-line split). `None` if it failed to
     /// load; the HUD then shows raw-less readouts.
     script: Option<ScriptHost>,
 
-    /// The in-scene HUD as a DECLARATIVE component tree, parsed ONCE from
-    /// `hud_pocclusters.lua`'s `tree()` at construction (the walker redraws this
-    /// cached tree every frame with fresh Model bindings). `None` if the script
-    /// failed to load — the scene still runs without a HUD.
+    /// The in-scene HUD as a DECLARATIVE component tree, taken ONCE from
+    /// `csgtest.scene.json`'s authored `tree` at construction (the walker
+    /// redraws this cached tree every frame with fresh Model bindings). `None`
+    /// if the scene file has none — the scene still runs without a HUD.
     ui_tree: Option<UiNode>,
     /// The screen's declarative signal bindings (S9), collected from the cached
     /// tree's ROOT `on_<signal>` props at the same build point (`on_menu =
@@ -300,8 +277,7 @@ struct GameScene {
     /// `false` = fly mode: free 6-DOF, no nav generated. `true` =
     /// surface-walk mode, which generates the LOD2 nav surface around the
     /// player and walks on it (`walk_step`): WASD in the XZ plane with
-    /// gravity + a ground-clamp. See `docs/architecture.md` "Mesh &
-    /// navigation generation".
+    /// gravity + a ground-clamp.
     locomotion_walk: bool,
     /// Currently-applied per-cluster LOD for the 3×3 field, already smoothed
     /// to the mesher's ±1 cross-LOD adjacency invariant. `rebuild` meshes to
@@ -337,10 +313,6 @@ struct GameScene {
     /// snap waits for it).
     walk_needs_snap: bool,
 
-    /// The exclusive-TextEntry chat handler (owns the T hand-off + the key
-    /// guard). Events + the route scratch arrive from the PUMP via `SceneInput`
-    /// — the private resolver/tick rig deleted with the migration (P6).
-    command: CommandHandler,
 
     /// Gothic UI theme: drawn as the loading widget while `Booting`, and handed
     /// to each `PauseScene` we push (so pausing never re-uploads). `None` until
@@ -413,8 +385,6 @@ impl Default for GameScene {
             locomotion_walk: false,
             lod_field: [[0u8; FIELD_DIM as usize]; FIELD_DIM as usize],
             digit_atlas: None,
-            planet_disc: None,
-            star_tex: None,
             world_stage: StageDef::default(),
             shadow_stage: StageDef::default(),
             shadow_target: None,
@@ -426,7 +396,6 @@ impl Default for GameScene {
             vy: 0.0,
             grounded: false,
             walk_needs_snap: true,
-            command: CommandHandler::default(),
             ui_theme: None,
             phase: GamePhase::Booting,
             nav_ready_target: 0,
@@ -434,7 +403,7 @@ impl Default for GameScene {
     }
 }
 
-/// The pair script (`content/sensorium/scripts/pocclusters.lua`) — embedded at
+/// The pair script (`content/sensorium/scripts/csgtest.lua`) — embedded at
 /// compile time like every migrated scene's; `derive()` turns the raw Model
 /// into the HUD display strings.
 const CSGTEST_SCRIPT: &str =
@@ -442,7 +411,7 @@ const CSGTEST_SCRIPT: &str =
 
 impl GameScene {
     /// Build the game scene off the manifest's def (the five-line split): the
-    /// authored HUD tree + the folded styles come from `pocclusters.scene.json`,
+    /// authored HUD tree + the folded styles come from `csgtest.scene.json`,
     /// the pair script derives the display strings. Other state takes its
     /// placeholder values from [`Default`]; the world + camera come up in
     /// [`Scene::enter`].
@@ -450,7 +419,7 @@ impl GameScene {
         let ui_styles = flicker::ui::load_shared_styles(def.styles.as_ref());
         let ui_tree = def.tree.clone();
         if ui_tree.is_none() {
-            tracing::error!("pocclusters scene file has no `tree` — no HUD");
+            tracing::error!("csgtest scene file has no `tree` — no HUD");
         }
         // The screen's declarative bindings (S9), read off the authored root once —
         // cached exactly like the tree they were collected from.
@@ -458,7 +427,7 @@ impl GameScene {
         let script = match ScriptHost::new(CSGTEST_SCRIPT, "csgtest.lua") {
             Ok(h) => Some(h),
             Err(e) => {
-                tracing::error!("pocclusters.lua failed to load — raw HUD values only: {e}");
+                tracing::error!("csgtest.lua failed to load — raw HUD values only: {e}");
                 None
             }
         };
@@ -817,9 +786,11 @@ impl GameScene {
             return;
         }
         for id in &lod0_ids {
-            // Fall back to the SAME island the bakes were contoured from
-            // (`HeightField::island`), so a missing bake reproduces the island
-            // terrain rather than the old wave-field-plus-gallery world.
+            // Fallback when no bake is present: contour the ISLAND dome live.
+            // NOTE this does NOT reproduce the wave-field bakes this scene
+            // normally loads (`bakes/` = `bake_island -- wave`) — it's the
+            // island terrain instead. Kept as-is from the fork; acceptable for
+            // a dev fallback, but don't mistake it for the proven wave field.
             let island = HeightField::island(id.world_offset());
             source.insert(*id, contour(&island, material, *id));
         }
@@ -1034,25 +1005,23 @@ fn build_cluster(
     };
 
     let (self_c, self_lod) = derive(x, z);
-    let neg_x = if x > 0 { Some(derive(x - 1, z)) } else { None };
-    let pos_x = if x + 1 < FIELD_DIM {
-        Some(derive(x + 1, z))
-    } else {
-        None
-    };
-    let neg_z = if z > 0 { Some(derive(x, z - 1)) } else { None };
-    let pos_z = if z + 1 < FIELD_DIM {
-        Some(derive(x, z + 1))
-    } else {
-        None
-    };
-    let neighbors = NeighborContext {
-        neg_x: neg_x.as_ref().map(|(c, l)| (c, *l)),
-        pos_x: pos_x.as_ref().map(|(c, l)| (c, *l)),
-        neg_z: neg_z.as_ref().map(|(c, l)| (c, *l)),
-        pos_z: pos_z.as_ref().map(|(c, l)| (c, *l)),
-        ..NeighborContext::none()
-    };
+    // The FULL in-plane neighborhood — the four faces AND the four
+    // diagonals, so the seam quads at a 4-cluster corner junction
+    // resolve instead of dropping (the old corner holes). The derived
+    // neighbors are owned here; the context borrows them.
+    let ring: Vec<(i32, i32, (Cluster, Lod))> = (-1i32..=1)
+        .flat_map(|dx| (-1i32..=1).map(move |dz| (dx, dz)))
+        .filter(|&(dx, dz)| dx != 0 || dz != 0)
+        .filter_map(|(dx, dz)| {
+            let (nx, nz) = (x as i32 + dx, z as i32 + dz);
+            ((0..FIELD_DIM as i32).contains(&nx) && (0..FIELD_DIM as i32).contains(&nz))
+                .then(|| (dx, dz, derive(nx as u16, nz as u16)))
+        })
+        .collect();
+    let mut neighbors = NeighborContext::none();
+    for (dx, dz, (c, l)) in &ring {
+        neighbors.set(*dx, 0, *dz, c, *l);
+    }
 
     let id = ClusterId::new(self_lod.level(), x, 0, z);
     let off = id.world_offset();
@@ -1414,7 +1383,7 @@ impl GameScene {
     fn hud_model(&self) -> ValueMap {
         // The ENGINE publishes RAW runtime variables + RESOLVED WORD tokens
         // (localization stays stringtable-resolved engine-side); the PAIR SCRIPT
-        // (pocclusters.lua) derives the display strings — the five-line split.
+        // (csgtest.lua) derives the display strings — the five-line split.
         // Pre-formatted values remain only where a readout IS one formatted
         // value (the celestial fmt_* clock/phase/month strings, the sablework-
         // sanctioned shape).
@@ -1532,7 +1501,7 @@ impl GameScene {
         let mut m = raw.clone();
         if let Some(script) = &self.script {
             if let Err(e) = script.set_model(&raw) {
-                tracing::error!("pocclusters: publishing raw vars failed: {e}");
+                tracing::error!("csgtest: publishing raw vars failed: {e}");
             }
             match script.derive() {
                 Ok(Some(derived)) => {
@@ -1541,7 +1510,7 @@ impl GameScene {
                     }
                 }
                 Ok(None) => {}
-                Err(e) => tracing::error!("pocclusters.lua derive() failed: {e}"),
+                Err(e) => tracing::error!("csgtest.lua derive() failed: {e}"),
             }
         }
 
@@ -1709,8 +1678,6 @@ impl Scene for GameScene {
                 down: input.mouse_left,
                 right_down: input.mouse_right,
                 screen,
-                typed: String::new(),
-                backspace: false,
                 wheel: input.mouse_wheel_delta,
                 exclusive: false,
                 motion: Default::default(),
@@ -1776,28 +1743,24 @@ impl Scene for GameScene {
         }
 
 
-        // ── Dispatch the PUMP's resolved events through the 4-handler chain
-        // (root → command → walker → gameplay). The runner resolved this frame
-        // over the scene's declared context (`input_context()`), so while chat
-        // owns the keyboard the TextEntry map resolves nothing at all. ──
+        // ── Dispatch the PUMP's resolved events through the 3-handler chain
+        // (root → walker → gameplay). The runner resolved this frame over the
+        // scene's declared context (`input_context()`). ──
         let mut root = RootHandler;
         let mut gameplay = GameplayBase::default();
-        // The walker layer wraps the CHAT walker's retained focus (it owns the
-        // `chat_input` field) + this frame's pointer-consume = HUD `hud_hit` OR chat
-        // `chat_hit` (the old two-gate fall-through, folded into the one walker
-        // layer) + the screen's DECLARED intents (S9: `on_menu = "pause_open"`).
+        // The walker layer wraps this frame's pointer-consume (HUD `hud_hit`)
+        // + the screen's DECLARED intents (S9: `on_menu = "pause_open"`).
         self.fired_sigs.clear(); // last frame's mirror rode the HUD walk above — done
         let mut walker = WalkerHandler::hud(&mut self.ui_state, hud_hit)
             .with_intents(&self.ui_intents);
         {
-            let mut chain: [&mut dyn InputHandler; 4] =
-                [&mut root, &mut self.command, &mut walker, &mut gameplay];
+            let mut chain: [&mut dyn InputHandler; 3] = [&mut root, &mut walker, &mut gameplay];
             Router::dispatch(signals.events, &mut chain, signals.route);
         }
 
 
         // Surface context wiring (S9): any declared-surface flip since last frame
-        // becomes Push/PopContext on the same queue (no pocclusters surface
+        // becomes Push/PopContext on the same queue (no csgtest surface
         // carries a context today — the seam is standard, the call a live no-op).
         // The RUNNER applies the queued requests to the pump after `update`; the
         // chat field's walker focus is re-asserted per-frame from `chat_focused`.
@@ -1809,9 +1772,7 @@ impl Scene for GameScene {
 
         // The screen DECLARED `on_menu = "pause_open"` (S9): the walker layer
         // consumed the Menu press and fired the name; the scene maps it onto its
-        // pause push — the root's hardcoded Menu arm is gone. Under TextEntry the
-        // guard is doubly structural: the empty map resolves no Menu at all, and
-        // the command layer's capture sits above the walker anyway.
+        // pause push — the root's hardcoded Menu arm is gone.
         if self.fired_sigs.iter().any(|n| n == "pause_open") {
             let theme = self.ui_theme.expect("pause theme built in enter");
             let pause_map = flicker_shell::input_profile()
@@ -2186,20 +2147,12 @@ fn shadow_knobs(world: &StageDef, producer: &StageDef) -> Option<(u32, f32, f32)
 // `render_hud` now lives in `flicker-widgets` (the reusable UI surface) and is
 // imported above; the call sites below are unchanged.
 
-/// Point-in-rect test in device px (top-left origin).
-fn in_rect(p: Vec2, x: f32, y: f32, w: f32, h: f32) -> bool {
-    p.x >= x && p.x < x + w && p.y >= y && p.y < y + h
-}
-
-/// The chat nick for this client — the OS user name (the client codec sanitizes it),
-/// else a default. There is no auth/registration at this stage; the web side owns
-/// identity later, so this is just a friendly label for the raw-protocol test.
-
-/// Package subdirectory holding the LOD-0 cluster bakes the scene loads. The
-/// island set (`bakes_island/`, written by `flicker-voxel`'s `bake_island`
-/// bin) — NOT the old wave-field `bakes/`, which stays on disk untouched. The
-/// live-contour fallback in [`GameScene::ensure_source`] builds the same
-/// island, so a missing bake reproduces the same terrain.
+/// Package subdirectory holding the LOD-0 cluster bakes the scene loads: the
+/// seeded WAVE-FIELD set (`bakes/`, written by `flicker-voxel`'s
+/// `bake_island -- wave`) — the terrain the new contouring engine was proven
+/// on. Pocclusters reads the island set (`bakes_island/`) instead; the two
+/// sets never collide. NOTE the live-contour fallback in
+/// [`GameScene::ensure_source`] builds the ISLAND, not this wave field.
 const WAVE_BAKES: &str = "bakes";
 
 /// Directory the scene reads baked clusters from on startup (contour-from-primitive

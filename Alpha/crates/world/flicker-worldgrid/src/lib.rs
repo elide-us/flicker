@@ -30,4 +30,4 @@ mod patch;
 mod sphere;
 
 pub use patch::{pentagon_patch, Patch};
-pub use sphere::{icosphere, icosphere_with_outlines, CellId, Sphere};
+pub use sphere::{cell_count, icosphere, icosphere_with_outlines, CellId, Sphere};

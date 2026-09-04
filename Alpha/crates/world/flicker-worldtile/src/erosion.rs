@@ -525,6 +525,7 @@ pub mod demo {
             frame,
             mask,
             strata: vec![dike, soft],
+            materials: vec![0, 1],
             skirt,
             pixel_born: 0,
         };
@@ -568,11 +569,13 @@ pub mod demo {
                 resistance: if hard { 0.85 } else { 0.12 },
             });
         }
+        let materials = (0..strata.len() as u8).collect();
         let tile = Tile {
             cell: 0,
             frame,
             mask,
             strata,
+            materials,
             skirt,
             pixel_born: 0,
         };

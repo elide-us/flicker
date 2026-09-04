@@ -318,6 +318,16 @@
                             "size_class": "md",
                             "tab_group": "cat_nav",
                             "nav_ordinal": 27
+                          },
+                          {
+                            "component": "button",
+                            "id": "nav_27",
+                            "label": "$cat_nav_binding_icon",
+                            "style_bind": "nav_sty_27",
+                            "action": "nav_27",
+                            "size_class": "md",
+                            "tab_group": "cat_nav",
+                            "nav_ordinal": 28
                           }
                         ]
                       }
@@ -1272,7 +1282,7 @@
                                 "gap": 8,
                                 "children": [
                                   { "component": "option", "glyph": "a", "label": "$cat_ft_select", "size": 56 },
-                                  { "component": "option", "glyph": "b", "label": "$cat_ft_back", "size": 56, "action": "cat_pm_page_prev" },
+                                  { "component": "option", "glyph": "b", "label": "$cat_ft_back", "size": 56 },
                                   { "component": "option", "glyph": "x", "label": "$cat_ft_copy", "size": 56 },
                                   { "component": "option", "glyph": "y", "label": "$cat_ft_paste", "size": 56 },
                                   { "component": "button", "id": "cat_ft_menu", "action": "pause_open", "label": "$cat_ft_menu", "size": 90, "size_class": "md", "variant": "secondary", "tab_group": "cat_ft", "nav_ordinal": 1 },
@@ -1313,6 +1323,33 @@
                               {
                                 "component": "text",
                                 "text": "$cat_surface_note",
+                                "text_size": 11,
+                                "font": "label",
+                                "color": "panel.stat_label"
+                              }
+                            ]
+                          },
+                          {
+                            "_comment": "BINDING ICON (Aaron 2026-09-02): the tooltip affordance as its own kind — give it an ActionSignal and it shows the CURRENT DEVICE's face of the binding (atlas glyph on a pad, the house keycap on kbm) with a `{Signal}` help label. Read-only chrome: never focusable, never a target. The three rows read LIVE bindings the scene publishes; a signal no profile binds shows its own name.",
+                            "component": "panel",
+                            "id": "card_27",
+                            "style": "panel",
+                            "pad": 14,
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text": "$cat_nav_binding_icon",
+                                "text_size": 14,
+                                "font": "label",
+                                "color": "panel.stat_value"
+                              },
+                              { "component": "binding_icon", "id": "cat_bi_interact", "signal": "Interact", "label": "$cat_bi_interact", "size": 22, "text_size": 12 },
+                              { "component": "binding_icon", "id": "cat_bi_menu", "signal": "Menu", "label": "$cat_bi_menu", "size": 22, "text_size": 12 },
+                              { "component": "binding_icon", "id": "cat_bi_confirm", "signal": "Confirm", "label": "$cat_bi_confirm", "size": 22, "text_size": 12 },
+                              {
+                                "component": "text",
+                                "text": "$cat_bi_note",
                                 "text_size": 11,
                                 "font": "label",
                                 "color": "panel.stat_label"

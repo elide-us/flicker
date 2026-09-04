@@ -18,7 +18,8 @@
 //!   reads it at the coarse stride to decide cell activeness, exactly as it
 //!   would for a contoured-at-LOD cluster.
 //! - **Corners** are condensed: every LOD-0 dual vertex is binned into the
-//!   coarse cell (`stride³` voxels) that contains it; each coarse cell's
+//!   coarse cell (`stride³` voxels) that **owns** it (by its storing
+//!   voxel's coord — the decoded position may reach outside); each coarse cell's
 //!   vertex is the average of the LOD-0 vertices in its footprint. That
 //!   average is re-encoded cell-relative to the coarse cell and written
 //!   across the footprint — byte-shaped exactly as [`crate::contour`] would

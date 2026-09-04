@@ -202,6 +202,44 @@ pub enum InputEdge {
     Mouse { button: MouseButton, down: bool },
 }
 
+/// The TEXT STREAM — what the keyboard produced this frame for a FOCUSED text field.
+///
+/// Read below the signal layer while `InputContext::TextEntry` is active: in text
+/// entry the engine reads key input, it does not resolve signals (Aaron 2026-09-03).
+/// Unicode by default — `typed` is the OS-committed text for ANY layout (post-IME
+/// once the window allows IME, which the runner does exactly while the context is
+/// active), `preedit` the composition in progress to display at the caret, and the
+/// rest are the editing keys every text field honours (press edges, one per press).
+/// A platform on-screen keyboard (parked) lands its result in this same shape.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TextStream {
+    /// OS-committed text this frame, in order. Empty on non-typing frames.
+    pub typed: String,
+    /// The IME's in-progress composition, while one is open.
+    pub preedit: Option<String>,
+    /// Backspace pressed this frame (delete before the caret).
+    pub backspace: bool,
+    /// Delete pressed this frame (delete after the caret).
+    pub delete: bool,
+    /// Caret one left.
+    pub left: bool,
+    /// Caret one right.
+    pub right: bool,
+    /// Caret to the start.
+    pub home: bool,
+    /// Caret to the end.
+    pub end: bool,
+}
+
+impl TextStream {
+    /// Nothing for a field to do this frame.
+    pub fn is_empty(&self) -> bool {
+        self.typed.is_empty()
+            && self.preedit.is_none()
+            && !(self.backspace || self.delete || self.left || self.right || self.home || self.end)
+    }
+}
+
 // ───────────────────────────────────────────────────────────────────
 // Input State (polled snapshot)
 // ───────────────────────────────────────────────────────────────────
@@ -250,6 +288,11 @@ pub struct InputState {
     /// `true` only on the frame Backspace transitions up→down. Edge (no
     /// auto-repeat yet). Driver-set; reset after each `App::update`.
     backspace_edge: bool,
+    /// The IME's in-progress composition (winit `Ime::Preedit`), for the focused
+    /// text field to DISPLAY at its caret — never part of the value until the IME
+    /// commits it (which arrives as [`push_typed`](Self::push_typed)). State, not
+    /// an edge: it stands until the IME clears or commits it.
+    preedit: Option<String>,
 
     /// This frame's discrete transitions in arrival order (see [`InputEdge`]).
     /// Driver-filled during the drain; reset with the other per-frame edges after
@@ -282,6 +325,7 @@ impl Default for InputState {
             keys_held: HashSet::new(),
             typed_text: String::new(),
             backspace_edge: false,
+            preedit: None,
             edges: Vec::new(),
             gamepads: HashMap::new(),
             analog_latch: None,
@@ -310,6 +354,33 @@ impl InputState {
     /// Did Backspace transition up→down this frame? An edge, reset each frame.
     pub fn backspace(&self) -> bool {
         self.backspace_edge
+    }
+
+    /// The IME's in-progress composition, while one is open (see [`TextStream`]).
+    pub fn preedit(&self) -> Option<&str> {
+        self.preedit.as_deref()
+    }
+
+    /// This frame's TEXT STREAM — everything the keyboard produced for a focused
+    /// text field, read BELOW the signal layer (Aaron 2026-09-03: in text entry the
+    /// engine reads key input, not signals). The editing keys are the press EDGES
+    /// of the ordered transition log, so they never fire twice for one press.
+    pub fn text_stream(&self) -> TextStream {
+        let pressed = |k: Key| {
+            self.edges
+                .iter()
+                .any(|e| matches!(e, InputEdge::Key { key, down: true } if *key == k))
+        };
+        TextStream {
+            typed: self.typed_text.clone(),
+            preedit: self.preedit.clone(),
+            backspace: self.backspace_edge,
+            delete: pressed(Key::Delete),
+            left: pressed(Key::Left),
+            right: pressed(Key::Right),
+            home: pressed(Key::Home),
+            end: pressed(Key::End),
+        }
     }
 
     // ── Frame edges ──
@@ -479,6 +550,13 @@ impl InputState {
     /// Flag a Backspace edge for this frame (driver hook).
     pub fn flag_backspace(&mut self) {
         self.backspace_edge = true;
+    }
+
+    /// Set or clear the IME's in-progress composition (driver hook; from winit
+    /// `Ime::Preedit`). An empty string clears it — winit sends one right before
+    /// every `Commit`.
+    pub fn set_preedit(&mut self, text: &str) {
+        self.preedit = (!text.is_empty()).then(|| text.to_string());
     }
 
     /// Record a discrete transition (driver hook).

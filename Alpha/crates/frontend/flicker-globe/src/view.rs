@@ -110,6 +110,29 @@ impl GlobeView {
         meshes: &[ShellDraw],
         arrows: &'f Arrows,
     ) {
+        self.render_pass(
+            r,
+            fg,
+            seat,
+            base_layer,
+            stage,
+            Self::draw_pass(camera, meshes, arrows),
+        );
+    }
+
+    /// The target + composite plumbing of [`Self::render`] with a CALLER-supplied pass
+    /// body — the seam a non-globe surface filler (the flat [`crate::WorldMap`]) reuses so
+    /// the offscreen-target lifecycle exists exactly once. `draw` runs inside the stage's
+    /// declared pass with the target bound; it sets its own camera.
+    pub fn render_pass<'f>(
+        &mut self,
+        r: &mut Renderer,
+        fg: &mut FrameGraph<'f>,
+        seat: Seat,
+        base_layer: f32,
+        stage: &StageDef,
+        draw: impl FnOnce(&mut Renderer) + 'f,
+    ) {
         let rect = seat.rect;
         let (w, h) = stage.attachments.pixels(rect.size);
         match self.target {
@@ -133,7 +156,7 @@ impl GlobeView {
             stage,
             StageInputs::default(),
             seat.rate,
-            Self::draw_pass(camera, meshes, arrows),
+            draw,
         );
         // `frame: None` — the walker already drew the node's holder panel on the 2D
         // path, so a second frame here would double the chrome. The composite lands at

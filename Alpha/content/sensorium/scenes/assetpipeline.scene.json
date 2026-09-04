@@ -1,636 +1,1914 @@
 {
-  "_comment": "Clayworks Bench SCENE DEFINITION (201F4F51 template-free). The asset-pipeline editor: a wizard over three LINEAR workflow definitions (params.workflows — branching lives BETWEEN definitions, chosen by the Task cards), three page surfaces in one holder (`surface` kind: `ap_quad` 2×2 / `ap_clip_pair` / `ap_bake_view`, page-gated by `view_quad`/`view_clip`/`view_bake` — the behaviour fills each with the shared ViewportFiller), a floating right inspector whose per-stage cells gate on the step surfaces (`wf_step_<id>`) and the conform ROLE flags (`on_conform_*`), a display-toggle panel over the viewport, and the Back/Next footer that drives the rail. The `assetpipeline` behaviour plays it (flicker-assetpipeline); assetpipeline.lua derives the rail-chip styles and the bank-row selection washes. Styles: the live blocks folded in from the crate's quarantined scene_styles.json (col/map/panel/well/seam/checkbox/rowsel/card); the dead template-era blocks (window/frame/option_grid/layout/header/tab_bar/footer dims) did not move.",
+  "_comment": "Clayworks Bench \u2014 the content workbench (FBX/BVH \u2192 staging). Rebuilt 2026-09-03 in the Populous shape: one paged_menu (page rail hidden) whose tab rail is the WORKFLOW's steps; a three-panel body (facts \u00b7 view \u00b7 controls) whose slices assetpipeline.lua's arrange() lights by (workflow, step); the standard nav_footer; a shared-confirm-shaped discard modal. Every control is a catalog component with its standard props; the only styles are the shared blocks; the view surfaces are authored stages.",
   "behaviour": "assetpipeline",
-  "params": {
-    "_comment": "Workflow DEFINITIONS for the bench's vendored Workflow runtime: `workflows.<name>` is one LINEAR wizard — the ordered `steps` ({ id, title, needs, yields }). Branching is deliberately absent (Aaron, ratified 2026-08-01): a required branch is a SEPARATE definition, chosen up front by the Task cards — Character (and the unclassified default) walks import_character, Prop/Accessory import_prop, Animation import_animation, so the old in-spine 'skip Attach for a non-character' conditional is simply a definition without the step. `needs`/`yields` name keys of the bench's per-frame step DOCUMENT (a key is present exactly when the scene state it names exists — `wf_doc`): `source` = an open scanned folder, `class` = the declared AssetClass, `rig` = the character conform produced its Rig, `attach` = the authored attach-point set, `fit` = the prop/garment mount binding applies, `clip` = the active BVH retargeted onto the reference skeleton, `committed` = the baked rig / emitted clip path. `Next` into a step whose needs are unmet refuses, fail-loud. Step `title` is the rail-chip label, a `$token` resolved through the stringtable at publish.",
-    "workflows": {
-      "import_character": {
-        "title": "$ap_character",
-        "steps": [
-          { "id": "task", "title": "$wf_step_task", "yields": ["source", "class"] },
-          { "id": "prep", "title": "$wf_step_prep", "needs": ["source"] },
-          { "id": "conform", "title": "$wf_step_rig", "needs": ["source"], "yields": ["rig"] },
-          { "id": "preview", "title": "$wf_step_preview", "needs": ["rig"] },
-          { "id": "attach", "title": "$wf_step_attach", "needs": ["rig"], "yields": ["attach"] },
-          { "id": "review", "title": "$wf_step_review", "needs": ["rig", "attach"], "yields": ["committed"] }
-        ]
-      },
-      "import_prop": {
-        "title": "$ap_prop",
-        "steps": [
-          { "id": "task", "title": "$wf_step_task", "yields": ["source", "class"] },
-          { "id": "conform", "title": "$wf_step_mount", "needs": ["source"], "yields": ["fit"] },
-          { "id": "review", "title": "$wf_step_review", "needs": ["fit"], "yields": ["committed"] }
-        ]
-      },
-      "import_animation": {
-        "title": "$ap_animation",
-        "steps": [
-          { "id": "task", "title": "$wf_step_task", "yields": ["source", "class"] },
-          { "id": "conform", "title": "$wf_step_clip", "needs": ["source"], "yields": ["clip"] },
-          { "id": "review", "title": "$wf_step_review", "needs": ["clip"], "yields": ["committed"] }
-        ]
-      }
-    }
-  },
-  "styles": {
-    "window": {
-      "_comment": "This bench's root slab — scene-owned like every migrated bench's (a shared file would fork the look; duplication is the pattern). Only draw-read keys.",
-      "radius": 4,
-      "fill_top": "$stone3",
-      "fill_bot": "$stone1",
-      "border": "$edge2"
-    },
-    "workflow": {
-      "_comment": "The step-rail chip trio the vendored Workflow runtime's states resolve to: the pair script derives `wf_<id>_style` = workflow.chip.<state> from the published `wf_<id>_state` (active / visited / todo).",
-      "chip": {
-        "active": {
-          "fill_top": "$sap_base",
-          "fill_bot": "$sap_base_lo",
-          "border": "$sap_border",
-          "border_w": 1,
-          "label": "$ink_bright",
-          "radius": 3
-        },
-        "visited": {
-          "fill_top": "$stone3",
-          "fill_bot": "$stone2",
-          "border": "$edge2",
-          "border_w": 1,
-          "label": "$bronze",
-          "radius": 3
-        },
-        "todo": {
-          "fill_top": "$stone2",
-          "fill_bot": "$stone1",
-          "border": "$edge1",
-          "border_w": 1,
-          "label": "$dim",
-          "radius": 3
-        }
-      }
-    },
-    "assetpipeline": {
-      "col": {
-        "ink": "$ink_bright",
-        "ink_dim": "$ink",
-        "dim": "$dim",
-        "faint": "$faint",
-        "bronze": "$bronze",
-        "rail": "$dim_soft",
-        "sapphire": "$sapphire"
-      },
-      "_map_comment": "BONE-MAP / REQUIREMENT COLOUR KEY — the one place the conform provenance states get their colour. ok = a source bone renamed to canonical; review = placed by a derive pass (hip/shoulder/ankle) and worth a human's eye; auto = inferred from the reference rig; fail = a Review requirement that is not met. Bound per-row as a dotted path via `<row>_color`, so the key cannot drift between the list and the summary.",
-      "map": {
-        "ok": "$sig_green",
-        "review": "$sig_yellow",
-        "auto": "$sig_blue",
-        "fail": "$hp_hi"
-      },
-      "panel": {
-        "fill_top": "$stone3",
-        "fill_bot": "$stone1",
-        "border": "$edge2",
-        "border_w": 1,
-        "radius": 4,
-        "focused": {
-          "fill_top": "$stone4",
-          "fill_bot": "$stone2",
-          "border": "$sap_border",
-          "border_w": 1,
-          "radius": 4
-        }
-      },
-      "well": {
-        "fill_top": "$well_top",
-        "fill_bot": "$well_bot",
-        "border": "$edge1",
-        "border_w": 1,
-        "radius": 3
-      },
-      "seam": {
-        "fill_top": "$seam",
-        "fill_bot": "$seam"
-      },
-      "holder": {
-        "fill_top": "$stage_void",
-        "fill_bot": "$stage_void",
-        "border": "$bronze_deep",
-        "border_w": 1,
-        "radius": 3
-      },
-      "checkbox": {
-        "box": "$stone2",
-        "check": "$sig_green",
-        "border": "$edge4",
-        "pad": 3
-      },
-      "slider": {
-        "track": "$well",
-        "border": "$edge2",
-        "fill": "$sap_base",
-        "fill_hi": "$sap_border",
-        "handle": "$sap_border",
-        "handle_w": 14
-      },
-      "button": {
-        "fill_top": "$stone4",
-        "fill_bot": "$stone2",
-        "border": "$edge3",
-        "border_w": 1,
-        "radius": 3
-      },
-      "bar": {
-        "fill_top": "$stone4",
-        "fill_bot": "$stone3",
-        "border": "$edge2",
-        "border_w": 1,
-        "radius": 3
-      },
-      "_rowsel_comment": "The bank rows' LIST-SELECTION washes: the pair script derives each row's `style_bind` path from the published sel/window numbers — the selected slot wears `rowsel` (the sapphire accent wash), the rest `rowsel_off` (draws next to nothing under the bound label).",
-      "rowsel": {
-        "fill_top": "$accent_wash_2",
-        "fill_bot": "$accent_wash",
-        "hover_top": "$accent_wash_2",
-        "hover_bot": "$accent_wash_2",
-        "border": "$sapphire",
-        "border_w": 1,
-        "radius": 2,
-        "label": "$ink"
-      },
-      "rowsel_off": {
-        "fill_top": "$stage_void",
-        "fill_bot": "$stage_void",
-        "hover_top": "$accent_wash",
-        "hover_bot": "$accent_wash",
-        "radius": 2,
-        "label": "$ink"
-      },
-      "card": {
-        "fill_top": "$stage_void",
-        "fill_bot": "$stage_void",
-        "hover_top": "$accent_wash",
-        "hover_bot": "$accent_wash",
-        "border": "$edge3",
-        "hover_border": "$sapphire",
-        "border_w": 1,
-        "radius": 3,
-        "glow": "$sap_glow",
-        "label": "$ink_bright",
-        "hover_label": "$ink_bright"
-      }
-    }
-  },
+  "params": {},
   "tree": {
     "component": "surface",
     "id": "assetpipeline",
     "on_menu": "pause_open",
-    "on_mode_next": "gizmo_next",
-    "on_mode_prev": "gizmo_prev",
-    "on_tab_next": "wf_next",
-    "on_tab_prev": "wf_back",
+    "on_tab_next": "step_next",
+    "on_tab_prev": "step_prev",
     "children": [
       {
-        "component": "cell",
+        "component": "stack",
         "style": "window",
-        "runes": true,
         "anchor": "top_left",
-        "width_frac": 1.0,
-        "height_frac": 1.0,
-        "pad": 20,
-        "gap": 10,
         "children": [
           {
-            "component": "row",
-            "id": "ap_header",
-            "style": "assetpipeline.bar",
-            "size": 44,
-            "pad_x": 12,
-            "pad_y": 6,
-            "gap": 10,
-            "align": "center",
-            "children": [
-              { "component": "text", "text": "✦", "text_size": 18, "font": "label", "color": "assetpipeline.col.bronze", "size": 22 },
-              { "component": "text", "text": "$ap_clayworks_bench", "text_size": 17, "font": "label", "color": "assetpipeline.col.ink", "size": 190 },
-              { "component": "text", "text_bind": "asset_name", "text_size": 13, "font": "label", "color": "assetpipeline.col.ink_dim", "grow": 1.0 },
-              { "component": "text", "text_bind": "asset_file", "text_size": 11, "font": "label", "color": "assetpipeline.col.dim", "size": 230 },
-              { "component": "text", "text_bind": "insp_badge", "text_size": 11, "font": "label", "color": "assetpipeline.col.sapphire", "align": "right", "size": 110 }
-            ]
-          },
-          {
-            "component": "row",
-            "id": "ap_rail",
-            "size": 30,
-            "gap": 6,
-            "align": "center",
-            "children": [
-              { "component": "button", "id": "ap_chip_task", "label_bind": "wf_task_title", "style_bind": "wf_task_style", "visible_bind": "wf_task_show", "size": 110, "size_class": "sm" },
-              { "component": "cell", "style": "assetpipeline.seam", "visible_bind": "wf_prep_show", "size": 18, "height": 1 },
-              { "component": "button", "id": "ap_chip_prep", "label_bind": "wf_prep_title", "style_bind": "wf_prep_style", "visible_bind": "wf_prep_show", "size": 110, "size_class": "sm" },
-              { "component": "cell", "style": "assetpipeline.seam", "visible_bind": "wf_conform_show", "size": 18, "height": 1 },
-              { "component": "button", "id": "ap_chip_conform", "label_bind": "wf_conform_title", "style_bind": "wf_conform_style", "visible_bind": "wf_conform_show", "size": 110, "size_class": "sm" },
-              { "component": "cell", "style": "assetpipeline.seam", "visible_bind": "wf_preview_show", "size": 18, "height": 1 },
-              { "component": "button", "id": "ap_chip_preview", "label_bind": "wf_preview_title", "style_bind": "wf_preview_style", "visible_bind": "wf_preview_show", "size": 110, "size_class": "sm" },
-              { "component": "cell", "style": "assetpipeline.seam", "visible_bind": "wf_attach_show", "size": 18, "height": 1 },
-              { "component": "button", "id": "ap_chip_attach", "label_bind": "wf_attach_title", "style_bind": "wf_attach_style", "visible_bind": "wf_attach_show", "size": 110, "size_class": "sm" },
-              { "component": "cell", "style": "assetpipeline.seam", "visible_bind": "wf_review_show", "size": 18, "height": 1 },
-              { "component": "button", "id": "ap_chip_review", "label_bind": "wf_review_title", "style_bind": "wf_review_style", "visible_bind": "wf_review_show", "size": 110, "size_class": "sm" }
-            ]
-          },
-          {
-            "component": "row",
-            "id": "ap_body",
-            "grow": 1.0,
-            "gap": 10,
+            "component": "cell",
+            "gap": 12,
+            "pad": 30,
+            "anchor": "top_left",
             "children": [
               {
-                "component": "panel",
-                "id": "ap_view",
-                "style": "assetpipeline.panel",
-                "pane": true,
-                "nav_ordinal": 1,
+                "component": "paged_menu",
+                "style": "paged_menu.frame",
+                "pad": 40,
                 "grow": 1.0,
-                "pad": 8,
+                "hide_pages": true,
                 "children": [
-                  { "component": "surface", "id": "ap_quad", "layout": "quad", "style": "assetpipeline.holder", "grow": 1.0, "visible_bind": "view_quad" },
-                  { "component": "surface", "id": "ap_clip_pair", "layout": "pair", "style": "assetpipeline.holder", "grow": 1.0, "visible_bind": "view_clip" },
-                  { "component": "surface", "id": "ap_bake_view", "layout": "single", "style": "assetpipeline.holder", "grow": 1.0, "visible_bind": "view_bake" },
                   {
-                    "component": "panel",
-                    "id": "ap_display",
-                    "style": "assetpipeline.panel",
-                    "anchor": "top_right",
-                    "offset": [-16, 16],
-                    "width": 200,
-                    "pad": 10,
-                    "gap": 6,
-                    "nav_ordinal": 2,
+                    "component": "pill_toggle",
+                    "id": "ap_steps_character",
+                    "bind": "tab",
+                    "style": "paged_menu.tab_track",
+                    "size": 640,
+                    "visible_bind": "shown_wf_character",
+                    "next_action": "step_next",
+                    "prev_action": "step_prev",
                     "children": [
-                      { "component": "text", "text": "$ap_display", "text_size": 11, "font": "label", "color": "assetpipeline.col.rail", "size": 16 },
-                      { "component": "checkbox", "id": "show_skeleton", "bind": "show_skeleton", "label": "$ap_skeleton", "box": 14, "size": 22, "style": "assetpipeline.checkbox", "tab_group": "ap_display", "nav_ordinal": 1 },
-                      { "component": "checkbox", "id": "show_base", "bind": "show_base", "label": "$ap_reference_body", "box": 14, "size": 22, "style": "assetpipeline.checkbox", "tab_group": "ap_display", "nav_ordinal": 2 },
-                      { "component": "checkbox", "id": "show_collision", "bind": "show_collision", "label": "$ap_collision", "box": 14, "size": 22, "style": "assetpipeline.checkbox", "tab_group": "ap_display", "nav_ordinal": 3 },
-                      { "component": "checkbox", "id": "show_wireframe", "bind": "show_wireframe", "label": "$ap_wireframe", "box": 14, "size": 22, "style": "assetpipeline.checkbox", "tab_group": "ap_display", "nav_ordinal": 4 }
+                      {
+                        "component": "option",
+                        "label": "$ap_step_source",
+                        "value": 0
+                      },
+                      {
+                        "component": "option",
+                        "label": "$wf_step_prep",
+                        "value": 1
+                      },
+                      {
+                        "component": "option",
+                        "label": "$wf_step_rig",
+                        "value": 2
+                      },
+                      {
+                        "component": "option",
+                        "label": "$wf_step_preview",
+                        "value": 3
+                      },
+                      {
+                        "component": "option",
+                        "label": "$wf_step_attach",
+                        "value": 4
+                      },
+                      {
+                        "component": "option",
+                        "label": "$wf_step_review",
+                        "value": 5
+                      }
+                    ],
+                    "tab_active": "paged_menu.tab_active",
+                    "tab_idle": "paged_menu.tab_idle"
+                  },
+                  {
+                    "component": "pill_toggle",
+                    "id": "ap_steps_prop",
+                    "bind": "tab",
+                    "style": "paged_menu.tab_track",
+                    "size": 640,
+                    "visible_bind": "shown_wf_prop",
+                    "next_action": "step_next",
+                    "prev_action": "step_prev",
+                    "children": [
+                      {
+                        "component": "option",
+                        "label": "$ap_step_source",
+                        "value": 0
+                      },
+                      {
+                        "component": "option",
+                        "label": "$wf_step_mount",
+                        "value": 1
+                      },
+                      {
+                        "component": "option",
+                        "label": "$wf_step_review",
+                        "value": 2
+                      }
+                    ],
+                    "tab_active": "paged_menu.tab_active",
+                    "tab_idle": "paged_menu.tab_idle"
+                  },
+                  {
+                    "component": "pill_toggle",
+                    "id": "ap_steps_animation",
+                    "bind": "tab",
+                    "style": "paged_menu.tab_track",
+                    "size": 640,
+                    "visible_bind": "shown_wf_animation",
+                    "next_action": "step_next",
+                    "prev_action": "step_prev",
+                    "children": [
+                      {
+                        "component": "option",
+                        "label": "$ap_step_source",
+                        "value": 0
+                      },
+                      {
+                        "component": "option",
+                        "label": "$wf_step_clip",
+                        "value": 1
+                      },
+                      {
+                        "component": "option",
+                        "label": "$wf_step_review",
+                        "value": 2
+                      }
+                    ],
+                    "tab_active": "paged_menu.tab_active",
+                    "tab_idle": "paged_menu.tab_idle"
+                  },
+                  {
+                    "component": "cell",
+                    "style": "window",
+                    "pad": 30,
+                    "grow": 1.0,
+                    "children": [
+                      {
+                        "component": "row",
+                        "size": 22,
+                        "gap": 8,
+                        "children": [
+                          {
+                            "component": "text",
+                            "text_bind": "step_title",
+                            "grow": 1.0,
+                            "text_size": 14,
+                            "font": "label"
+                          },
+                          {
+                            "component": "text",
+                            "text_bind": "step_hint",
+                            "grow": 2.0,
+                            "align": "right",
+                            "text_size": 12,
+                            "font": "label",
+                            "color": "panel.stat_label"
+                          }
+                        ]
+                      },
+                      {
+                        "component": "row",
+                        "gap": 10,
+                        "grow": 1.0,
+                        "children": [
+                          {
+                            "component": "panel",
+                            "id": "ap_facts",
+                            "style": "panel",
+                            "pad": 10,
+                            "grow": 0.7,
+                            "nav_ordinal": 1,
+                            "children": [
+                              {
+                                "component": "cell",
+                                "gap": 8,
+                                "grow": 1.0,
+                                "children": [
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$ap_asset",
+                                        "grow": 1.0,
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label"
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "asset_name",
+                                        "size": 132,
+                                        "align": "right",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value"
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$ap_class",
+                                        "grow": 1.0,
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label"
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "class_label",
+                                        "size": 132,
+                                        "align": "right",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value"
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$ap_triangles",
+                                        "grow": 1.0,
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label"
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "fact_tris",
+                                        "size": 132,
+                                        "align": "right",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value"
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$ap_verts",
+                                        "grow": 1.0,
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label"
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "fact_verts",
+                                        "size": 132,
+                                        "align": "right",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value"
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$ap_bones",
+                                        "grow": 1.0,
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label"
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "fact_bones",
+                                        "size": 132,
+                                        "align": "right",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value"
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$ap_clips",
+                                        "grow": 1.0,
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label"
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "fact_clips",
+                                        "size": 132,
+                                        "align": "right",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value"
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$ap_facts_status",
+                                        "grow": 1.0,
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label"
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "text",
+                                    "text_bind": "fact_status",
+                                    "wrap": true,
+                                    "grow": 1.0,
+                                    "text_size": 12,
+                                    "font": "label",
+                                    "color": "panel.stat_label"
+                                  },
+                                  {
+                                    "component": "text",
+                                    "text_bind": "ap_status",
+                                    "text_size": 12,
+                                    "font": "label",
+                                    "color": "panel.stat_label",
+                                    "wrap": true
+                                  }
+                                ]
+                              }
+                            ]
+                          },
+                          {
+                            "component": "panel",
+                            "id": "ap_view",
+                            "style": "panel",
+                            "pad": 10,
+                            "pane": true,
+                            "nav_ordinal": 2,
+                            "children": [
+                              {
+                                "component": "cell",
+                                "grow": 1.0,
+                                "visible_bind": "shown_view_quad",
+                                "children": [
+                                  {
+                                    "component": "grid",
+                                    "cols": "1fr 1fr",
+                                    "rows": "1fr 1fr",
+                                    "gap": 6,
+                                    "grow": 1.0,
+                                    "children": [
+                                      {
+                                        "component": "surface",
+                                        "id": "ap_view_persp",
+                                        "source": "rig_persp",
+                                        "style": "rtt_holder",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "surface",
+                                        "id": "ap_view_top",
+                                        "source": "rig_top",
+                                        "style": "rtt_holder",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "surface",
+                                        "id": "ap_view_side",
+                                        "source": "rig_side",
+                                        "style": "rtt_holder",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "surface",
+                                        "id": "ap_view_front",
+                                        "source": "rig_front",
+                                        "style": "rtt_holder",
+                                        "grow": 1.0
+                                      }
+                                    ]
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "cell",
+                                "grow": 1.0,
+                                "visible_bind": "shown_view_bake",
+                                "children": [
+                                  {
+                                    "component": "surface",
+                                    "id": "ap_view_bake",
+                                    "source": "rig_bake",
+                                    "style": "rtt_holder",
+                                    "grow": 1.0
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "cell",
+                                "grow": 1.0,
+                                "visible_bind": "shown_view_clip",
+                                "children": [
+                                  {
+                                    "component": "row",
+                                    "gap": 6,
+                                    "grow": 1.0,
+                                    "children": [
+                                      {
+                                        "component": "surface",
+                                        "id": "ap_view_root",
+                                        "source": "clip_root",
+                                        "style": "rtt_holder",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "surface",
+                                        "id": "ap_view_place",
+                                        "source": "clip_place",
+                                        "style": "rtt_holder",
+                                        "grow": 1.0
+                                      }
+                                    ]
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "cell",
+                                "grow": 1.0,
+                                "visible_bind": "shown_view_none",
+                                "children": [
+                                  {
+                                    "component": "text",
+                                    "text": "$ap_view_empty",
+                                    "text_size": 11,
+                                    "font": "label",
+                                    "color": "panel.stat_label"
+                                  }
+                                ]
+                              }
+                            ],
+                            "aspect": 1.0
+                          },
+                          {
+                            "component": "panel",
+                            "id": "ap_controls",
+                            "style": "panel",
+                            "pad": 10,
+                            "grow": 0.7,
+                            "nav_ordinal": 3,
+                            "children": [
+                              {
+                                "component": "cell",
+                                "gap": 8,
+                                "grow": 1.0,
+                                "visible_bind": "shown_t_source",
+                                "children": [
+                                  {
+                                    "component": "text",
+                                    "text": "$ap_choose_a_workflow",
+                                    "text_size": 11,
+                                    "font": "label",
+                                    "color": "panel.stat_label"
+                                  },
+                                  {
+                                    "component": "button",
+                                    "id": "import_character",
+                                    "action": "import_character",
+                                    "label": "$ap_character",
+                                    "variant": "secondary",
+                                    "size_class": "lg",
+                                    "tab_group": "ap_controls",
+                                    "nav_ordinal": 1
+                                  },
+                                  {
+                                    "component": "button",
+                                    "id": "import_accessory",
+                                    "action": "import_accessory",
+                                    "label": "$ap_accessory",
+                                    "variant": "secondary",
+                                    "size_class": "lg",
+                                    "tab_group": "ap_controls",
+                                    "nav_ordinal": 2
+                                  },
+                                  {
+                                    "component": "button",
+                                    "id": "import_prop",
+                                    "action": "import_prop",
+                                    "label": "$ap_prop",
+                                    "variant": "secondary",
+                                    "size_class": "lg",
+                                    "tab_group": "ap_controls",
+                                    "nav_ordinal": 3
+                                  },
+                                  {
+                                    "component": "button",
+                                    "id": "import_animation",
+                                    "action": "import_animation",
+                                    "label": "$ap_animation",
+                                    "variant": "secondary",
+                                    "size_class": "lg",
+                                    "tab_group": "ap_controls",
+                                    "nav_ordinal": 4
+                                  },
+                                  {
+                                    "component": "checkbox",
+                                    "id": "prefer_staged",
+                                    "bind": "prefer_staged",
+                                    "style": "checkbox",
+                                    "size": 22,
+                                    "label": "$ap_prefer_staged",
+                                    "tab_group": "ap_controls",
+                                    "nav_ordinal": 5
+                                  },
+                                  {
+                                    "component": "checkbox",
+                                    "id": "as_provided",
+                                    "bind": "as_provided",
+                                    "style": "checkbox",
+                                    "size": 22,
+                                    "label": "$ap_as_provided",
+                                    "tab_group": "ap_controls",
+                                    "nav_ordinal": 6
+                                  },
+                                  {
+                                    "component": "cell",
+                                    "gap": 6,
+                                    "grow": 1.0,
+                                    "visible_bind": "has_picks",
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$ap_meshes_in_this_folder",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label"
+                                      },
+                                      {
+                                        "component": "list",
+                                        "id": "ap_picks",
+                                        "bind": "ap_picks_scroll",
+                                        "style": "settings.content.scrollbar",
+                                        "rows_from": "ap_picks",
+                                        "grow": 1.0,
+                                        "pad": 4,
+                                        "children": [
+                                          {
+                                            "component": "radio",
+                                            "id": "ap_picks_{row}",
+                                            "bind": "pick_sel",
+                                            "value": "{id}",
+                                            "size": 24,
+                                            "box": 15,
+                                            "tab_group": "ap_controls",
+                                            "nav_ordinal": 7,
+                                            "label_bind": "ap_picks_{row}_label"
+                                          }
+                                        ]
+                                      }
+                                    ]
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "cell",
+                                "gap": 8,
+                                "grow": 1.0,
+                                "visible_bind": "shown_t_prep",
+                                "children": [
+                                  {
+                                    "component": "text",
+                                    "text": "$ap_stature",
+                                    "text_size": 11,
+                                    "font": "label",
+                                    "color": "panel.stat_label"
+                                  },
+                                  {
+                                    "component": "slider",
+                                    "id": "stature_cm",
+                                    "bind": "stature_cm",
+                                    "style": "slider",
+                                    "size": 40,
+                                    "label": "$ap_height_cm",
+                                    "min": 40,
+                                    "max": 200,
+                                    "step": 1,
+                                    "tab_group": "ap_controls",
+                                    "nav_ordinal": 1
+                                  },
+                                  {
+                                    "component": "text",
+                                    "text_bind": "prep_height",
+                                    "size": 18,
+                                    "text_size": 12,
+                                    "font": "label"
+                                  },
+                                  {
+                                    "component": "text",
+                                    "text": "$ap_decimate",
+                                    "text_size": 11,
+                                    "font": "label",
+                                    "color": "panel.stat_label"
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 34,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text_field",
+                                        "id": "decimate_target",
+                                        "bind": "decimate_target",
+                                        "kind": "digits",
+                                        "max_len": 7,
+                                        "style": "settings.controls.field",
+                                        "grow": 1.0,
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 2,
+                                        "height": 30
+                                      },
+                                      {
+                                        "component": "button",
+                                        "id": "prep_decimate_reset",
+                                        "action": "prep_decimate_reset",
+                                        "label": "$ap_decimate_reset",
+                                        "variant": "secondary",
+                                        "size_class": "md",
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 3,
+                                        "size": 80
+                                      },
+                                      {
+                                        "component": "button",
+                                        "id": "prep_decimate_apply",
+                                        "action": "prep_decimate_apply",
+                                        "label": "$ap_decimate_apply",
+                                        "variant": "primary",
+                                        "size_class": "md",
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 4,
+                                        "size": 80
+                                      }
+                                    ],
+                                    "align": "center"
+                                  },
+                                  {
+                                    "component": "text",
+                                    "text_bind": "prep_status",
+                                    "wrap": true,
+                                    "size": 34,
+                                    "text_size": 12,
+                                    "font": "label"
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "cell",
+                                "gap": 8,
+                                "grow": 1.0,
+                                "visible_bind": "shown_t_rig",
+                                "children": [
+                                  {
+                                    "component": "text",
+                                    "text": "$ap_bone_map",
+                                    "text_size": 11,
+                                    "font": "label",
+                                    "color": "panel.stat_label"
+                                  },
+                                  {
+                                    "component": "gauge",
+                                    "id": "rig_progress",
+                                    "bind": "rig_progress",
+                                    "height": 10
+                                  },
+                                  {
+                                    "component": "list",
+                                    "id": "ap_bones",
+                                    "bind": "ap_bones_scroll",
+                                    "style": "settings.content.scrollbar",
+                                    "rows_from": "ap_bones",
+                                    "grow": 1.0,
+                                    "pad": 4,
+                                    "children": [
+                                      {
+                                        "component": "radio",
+                                        "id": "ap_bones_{row}",
+                                        "bind": "bone_sel",
+                                        "value": "{id}",
+                                        "size": 24,
+                                        "box": 15,
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 1,
+                                        "label_bind": "ap_bones_{row}_label"
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "slider",
+                                    "id": "off_x",
+                                    "bind": "off_x",
+                                    "style": "slider",
+                                    "size": 40,
+                                    "label": "$ap_off_x",
+                                    "min": -50,
+                                    "max": 50,
+                                    "step": 0.5,
+                                    "tab_group": "ap_controls",
+                                    "nav_ordinal": 2
+                                  },
+                                  {
+                                    "component": "slider",
+                                    "id": "off_y",
+                                    "bind": "off_y",
+                                    "style": "slider",
+                                    "size": 40,
+                                    "label": "$ap_off_y",
+                                    "min": -50,
+                                    "max": 50,
+                                    "step": 0.5,
+                                    "tab_group": "ap_controls",
+                                    "nav_ordinal": 3
+                                  },
+                                  {
+                                    "component": "slider",
+                                    "id": "off_z",
+                                    "bind": "off_z",
+                                    "style": "slider",
+                                    "size": 40,
+                                    "label": "$ap_off_z",
+                                    "min": -50,
+                                    "max": 50,
+                                    "step": 0.5,
+                                    "tab_group": "ap_controls",
+                                    "nav_ordinal": 4
+                                  },
+                                  {
+                                    "component": "slider",
+                                    "id": "off_roll",
+                                    "bind": "off_roll",
+                                    "style": "slider",
+                                    "size": 40,
+                                    "label": "$ap_roll",
+                                    "min": -180,
+                                    "max": 180,
+                                    "step": 1,
+                                    "tab_group": "ap_controls",
+                                    "nav_ordinal": 5
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 24,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "radio",
+                                        "id": "mode_translate",
+                                        "value": "translate",
+                                        "bind": "gizmo_mode",
+                                        "label": "$ap_translate",
+                                        "size": 24,
+                                        "box": 15,
+                                        "grow": 1.0,
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 6
+                                      },
+                                      {
+                                        "component": "radio",
+                                        "id": "mode_rotate",
+                                        "value": "rotate",
+                                        "bind": "gizmo_mode",
+                                        "label": "$ap_rotate",
+                                        "size": 24,
+                                        "box": 15,
+                                        "grow": 1.0,
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 7
+                                      },
+                                      {
+                                        "component": "radio",
+                                        "id": "mode_scale",
+                                        "value": "scale",
+                                        "bind": "gizmo_mode",
+                                        "label": "$ap_scale_gizmo",
+                                        "size": 24,
+                                        "box": 15,
+                                        "grow": 1.0,
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 8
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "checkbox",
+                                    "id": "mirror",
+                                    "bind": "mirror",
+                                    "style": "checkbox",
+                                    "size": 22,
+                                    "label": "$ap_mirror_joints",
+                                    "tab_group": "ap_controls",
+                                    "nav_ordinal": 9
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 34,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "button",
+                                        "id": "bake_skin",
+                                        "action": "bake_skin",
+                                        "label": "$ap_bake_skin",
+                                        "variant": "secondary",
+                                        "size_class": "md",
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 10,
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "button",
+                                        "id": "bone_reset",
+                                        "action": "bone_reset",
+                                        "label": "$ap_reset_bone",
+                                        "variant": "secondary",
+                                        "size_class": "md",
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 11,
+                                        "grow": 1.0
+                                      }
+                                    ],
+                                    "align": "center"
+                                  },
+                                  {
+                                    "component": "text",
+                                    "text": "$ap_display",
+                                    "text_size": 11,
+                                    "font": "label",
+                                    "color": "panel.stat_label"
+                                  },
+                                  {
+                                    "component": "checkbox",
+                                    "id": "show_skeleton",
+                                    "bind": "show_skeleton",
+                                    "style": "checkbox",
+                                    "size": 22,
+                                    "label": "$ap_skeleton",
+                                    "tab_group": "ap_controls",
+                                    "nav_ordinal": 12
+                                  },
+                                  {
+                                    "component": "checkbox",
+                                    "id": "show_base",
+                                    "bind": "show_base",
+                                    "style": "checkbox",
+                                    "size": 22,
+                                    "label": "$ap_reference_body",
+                                    "tab_group": "ap_controls",
+                                    "nav_ordinal": 13
+                                  },
+                                  {
+                                    "component": "checkbox",
+                                    "id": "show_collision",
+                                    "bind": "show_collision",
+                                    "style": "checkbox",
+                                    "size": 22,
+                                    "label": "$ap_collision",
+                                    "tab_group": "ap_controls",
+                                    "nav_ordinal": 14
+                                  },
+                                  {
+                                    "component": "checkbox",
+                                    "id": "show_wireframe",
+                                    "bind": "show_wireframe",
+                                    "style": "checkbox",
+                                    "size": 22,
+                                    "label": "$ap_wireframe",
+                                    "tab_group": "ap_controls",
+                                    "nav_ordinal": 15
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "cell",
+                                "gap": 8,
+                                "grow": 1.0,
+                                "visible_bind": "shown_t_mount",
+                                "children": [
+                                  {
+                                    "component": "text",
+                                    "text": "$ap_mount_socket",
+                                    "text_size": 11,
+                                    "font": "label",
+                                    "color": "panel.stat_label"
+                                  },
+                                  {
+                                    "component": "list",
+                                    "id": "ap_sockets",
+                                    "bind": "ap_sockets_scroll",
+                                    "style": "settings.content.scrollbar",
+                                    "rows_from": "ap_sockets",
+                                    "grow": 1.0,
+                                    "pad": 4,
+                                    "children": [
+                                      {
+                                        "component": "radio",
+                                        "id": "ap_sockets_{row}",
+                                        "bind": "sock_sel",
+                                        "value": "{id}",
+                                        "size": 24,
+                                        "box": 15,
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 1,
+                                        "label_bind": "ap_sockets_{row}_label"
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "slider",
+                                    "id": "fit_ox",
+                                    "bind": "fit_ox",
+                                    "style": "slider",
+                                    "size": 40,
+                                    "label": "$ap_offset_x",
+                                    "min": -50,
+                                    "max": 50,
+                                    "step": 0.5,
+                                    "tab_group": "ap_controls",
+                                    "nav_ordinal": 2
+                                  },
+                                  {
+                                    "component": "slider",
+                                    "id": "fit_oy",
+                                    "bind": "fit_oy",
+                                    "style": "slider",
+                                    "size": 40,
+                                    "label": "$ap_offset_y",
+                                    "min": -50,
+                                    "max": 50,
+                                    "step": 0.5,
+                                    "tab_group": "ap_controls",
+                                    "nav_ordinal": 3
+                                  },
+                                  {
+                                    "component": "slider",
+                                    "id": "fit_oz",
+                                    "bind": "fit_oz",
+                                    "style": "slider",
+                                    "size": 40,
+                                    "label": "$ap_offset_z",
+                                    "min": -50,
+                                    "max": 50,
+                                    "step": 0.5,
+                                    "tab_group": "ap_controls",
+                                    "nav_ordinal": 4
+                                  },
+                                  {
+                                    "component": "slider",
+                                    "id": "fit_rx",
+                                    "bind": "fit_rx",
+                                    "style": "slider",
+                                    "size": 40,
+                                    "label": "$ap_rotate_x",
+                                    "min": -180,
+                                    "max": 180,
+                                    "step": 1,
+                                    "tab_group": "ap_controls",
+                                    "nav_ordinal": 5
+                                  },
+                                  {
+                                    "component": "slider",
+                                    "id": "fit_ry",
+                                    "bind": "fit_ry",
+                                    "style": "slider",
+                                    "size": 40,
+                                    "label": "$ap_rotate_y",
+                                    "min": -180,
+                                    "max": 180,
+                                    "step": 1,
+                                    "tab_group": "ap_controls",
+                                    "nav_ordinal": 6
+                                  },
+                                  {
+                                    "component": "slider",
+                                    "id": "fit_rz",
+                                    "bind": "fit_rz",
+                                    "style": "slider",
+                                    "size": 40,
+                                    "label": "$ap_rotate_z",
+                                    "min": -180,
+                                    "max": 180,
+                                    "step": 1,
+                                    "tab_group": "ap_controls",
+                                    "nav_ordinal": 7
+                                  },
+                                  {
+                                    "component": "slider",
+                                    "id": "fit_sx",
+                                    "bind": "fit_sx",
+                                    "style": "slider",
+                                    "size": 40,
+                                    "label": "$ap_scale_x",
+                                    "min": 0.01,
+                                    "max": 4,
+                                    "step": 0.01,
+                                    "tab_group": "ap_controls",
+                                    "nav_ordinal": 8
+                                  },
+                                  {
+                                    "component": "slider",
+                                    "id": "fit_sy",
+                                    "bind": "fit_sy",
+                                    "style": "slider",
+                                    "size": 40,
+                                    "label": "$ap_scale_y",
+                                    "min": 0.01,
+                                    "max": 4,
+                                    "step": 0.01,
+                                    "tab_group": "ap_controls",
+                                    "nav_ordinal": 9
+                                  },
+                                  {
+                                    "component": "slider",
+                                    "id": "fit_sz",
+                                    "bind": "fit_sz",
+                                    "style": "slider",
+                                    "size": 40,
+                                    "label": "$ap_scale_z",
+                                    "min": 0.01,
+                                    "max": 4,
+                                    "step": 0.01,
+                                    "tab_group": "ap_controls",
+                                    "nav_ordinal": 10
+                                  },
+                                  {
+                                    "component": "slider",
+                                    "id": "fit_scale",
+                                    "bind": "fit_scale",
+                                    "style": "slider",
+                                    "size": 40,
+                                    "label": "$ap_scale_all",
+                                    "min": 0.01,
+                                    "max": 4,
+                                    "step": 0.01,
+                                    "tab_group": "ap_controls",
+                                    "nav_ordinal": 11
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "cell",
+                                "gap": 8,
+                                "grow": 1.0,
+                                "visible_bind": "shown_t_clip",
+                                "children": [
+                                  {
+                                    "component": "text",
+                                    "text": "$ap_variants",
+                                    "text_size": 11,
+                                    "font": "label",
+                                    "color": "panel.stat_label"
+                                  },
+                                  {
+                                    "component": "checkbox",
+                                    "id": "variant_rm",
+                                    "bind": "variant_rm",
+                                    "style": "checkbox",
+                                    "size": 22,
+                                    "label": "$ap_root_motion",
+                                    "tab_group": "ap_controls",
+                                    "nav_ordinal": 1
+                                  },
+                                  {
+                                    "component": "checkbox",
+                                    "id": "variant_ip",
+                                    "bind": "variant_ip",
+                                    "style": "checkbox",
+                                    "size": 22,
+                                    "label": "$ap_in_place",
+                                    "tab_group": "ap_controls",
+                                    "nav_ordinal": 2
+                                  },
+                                  {
+                                    "component": "cell",
+                                    "gap": 6,
+                                    "grow": 1.0,
+                                    "visible_bind": "has_picks",
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$ap_clips_in_this_folder",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label"
+                                      },
+                                      {
+                                        "component": "list",
+                                        "id": "ap_clips",
+                                        "bind": "ap_clips_scroll",
+                                        "style": "settings.content.scrollbar",
+                                        "rows_from": "ap_clips",
+                                        "grow": 1.0,
+                                        "pad": 4,
+                                        "children": [
+                                          {
+                                            "component": "radio",
+                                            "id": "ap_clips_{row}",
+                                            "bind": "pick_sel",
+                                            "value": "{id}",
+                                            "size": 24,
+                                            "box": 15,
+                                            "tab_group": "ap_controls",
+                                            "nav_ordinal": 3,
+                                            "label_bind": "ap_clips_{row}_label"
+                                          }
+                                        ]
+                                      }
+                                    ]
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "cell",
+                                "gap": 8,
+                                "grow": 1.0,
+                                "visible_bind": "shown_t_preview",
+                                "children": [
+                                  {
+                                    "component": "text",
+                                    "text": "$ap_preview_blurb",
+                                    "wrap": true,
+                                    "size": 60,
+                                    "text_size": 11,
+                                    "font": "label",
+                                    "color": "panel.stat_label"
+                                  },
+                                  {
+                                    "component": "text",
+                                    "text_bind": "preview_status",
+                                    "wrap": true,
+                                    "size": 48,
+                                    "text_size": 12,
+                                    "font": "label"
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "cell",
+                                "gap": 8,
+                                "grow": 1.0,
+                                "visible_bind": "shown_t_attach",
+                                "children": [
+                                  {
+                                    "component": "text",
+                                    "text": "$ap_attach_points",
+                                    "text_size": 11,
+                                    "font": "label",
+                                    "color": "panel.stat_label"
+                                  },
+                                  {
+                                    "component": "list",
+                                    "id": "ap_attach",
+                                    "bind": "ap_attach_scroll",
+                                    "style": "settings.content.scrollbar",
+                                    "rows_from": "ap_attach",
+                                    "grow": 1.0,
+                                    "pad": 4,
+                                    "children": [
+                                      {
+                                        "component": "radio",
+                                        "id": "ap_attach_{row}",
+                                        "bind": "att_sel",
+                                        "value": "{id}",
+                                        "size": 24,
+                                        "box": 15,
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 1,
+                                        "label_bind": "ap_attach_{row}_label"
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "slider",
+                                    "id": "att_x",
+                                    "bind": "att_x",
+                                    "style": "slider",
+                                    "size": 40,
+                                    "label": "$ap_offset_x",
+                                    "min": -50,
+                                    "max": 50,
+                                    "step": 0.5,
+                                    "tab_group": "ap_controls",
+                                    "nav_ordinal": 2
+                                  },
+                                  {
+                                    "component": "slider",
+                                    "id": "att_y",
+                                    "bind": "att_y",
+                                    "style": "slider",
+                                    "size": 40,
+                                    "label": "$ap_offset_y",
+                                    "min": -50,
+                                    "max": 50,
+                                    "step": 0.5,
+                                    "tab_group": "ap_controls",
+                                    "nav_ordinal": 3
+                                  },
+                                  {
+                                    "component": "slider",
+                                    "id": "att_z",
+                                    "bind": "att_z",
+                                    "style": "slider",
+                                    "size": 40,
+                                    "label": "$ap_offset_z",
+                                    "min": -50,
+                                    "max": 50,
+                                    "step": 0.5,
+                                    "tab_group": "ap_controls",
+                                    "nav_ordinal": 4
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "cell",
+                                "gap": 8,
+                                "grow": 1.0,
+                                "visible_bind": "shown_t_review",
+                                "children": [
+                                  {
+                                    "component": "text",
+                                    "text": "$ap_engine_requirements",
+                                    "text_size": 11,
+                                    "font": "label",
+                                    "color": "panel.stat_label"
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text_bind": "req_0",
+                                        "grow": 1.0,
+                                        "text_size": 12,
+                                        "font": "label"
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "req_0_state",
+                                        "size": 90,
+                                        "align": "right",
+                                        "text_size": 12,
+                                        "font": "label"
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text_bind": "req_1",
+                                        "grow": 1.0,
+                                        "text_size": 12,
+                                        "font": "label"
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "req_1_state",
+                                        "size": 90,
+                                        "align": "right",
+                                        "text_size": 12,
+                                        "font": "label"
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text_bind": "req_2",
+                                        "grow": 1.0,
+                                        "text_size": 12,
+                                        "font": "label"
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "req_2_state",
+                                        "size": 90,
+                                        "align": "right",
+                                        "text_size": 12,
+                                        "font": "label"
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text_bind": "req_3",
+                                        "grow": 1.0,
+                                        "text_size": 12,
+                                        "font": "label"
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "req_3_state",
+                                        "size": 90,
+                                        "align": "right",
+                                        "text_size": 12,
+                                        "font": "label"
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "stack",
+                                    "grow": 1.0
+                                  },
+                                  {
+                                    "component": "button",
+                                    "id": "next_piece",
+                                    "action": "next_piece",
+                                    "label": "$ap_import_next_piece",
+                                    "variant": "secondary",
+                                    "size_class": "md",
+                                    "tab_group": "ap_controls",
+                                    "nav_ordinal": 1,
+                                    "visible_bind": "has_committed"
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
                     ]
                   }
                 ]
               },
               {
-                "component": "panel",
-                "id": "ap_insp",
-                "style": "assetpipeline.panel",
-                "nav_ordinal": 3,
-                "size": 384,
-                "pad": 14,
+                "component": "nav_footer",
+                "id": "ap_footer",
+                "size": 52,
+                "style": "nav_footer.frame",
                 "gap": 8,
+                "nav_ordinal": 4,
                 "children": [
-                  { "component": "text", "text_bind": "insp_title", "text_size": 16, "font": "label", "color": "assetpipeline.col.ink", "size": 22 },
                   {
-                    "component": "cell",
-                    "id": "ap_task_page",
-                    "visible_bind": "wf_step_task",
-                    "gap": 8,
-                    "children": [
-                      { "component": "text", "text": "$ap_choose_a_workflow", "text_size": 12, "font": "label", "color": "assetpipeline.col.rail", "size": 18 },
-                      { "component": "text", "text": "$ap_what_manner_of_thing_will_you_weave_into", "text_size": 12, "font": "label", "color": "assetpipeline.col.dim", "wrap": true, "size": 34 },
-                      { "component": "button", "id": "import_character", "action": "import_character", "label": "$ap_character", "style": "assetpipeline.card", "size": 44, "size_class": "lg", "tab_group": "ap_insp", "nav_ordinal": 1 },
-                      { "component": "text", "text": "$ap_fbx_glb_rigged", "text_size": 10, "font": "label", "color": "assetpipeline.col.faint", "size": 14 },
-                      { "component": "button", "id": "import_accessory", "action": "import_accessory", "label": "$ap_accessory", "style": "assetpipeline.card", "size": 44, "size_class": "lg", "tab_group": "ap_insp", "nav_ordinal": 2 },
-                      { "component": "text", "text": "$ap_fbx_glb_attach_point", "text_size": 10, "font": "label", "color": "assetpipeline.col.faint", "size": 14 },
-                      { "component": "button", "id": "import_prop", "action": "import_prop", "label": "$ap_prop", "style": "assetpipeline.card", "size": 44, "size_class": "lg", "tab_group": "ap_insp", "nav_ordinal": 3 },
-                      { "component": "text", "text": "$ap_fbx_glb_static", "text_size": 10, "font": "label", "color": "assetpipeline.col.faint", "size": 14 },
-                      { "component": "button", "id": "import_animation", "action": "import_animation", "label": "$ap_animation", "style": "assetpipeline.card", "size": 44, "size_class": "lg", "tab_group": "ap_insp", "nav_ordinal": 4 },
-                      { "component": "text", "text": "$ap_fbx_bvh_clip", "text_size": 10, "font": "label", "color": "assetpipeline.col.faint", "size": 14 },
-                      { "component": "cell", "size": 6 },
-                      { "component": "checkbox", "id": "prefer_staged", "bind": "prefer_staged", "label": "$ap_prefer_staged", "box": 14, "size": 22, "style": "assetpipeline.checkbox", "tab_group": "ap_insp", "nav_ordinal": 5 },
-                      { "component": "text", "text": "$ap_prefer_staged_hint", "text_size": 10, "font": "label", "color": "assetpipeline.col.faint", "wrap": true, "size": 26 },
-                      { "component": "checkbox", "id": "as_provided", "bind": "as_provided", "label": "$ap_as_provided", "box": 14, "size": 22, "style": "assetpipeline.checkbox", "tab_group": "ap_insp", "nav_ordinal": 6 },
-                      { "component": "text", "text": "$ap_as_provided_hint", "text_size": 10, "font": "label", "color": "assetpipeline.col.faint", "wrap": true, "size": 26 },
-                      { "component": "text", "text": "$ap_select_a_workflow_to_begin", "text_size": 11, "font": "label", "color": "assetpipeline.col.faint", "size": 16 }
-                    ]
+                    "component": "option",
+                    "label": "$ap_ft_select",
+                    "signal": "Confirm",
+                    "size": 56
                   },
                   {
-                    "component": "cell",
-                    "id": "ap_prep_page",
-                    "visible_bind": "wf_step_prep",
-                    "gap": 8,
-                    "children": [
-                      { "component": "text", "text": "$ap_prep_head", "text_size": 12, "font": "label", "color": "assetpipeline.col.rail", "size": 18 },
-                      { "component": "text", "text": "$ap_prep_blurb", "text_size": 12, "font": "label", "color": "assetpipeline.col.dim", "wrap": true, "size": 44 },
-                      {
-                        "component": "cell",
-                        "id": "ap_prep_controls",
-                        "visible_bind": "prep_active",
-                        "gap": 8,
-                        "children": [
-                          { "component": "text", "text": "$ap_stature", "text_size": 11, "font": "label", "color": "assetpipeline.col.rail", "size": 16 },
-                          { "component": "slider", "id": "stature_cm", "bind": "stature_cm", "label": "$ap_height_cm", "min": 40, "max": 200, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 54, "size": 24, "style": "assetpipeline.slider", "tab_group": "ap_insp", "nav_ordinal": 20 },
-                          { "component": "text", "text_bind": "prep_height", "text_size": 11, "font": "label", "color": "assetpipeline.col.dim", "size": 16 },
-                          { "component": "text", "text": "$ap_decimate", "text_size": 11, "font": "label", "color": "assetpipeline.col.rail", "size": 16 },
-                          { "component": "slider", "id": "keep_pct", "bind": "keep_pct", "label": "$ap_keep_pct", "min": 50, "max": 100, "step": 5, "decimals": 0, "slider_h": 7, "value_w": 54, "size": 24, "style": "assetpipeline.slider", "tab_group": "ap_insp", "nav_ordinal": 21 }
-                        ]
-                      },
-                      { "component": "text", "text_bind": "prep_status", "text_size": 11, "font": "label", "color": "assetpipeline.col.dim", "wrap": true, "size": 34 }
-                    ]
+                    "component": "option",
+                    "label": "$ap_ft_back",
+                    "signal": "Cancel",
+                    "size": 56
                   },
                   {
-                    "component": "cell",
-                    "id": "ap_pick_bank",
-                    "visible_bind": "on_pick",
-                    "gap": 4,
-                    "children": [
-                      { "component": "text", "text_bind": "pick_head", "text_size": 11, "font": "label", "color": "assetpipeline.col.rail", "size": 16 },
-                      { "component": "button", "id": "pick_sel_0", "action": "pick_sel_0", "label_bind": "pick_0", "style_bind": "pick_0_sty", "size": 22, "size_class": "sm", "tab_group": "ap_insp", "nav_ordinal": 10 },
-                      { "component": "button", "id": "pick_sel_1", "action": "pick_sel_1", "label_bind": "pick_1", "style_bind": "pick_1_sty", "size": 22, "size_class": "sm", "tab_group": "ap_insp", "nav_ordinal": 11 },
-                      { "component": "button", "id": "pick_sel_2", "action": "pick_sel_2", "label_bind": "pick_2", "style_bind": "pick_2_sty", "size": 22, "size_class": "sm", "tab_group": "ap_insp", "nav_ordinal": 12 },
-                      { "component": "button", "id": "pick_sel_3", "action": "pick_sel_3", "label_bind": "pick_3", "style_bind": "pick_3_sty", "size": 22, "size_class": "sm", "tab_group": "ap_insp", "nav_ordinal": 13 },
-                      { "component": "button", "id": "pick_sel_4", "action": "pick_sel_4", "label_bind": "pick_4", "style_bind": "pick_4_sty", "size": 22, "size_class": "sm", "tab_group": "ap_insp", "nav_ordinal": 14 },
-                      { "component": "button", "id": "pick_sel_5", "action": "pick_sel_5", "label_bind": "pick_5", "style_bind": "pick_5_sty", "size": 22, "size_class": "sm", "tab_group": "ap_insp", "nav_ordinal": 15 },
-                      {
-                        "component": "row",
-                        "size": 22,
-                        "gap": 6,
-                        "align": "center",
-                        "children": [
-                          { "component": "button", "id": "pick_prev", "action": "pick_prev", "label": "‹", "enabled_bind": "pick_prev_enabled", "style": "assetpipeline.button", "size": 30, "size_class": "sm", "tab_group": "ap_insp", "nav_ordinal": 16 },
-                          { "component": "text", "text_bind": "pick_page", "text_size": 11, "font": "label", "color": "assetpipeline.col.dim", "align": "center", "grow": 1.0 },
-                          { "component": "button", "id": "pick_next", "action": "pick_next", "label": "›", "enabled_bind": "pick_next_enabled", "style": "assetpipeline.button", "size": 30, "size_class": "sm", "tab_group": "ap_insp", "nav_ordinal": 17 }
-                        ]
-                      }
-                    ]
+                    "component": "option",
+                    "label": "$ap_ft_steps",
+                    "signal": "TabNext",
+                    "size": 56
                   },
                   {
-                    "component": "cell",
-                    "id": "ap_skeleton_page",
-                    "visible_bind": "on_conform_skeleton",
-                    "gap": 5,
-                    "children": [
-                      { "component": "text", "text_bind": "rig_headline", "text_size": 13, "font": "label", "color": "assetpipeline.col.ink", "size": 18 },
-                      { "component": "gauge", "id": "rig_progress", "bind": "rig_progress", "height": 10, "size": 12 },
-                      { "component": "text", "text_bind": "rig_legend", "text_size": 11, "font": "label", "color": "assetpipeline.col.dim", "size": 16 },
-                      { "component": "text", "text": "$ap_bone_map", "text_size": 11, "font": "label", "color": "assetpipeline.col.rail", "size": 16 },
-                      {
-                        "component": "row", "size": 22, "gap": 4, "align": "center",
-                        "children": [
-                          { "component": "text", "text": "●", "text_size": 11, "color_bind": "bone_0_color", "size": 14 },
-                          { "component": "button", "id": "bone_sel_0", "action": "bone_sel_0", "label_bind": "bone_0", "style_bind": "bone_0_sty", "grow": 1.0, "size_class": "sm", "tab_group": "ap_insp", "nav_ordinal": 20 }
-                        ]
-                      },
-                      {
-                        "component": "row", "size": 22, "gap": 4, "align": "center",
-                        "children": [
-                          { "component": "text", "text": "●", "text_size": 11, "color_bind": "bone_1_color", "size": 14 },
-                          { "component": "button", "id": "bone_sel_1", "action": "bone_sel_1", "label_bind": "bone_1", "style_bind": "bone_1_sty", "grow": 1.0, "size_class": "sm", "tab_group": "ap_insp", "nav_ordinal": 21 }
-                        ]
-                      },
-                      {
-                        "component": "row", "size": 22, "gap": 4, "align": "center",
-                        "children": [
-                          { "component": "text", "text": "●", "text_size": 11, "color_bind": "bone_2_color", "size": 14 },
-                          { "component": "button", "id": "bone_sel_2", "action": "bone_sel_2", "label_bind": "bone_2", "style_bind": "bone_2_sty", "grow": 1.0, "size_class": "sm", "tab_group": "ap_insp", "nav_ordinal": 22 }
-                        ]
-                      },
-                      {
-                        "component": "row", "size": 22, "gap": 4, "align": "center",
-                        "children": [
-                          { "component": "text", "text": "●", "text_size": 11, "color_bind": "bone_3_color", "size": 14 },
-                          { "component": "button", "id": "bone_sel_3", "action": "bone_sel_3", "label_bind": "bone_3", "style_bind": "bone_3_sty", "grow": 1.0, "size_class": "sm", "tab_group": "ap_insp", "nav_ordinal": 23 }
-                        ]
-                      },
-                      {
-                        "component": "row", "size": 22, "gap": 4, "align": "center",
-                        "children": [
-                          { "component": "text", "text": "●", "text_size": 11, "color_bind": "bone_4_color", "size": 14 },
-                          { "component": "button", "id": "bone_sel_4", "action": "bone_sel_4", "label_bind": "bone_4", "style_bind": "bone_4_sty", "grow": 1.0, "size_class": "sm", "tab_group": "ap_insp", "nav_ordinal": 24 }
-                        ]
-                      },
-                      {
-                        "component": "row", "size": 22, "gap": 4, "align": "center",
-                        "children": [
-                          { "component": "text", "text": "●", "text_size": 11, "color_bind": "bone_5_color", "size": 14 },
-                          { "component": "button", "id": "bone_sel_5", "action": "bone_sel_5", "label_bind": "bone_5", "style_bind": "bone_5_sty", "grow": 1.0, "size_class": "sm", "tab_group": "ap_insp", "nav_ordinal": 25 }
-                        ]
-                      },
-                      {
-                        "component": "row",
-                        "size": 22,
-                        "gap": 6,
-                        "align": "center",
-                        "children": [
-                          { "component": "button", "id": "bone_prev", "action": "bone_prev", "label": "‹", "enabled_bind": "bone_prev_enabled", "style": "assetpipeline.button", "size": 30, "size_class": "sm", "tab_group": "ap_insp", "nav_ordinal": 26 },
-                          { "component": "text", "text_bind": "bone_page", "text_size": 11, "font": "label", "color": "assetpipeline.col.dim", "align": "center", "grow": 1.0 },
-                          { "component": "button", "id": "bone_next", "action": "bone_next", "label": "›", "enabled_bind": "bone_next_enabled", "style": "assetpipeline.button", "size": 30, "size_class": "sm", "tab_group": "ap_insp", "nav_ordinal": 27 }
-                        ]
-                      },
-                      { "component": "text", "text_bind": "rig_sel", "text_size": 12, "font": "label", "color": "assetpipeline.col.ink_dim", "size": 16 },
-                      { "component": "slider", "id": "off_x", "bind": "off_x", "label": "$ap_translate_x", "min": -20, "max": 20, "step": 0.1, "decimals": 1, "slider_h": 7, "value_w": 46, "size": 24, "style": "assetpipeline.slider", "tab_group": "ap_insp", "nav_ordinal": 30 },
-                      { "component": "slider", "id": "off_y", "bind": "off_y", "label": "$ap_translate_y", "min": -20, "max": 20, "step": 0.1, "decimals": 1, "slider_h": 7, "value_w": 46, "size": 24, "style": "assetpipeline.slider", "tab_group": "ap_insp", "nav_ordinal": 31 },
-                      { "component": "slider", "id": "off_z", "bind": "off_z", "label": "$ap_translate_z", "min": -20, "max": 20, "step": 0.1, "decimals": 1, "slider_h": 7, "value_w": 46, "size": 24, "style": "assetpipeline.slider", "tab_group": "ap_insp", "nav_ordinal": 32 },
-                      { "component": "slider", "id": "off_roll", "bind": "off_roll", "label": "$ap_roll", "min": -90, "max": 90, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 46, "size": 24, "style": "assetpipeline.slider", "tab_group": "ap_insp", "nav_ordinal": 33 },
-                      { "component": "text", "text": "$ap_gizmo_mode", "text_size": 11, "font": "label", "color": "assetpipeline.col.rail", "size": 16 },
-                      {
-                        "component": "row",
-                        "size": 24,
-                        "gap": 6,
-                        "align": "center",
-                        "children": [
-                          { "component": "radio", "id": "mode_translate", "value": "translate", "bind": "gizmo_mode", "label": "$ap_translate", "box": 14, "grow": 1.0, "tab_group": "ap_insp", "nav_ordinal": 40 },
-                          { "component": "radio", "id": "mode_rotate", "value": "rotate", "bind": "gizmo_mode", "label": "$ap_rotate", "box": 14, "grow": 1.0, "tab_group": "ap_insp", "nav_ordinal": 41 },
-                          { "component": "radio", "id": "mode_scale", "value": "scale", "bind": "gizmo_mode", "label": "$ap_scale_gizmo", "box": 14, "grow": 1.0, "tab_group": "ap_insp", "nav_ordinal": 42 }
-                        ]
-                      },
-                      {
-                        "component": "row",
-                        "size": 28,
-                        "gap": 6,
-                        "align": "center",
-                        "children": [
-                          { "component": "checkbox", "id": "mirror", "bind": "mirror", "label": "$ap_mirror_joints", "box": 14, "grow": 1.0, "style": "assetpipeline.checkbox", "tab_group": "ap_insp", "nav_ordinal": 44 },
-                          { "component": "button", "id": "bake_skin", "action": "bake_skin", "label": "$ap_bake_skin", "style": "assetpipeline.button", "size": 92, "size_class": "sm", "tab_group": "ap_insp", "nav_ordinal": 45 },
-                          { "component": "button", "id": "bone_reset", "action": "bone_reset", "label": "$ap_reset_bone", "style": "assetpipeline.button", "size": 96, "size_class": "sm", "tab_group": "ap_insp", "nav_ordinal": 46 }
-                        ]
-                      }
-                    ]
+                    "component": "button",
+                    "id": "ap_ft_menu",
+                    "action": "pause_open",
+                    "label": "$ap_ft_menu",
+                    "variant": "secondary",
+                    "size_class": "md",
+                    "tab_group": "ap_footer",
+                    "nav_ordinal": 1,
+                    "size": 90
                   },
                   {
-                    "component": "cell",
-                    "id": "ap_mount_page",
-                    "visible_bind": "on_conform_mount",
-                    "gap": 5,
-                    "children": [
-                      { "component": "text", "text": "$ap_mount_socket", "text_size": 11, "font": "label", "color": "assetpipeline.col.rail", "size": 16 },
-                      { "component": "text", "text_bind": "fit_socket", "text_size": 12, "font": "label", "color": "assetpipeline.col.ink_dim", "size": 16 },
-                      { "component": "button", "id": "sock_sel_0", "action": "sock_sel_0", "label_bind": "sock_0", "style_bind": "sock_0_sty", "size": 22, "size_class": "sm", "tab_group": "ap_insp", "nav_ordinal": 50 },
-                      { "component": "button", "id": "sock_sel_1", "action": "sock_sel_1", "label_bind": "sock_1", "style_bind": "sock_1_sty", "size": 22, "size_class": "sm", "tab_group": "ap_insp", "nav_ordinal": 51 },
-                      { "component": "button", "id": "sock_sel_2", "action": "sock_sel_2", "label_bind": "sock_2", "style_bind": "sock_2_sty", "size": 22, "size_class": "sm", "tab_group": "ap_insp", "nav_ordinal": 52 },
-                      { "component": "button", "id": "sock_sel_3", "action": "sock_sel_3", "label_bind": "sock_3", "style_bind": "sock_3_sty", "size": 22, "size_class": "sm", "tab_group": "ap_insp", "nav_ordinal": 53 },
-                      { "component": "button", "id": "sock_sel_4", "action": "sock_sel_4", "label_bind": "sock_4", "style_bind": "sock_4_sty", "size": 22, "size_class": "sm", "tab_group": "ap_insp", "nav_ordinal": 54 },
-                      { "component": "button", "id": "sock_sel_5", "action": "sock_sel_5", "label_bind": "sock_5", "style_bind": "sock_5_sty", "size": 22, "size_class": "sm", "tab_group": "ap_insp", "nav_ordinal": 55 },
-                      {
-                        "component": "row",
-                        "size": 22,
-                        "gap": 6,
-                        "align": "center",
-                        "children": [
-                          { "component": "button", "id": "sock_prev", "action": "sock_prev", "label": "‹", "enabled_bind": "sock_prev_enabled", "style": "assetpipeline.button", "size": 30, "size_class": "sm", "tab_group": "ap_insp", "nav_ordinal": 56 },
-                          { "component": "text", "text_bind": "sock_page", "text_size": 11, "font": "label", "color": "assetpipeline.col.dim", "align": "center", "grow": 1.0 },
-                          { "component": "button", "id": "sock_next", "action": "sock_next", "label": "›", "enabled_bind": "sock_next_enabled", "style": "assetpipeline.button", "size": 30, "size_class": "sm", "tab_group": "ap_insp", "nav_ordinal": 57 }
-                        ]
-                      },
-                      { "component": "text", "text": "$ap_offset_cm", "text_size": 11, "font": "label", "color": "assetpipeline.col.rail", "size": 16 },
-                      { "component": "slider", "id": "fit_ox", "bind": "fit_ox", "label": "$ap_offset_x", "min": -50, "max": 50, "step": 0.1, "decimals": 1, "slider_h": 7, "value_w": 46, "size": 24, "style": "assetpipeline.slider", "tab_group": "ap_insp", "nav_ordinal": 60 },
-                      { "component": "slider", "id": "fit_oy", "bind": "fit_oy", "label": "$ap_offset_y", "min": -50, "max": 50, "step": 0.1, "decimals": 1, "slider_h": 7, "value_w": 46, "size": 24, "style": "assetpipeline.slider", "tab_group": "ap_insp", "nav_ordinal": 61 },
-                      { "component": "slider", "id": "fit_oz", "bind": "fit_oz", "label": "$ap_offset_z", "min": -50, "max": 50, "step": 0.1, "decimals": 1, "slider_h": 7, "value_w": 46, "size": 24, "style": "assetpipeline.slider", "tab_group": "ap_insp", "nav_ordinal": 62 },
-                      { "component": "text", "text": "$ap_rotate_deg", "text_size": 11, "font": "label", "color": "assetpipeline.col.rail", "size": 16 },
-                      { "component": "slider", "id": "fit_rx", "bind": "fit_rx", "label": "$ap_rotate_x", "min": -180, "max": 180, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 46, "size": 24, "style": "assetpipeline.slider", "tab_group": "ap_insp", "nav_ordinal": 63 },
-                      { "component": "slider", "id": "fit_ry", "bind": "fit_ry", "label": "$ap_rotate_y", "min": -180, "max": 180, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 46, "size": 24, "style": "assetpipeline.slider", "tab_group": "ap_insp", "nav_ordinal": 64 },
-                      { "component": "slider", "id": "fit_rz", "bind": "fit_rz", "label": "$ap_rotate_z", "min": -180, "max": 180, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 46, "size": 24, "style": "assetpipeline.slider", "tab_group": "ap_insp", "nav_ordinal": 65 },
-                      { "component": "text", "text": "$ap_scale", "text_size": 11, "font": "label", "color": "assetpipeline.col.rail", "size": 16 },
-                      { "component": "slider", "id": "fit_sx", "bind": "fit_sx", "label": "$ap_scale_x", "min": 0.01, "max": 4, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 46, "size": 24, "style": "assetpipeline.slider", "tab_group": "ap_insp", "nav_ordinal": 66 },
-                      { "component": "slider", "id": "fit_sy", "bind": "fit_sy", "label": "$ap_scale_y", "min": 0.01, "max": 4, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 46, "size": 24, "style": "assetpipeline.slider", "tab_group": "ap_insp", "nav_ordinal": 67 },
-                      { "component": "slider", "id": "fit_sz", "bind": "fit_sz", "label": "$ap_scale_z", "min": 0.01, "max": 4, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 46, "size": 24, "style": "assetpipeline.slider", "tab_group": "ap_insp", "nav_ordinal": 68 },
-                      { "component": "slider", "id": "fit_scale", "bind": "fit_scale", "label": "$ap_scale_all", "min": 0.01, "max": 4, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 46, "size": 24, "style": "assetpipeline.slider", "tab_group": "ap_insp", "nav_ordinal": 69 }
-                    ]
+                    "component": "button",
+                    "id": "ap_ft_back",
+                    "action": "step_prev",
+                    "label": "$wf_back",
+                    "variant": "secondary",
+                    "size_class": "md",
+                    "tab_group": "ap_footer",
+                    "nav_ordinal": 2,
+                    "size": 90
                   },
                   {
-                    "component": "cell",
-                    "id": "ap_clip_page",
-                    "visible_bind": "on_conform_clip",
-                    "gap": 6,
-                    "children": [
-                      { "component": "text", "text": "$ap_clips", "text_size": 11, "font": "label", "color": "assetpipeline.col.rail", "size": 16 },
-                      { "component": "checkbox", "id": "variant_rm", "bind": "variant_rm", "label": "$ap_root_motion", "box": 14, "size": 22, "style": "assetpipeline.checkbox", "tab_group": "ap_insp", "nav_ordinal": 70 },
-                      { "component": "checkbox", "id": "variant_ip", "bind": "variant_ip", "label": "$ap_in_place", "box": 14, "size": 22, "style": "assetpipeline.checkbox", "tab_group": "ap_insp", "nav_ordinal": 71 }
-                    ]
+                    "component": "button",
+                    "id": "ap_ft_next",
+                    "action": "step_next",
+                    "label": "$wf_next",
+                    "variant": "primary",
+                    "size_class": "md",
+                    "tab_group": "ap_footer",
+                    "nav_ordinal": 3,
+                    "size": 90,
+                    "visible_bind": "shown_ft_next"
                   },
                   {
-                    "component": "cell",
-                    "id": "ap_preview_page",
-                    "visible_bind": "wf_step_preview",
-                    "gap": 8,
-                    "children": [
-                      { "component": "text", "text": "$ap_preview_blurb", "text_size": 12, "font": "label", "color": "assetpipeline.col.dim", "wrap": true, "size": 48 },
-                      { "component": "text", "text_bind": "preview_status", "text_size": 11, "font": "label", "color": "assetpipeline.col.rail", "size": 16 },
-                      { "component": "text", "text": "$ap_preview_back_hint", "text_size": 10, "font": "label", "color": "assetpipeline.col.faint", "wrap": true, "size": 26 }
-                    ]
-                  },
-                  {
-                    "component": "cell",
-                    "id": "ap_attach_page",
-                    "visible_bind": "wf_step_attach",
-                    "gap": 5,
-                    "children": [
-                      { "component": "text", "text": "$ap_rig_attach_points", "text_size": 11, "font": "label", "color": "assetpipeline.col.rail", "size": 16 },
-                      { "component": "button", "id": "att_sel_0", "action": "att_sel_0", "label_bind": "att_0", "style_bind": "att_0_sty", "size": 22, "size_class": "sm", "tab_group": "ap_insp", "nav_ordinal": 80 },
-                      { "component": "button", "id": "att_sel_1", "action": "att_sel_1", "label_bind": "att_1", "style_bind": "att_1_sty", "size": 22, "size_class": "sm", "tab_group": "ap_insp", "nav_ordinal": 81 },
-                      { "component": "button", "id": "att_sel_2", "action": "att_sel_2", "label_bind": "att_2", "style_bind": "att_2_sty", "size": 22, "size_class": "sm", "tab_group": "ap_insp", "nav_ordinal": 82 },
-                      { "component": "button", "id": "att_sel_3", "action": "att_sel_3", "label_bind": "att_3", "style_bind": "att_3_sty", "size": 22, "size_class": "sm", "tab_group": "ap_insp", "nav_ordinal": 83 },
-                      { "component": "button", "id": "att_sel_4", "action": "att_sel_4", "label_bind": "att_4", "style_bind": "att_4_sty", "size": 22, "size_class": "sm", "tab_group": "ap_insp", "nav_ordinal": 84 },
-                      { "component": "button", "id": "att_sel_5", "action": "att_sel_5", "label_bind": "att_5", "style_bind": "att_5_sty", "size": 22, "size_class": "sm", "tab_group": "ap_insp", "nav_ordinal": 85 },
-                      { "component": "text", "text_bind": "att_sel", "text_size": 12, "font": "label", "color": "assetpipeline.col.ink_dim", "size": 16 },
-                      { "component": "slider", "id": "att_x", "bind": "att_x", "label": "$ap_off_x", "min": -30, "max": 30, "step": 0.1, "decimals": 1, "slider_h": 7, "value_w": 46, "size": 24, "style": "assetpipeline.slider", "tab_group": "ap_insp", "nav_ordinal": 86 },
-                      { "component": "slider", "id": "att_y", "bind": "att_y", "label": "$ap_off_y", "min": -30, "max": 30, "step": 0.1, "decimals": 1, "slider_h": 7, "value_w": 46, "size": 24, "style": "assetpipeline.slider", "tab_group": "ap_insp", "nav_ordinal": 87 },
-                      { "component": "slider", "id": "att_z", "bind": "att_z", "label": "$ap_off_z", "min": -30, "max": 30, "step": 0.1, "decimals": 1, "slider_h": 7, "value_w": 46, "size": 24, "style": "assetpipeline.slider", "tab_group": "ap_insp", "nav_ordinal": 88 }
-                    ]
-                  },
-                  {
-                    "component": "cell",
-                    "id": "ap_review_page",
-                    "visible_bind": "wf_step_review",
-                    "gap": 6,
-                    "children": [
-                      { "component": "text", "text": "$ap_engine_requirements", "text_size": 11, "font": "label", "color": "assetpipeline.col.rail", "size": 16 },
-                      {
-                        "component": "row", "size": 20, "gap": 4, "align": "center",
-                        "children": [
-                          { "component": "text", "text": "●", "text_size": 11, "color_bind": "req_0_color", "size": 14 },
-                          { "component": "text", "text_bind": "req_0", "text_size": 12, "font": "label", "color": "assetpipeline.col.ink_dim", "grow": 1.0 }
-                        ]
-                      },
-                      {
-                        "component": "row", "size": 20, "gap": 4, "align": "center",
-                        "children": [
-                          { "component": "text", "text": "●", "text_size": 11, "color_bind": "req_1_color", "size": 14 },
-                          { "component": "text", "text_bind": "req_1", "text_size": 12, "font": "label", "color": "assetpipeline.col.ink_dim", "grow": 1.0 }
-                        ]
-                      },
-                      {
-                        "component": "row", "size": 20, "gap": 4, "align": "center",
-                        "children": [
-                          { "component": "text", "text": "●", "text_size": 11, "color_bind": "req_2_color", "size": 14 },
-                          { "component": "text", "text_bind": "req_2", "text_size": 12, "font": "label", "color": "assetpipeline.col.ink_dim", "grow": 1.0 }
-                        ]
-                      },
-                      {
-                        "component": "row", "size": 20, "gap": 4, "align": "center",
-                        "children": [
-                          { "component": "text", "text": "●", "text_size": 11, "color_bind": "req_3_color", "size": 14 },
-                          { "component": "text", "text_bind": "req_3", "text_size": 12, "font": "label", "color": "assetpipeline.col.ink_dim", "grow": 1.0 }
-                        ]
-                      },
-                      { "component": "button", "id": "commit", "action": "commit", "label_bind": "commit_label", "enabled_bind": "commit_enabled", "variant": "primary", "size_class": "lg", "size": 40, "tab_group": "ap_insp", "nav_ordinal": 90 },
-                      { "component": "button", "id": "next_piece", "action": "next_piece", "label": "$ap_import_next_piece", "visible_bind": "has_committed", "variant": "secondary", "size_class": "md", "size": 30, "tab_group": "ap_insp", "nav_ordinal": 91 }
-                    ]
-                  },
-                  { "component": "text", "text_bind": "insp_0", "text_size": 11, "font": "label", "color": "assetpipeline.col.ink_dim", "size": 15 },
-                  { "component": "text", "text_bind": "insp_1", "text_size": 11, "font": "label", "color": "assetpipeline.col.ink_dim", "size": 15 },
-                  { "component": "text", "text_bind": "insp_2", "text_size": 11, "font": "label", "color": "assetpipeline.col.ink_dim", "size": 15 },
-                  { "component": "text", "text_bind": "insp_3", "text_size": 11, "font": "label", "color": "assetpipeline.col.ink_dim", "size": 15 },
-                  { "component": "text", "text_bind": "insp_4", "text_size": 11, "font": "label", "color": "assetpipeline.col.ink_dim", "size": 15 },
-                  { "component": "text", "text_bind": "insp_5", "text_size": 11, "font": "label", "color": "assetpipeline.col.ink_dim", "size": 15 },
-                  { "component": "text", "text_bind": "insp_6", "text_size": 11, "font": "label", "color": "assetpipeline.col.ink_dim", "size": 15 },
-                  { "component": "text", "text_bind": "insp_7", "text_size": 11, "font": "label", "color": "assetpipeline.col.ink_dim", "size": 15 }
+                    "component": "button",
+                    "id": "ap_ft_commit",
+                    "action": "commit",
+                    "label": "$ap_export_to_staging",
+                    "variant": "primary",
+                    "size_class": "md",
+                    "tab_group": "ap_footer",
+                    "nav_ordinal": 3,
+                    "size": 150,
+                    "visible_bind": "shown_ft_commit"
+                  }
                 ]
               }
-            ]
-          },
-          {
-            "component": "row",
-            "id": "ap_footer",
-            "style": "assetpipeline.bar",
-            "nav_ordinal": 4,
-            "size": 56,
-            "pad_x": 12,
-            "pad_y": 8,
-            "gap": 10,
-            "align": "center",
-            "children": [
-              { "component": "button", "id": "wf_back", "action": "wf_back", "label": "$wf_back", "enabled_bind": "back_enabled", "variant": "ghost", "size_class": "md", "size": 96, "tab_group": "ap_footer", "nav_ordinal": 1 },
-              {
-                "component": "cell",
-                "grow": 1.0,
-                "gap": 2,
-                "children": [
-                  { "component": "text", "text_bind": "step_title", "text_size": 14, "font": "label", "color": "assetpipeline.col.ink", "size": 18 },
-                  { "component": "text", "text_bind": "step_hint", "text_size": 11, "font": "label", "color": "assetpipeline.col.dim", "size": 15 }
-                ]
-              },
-              { "component": "button", "id": "wf_next", "action": "wf_next", "label_bind": "next_label", "enabled_bind": "next_enabled", "variant": "primary", "size_class": "md", "size": 110, "tab_group": "ap_footer", "nav_ordinal": 2 }
-            ]
+            ],
+            "width_frac": 1.0,
+            "height_frac": 1.0
           }
-        ]
+        ],
+        "runes": true,
+        "width_frac": 1.0,
+        "height_frac": 1.0
       },
       {
         "component": "cell",
         "id": "ap_discard",
-        "visible_bind": "wf_discard",
-        "anchor": "center",
-        "width": 420,
+        "style": "screens.confirm",
+        "anchor": "top_left",
+        "visible_bind": "shown_discard",
+        "layer": 4,
         "children": [
           {
             "component": "popup_panel",
-            "title": "$wf_discard_title",
-            "subtitle": "$wf_discard_msg",
-            "divider": true,
-            "items_gap": 12,
-            "layer": 2,
+            "id": "ap_discard_popup",
+            "anchor": "center",
             "children": [
-              { "component": "button", "id": "wf_discard_yes", "action": "wf_discard_yes", "label": "$wf_discard_confirm", "size_class": "lg", "variant": "primary", "tab_group": "ap_discard", "nav_ordinal": 1 },
-              { "component": "button", "id": "wf_discard_no", "action": "wf_discard_no", "label": "$wf_discard_cancel", "size_class": "lg", "variant": "secondary", "tab_group": "ap_discard", "nav_ordinal": 2 }
+              {
+                "component": "text",
+                "text": "$wf_discard_msg",
+                "size": 44,
+                "align": "center",
+                "wrap": true,
+                "text_size": 11,
+                "font": "label",
+                "color": "panel.stat_label"
+              },
+              {
+                "component": "button",
+                "id": "discard_no",
+                "action": "discard_no",
+                "label": "$wf_discard_cancel",
+                "variant": "primary",
+                "size_class": "md",
+                "tab_group": "ap_discard",
+                "nav_ordinal": 1,
+                "size": 48
+              },
+              {
+                "component": "button",
+                "id": "discard_yes",
+                "action": "discard_yes",
+                "label": "$wf_discard_confirm",
+                "variant": "danger",
+                "size_class": "md",
+                "tab_group": "ap_discard",
+                "nav_ordinal": 2,
+                "size": 48
+              }
             ]
           }
-        ]
+        ],
+        "width_frac": 1.0,
+        "height_frac": 1.0
       }
     ]
+  },
+  "exits": {},
+  "stages": {
+    "rig_persp": {
+      "lighting": "studio",
+      "clear": "$stage_void",
+      "attachments": {
+        "hdr": {
+          "format": "rgba16f"
+        },
+        "color": {
+          "format": "surface"
+        },
+        "depth": {
+          "format": "depth32"
+        }
+      },
+      "passes": [
+        {
+          "pass": "scene",
+          "writes": [
+            "hdr",
+            "depth"
+          ]
+        },
+        {
+          "pass": "tonemap_grade"
+        }
+      ],
+      "_comment": "The Clayworks rig view \u2014 four `surface` panels in a grid, each its own stage (perspective orbit + top/side/front orthos), lit by the studio rig; the RigView filler draws the mesh, skeleton, gizmo and collision into the `scene` pass and the HDR resolve keeps all four panels' colours agreeing. `clear` is transparent so the holder chrome shows through."
+    },
+    "rig_top": {
+      "lighting": "studio",
+      "clear": "$stage_void",
+      "attachments": {
+        "hdr": {
+          "format": "rgba16f"
+        },
+        "color": {
+          "format": "surface"
+        },
+        "depth": {
+          "format": "depth32"
+        }
+      },
+      "passes": [
+        {
+          "pass": "scene",
+          "writes": [
+            "hdr",
+            "depth"
+          ]
+        },
+        {
+          "pass": "tonemap_grade"
+        }
+      ]
+    },
+    "rig_side": {
+      "lighting": "studio",
+      "clear": "$stage_void",
+      "attachments": {
+        "hdr": {
+          "format": "rgba16f"
+        },
+        "color": {
+          "format": "surface"
+        },
+        "depth": {
+          "format": "depth32"
+        }
+      },
+      "passes": [
+        {
+          "pass": "scene",
+          "writes": [
+            "hdr",
+            "depth"
+          ]
+        },
+        {
+          "pass": "tonemap_grade"
+        }
+      ]
+    },
+    "rig_front": {
+      "lighting": "studio",
+      "clear": "$stage_void",
+      "attachments": {
+        "hdr": {
+          "format": "rgba16f"
+        },
+        "color": {
+          "format": "surface"
+        },
+        "depth": {
+          "format": "depth32"
+        }
+      },
+      "passes": [
+        {
+          "pass": "scene",
+          "writes": [
+            "hdr",
+            "depth"
+          ]
+        },
+        {
+          "pass": "tonemap_grade"
+        }
+      ]
+    },
+    "rig_bake": {
+      "lighting": "studio",
+      "clear": "$stage_void",
+      "attachments": {
+        "hdr": {
+          "format": "rgba16f"
+        },
+        "color": {
+          "format": "surface"
+        },
+        "depth": {
+          "format": "depth32"
+        }
+      },
+      "passes": [
+        {
+          "pass": "scene",
+          "writes": [
+            "hdr",
+            "depth"
+          ]
+        },
+        {
+          "pass": "tonemap_grade"
+        }
+      ]
+    },
+    "clip_root": {
+      "lighting": "studio",
+      "clear": "$stage_void",
+      "attachments": {
+        "hdr": {
+          "format": "rgba16f"
+        },
+        "color": {
+          "format": "surface"
+        },
+        "depth": {
+          "format": "depth32"
+        }
+      },
+      "passes": [
+        {
+          "pass": "scene",
+          "writes": [
+            "hdr",
+            "depth"
+          ]
+        },
+        {
+          "pass": "tonemap_grade"
+        }
+      ]
+    },
+    "clip_place": {
+      "lighting": "studio",
+      "clear": "$stage_void",
+      "attachments": {
+        "hdr": {
+          "format": "rgba16f"
+        },
+        "color": {
+          "format": "surface"
+        },
+        "depth": {
+          "format": "depth32"
+        }
+      },
+      "passes": [
+        {
+          "pass": "scene",
+          "writes": [
+            "hdr",
+            "depth"
+          ]
+        },
+        {
+          "pass": "tonemap_grade"
+        }
+      ]
+    }
+  },
+  "styles": {
+    "window": {
+      "radius": 4,
+      "fill_top": "$stone3",
+      "fill_bot": "$stone1",
+      "border": "$edge2"
+    },
+    "panel": {
+      "resting": {
+        "fill": "$panel_bg",
+        "border": "$edge2",
+        "border_w": 1,
+        "radius": 3
+      },
+      "focused": {
+        "fill": "$panel_bg",
+        "border": "$sap_border",
+        "border_w": 2,
+        "radius": 3
+      },
+      "empty": "$dim",
+      "stat_label": "$dim",
+      "stat_value": "$ink_bright"
+    },
+    "checkbox": {
+      "box": "$stone2",
+      "check": "$sig_green",
+      "border": "$edge4",
+      "pad": 3
+    },
+    "slider": {
+      "track": "$well",
+      "fill": "$sap_base",
+      "fill_hi": "$sap_border",
+      "handle": "$sap_border",
+      "handle_w": 14,
+      "focus_track": "$well",
+      "focus_fill": "$sap_hover",
+      "focus_label": "$rune_glow_hi",
+      "value_color": "$dim",
+      "label_size": 13,
+      "value_size": 12
+    },
+    "paged_menu": {
+      "frame": {
+        "fill_top": "$surface_top",
+        "fill_bot": "$stage_void",
+        "border": "$edge2",
+        "border_w": 1,
+        "radius": 6
+      },
+      "hint": {
+        "fill_top": "$stone_btn_hi",
+        "fill_bot": "$stone_btn",
+        "border": "$edge4",
+        "border_w": 1,
+        "radius": 3
+      },
+      "eyebrow": "$bronze_dim",
+      "title": "$ink_bright",
+      "rule": "$seam",
+      "page_active": {
+        "fill_top": "$stage_void",
+        "fill_bot": "$stage_void",
+        "border": "$stage_void",
+        "border_w": 0,
+        "radius": 0,
+        "label": "$ink_bright",
+        "label_size": 15,
+        "underline": "$rune_glow_hi",
+        "underline_w": 2
+      },
+      "page_idle": {
+        "fill_top": "$stage_void",
+        "fill_bot": "$stage_void",
+        "border": "$stage_void",
+        "border_w": 0,
+        "radius": 0,
+        "label": "$dim",
+        "label_size": 15
+      },
+      "tab_track": {
+        "fill_top": "$well_top",
+        "fill_bot": "$well_bot",
+        "border": "$edge3",
+        "border_w": 1,
+        "radius": 14
+      },
+      "tab_active": {
+        "fill_top": "$sap_base",
+        "fill_bot": "$sap_base_lo",
+        "border": "$sap_border",
+        "border_w": 1,
+        "radius": 12,
+        "label": "$ink_sapphire"
+      },
+      "tab_idle": {
+        "fill_top": "$stage_void",
+        "fill_bot": "$stage_void",
+        "border": "$stage_void",
+        "border_w": 0,
+        "radius": 12,
+        "label": "$dim"
+      },
+      "group_eyebrow": "$bronze",
+      "well": {
+        "fill_top": "$well_top",
+        "fill_bot": "$well_bot",
+        "border": "$edge2",
+        "border_w": 1,
+        "radius": 4
+      },
+      "row_label": "$dim_soft",
+      "row_label_focus": "$ink_bright",
+      "row_seam": "$seam",
+      "row_focus": {
+        "fill_top": "$accent_wash",
+        "fill_bot": "$stage_void",
+        "border": "$stage_void",
+        "border_w": 0,
+        "radius": 0
+      },
+      "legend_label": "$dim",
+      "legend_hint": "$faint"
+    },
+    "nav_footer": {
+      "_comment": "Bench nav rail band (the sablework/catalog block, same values). `frame` = the node's own slab; `rule` (top hairline) + `label` (legend ink) resolve as the component's defaults.",
+      "frame": {
+        "fill_top": "$surface_top",
+        "fill_bot": "$stage_void",
+        "border": "$edge2",
+        "border_w": 1,
+        "radius": 6
+      },
+      "rule": {
+        "color": "$seam"
+      },
+      "label": "$dim"
+    },
+    "pad_glyphs": {
+      "tex": 2,
+      "cols": 4,
+      "rows": 4,
+      "color": "$bronze",
+      "flash": "$rune_glow_hi",
+      "cells": {
+        "lt": 0,
+        "rt": 1,
+        "lb": 2,
+        "rb": 3,
+        "a": 4,
+        "b": 5,
+        "x": 6,
+        "y": 7,
+        "menu": 8,
+        "view": 9,
+        "dpad": 10,
+        "dpad_up": 11,
+        "dpad_down": 12,
+        "dpad_left": 13,
+        "dpad_right": 14,
+        "stick": 15,
+        "face_south": 4,
+        "face_east": 5,
+        "face_west": 6,
+        "face_north": 7,
+        "bumper_l": 2,
+        "bumper_r": 3,
+        "trigger_l": 0,
+        "trigger_r": 1,
+        "stick_l": 15,
+        "stick_r": 15
+      }
+    },
+    "rtt_holder": {
+      "_comment": "The framed RTT HOLDER every bench's rtt/viewport slot styles against \u2014 the shared chrome for an offscreen-view slot (replaced the per-scene assetpipeline holder block, same values).",
+      "fill_top": "$well_top",
+      "fill_bot": "$well_bot",
+      "border": "$edge2",
+      "border_w": 1,
+      "radius": 4,
+      "inset": 6
+    },
+    "settings": {
+      "content": {
+        "scrollbar": {
+          "thumb": "$bronze_dim"
+        }
+      },
+      "controls": {
+        "field": {
+          "top": "$surface_top",
+          "bot": "$surface_bot",
+          "border": "$edge4",
+          "hover_border": "$bronze_dim",
+          "radius": 3,
+          "h": 40,
+          "label": "$ink_button",
+          "label_size": 15,
+          "caret": "$rune_glow"
+        }
+      }
+    },
+    "screens": {
+      "confirm": {
+        "layout": "center",
+        "overlay": "$scrim_dim",
+        "title": "$confirm_display_title",
+        "title_size": 38
+      }
+    }
   }
 }

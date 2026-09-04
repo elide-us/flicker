@@ -31,6 +31,15 @@ function M.arrange()
     ["shown_p0_t2"] = { on = (page == 0 and tab == 2) }, -- the CRUST tab's slice
     ["shown_p0_t3"] = { on = (page == 0 and tab == 3) }, -- the EVOLVE tab's slice
     ["shown_p1_t0"] = { on = (page == 1 and tab == 0) }, -- the STACK tab's slice
+    -- The nav footer's one swap: the flow's LAST stop (the EVOLVE tab) shows
+    -- COMMIT where every other stop shows NEXT. Same key mechanism as the
+    -- slices — the tree authors both buttons, this lights exactly one.
+    ["shown_ft_commit"] = { on = (page == 0 and tab == 3) },
+    ["shown_ft_next"] = { on = not (page == 0 and tab == 3) },
+    -- THE WORLD MAP MODAL: the engine publishes its runtime flag (`map_open`,
+    -- toggled by the footer's MAP button) and this lights the modal's slice —
+    -- the same one visibility mechanism as every gated subtree above.
+    ["shown_map"] = { on = ((Model and Model.map_open) == true) },
   }
 end
 
