@@ -39,8 +39,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // service (`roots().package().join(subdir)`). Written relative to
     // this crate so the tool works from any cwd, mirroring the worldengine
     // `bake` bin.
-    let out_dir =
-        PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../content/package")).join(subdir);
+    let out_dir = PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../content/package"
+    ))
+    .join(subdir);
 
     // Id 23 = Gravel in the material catalog — one material for the whole
     // field, matching the scenes' live-contour fallbacks.

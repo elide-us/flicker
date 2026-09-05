@@ -314,7 +314,8 @@ impl RigView {
                 }
             } else if dx != 0.0 || dy != 0.0 {
                 let (yaw, pitch) = self.controls.look_delta_stick(stick);
-                self.orbit.orbit_by(Vec2::new(yaw, pitch) * PAD_ORBIT_RATE * dt / 0.006);
+                self.orbit
+                    .orbit_by(Vec2::new(yaw, pitch) * PAD_ORBIT_RATE * dt / 0.006);
             }
             if dz != 0.0 {
                 self.orbit.zoom_by(dz * PAD_ZOOM_RATE * dt);
@@ -370,7 +371,13 @@ impl RigView {
                         albedo,
                         maps,
                         world,
-                    } => r.draw_textured_mesh_pbr(mesh, albedo, maps, world, MeshDrawOptions::default()),
+                    } => r.draw_textured_mesh_pbr(
+                        mesh,
+                        albedo,
+                        maps,
+                        world,
+                        MeshDrawOptions::default(),
+                    ),
                     Draw::Skinned {
                         mesh,
                         world,
@@ -442,7 +449,11 @@ mod tests {
             let mut v = RigView::new("rig_test", &styles(), p);
             v.set_frame(Vec3::new(0.0, 0.0, 90.0), 90.0);
             let cam = v.camera();
-            assert_eq!(cam.target, Vec3::new(0.0, 0.0, 90.0), "{p:?} looks at the centre");
+            assert_eq!(
+                cam.target,
+                Vec3::new(0.0, 0.0, 90.0),
+                "{p:?} looks at the centre"
+            );
             assert_eq!(cam.ortho_height.is_some(), p.is_ortho(), "{p:?}");
         }
     }

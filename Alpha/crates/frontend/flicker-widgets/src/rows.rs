@@ -146,7 +146,9 @@ mod tests {
             ..Default::default()
         };
         proto.props.insert("value".into(), text("{id}"));
-        proto.props.insert("label_bind".into(), text("bones_{row}_label"));
+        proto
+            .props
+            .insert("label_bind".into(), text("bones_{row}_label"));
         let mut list = UiNode {
             component: "list".into(),
             id: "bones".into(),

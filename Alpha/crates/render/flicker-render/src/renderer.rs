@@ -1039,7 +1039,15 @@ impl Renderer {
         color: [f32; 4],
     ) {
         let (position, size, rotation, pivot) = line_quad(from, to, width);
-        self.draw_sprite_ex(texture, position, size, color, FULL_TEXTURE, rotation, pivot);
+        self.draw_sprite_ex(
+            texture,
+            position,
+            size,
+            color,
+            FULL_TEXTURE,
+            rotation,
+            pivot,
+        );
     }
 
     /// Submit a **vector UI panel**: a rounded-rectangle filled with a solid or
@@ -2506,7 +2514,10 @@ mod line_quad_tests {
 
         // Screen y is down, so a segment going down-right turns CLOCKWISE by +45°.
         let (_, size, rot, _) = line_quad(Vec2::new(0.0, 0.0), Vec2::new(10.0, 10.0), 2.0);
-        assert!((size.x - 200.0f32.sqrt()).abs() < 1e-4, "true segment length");
+        assert!(
+            (size.x - 200.0f32.sqrt()).abs() < 1e-4,
+            "true segment length"
+        );
         assert_eq!(size.y, 2.0, "width is never scaled by the length");
         assert!(
             (rot - std::f32::consts::FRAC_PI_4).abs() < 1e-6,

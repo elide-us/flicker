@@ -850,7 +850,11 @@ mod tests {
         let log: Log = Rc::default();
         let mut mgr = SceneManager::new(Box::new(Host(log.clone())));
         mgr.stack.push(Box::new(Modal));
-        assert_eq!(mgr.visible_start(), 0, "the host stays visible under a modal");
+        assert_eq!(
+            mgr.visible_start(),
+            0,
+            "the host stays visible under a modal"
+        );
 
         // The pop half (`apply_pending` runs `exit` here, which needs a Renderer), then
         // the delivery half — the contract under test.

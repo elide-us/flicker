@@ -150,8 +150,9 @@ fn roster() -> Vec<SceneEntry> {
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "prism_alpha=info,flicker_app=info,flicker_render=warn,text_entry=info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                "prism_alpha=info,flicker_app=info,flicker_render=warn,text_entry=info".into()
+            }),
         )
         .init();
 

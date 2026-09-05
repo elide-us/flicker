@@ -44,8 +44,8 @@
 
 use flicker_globe::Arrows;
 use flicker_mechanics::{
-    flip as flip_guarded, gizmo_segments, pick_handle_among, world_axis, Axis, DragDelta, DragState,
-    GadgetModes, GizmoMode,
+    flip as flip_guarded, gizmo_segments, pick_handle_among, world_axis, Axis, DragDelta,
+    DragState, GadgetModes, GizmoMode,
 };
 use glam::{Mat3, Mat4, Quat, Vec3};
 
@@ -590,7 +590,10 @@ mod tests {
         let mut g = gadget(GizmoMode::Translate);
         // Down the +X shaft (0..18), 9 out: X misses by 0, Y and Z by 9 > 6.3.
         assert_eq!(
-            g.pick(Projection::Perspective, Some(ray(Vec3::new(9.0, 0.0, 0.0), Vec3::Y))),
+            g.pick(
+                Projection::Perspective,
+                Some(ray(Vec3::new(9.0, 0.0, 0.0), Vec3::Y))
+            ),
             Some(Axis::X)
         );
         assert_eq!(g.hover(), Some(Axis::X));
@@ -603,7 +606,10 @@ mod tests {
             None
         );
         // No pointer over the panel clears the aim.
-        g.pick(Projection::Perspective, Some(ray(Vec3::new(0.0, 9.0, 0.0), Vec3::Z)));
+        g.pick(
+            Projection::Perspective,
+            Some(ray(Vec3::new(0.0, 9.0, 0.0), Vec3::Z)),
+        );
         assert_eq!(g.hover(), Some(Axis::Y));
         assert_eq!(g.pick(Projection::Perspective, None), None);
         assert_eq!(g.hover(), None);
@@ -613,7 +619,10 @@ mod tests {
     fn a_perspective_drag_on_the_x_arrow_translates_along_x_only() {
         let mut g = gadget(GizmoMode::Translate);
         let press = ray(Vec3::new(9.0, 0.0, 0.0), Vec3::Y);
-        assert_eq!(g.decide(Projection::Perspective, press), Press::Axis(Axis::X));
+        assert_eq!(
+            g.decide(Projection::Perspective, press),
+            Press::Axis(Axis::X)
+        );
         assert!(g.begin(Projection::Perspective, press, None));
         let moved = g.update(ray(Vec3::new(14.0, 0.0, 0.0), Vec3::Y));
         let Some(GadgetDelta::Translate(v)) = moved else {
@@ -633,7 +642,10 @@ mod tests {
         // The rings sit at 0.85 × the handle length.
         let r = g.size() * 0.85;
         let press = ray(Vec3::new(r, 0.0, 0.0), Vec3::NEG_Y);
-        assert_eq!(g.decide(Projection::Perspective, press), Press::Axis(Axis::Y));
+        assert_eq!(
+            g.decide(Projection::Perspective, press),
+            Press::Axis(Axis::Y)
+        );
         assert!(g.begin(Projection::Perspective, press, None));
         // A right-handed quarter turn about +Y carries +X to −Z.
         let swept = g.update(ray(Vec3::new(0.0, 0.0, -r), Vec3::NEG_Y));
@@ -648,7 +660,10 @@ mod tests {
             angle.to_degrees()
         );
         assert!((q * Vec3::Z - Vec3::X).length() < 1e-3, "Z turns to X");
-        assert!((g.total().unwrap() - 90.0).abs() < 1e-2, "the readout agrees");
+        assert!(
+            (g.total().unwrap() - 90.0).abs() < 1e-2,
+            "the readout agrees"
+        );
     }
 
     #[test]
@@ -663,7 +678,10 @@ mod tests {
         let Some(GadgetDelta::Scale(s)) = scaled else {
             panic!("expected a scale, got {scaled:?}");
         };
-        assert!((s - Vec3::new(1.0, 1.0, 2.0)).length() < 1e-3, "(1,1,k): {s}");
+        assert!(
+            (s - Vec3::new(1.0, 1.0, 2.0)).length() < 1e-3,
+            "(1,1,k): {s}"
+        );
     }
 
     #[test]
@@ -673,7 +691,10 @@ mod tests {
         assert_eq!(g.flip(Axis::X, |_| false), None, "the validator refused");
         assert_eq!(g.refused(), Some(Axis::X));
         assert_eq!(
-            count(&g.handle_lines(Projection::Perspective, &STYLE), STYLE.refused),
+            count(
+                &g.handle_lines(Projection::Perspective, &STYLE),
+                STYLE.refused
+            ),
             6,
             "the refused axis draws dead, both its arrow and its mirror"
         );
@@ -681,7 +702,10 @@ mod tests {
         let Some(GadgetDelta::Flip(m)) = g.flip(Axis::X, |_| true) else {
             panic!("expected a mirror");
         };
-        assert!((m.transform_point3(Vec3::new(2.0, 3.0, 4.0)) - Vec3::new(-2.0, 3.0, 4.0)).length() < 1e-4);
+        assert!(
+            (m.transform_point3(Vec3::new(2.0, 3.0, 4.0)) - Vec3::new(-2.0, 3.0, 4.0)).length()
+                < 1e-4
+        );
         assert_eq!(g.refused(), None);
         // A surface whose gate omits FLIP has no mirror at all — and no refusal to show.
         g.set_modes(GadgetModes::TRANSLATE);
@@ -758,7 +782,10 @@ mod tests {
             modes_from_names(["translate", "flip"]),
             GadgetModes::TRANSLATE.with(GadgetModes::FLIP)
         );
-        assert_eq!(modes_from_names(["rotate", "nonsense"]), GadgetModes::ROTATE);
+        assert_eq!(
+            modes_from_names(["rotate", "nonsense"]),
+            GadgetModes::ROTATE
+        );
         assert_eq!(modes_from_names::<&str>([]), GadgetModes::NONE);
     }
 
@@ -771,6 +798,9 @@ mod tests {
         // Two units along a five-unit grid is still the same grid point.
         assert_eq!(g.update(ray(Vec3::new(11.0, 0.0, 0.0), Vec3::Y)), None);
         let stepped = g.update(ray(Vec3::new(12.5, 0.0, 0.0), Vec3::Y));
-        assert_eq!(stepped, Some(GadgetDelta::Translate(Vec3::new(5.0, 0.0, 0.0))));
+        assert_eq!(
+            stepped,
+            Some(GadgetDelta::Translate(Vec3::new(5.0, 0.0, 0.0)))
+        );
     }
 }

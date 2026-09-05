@@ -1332,7 +1332,10 @@ impl LoomforgeBench {
         // Split the borrow: the doll bank is mutated while the styles and the shared rig
         // are read.
         let Self {
-            dolls, ui_styles, rig, ..
+            dolls,
+            ui_styles,
+            rig,
+            ..
         } = self;
         for d in dolls.values_mut() {
             d.unseat();
@@ -2111,7 +2114,8 @@ impl LoomforgeBench {
             card_fill_top: self.color("loomforge.canvas.card_fill_top", [0.10, 0.12, 0.15, 1.0]),
             card_fill_bot: self.color("loomforge.canvas.card_fill_bot", [0.07, 0.08, 0.11, 1.0]),
             card_border: self.color("loomforge.canvas.card_border", [0.17, 0.19, 0.24, 1.0]),
-            card_border_selected: self.color("loomforge.canvas.card_border_sel", [0.23, 0.35, 0.63, 1.0]),
+            card_border_selected: self
+                .color("loomforge.canvas.card_border_sel", [0.23, 0.35, 0.63, 1.0]),
             label: self.color("loomforge.canvas.card_label", [0.91, 0.88, 0.82, 1.0]),
             label_selected: self.color("loomforge.canvas.card_label_sel", [0.62, 0.72, 1.0, 1.0]),
             meta: self.color("loomforge.canvas.card_meta", [0.56, 0.54, 0.49, 1.0]),
@@ -2130,13 +2134,7 @@ impl LoomforgeBench {
     ///
     /// `summary` puts the State Machine page's one-line clip readout beside the title;
     /// the TAE Editor page's own header carries that information in its inspector.
-    fn tae_commands(
-        &self,
-        rect: StageRect,
-        title: &str,
-        summary: bool,
-        out: &mut Vec<HudCommand>,
-    ) {
+    fn tae_commands(&self, rect: StageRect, title: &str, summary: bool, out: &mut Vec<HudCommand>) {
         out.push(HudCommand::Panel {
             x: rect.pos.x,
             y: rect.pos.y,
@@ -2187,7 +2185,10 @@ impl LoomforgeBench {
             .collect();
         let style = TimelineStyle {
             ruler: self.color("loomforge.tae_lane.ruler", [0.561, 0.541, 0.49, 1.0]),
-            tick: self.color("loomforge.tae_lane.track_border", [0.149, 0.169, 0.208, 1.0]),
+            tick: self.color(
+                "loomforge.tae_lane.track_border",
+                [0.149, 0.169, 0.208, 1.0],
+            ),
             playhead: self.color("loomforge.tae_lane.playhead", [0.435, 0.592, 1.0, 1.0]),
             event_selected: self.color("loomforge.tae_lane.event_sel", [0.435, 0.592, 1.0, 1.0]),
         };
@@ -2563,12 +2564,30 @@ mod tests {
         // (canvas.rs), the strip's frame/lane mapping (tae.rs), and the thin-quad line
         // fake the `HudCommand::Line` primitive retired.
         let banned = [
-            "fn layout", "fn hit_test", "fn edge_points", "fn clip_to_border",
-            "fn dist_to_segment", "fn hit_edge", "fn grid_slot", "fn card_stage_rect",
-            "fn zoom_at", "fn lane_rect", "fn frame_x", "fn event_rect",
-            "fn ruler_ticks", "fn track_x", "fn lane_h", "draw_triangle",
-            "const CARD_W", "const CARD_H", "const GUTTER_W", "const RULER_H",
-            "const POINT_W", "const ZOOM_MIN", "const SELF_LOOP_LIFT", "const EDGE_GRAB",
+            "fn layout",
+            "fn hit_test",
+            "fn edge_points",
+            "fn clip_to_border",
+            "fn dist_to_segment",
+            "fn hit_edge",
+            "fn grid_slot",
+            "fn card_stage_rect",
+            "fn zoom_at",
+            "fn lane_rect",
+            "fn frame_x",
+            "fn event_rect",
+            "fn ruler_ticks",
+            "fn track_x",
+            "fn lane_h",
+            "draw_triangle",
+            "const CARD_W",
+            "const CARD_H",
+            "const GUTTER_W",
+            "const RULER_H",
+            "const POINT_W",
+            "const ZOOM_MIN",
+            "const SELF_LOOP_LIFT",
+            "const EDGE_GRAB",
         ];
         for entry in std::fs::read_dir(&dir).expect("src/ is readable") {
             let path = entry.expect("a readable dir entry").path();
@@ -2798,11 +2817,23 @@ mod tests {
         // The rig that moved, by the names it had, plus every way a scene can come to own
         // a target or a stage pass of its own.
         let banned = [
-            "StageRig", "StageReq", "fn palette_for", "fn ground_transform",
-            "fn line_layers", "retain_slots", "slot_count",
-            "create_render_target", "free_render_target", "resize_render_target",
-            "composite_panel", "draw_skinned_instanced", "upload_skinned_mesh",
-            "ring_segments", "grid_segments", "fg.surface(", "CompositeTarget",
+            "StageRig",
+            "StageReq",
+            "fn palette_for",
+            "fn ground_transform",
+            "fn line_layers",
+            "retain_slots",
+            "slot_count",
+            "create_render_target",
+            "free_render_target",
+            "resize_render_target",
+            "composite_panel",
+            "draw_skinned_instanced",
+            "upload_skinned_mesh",
+            "ring_segments",
+            "grid_segments",
+            "fg.surface(",
+            "CompositeTarget",
         ];
         for entry in std::fs::read_dir(&dir).expect("src/ is readable") {
             let path = entry.expect("a readable dir entry").path();

@@ -190,9 +190,10 @@ pub fn chat_panel(x: f32, y: f32, w: f32, h: f32, view: &ChatView) -> UiNode {
     // field `EnterText` (the bound key / chord) opens when nothing else is focused.
     set_txt(&mut field, "submit_action", "chat_submit");
     set_txt(&mut field, "cancel_action", "chat_cancel");
-    field
-        .props
-        .insert("default_text".to_string(), flicker_script::Value::Bool(true));
+    field.props.insert(
+        "default_text".to_string(),
+        flicker_script::Value::Bool(true),
+    );
     set_txt(
         &mut field,
         "placeholder",

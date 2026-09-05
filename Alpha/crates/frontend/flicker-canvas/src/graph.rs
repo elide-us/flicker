@@ -388,16 +388,18 @@ impl GraphCanvas {
         let cols = self.columns();
         let size = m.card * self.view.zoom;
         self.cards.clear();
-        self.cards.extend(keys.iter().enumerate().map(|(i, key)| Rect {
-            pos: self.view.to_screen(
-                self.area,
-                self.view
-                    .placed
-                    .get(*key)
-                    .copied()
-                    .unwrap_or_else(|| grid_slot(i, cols, m)),
-            ),
-            size,
+        self.cards.extend(keys.iter().enumerate().map(|(i, key)| {
+            Rect {
+                pos: self.view.to_screen(
+                    self.area,
+                    self.view
+                        .placed
+                        .get(*key)
+                        .copied()
+                        .unwrap_or_else(|| grid_slot(i, cols, m)),
+                ),
+                size,
+            }
         }));
 
         self.edges.clear();
@@ -621,7 +623,9 @@ impl GraphCanvas {
     ) {
         let m = &self.metrics;
         let z = self.view.zoom;
-        out.push(panel(self.area, style.bg, style.bg, 0.0, 0.0, 0.0, style.bg, layer));
+        out.push(panel(
+            self.area, style.bg, style.bg, 0.0, 0.0, 0.0, style.bg, layer,
+        ));
 
         // Edges first so the cards sit on top of them.
         for g in &self.edges {
@@ -672,7 +676,11 @@ impl GraphCanvas {
                     ));
                 }
             }
-            let text_x = if n.icon { self.text_x() } else { m.card_pad * z };
+            let text_x = if n.icon {
+                self.text_x()
+            } else {
+                m.card_pad * z
+            };
             out.push(text(
                 n.title,
                 c.pos + Vec2::new(text_x, m.title_y * z),
@@ -932,7 +940,9 @@ mod tests {
     fn a_placed_card_stays_put_when_the_graph_changes_around_it() {
         let (mut c, ns) = seated(4);
         let before: Vec<Rect> = c.cards().to_vec();
-        c.view.placed.insert("State 2".into(), Vec2::new(500.0, 400.0));
+        c.view
+            .placed
+            .insert("State 2".into(), Vec2::new(500.0, 400.0));
         c.layout(&keys(&ns), &[]);
         assert_eq!(
             c.cards()[2].pos,
@@ -1290,7 +1300,13 @@ mod tests {
         );
         assert_eq!(c.linking(), Some(0), "the rubber band is in flight");
         let ev = c.pointer(&sample(to), &keys(&ns));
-        assert_eq!(ev.linked, Some(Link { from: 0, to: Some(3) }));
+        assert_eq!(
+            ev.linked,
+            Some(Link {
+                from: 0,
+                to: Some(3)
+            })
+        );
         assert_eq!(c.linking(), None);
 
         // A self-link is REPORTED, not refused — whether it is legal is the
@@ -1305,7 +1321,10 @@ mod tests {
         );
         assert_eq!(
             c.pointer(&sample(from), &keys(&ns)).linked,
-            Some(Link { from: 0, to: Some(0) })
+            Some(Link {
+                from: 0,
+                to: Some(0)
+            })
         );
 
         // A release over nothing ends the drag with no target.
@@ -1394,12 +1413,22 @@ mod tests {
         let p0 = c.port_center(0, 0, &nodes).unwrap();
         let p1 = c.port_center(0, 1, &nodes).unwrap();
         let card = c.cards()[0];
-        assert!((p0.x - (card.pos.x + card.size.x)).abs() < 1e-3, "right edge");
+        assert!(
+            (p0.x - (card.pos.x + card.size.x)).abs() < 1e-3,
+            "right edge"
+        );
         assert!(p1.y > p0.y, "ports descend");
-        assert!(p0.y > card.pos.y && p1.y < card.pos.y + card.size.y, "inside");
+        assert!(
+            p0.y > card.pos.y && p1.y < card.pos.y + card.size.y,
+            "inside"
+        );
         assert_eq!(c.port_at(p0, &nodes), Some((0, 0)));
         assert_eq!(c.port_at(p1 + Vec2::new(1.0, 1.0), &nodes), Some((0, 1)));
-        assert_eq!(c.port_at(p0 + Vec2::new(0.0, 60.0), &nodes), None, "too far");
+        assert_eq!(
+            c.port_at(p0 + Vec2::new(0.0, 60.0), &nodes),
+            None,
+            "too far"
+        );
         assert_eq!(c.port_center(1, 0, &nodes), None, "no ports declared");
         assert_eq!(c.port_at(center(c.cards()[1]), &nodes), None);
     }

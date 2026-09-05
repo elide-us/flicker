@@ -2136,8 +2136,8 @@ impl Scene for GameScene {
         // `chat_hit` (the old two-gate fall-through, folded into the one walker
         // layer) + the screen's DECLARED intents (S9: `on_menu = "pause_open"`).
         self.fired_sigs.clear(); // last frame's mirror rode the HUD walk above — done
-        // The walker layer over the chat window's state AND tree, so the chat line is
-        // the text field `EnterText` opens and its session closes through the walker.
+                                 // The walker layer over the chat window's state AND tree, so the chat line is
+                                 // the text field `EnterText` opens and its session closes through the walker.
         let (chat_ui, chat_nav) = self.chat_modal.walker_parts();
         let mut walker =
             WalkerHandler::hud(chat_ui, hud_hit || chat_hit).with_intents(&self.ui_intents);

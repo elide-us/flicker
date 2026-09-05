@@ -22,8 +22,8 @@
 use std::sync::Arc;
 
 use flicker::render::{
-    grid_segments, ring_segments, FrameGraph, MeshIndices, Rate, Rect, Renderer,
-    SkinnedMeshHandle, SkinnedVertex, StageCamera, StageLayer,
+    grid_segments, ring_segments, FrameGraph, MeshIndices, Rate, Rect, Renderer, SkinnedMeshHandle,
+    SkinnedVertex, StageCamera, StageLayer,
 };
 use flicker::ui::SurfaceSlot;
 use flicker_globe::Arrows;
@@ -607,15 +607,25 @@ mod tests {
     #[test]
     fn a_live_doll_asks_for_a_rate_and_a_poster_asks_for_dirty() {
         let mut d = Doll::new("doll_test", &styles());
-        assert_eq!(d.rate(), Rate::Dirty, "a doll is a poster until told otherwise");
+        assert_eq!(
+            d.rate(),
+            Rate::Dirty,
+            "a doll is a poster until told otherwise"
+        );
         d.set_live(true);
         assert_eq!(d.rate(), Rate::Hz(LIVE_HZ));
-        assert!(matches!(d.rate(), Rate::Hz(hz) if hz > 0.0), "a live rate is > 0");
+        assert!(
+            matches!(d.rate(), Rate::Hz(hz) if hz > 0.0),
+            "a live rate is > 0"
+        );
         d.set_live(false);
         assert_eq!(d.rate(), Rate::Dirty);
         // And the rate the clock is handed is a real one at every size.
         let refused = Doll::new("doll_test", &styles()).live_hz(0.0);
-        assert_eq!(refused.hz, LIVE_HZ, "a zero rate would never draw — refused");
+        assert_eq!(
+            refused.hz, LIVE_HZ,
+            "a zero rate would never draw — refused"
+        );
     }
 
     /// Only what CHANGES the image raises `dirty`, and the render consumes it — otherwise
@@ -656,7 +666,10 @@ mod tests {
         d.set_live(true);
         d.tick(0.25);
         d.tick(0.25);
-        assert!((d.time() - 0.5).abs() < 1e-6, "a live doll runs its own clock");
+        assert!(
+            (d.time() - 0.5).abs() < 1e-6,
+            "a live doll runs its own clock"
+        );
         d.set_live(false);
         d.tick(1.0);
         assert!((d.time() - 0.5).abs() < 1e-6, "and stops where it stopped");
@@ -683,7 +696,11 @@ mod tests {
         let layers = &d.view.stage().layers;
         let idle = ground_lines(layers, false);
         let lit = ground_lines(layers, true);
-        assert_eq!(idle.len(), lit.len(), "activity changes colour, not geometry");
+        assert_eq!(
+            idle.len(),
+            lit.len(),
+            "activity changes colour, not geometry"
+        );
         assert!(!idle.is_empty(), "the ring produced segments");
         assert_eq!(idle[0].1.len(), lit[0].1.len());
         assert_ne!(idle[0].0, lit[0].0, "an active ring is a different colour");
@@ -719,7 +736,10 @@ mod tests {
     #[test]
     fn a_settled_poster_does_not_pose_but_everything_that_can_draw_does() {
         let mut d = Doll::new("doll_test", &styles());
-        assert!(d.poses(), "the first frame always renders — it must be posed");
+        assert!(
+            d.poses(),
+            "the first frame always renders — it must be posed"
+        );
         d.set_rig(Some(rig(0.9)));
         d.seat(Some(&seat(92.0, 92.0)));
         assert!(d.poses(), "a fresh target must draw");

@@ -313,10 +313,7 @@ impl<C: MapContent> WorldMap<C> {
         let old = self.span_h.max(1e-3);
         let new = (old * factor).clamp(e.min_span.min(fit), fit);
         if let Some(cur) = at {
-            let (u_old, u_new) = (
-                old / rect.size.y.max(1.0),
-                new / rect.size.y.max(1.0),
-            );
+            let (u_old, u_new) = (old / rect.size.y.max(1.0), new / rect.size.y.max(1.0));
             let off = cur - (rect.pos + rect.size * 0.5);
             self.center += Vec2::new(off.x * (u_old - u_new), -off.y * (u_old - u_new));
         }
@@ -349,7 +346,13 @@ impl<C: MapContent> WorldMap<C> {
     /// the pointer sample (drag pans while captured, wheel zooms at the cursor,
     /// a press-without-drag release picks), the clamps, and the rebake decision.
     /// `active` is the scene's gate — a closed map moves for nobody.
-    pub fn update(&mut self, dt: f32, pointer: Option<&SurfacePointer>, look: (f32, f32, f32), active: bool) {
+    pub fn update(
+        &mut self,
+        dt: f32,
+        pointer: Option<&SurfacePointer>,
+        look: (f32, f32, f32),
+        active: bool,
+    ) {
         self.active = active;
         if !active {
             self.press = None;
@@ -370,9 +373,9 @@ impl<C: MapContent> WorldMap<C> {
         let (dx, dy, dz) = look;
         if dx != 0.0 || dy != 0.0 {
             let step = frame.span * (LOOK_PAN_RATE * dt);
-            self.center = self
-                .content
-                .pan(self.center, Vec2::new(dx * step.x, dy * step.y), &frame);
+            self.center =
+                self.content
+                    .pan(self.center, Vec2::new(dx * step.x, dy * step.y), &frame);
         }
         if dz != 0.0 {
             self.zoom_by((-dz * ZOOM_SIG_RATE * dt).exp(), None, rect);
@@ -611,11 +614,7 @@ impl HexSphereMap {
     }
 
     fn dir_of(lat: f32, lon: f32) -> Vec3 {
-        Vec3::new(
-            lat.cos() * lon.cos(),
-            lat.sin(),
-            lat.cos() * lon.sin(),
-        )
+        Vec3::new(lat.cos() * lon.cos(), lat.sin(), lat.cos() * lon.sin())
     }
 
     /// A cell's atlas geometry: equirectangular, corners re-branched to the
@@ -646,10 +645,13 @@ impl HexSphereMap {
     /// longitude on, so the frame never degenerates.
     fn basis(&self, center: Vec2) -> (Vec3, Vec3, Vec3) {
         let (lat, lon) = (center.y / self.r, center.x / self.r);
-        let c = Self::dir_of(lat.clamp(
-            -(std::f32::consts::FRAC_PI_2 - 1e-4),
-            std::f32::consts::FRAC_PI_2 - 1e-4,
-        ), lon);
+        let c = Self::dir_of(
+            lat.clamp(
+                -(std::f32::consts::FRAC_PI_2 - 1e-4),
+                std::f32::consts::FRAC_PI_2 - 1e-4,
+            ),
+            lon,
+        );
         let east = Vec3::new(-lon.sin(), 0.0, lon.cos());
         let north = c.cross(east);
         (c, east, north)
@@ -675,7 +677,14 @@ impl HexSphereMap {
     }
 
     /// One polygon fan into the mesh under construction, wound to front +Z.
-    fn push_cell(verts: &mut Vec<MeshVertex>, idx: &mut Vec<u32>, c: Vec2, ring: &[Vec2], inset: f32, rgb: [f32; 3]) {
+    fn push_cell(
+        verts: &mut Vec<MeshVertex>,
+        idx: &mut Vec<u32>,
+        c: Vec2,
+        ring: &[Vec2],
+        inset: f32,
+        rgb: [f32; 3],
+    ) {
         if ring.len() < 3 {
             return;
         }
@@ -722,7 +731,11 @@ impl HexSphereMap {
             normal,
             material,
         });
-        meshes.push((v.to_vec(), vec![0, 1, 2, 0, 2, 3], MeshDrawOptions::default()));
+        meshes.push((
+            v.to_vec(),
+            vec![0, 1, 2, 0, 2, 3],
+            MeshDrawOptions::default(),
+        ));
     }
 
     /// The shared graticule, mapped flat through `project` — the same five ink
@@ -742,10 +755,7 @@ impl HexSphereMap {
                         if (pa - pb).length() > jump {
                             return None;
                         }
-                        Some((
-                            Vec3::new(pa.x, pa.y, LINE_Z),
-                            Vec3::new(pb.x, pb.y, LINE_Z),
-                        ))
+                        Some((Vec3::new(pa.x, pa.y, LINE_Z), Vec3::new(pb.x, pb.y, LINE_Z)))
                     })
                     .collect();
                 (color, flat)
@@ -794,7 +804,14 @@ impl MapContent for HexSphereMap {
                 );
                 for (i, cell) in self.atlas.iter().enumerate() {
                     let Some(cell) = cell else { continue };
-                    Self::push_cell(&mut verts, &mut idx, cell.c, &cell.ring, self.inset, self.cell_color(i));
+                    Self::push_cell(
+                        &mut verts,
+                        &mut idx,
+                        cell.c,
+                        &cell.ring,
+                        self.inset,
+                        self.cell_color(i),
+                    );
                 }
             }
             MapMode::Local => {
@@ -824,7 +841,14 @@ impl MapContent for HexSphereMap {
                         })
                         .collect();
                     let Some(ring) = ring else { continue };
-                    Self::push_cell(&mut verts, &mut idx, pc, &ring, self.inset, self.cell_color(i));
+                    Self::push_cell(
+                        &mut verts,
+                        &mut idx,
+                        pc,
+                        &ring,
+                        self.inset,
+                        self.cell_color(i),
+                    );
                 }
             }
         }
@@ -985,12 +1009,12 @@ mod tests {
         let c = content();
         let e = c.extent();
         assert!((e.w - std::f32::consts::TAU * RADIUS).abs() < 1e-3);
-        assert!(
-            (e.h - 2.0 * HexSphereMap::DEFAULT_TRIM_DEG.to_radians() * RADIUS).abs() < 1e-3
-        );
+        assert!((e.h - 2.0 * HexSphereMap::DEFAULT_TRIM_DEG.to_radians() * RADIUS).abs() < 1e-3);
         assert!(e.wrap_x, "longitude wraps");
         // Equator ring: on the sheet at y = 0, at its own longitude.
-        let cell = c.atlas[2].as_ref().expect("an equator cell is on the sheet");
+        let cell = c.atlas[2]
+            .as_ref()
+            .expect("an equator cell is on the sheet");
         assert!(cell.c.y.abs() < 1e-3);
         let (_, lon) = HexSphereMap::latlon(c.dirs[2]);
         assert!((cell.c.x - lon * RADIUS).abs() < 1e-3);
@@ -1035,7 +1059,10 @@ mod tests {
             "flanking cells sit their true arc apart ({apart} vs {arc})"
         );
         // And the atlas puts them at opposite edges of the sheet.
-        let (xa, xb) = (c.atlas[3].as_ref().unwrap().c.x, c.atlas[5].as_ref().unwrap().c.x);
+        let (xa, xb) = (
+            c.atlas[3].as_ref().unwrap().c.x,
+            c.atlas[5].as_ref().unwrap().c.x,
+        );
         assert!((xa - xb).abs() > RADIUS * 4.0, "the sheet separates them");
     }
 
@@ -1093,14 +1120,22 @@ mod tests {
         // Local: centre the frame on cell 3; picking dead centre finds it, and
         // the pole cell is reachable — the caps exist in local mode.
         let (_, lon) = HexSphereMap::latlon(c.dirs[3]);
-        let lf = frame(Vec2::new(lon * RADIUS, 0.0), Vec2::splat(RADIUS), MapMode::Local);
+        let lf = frame(
+            Vec2::new(lon * RADIUS, 0.0),
+            Vec2::splat(RADIUS),
+            MapMode::Local,
+        );
         assert_eq!(c.pick(&lf, lf.center), Some(3));
         let north = frame(
             Vec2::new(0.0, (std::f32::consts::FRAC_PI_2 - POLE_STOP) * RADIUS),
             Vec2::splat(RADIUS),
             MapMode::Local,
         );
-        assert_eq!(c.pick(&north, north.center), Some(8), "the pole cell exists locally");
+        assert_eq!(
+            c.pick(&north, north.center),
+            Some(8),
+            "the pole cell exists locally"
+        );
     }
 
     /// **A bake paints ink, base and painted cells — and only the sheet's cells
@@ -1167,7 +1202,11 @@ mod tests {
                     .collect()
             })
             .collect();
-        let mut wm = WorldMap::new("test_map", &styles, HexSphereMap::from_tiling(&dirs, &rings));
+        let mut wm = WorldMap::new(
+            "test_map",
+            &styles,
+            HexSphereMap::from_tiling(&dirs, &rings),
+        );
         let look = wm.authored_look();
         assert_eq!(look.ink, Some([0.0, 0.0, 0.0]));
         assert_eq!(look.base, Some([0.5, 0.5, 0.5]));
@@ -1213,7 +1252,10 @@ mod tests {
             wm.update(0.05, None, (0.0, 0.0, -1.0), true);
         }
         let f = wm.frame().unwrap();
-        assert!((f.span.y - fit).abs() < 1.0, "zoom-out stops at the whole map");
+        assert!(
+            (f.span.y - fit).abs() < 1.0,
+            "zoom-out stops at the whole map"
+        );
         assert_eq!(f.mode, MapMode::Atlas);
 
         // An inactive map holds still.

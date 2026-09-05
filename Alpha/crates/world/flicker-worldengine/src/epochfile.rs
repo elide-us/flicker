@@ -722,7 +722,11 @@ mod tests {
         // A ledger array off the recipe's tile count.
         let mut short = tiny_planet();
         short.ledger.rain.pop();
-        assert!(short.to_json().map(|j| PlanetEpoch::from_json(&j)).unwrap().is_err());
+        assert!(short
+            .to_json()
+            .map(|j| PlanetEpoch::from_json(&j))
+            .unwrap()
+            .is_err());
         // A vein pointer past the body roster.
         let mut dangling = tiny_planet();
         dangling.ledger.vein_node_of[0] = 2;

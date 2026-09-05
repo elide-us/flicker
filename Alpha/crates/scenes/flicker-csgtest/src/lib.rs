@@ -87,7 +87,6 @@ use flicker_worker::WorkerPool;
 mod route;
 use route::{GameplayBase, RootHandler};
 
-
 /// Side length of the cluster field, in clusters. A 3×3 row in XZ
 /// gives one fully-interior cluster (all four lateral neighbors
 /// present), which is what actually exercises seam tangent stitching
@@ -313,7 +312,6 @@ struct GameScene {
     /// snap waits for it).
     walk_needs_snap: bool,
 
-
     /// Gothic UI theme: drawn as the loading widget while `Booting`, and handed
     /// to each `PauseScene` we push (so pausing never re-uploads). `None` until
     /// `enter`.
@@ -406,8 +404,7 @@ impl Default for GameScene {
 /// The pair script (`content/sensorium/scripts/csgtest.lua`) — embedded at
 /// compile time like every migrated scene's; `derive()` turns the raw Model
 /// into the HUD display strings.
-const CSGTEST_SCRIPT: &str =
-    include_str!("../../../../content/sensorium/scripts/csgtest.lua");
+const CSGTEST_SCRIPT: &str = include_str!("../../../../content/sensorium/scripts/csgtest.lua");
 
 impl GameScene {
     /// Build the game scene off the manifest's def (the five-line split): the
@@ -1578,7 +1575,6 @@ impl Scene for GameScene {
         self.ensure_source();
         self.submit_field_jobs();
 
-
         // 1×1 white pixel — tinted to build solid colored HUD quads.
         // Retained sprite-UI capability; no active widgets yet.
         self.white = Some(renderer.load_texture(&[0xff, 0xff, 0xff, 0xff], 1, 1));
@@ -1586,7 +1582,6 @@ impl Scene for GameScene {
         // Digit-glyph atlas for the LOD billboards (digits 0–7).
         self.digit_atlas =
             Some(renderer.load_texture(&build_digit_atlas(), ATLAS_W as u32, ATLAS_H as u32));
-
 
         // The ROOT surface's recipe, compiled ONCE from the scene file's own `stages`
         // section (`stage_def` warns every authoring problem it found). An unauthored or
@@ -1618,7 +1613,6 @@ impl Scene for GameScene {
         self.controls.mouse_sensitivity = look.mouse_sensitivity;
         self.controls.invert_mouse_pitch = look.invert_mouse_pitch;
         self.controls.invert_mouse_yaw = look.invert_mouse_yaw;
-
     }
 
     fn update(
@@ -1742,7 +1736,6 @@ impl Scene for GameScene {
             }
         }
 
-
         // ── Dispatch the PUMP's resolved events through the 3-handler chain
         // (root → walker → gameplay). The runner resolved this frame over the
         // scene's declared context (`input_context()`). ──
@@ -1751,13 +1744,12 @@ impl Scene for GameScene {
         // The walker layer wraps this frame's pointer-consume (HUD `hud_hit`)
         // + the screen's DECLARED intents (S9: `on_menu = "pause_open"`).
         self.fired_sigs.clear(); // last frame's mirror rode the HUD walk above — done
-        let mut walker = WalkerHandler::hud(&mut self.ui_state, hud_hit)
-            .with_intents(&self.ui_intents);
+        let mut walker =
+            WalkerHandler::hud(&mut self.ui_state, hud_hit).with_intents(&self.ui_intents);
         {
             let mut chain: [&mut dyn InputHandler; 3] = [&mut root, &mut walker, &mut gameplay];
             Router::dispatch(signals.events, &mut chain, signals.route);
         }
-
 
         // Surface context wiring (S9): any declared-surface flip since last frame
         // becomes Push/PopContext on the same queue (no csgtest surface
@@ -1768,7 +1760,6 @@ impl Scene for GameScene {
         // The screen's fired intents (S9), drained once per frame: acted on below
         // and queued for the one-frame `sig_<name>` Model mirror.
         self.fired_sigs = walker.take_fired();
-
 
         // The screen DECLARED `on_menu = "pause_open"` (S9): the walker layer
         // consumed the Menu press and fired the name; the scene maps it onto its
@@ -1985,7 +1976,6 @@ impl GameScene {
             far: 10000.0,
             ortho_height: None,
         });
-
 
         // Draw each cluster's extent as a white wireframe box. The extent is
         // LOD-independent, so iterate the grid positions directly.
@@ -2232,4 +2222,3 @@ fn nav_floor_min(navs: &[(ClusterId, ClusterNav)]) -> Option<f32> {
     }
     lowest
 }
-

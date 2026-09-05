@@ -1529,7 +1529,11 @@ impl Evolution {
                     pr.f32() * 2.0 - 1.0,
                     pr.f32() * 2.0 - 1.0,
                 );
-                let v = if v.length_squared() < 1e-6 { Vec3::X } else { v };
+                let v = if v.length_squared() < 1e-6 {
+                    Vec3::X
+                } else {
+                    v
+                };
                 (v.normalize(), pr.f32() * std::f32::consts::TAU)
             })
             .collect();
@@ -1546,8 +1550,18 @@ impl Evolution {
                 (0.80, -0.7, 0.35),
                 (1.0, -0.4, 0.20),
             ],
-            &[(0.0, -0.5, 0.15), (0.35, 0.2, 0.0), (0.55, 0.9, -0.1), (1.0, 0.2, 0.1)],
-            &[(0.0, 0.6, -0.50), (0.35, 0.9, -0.30), (0.65, 1.0, 0.20), (1.0, 0.5, 0.30)],
+            &[
+                (0.0, -0.5, 0.15),
+                (0.35, 0.2, 0.0),
+                (0.55, 0.9, -0.1),
+                (1.0, 0.2, 0.1),
+            ],
+            &[
+                (0.0, 0.6, -0.50),
+                (0.35, 0.9, -0.30),
+                (0.65, 1.0, 0.20),
+                (1.0, 0.5, 0.30),
+            ],
         ];
         const SPEEDS: [f32; AIR_LAYERS] = [1.0, 1.3, 1.7];
         let bump = |a: f32, c: f32, w: f32| (1.0 - ((a - c) / w).powi(2)).max(0.0);
@@ -1608,13 +1622,11 @@ impl Evolution {
                     // the clouds streaked along them.
                     if second.1 != i && second.0 > 0.0 {
                         self.wind_to2[l][i] = second.1 as u32;
-                        self.wind_frac[l][i] =
-                            (best.0 / (best.0 + second.0)).clamp(0.5, 1.0);
+                        self.wind_frac[l][i] = (best.0 / (best.0 + second.0)).clamp(0.5, 1.0);
                     }
                 }
             }
-            let c = bump(a, 0.0, 0.14) - 0.9 * bump(a, 0.35, 0.12)
-                + 0.55 * bump(a, 0.62, 0.11)
+            let c = bump(a, 0.0, 0.14) - 0.9 * bump(a, 0.35, 0.12) + 0.55 * bump(a, 0.62, 0.11)
                 - 0.6 * bump(a, 0.95, 0.14);
             self.conv[i] = c * (1.0 + 0.35 * meander);
         }
@@ -2060,9 +2072,7 @@ impl Evolution {
             return depth < MARINE_DEPTH_CAP && self.sst[i] > FREEZE_POINT;
         }
         let warmth = (0.25 + self.local_temp(t, map.direction(t), sea)).clamp(0.2, 1.3);
-        flow_to == u32::MAX
-            && self.discharge[i] < CHANNEL_LIVE
-            && self.rain[i] < EVAP_SEA * warmth
+        flow_to == u32::MAX && self.discharge[i] < CHANNEL_LIVE && self.rain[i] < EVAP_SEA * warmth
     }
 
     /// **THE RETURN** — bring `vol` of dissolved load out of solution at `i`,
@@ -2087,8 +2097,7 @@ impl Evolution {
         if put <= 0.0 {
             return vol;
         }
-        self.l3_hard[i] =
-            (self.l3_h[i] * self.l3_hard[i] + put * SED_GRADE) / (self.l3_h[i] + put);
+        self.l3_hard[i] = (self.l3_h[i] * self.l3_hard[i] + put * SED_GRADE) / (self.l3_h[i] + put);
         self.l3_dip[i] = Self::bedded_flat(self.l3_dip[i], self.l3_h[i], put);
         self.l3_h[i] += put;
         settled[i] += put;
@@ -2601,8 +2610,7 @@ impl Evolution {
                         if l == 0 {
                             // Convection off warm ground lifts the boundary
                             // layer into the condensation deck.
-                            let warm =
-                                (self.local_temp(t, map.direction(t), sea) - 0.55).max(0.0);
+                            let warm = (self.local_temp(t, map.direction(t), sea) - 0.55).max(0.0);
                             let up = m * CONVECT_LIFT * warm.min(0.5);
                             if up > 0.0 {
                                 delta[i] -= up;
@@ -2699,8 +2707,7 @@ impl Evolution {
                 let (mut land_n, mut green_n) = (0usize, 0usize);
                 #[allow(clippy::needless_range_loop)] // parallel stores, one index
                 for i in 0..n {
-                    self.rain[i] =
-                        self.rain[i] * (1.0 - RAIN_BLEND) + rain_now[i] * RAIN_BLEND;
+                    self.rain[i] = self.rain[i] * (1.0 - RAIN_BLEND) + rain_now[i] * RAIN_BLEND;
                     self.moist[i] = (self.air[0][i] / AIR_VIS).clamp(0.0, 1.0);
                     // VEGETATION: cover creeps toward what the sustained
                     // rain can feed AT THE STOCK'S CURRENT THIRST — greening
@@ -2764,7 +2771,11 @@ impl Evolution {
                                 pr.f32() * 2.0 - 1.0,
                                 pr.f32() * 2.0 - 1.0,
                             );
-                            let v = if v.length_squared() < 1e-6 { Vec3::X } else { v };
+                            let v = if v.length_squared() < 1e-6 {
+                                Vec3::X
+                            } else {
+                                v
+                            };
                             (v.normalize(), pr.f32() * std::f32::consts::TAU)
                         })
                         .collect();
@@ -2958,8 +2969,8 @@ impl Evolution {
                         // A MATURE EDGE has LEVERAGE: the tracked persistence
                         // scales the quantum — a long-lived convergence line
                         // builds a range where a young jam lifts a hill.
-                        let lever = 1.0
-                            + EDGE_GAIN * (self.edge_age[i] as f32 / EDGE_AGE_REF).min(1.0);
+                        let lever =
+                            1.0 + EDGE_GAIN * (self.edge_age[i] as f32 / EDGE_AGE_REF).min(1.0);
                         let quantum = UPLIFT_QUANTUM * lever;
                         let mut need = quantum;
                         let from_sed = need.min(self.sediment[i]);
@@ -2967,20 +2978,18 @@ impl Evolution {
                         need -= from_sed;
                         if need > 0.0 {
                             let ring: Vec<TileId> = map.neighbours(i as TileId).to_vec();
-                            let gather = |need: &mut f32,
-                                              slf: &mut Self,
-                                              act: &mut Vec<bool>,
-                                              j: usize| {
-                                let take_s = need.min(slf.sediment[j]);
-                                slf.sediment[j] -= take_s;
-                                *need -= take_s;
-                                let take_r = need.min(slf.rock[j]);
-                                slf.rock[j] -= take_r;
-                                *need -= take_r;
-                                if take_s + take_r > 0.0 {
-                                    act[j] = true;
-                                }
-                            };
+                            let gather =
+                                |need: &mut f32, slf: &mut Self, act: &mut Vec<bool>, j: usize| {
+                                    let take_s = need.min(slf.sediment[j]);
+                                    slf.sediment[j] -= take_s;
+                                    *need -= take_s;
+                                    let take_r = need.min(slf.rock[j]);
+                                    slf.rock[j] -= take_r;
+                                    *need -= take_r;
+                                    if take_s + take_r > 0.0 {
+                                        act[j] = true;
+                                    }
+                                };
                             for nb in &ring {
                                 if need <= 0.0 {
                                     break;
@@ -3008,8 +3017,8 @@ impl Evolution {
                             // METAMORPHISM: the converted rock hardens by the
                             // bed grade under the jam — an indurated old
                             // marine floor collides into HARD mountains.
-                            let grade = (UPLIFT_HARD * self.bed_hard[i])
-                                .clamp(UPLIFT_HARD, META_HARD_CAP);
+                            let grade =
+                                (UPLIFT_HARD * self.bed_hard[i]).clamp(UPLIFT_HARD, META_HARD_CAP);
                             let old = self.rock[i].max(0.0);
                             self.rock_hard[i] =
                                 (old * self.rock_hard[i] + got * grade) / (old + got);
@@ -3214,8 +3223,8 @@ impl Evolution {
                         let room = (L4_CAP - self.l4_h[t]).max(0.0);
                         let take = mass.min(room);
                         if take > 0.0 {
-                            self.l4_hard[t] = (self.l4_h[t] * self.l4_hard[t] + take * g)
-                                / (self.l4_h[t] + take);
+                            self.l4_hard[t] =
+                                (self.l4_h[t] * self.l4_hard[t] + take * g) / (self.l4_h[t] + take);
                             self.l4_dip[t] = Self::bedded_flat(self.l4_dip[t], self.l4_h[t], take);
                             self.l4_h[t] += take;
                         }
@@ -3412,8 +3421,7 @@ impl Evolution {
                     // reminder to fail.
                     if !act[i]
                         && self.discharge[i] < CHANNEL_LIVE
-                        && (flow_drop[i] <= STRATA_CLIFF
-                            || self.face_grade(i) >= ARREST_GRADE)
+                        && (flow_drop[i] <= STRATA_CLIFF || self.face_grade(i) >= ARREST_GRADE)
                     {
                         continue;
                     }
@@ -3700,8 +3708,8 @@ impl Evolution {
                     // over, less the wet floor under which rock only gets
                     // damp. This is the drain condition, and cutting it is
                     // what stops a doline growing.
-                    let flow = self.rain[i] + DISSOLVE_FLOW * self.discharge[i].sqrt()
-                        - DISSOLVE_WET;
+                    let flow =
+                        self.rain[i] + DISSOLVE_FLOW * self.discharge[i].sqrt() - DISSOLVE_WET;
                     if flow <= 0.0 {
                         continue;
                     }
@@ -3837,8 +3845,8 @@ impl Evolution {
                         // the summit harder): a load never rides onto an
                         // iced cell — it lies down at the glacier's gate as
                         // the moraine fan.
-                        let blocked = target == u32::MAX
-                            || self.ice[target as usize] >= ICE_ERODE_MIN;
+                        let blocked =
+                            target == u32::MAX || self.ice[target as usize] >= ICE_ERODE_MIN;
                         // ── WHAT IS IN SOLUTION (Phase 3) ──
                         // The dissolved load rides this tree and no other.
                         // No capacity break touches it: a river drops its
@@ -4089,8 +4097,8 @@ impl Evolution {
                         let room = (L4_CAP - self.l4_h[t]).max(0.0);
                         let take = mass.min(room);
                         if take > 0.0 {
-                            self.l4_hard[t] = (self.l4_h[t] * self.l4_hard[t] + take * g)
-                                / (self.l4_h[t] + take);
+                            self.l4_hard[t] =
+                                (self.l4_h[t] * self.l4_hard[t] + take * g) / (self.l4_h[t] + take);
                             // Pressed loose material is MASSIVE — it carries
                             // no fabric of its own, so the bed it joins can
                             // only flatten.
@@ -4591,7 +4599,12 @@ mod tests {
 
         // The reader's side of the contract: static context FROM THE RECIPE.
         let map2 = HexMap::new(back.recipe.freq);
-        let seams2 = SeamField::new(&map2, back.recipe.cells, back.recipe.spots, back.recipe.seed);
+        let seams2 = SeamField::new(
+            &map2,
+            back.recipe.cells,
+            back.recipe.spots,
+            back.recipe.seed,
+        );
         let crust2 = CrustField::derive(&map2, &seams2);
         let mut e2 = Evolution::new(&map2, &seams2);
         e2.restore(&map2, &seams2, &crust2, &back)
@@ -6220,7 +6233,10 @@ mod tests {
                 }
             }
         }
-        assert!(near_n >= 5 && far_n >= 5, "both pair pools exist: {near_n}/{far_n}");
+        assert!(
+            near_n >= 5 && far_n >= 5,
+            "both pair pools exist: {near_n}/{far_n}"
+        );
         let (near, far) = (near / near_n as f32, far / far_n as f32);
         assert!(
             near < far * 0.6,
@@ -6413,7 +6429,7 @@ mod tests {
         let (map, seams, crust, _plates) = world();
         let mut e = Evolution::new(&map, &seams);
         e.set_water(100.0); // a sea to evaporate from
-        // A windward chain in a real wind lane: u → wall → shadow.
+                            // A windward chain in a real wind lane: u → wall → shadow.
         let u = (0..map.len() as TileId)
             .find(|t| {
                 let i = *t as usize;
@@ -6489,9 +6505,8 @@ mod tests {
         };
         // Both sites must be BECALMED: quiet heat AND no derived push —
         // a heat-gradient shove would ride a pile away mid-experiment.
-        let still = |e: &Evolution, t: TileId| {
-            quiet(t) && e.push[t as usize].length_squared() < 1e-12
-        };
+        let still =
+            |e: &Evolution, t: TileId| quiet(t) && e.push[t as usize].length_squared() < 1e-12;
         let a = (0..map.len() as TileId)
             .find(|t| still(&e, *t))
             .expect("a becalmed site");
@@ -6659,9 +6674,8 @@ mod tests {
                 && !crust.is_vent(t)
                 && map.neighbours(t).iter().all(|nb| !crust.is_vent(*nb))
         };
-        let still = |e: &Evolution, t: TileId| {
-            quiet(t) && e.push[t as usize].length_squared() < 1e-12
-        };
+        let still =
+            |e: &Evolution, t: TileId| quiet(t) && e.push[t as usize].length_squared() < 1e-12;
         let a = (0..map.len() as TileId)
             .find(|t| still(&e, *t))
             .expect("a becalmed site");
@@ -6784,7 +6798,10 @@ mod tests {
             .collect();
         assert!(!live.is_empty(), "flows meet somewhere: live edges exist");
         let oldest = live.iter().map(|t| e.collision_age(*t)).max().unwrap();
-        assert!(oldest > 30, "an edge PERSISTS across ticks: oldest {oldest}");
+        assert!(
+            oldest > 30,
+            "an edge PERSISTS across ticks: oldest {oldest}"
+        );
         // Kill the motion: no flows, no meetings — every edge must DIE.
         e.push = vec![Vec3::ZERO; map.len()];
         for _ in 0..150 {
@@ -7231,7 +7248,9 @@ mod tests {
         // A PRE-FABRIC EPOCH: strip the arrays out of the file entirely, the
         // way a planet captured before Phase 1 has them.
         let mut v: serde_json::Value = serde_json::from_str(&json).expect("the file is json");
-        let led = v["ledger"].as_object_mut().expect("the ledger is an object");
+        let led = v["ledger"]
+            .as_object_mut()
+            .expect("the ledger is an object");
         for k in ["strike", "l3_dip", "l4_dip"] {
             assert!(led.remove(k).is_some(), "{k} was in the file to begin with");
         }

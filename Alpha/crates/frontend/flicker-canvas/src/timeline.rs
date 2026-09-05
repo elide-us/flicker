@@ -307,7 +307,8 @@ impl Timeline {
     /// the strip stays correct at any height rather than only at the mock's.
     pub fn lane_h(&self) -> f32 {
         let n = self.lanes.max(1) as f32;
-        ((self.strip.size.y - self.metrics.ruler_h - self.metrics.lane_gap * (n + 1.0)) / n).max(1.0)
+        ((self.strip.size.y - self.metrics.ruler_h - self.metrics.lane_gap * (n + 1.0)) / n)
+            .max(1.0)
     }
 
     /// A lane track's rect.
@@ -747,7 +748,10 @@ mod tests {
     #[test]
     fn frames_map_across_the_track_and_clamp() {
         let t = seated(40);
-        assert!((t.frame_x(0) - t.track_x()).abs() < 0.01, "frame 0 at the left");
+        assert!(
+            (t.frame_x(0) - t.track_x()).abs() < 0.01,
+            "frame 0 at the left"
+        );
         assert!(
             (t.frame_x(40) - (t.track_x() + t.track_w())).abs() < 0.01,
             "the last frame reaches the right"
@@ -955,7 +959,10 @@ mod tests {
         );
         // The right lane matters: the same x in another lane hits nothing.
         assert_eq!(
-            t.event_at(Vec2::new(t.frame_x(12), t.lane_rect(5).pos.y + 2.0), &events),
+            t.event_at(
+                Vec2::new(t.frame_x(12), t.lane_rect(5).pos.y + 2.0),
+                &events
+            ),
             None
         );
         assert_eq!(t.event_at(Vec2::new(t.frame_x(12), mid_y), &[]), None);
@@ -1072,7 +1079,11 @@ mod tests {
             )
             .edit
             .unwrap();
-        assert_eq!((e.start, e.end), (34, Some(40)), "length preserved at the end");
+        assert_eq!(
+            (e.start, e.end),
+            (34, Some(40)),
+            "length preserved at the end"
+        );
     }
 
     /// Grabbing an END resizes only that end, and cannot be dragged through the

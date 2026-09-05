@@ -670,7 +670,11 @@ fn the_material_rename_edits_a_bound_name_and_persists() {
     // The field's edited text comes back on its bind (the preselect-replace is the
     // component's `select_all_on_enter`, tested in flicker-widgets).
     bench.set_rename_draft("Xy");
-    assert_eq!(bench.rename_draft(), Some("Xy"), "the draft follows the field");
+    assert_eq!(
+        bench.rename_draft(),
+        Some("Xy"),
+        "the draft follows the field"
+    );
 
     // Commit persists: the in-memory index and the temp file both carry the new name.
     bench.commit_rename();

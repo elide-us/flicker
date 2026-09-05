@@ -186,11 +186,7 @@ impl AtlasFrame {
         let lat_top = (90.0 - self.trim_deg).to_radians();
         let lat_span = (180.0 - 2.0 * self.trim_deg).to_radians();
         let lat = lat_top - (z as f64 + 0.5) / self.height as f64 * lat_span;
-        DVec3::new(
-            lat.cos() * lon.cos(),
-            lat.sin(),
-            lat.cos() * lon.sin(),
-        )
+        DVec3::new(lat.cos() * lon.cos(), lat.sin(), lat.cos() * lon.sin())
     }
 }
 
@@ -287,7 +283,10 @@ mod tests {
         // Field isolation at the packed level.
         assert_eq!(WorldClusterId::new(15, 0, 0, 0).bits(), 0xF << 60);
         assert_eq!(WorldClusterId::new(0, 0xFFF, 0, 0).bits(), 0xFFF << 48);
-        assert_eq!(WorldClusterId::new(0, 0, 0xFF_FFFF, 0).bits(), 0xFF_FFFF << 24);
+        assert_eq!(
+            WorldClusterId::new(0, 0, 0xFF_FFFF, 0).bits(),
+            0xFF_FFFF << 24
+        );
         assert_eq!(WorldClusterId::new(0, 0, 0, 0xFF_FFFF).bits(), 0xFF_FFFF);
         assert_eq!(
             WorldClusterId::new(15, 0xFFF, 0xFF_FFFF, 0xFF_FFFF).bits(),
@@ -323,7 +322,10 @@ mod tests {
         // arc, same as any interior step — the wrap is seamless.
         let mid = frame.height / 2;
         let step_interior = frame.dir(1, mid).dot(frame.dir(2, mid)).acos();
-        let step_wrap = frame.dir(frame.width - 1, mid).dot(frame.dir(0, mid)).acos();
+        let step_wrap = frame
+            .dir(frame.width - 1, mid)
+            .dot(frame.dir(0, mid))
+            .acos();
         assert!((step_interior - step_wrap).abs() < 1e-9);
     }
 

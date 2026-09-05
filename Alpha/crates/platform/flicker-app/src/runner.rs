@@ -20,8 +20,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use flicker_input_core::{TextStream, 
+use flicker_input_core::{
     ContextualBindings, Fired, GamepadConfig, InputContext, InputMap, InputState, Resolver,
+    TextStream,
 };
 use flicker_input_device::{DiscreteSource, GamepadSource, WindowSource};
 use flicker_input_router::{apply_context_requests, InputEvent, RouteCtx};
@@ -531,7 +532,9 @@ mod text_route_tests {
         let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let mut offenders = Vec::new();
         fn walk(dir: &std::path::Path, out: &mut Vec<String>) {
-            let Ok(rd) = std::fs::read_dir(dir) else { return };
+            let Ok(rd) = std::fs::read_dir(dir) else {
+                return;
+            };
             for e in rd.flatten() {
                 let p = e.path();
                 if p.is_dir() {
@@ -540,11 +543,16 @@ mod text_route_tests {
                     }
                     walk(&p, out);
                 } else if p.extension().is_some_and(|x| x == "rs") {
-                    let s = p.to_string_lossy().to_string();
+                    // Separator-agnostic: the Windows runner walks `Alpha\crates\...`, and
+                    // a `/`-only test let the input system's own readers through as
+                    // offenders there (CI 2026-09-05, windows-latest).
+                    let s = p.to_string_lossy().replace('\\', "/");
                     if s.contains("/crates/input/") || s.contains("/crates/platform/") {
                         continue;
                     }
-                    let Ok(src) = std::fs::read_to_string(&p) else { continue };
+                    let Ok(src) = std::fs::read_to_string(&p) else {
+                        continue;
+                    };
                     for needle in ["text_stream(", ".typed()", ".backspace()", ".preedit()"] {
                         if src.contains(needle) {
                             out.push(format!("{s}: {needle}"));

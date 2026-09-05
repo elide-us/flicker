@@ -146,8 +146,7 @@ mod tests {
         let mut gameplay = GameplayBase::default();
         let mut rc = RouteCtx::new();
         let report = {
-            let mut chain: [&mut dyn InputHandler; 3] =
-                [&mut root, &mut walker, &mut gameplay];
+            let mut chain: [&mut dyn InputHandler; 3] = [&mut root, &mut walker, &mut gameplay];
             Router::dispatch(&events, &mut chain, &mut rc)
         };
         assert!(

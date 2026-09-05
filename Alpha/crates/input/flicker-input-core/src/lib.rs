@@ -55,4 +55,6 @@ pub use device::{AxisDirection, DeadzoneShape, GamepadAxis, GamepadButton, Key, 
 pub use rebind::{capture_input, RebindCapture};
 pub use resolve::{EventKind, Fired, Resolver, TickTime};
 pub use signal::{ActionSignal, RebindScope, SignalGroup};
-pub use snapshot::{apply_deadzone, GamepadConfig, GamepadState, InputEdge, InputState, TextStream};
+pub use snapshot::{
+    apply_deadzone, GamepadConfig, GamepadState, InputEdge, InputState, TextStream,
+};

@@ -101,13 +101,13 @@ pub use sections::{Section, SectionChange, Sections};
 
 pub mod strings;
 
+/// Data-driven rows: a `list` with `rows_from` expands its ONE prototype child into a
+/// clone per row the scene publishes — see [`rows`].
+pub mod rows;
 /// The **one stage compiler** — `stages.<source>` JSON → the typed
 /// [`StageDef`](flicker_render::StageDef) every surface filler consumes, with every
 /// authoring problem reported as data (and gated on the shipped content). See [`stages`].
 pub mod stages;
-/// Data-driven rows: a `list` with `rows_from` expands its ONE prototype child into a
-/// clone per row the scene publishes — see [`rows`].
-pub mod rows;
 pub use rows::{instantiate_rows, Row};
 pub use stages::{
     compile_rate, compile_stage, is_source_key, lighting_preset, stage_def, stage_defs,

@@ -1239,12 +1239,20 @@ mod tests {
     #[test]
     fn every_tab_group_member_has_an_id() {
         fn collect(node: &serde_json::Value, scene: &str, out: &mut Vec<String>) {
-            let has = |k: &str| node.get(k).and_then(|v| v.as_str()).is_some_and(|s| !s.is_empty());
+            let has = |k: &str| {
+                node.get(k)
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|s| !s.is_empty())
+            };
             if has("tab_group") && !has("id") {
                 out.push(format!(
                     "{scene}: `{}` in group `{}` (action {:?}, ordinal {:?}) has no id",
-                    node.get("component").and_then(|c| c.as_str()).unwrap_or("?"),
-                    node.get("tab_group").and_then(|g| g.as_str()).unwrap_or("?"),
+                    node.get("component")
+                        .and_then(|c| c.as_str())
+                        .unwrap_or("?"),
+                    node.get("tab_group")
+                        .and_then(|g| g.as_str())
+                        .unwrap_or("?"),
                     node.get("action").and_then(|a| a.as_str()),
                     node.get("nav_ordinal"),
                 ));

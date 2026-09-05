@@ -605,7 +605,10 @@ fn text_entry_map() -> InputMap {
     use crate::device::{GamepadButton, Key};
     let mut m = InputMap::empty();
     m.bind(ActionSignal::SubmitText, InputBinding::Key(Key::Enter));
-    m.bind(ActionSignal::SubmitText, InputBinding::Key(Key::NumpadEnter));
+    m.bind(
+        ActionSignal::SubmitText,
+        InputBinding::Key(Key::NumpadEnter),
+    );
     m.bind(
         ActionSignal::SubmitText,
         InputBinding::GamepadButton(GamepadButton::Start),

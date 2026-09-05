@@ -162,7 +162,8 @@ impl PlanetSource {
             .iter()
             .map(|&a| f64::from(a) / mean)
             .collect();
-        let free_units = f64::from(self.epoch.era.water_volume) - f64::from(self.epoch.era.ice_locked);
+        let free_units =
+            f64::from(self.epoch.era.water_volume) - f64::from(self.epoch.era.ice_locked);
         if free_units <= 0.0 {
             return 0.0;
         }
@@ -174,9 +175,7 @@ impl PlanetSource {
         hi += free_units; // a level above every column floods everything
         for _ in 0..64 {
             let mid = 0.5 * (lo + hi);
-            let held: f64 = (0..n)
-                .map(|i| rel[i] * (mid - ground[i]).max(0.0))
-                .sum();
+            let held: f64 = (0..n).map(|i| rel[i] * (mid - ground[i]).max(0.0)).sum();
             if held < free_units {
                 lo = mid;
             } else {

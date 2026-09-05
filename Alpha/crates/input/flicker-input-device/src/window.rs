@@ -34,9 +34,15 @@ use crate::DiscreteSource;
 #[derive(Clone, Debug, PartialEq)]
 enum KbmOp {
     CursorMoved(Vec2),
-    MouseButton { button: MouseButton, down: bool },
+    MouseButton {
+        button: MouseButton,
+        down: bool,
+    },
     Wheel(f32),
-    Key { key: Key, down: bool },
+    Key {
+        key: Key,
+        down: bool,
+    },
     Typed(String),
     /// The IME's composition in progress (empty = cleared).
     Preedit(String),

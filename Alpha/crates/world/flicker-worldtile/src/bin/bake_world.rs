@@ -125,14 +125,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(PathBuf::from)
         .or_else(|| epoch_file.parent().map(PathBuf::from))
         .unwrap_or_else(|| PathBuf::from("."));
-    let dir = out_root.join(&stem).join(format!("region_c{center}_r{rings}"));
+    let dir = out_root
+        .join(&stem)
+        .join(format!("region_c{center}_r{rings}"));
     std::fs::create_dir_all(&dir)?;
 
-    let heights_le: Vec<u8> = bake
-        .heights
-        .iter()
-        .flat_map(|h| h.to_le_bytes())
-        .collect();
+    let heights_le: Vec<u8> = bake.heights.iter().flat_map(|h| h.to_le_bytes()).collect();
     std::fs::write(
         dir.join("height.f32le.gz"),
         compression::compress_gzip(&heights_le),

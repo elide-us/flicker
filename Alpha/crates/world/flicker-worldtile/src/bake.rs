@@ -191,8 +191,7 @@ fn rect_for(
         let lon = d.z.atan2(d.x);
         let base = grid.dirs[region[0] as usize].as_dvec3().normalize();
         let base_lon = base.z.atan2(base.x);
-        let rel = (lon - base_lon + std::f64::consts::PI)
-            .rem_euclid(std::f64::consts::TAU)
+        let rel = (lon - base_lon + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU)
             - std::f64::consts::PI;
         lon_min = lon_min.min(rel);
         lon_max = lon_max.max(rel);
@@ -353,22 +352,18 @@ mod tests {
                 sum += f64::from(bake.heights[i]);
                 // A rim pixel (an ownership neighbour differs) must stand on
                 // the raw field — the absorption never moves an edge.
-                let on_rim = [(1i64, 0i64), (-1, 0), (0, 1), (0, -1)].iter().any(
-                    |&(dc, dr)| {
+                let on_rim = [(1i64, 0i64), (-1, 0), (0, 1), (0, -1)]
+                    .iter()
+                    .any(|&(dc, dr)| {
                         let (nc, nr) = (c as i64 + dc, r as i64 + dr);
-                        if nc < 0
-                            || nr < 0
-                            || nc >= bake.width as i64
-                            || nr >= bake.height as i64
-                        {
+                        if nc < 0 || nr < 0 || nc >= bake.width as i64 || nr >= bake.height as i64 {
                             return true;
                         }
                         let nd = bake
                             .frame
                             .dir(bake.frame.wrap_x(bake.x0 as i64 + nc), bake.z0 + nr as u32);
                         index.owner(src.grid(), nd) != cell
-                    },
-                );
+                    });
                 if on_rim && rim_checked < 200 {
                     rim_checked += 1;
                     let field = hood.relief_at(d).max(0.0);
@@ -407,9 +402,10 @@ mod tests {
         let index = CellIndex::new(src.grid());
         let exposed = (0..n).find(|&i| {
             let (c, r) = (i % bake.width as usize, i / bake.width as usize);
-            let d = bake
-                .frame
-                .dir(bake.frame.wrap_x(bake.x0 as i64 + c as i64), bake.z0 + r as u32);
+            let d = bake.frame.dir(
+                bake.frame.wrap_x(bake.x0 as i64 + c as i64),
+                bake.z0 + r as u32,
+            );
             bake.heights[i] > 0.0 && index.owner(src.grid(), d) == 5
         });
         let i = exposed.expect("the vein hex has ground");
@@ -423,7 +419,7 @@ mod tests {
     /// The sea solve is monotone sane: more water, higher level; no water,
     /// level zero.
     #[test]
-    fn the_sea_level_follows_the_water()  {
+    fn the_sea_level_follows_the_water() {
         let dry = {
             let mut e = tiny_epoch();
             e.era.water_volume = 0.0;
@@ -436,6 +432,9 @@ mod tests {
             PlanetSource::new(e, 2_000.0).sea_level_m()
         };
         assert_eq!(dry, 0.0);
-        assert!(low > 0.0 && high > low, "sea rises with the volume: {low} vs {high}");
+        assert!(
+            low > 0.0 && high > low,
+            "sea rises with the volume: {low} vs {high}"
+        );
     }
 }

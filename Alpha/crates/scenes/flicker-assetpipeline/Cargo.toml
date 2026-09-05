@@ -1,6 +1,6 @@
 [package]
 name = "flicker-assetpipeline"
-version = "0.1.9"
+version = "0.1.10"
 edition.workspace = true
 license.workspace = true
 publish = false
@@ -31,7 +31,7 @@ flicker-mechanics.workspace = true
 # The rig view: the shared surface filler each of the four view panels seats.
 flicker-rigview.workspace = true
 # `Arrows` — the line-batch currency the rig view draws (shared with the globe).
-flicker-globe = { version = "0.1.9", path = "../../frontend/flicker-globe" }
+flicker-globe = { version = "0.1.10", path = "../../frontend/flicker-globe" }
 # The shared input event bus + core resolver (spec section 9): this scene dispatches
 # Esc->pause and the HUD pointer-consume through the router. Reused read-only — the
 # bus is built and proven elsewhere; this crate only consumes it.

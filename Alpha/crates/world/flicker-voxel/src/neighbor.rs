@@ -236,10 +236,7 @@ mod tests {
     fn read_corner_edge_and_corner_oob_route_to_their_slots() {
         let dim = CLUSTER_DIM as i32;
         let mut edge = Cluster::empty();
-        edge.set(
-            LocalCoord::new(255, 255, 30).unwrap(),
-            solid_voxel(),
-        );
+        edge.set(LocalCoord::new(255, 255, 30).unwrap(), solid_voxel());
         let mut corner = Cluster::empty();
         corner.set(LocalCoord::new(255, 255, 0).unwrap(), solid_voxel());
         let cluster = Cluster::empty();

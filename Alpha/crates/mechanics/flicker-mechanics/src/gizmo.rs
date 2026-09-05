@@ -470,12 +470,20 @@ fn plane_hit(normal: Vec3, origin: Vec3, (o, d): (Vec3, Vec3)) -> Option<Vec3> {
 /// `0.0` when a ray runs (near-)parallel to the plane or lands on the pivot (the sweep is
 /// ill-conditioned) — the caller holds the previous value that frame, exactly as [`drag_plane`] does.
 /// This is ROTATE's free form: pass the view direction for the screen-space ring.
-pub fn drag_angle(normal: Vec3, origin: Vec3, ray_prev: (Vec3, Vec3), ray_now: (Vec3, Vec3)) -> f32 {
+pub fn drag_angle(
+    normal: Vec3,
+    origin: Vec3,
+    ray_prev: (Vec3, Vec3),
+    ray_now: (Vec3, Vec3),
+) -> f32 {
     let n = normal.normalize_or_zero();
     if n == Vec3::ZERO {
         return 0.0;
     }
-    let (Some(a), Some(b)) = (plane_hit(n, origin, ray_prev), plane_hit(n, origin, ray_now)) else {
+    let (Some(a), Some(b)) = (
+        plane_hit(n, origin, ray_prev),
+        plane_hit(n, origin, ray_now),
+    ) else {
         return 0.0;
     };
     let (ra, rb) = (a - origin, b - origin);
@@ -969,31 +977,62 @@ mod tests {
     #[test]
     fn a_quarter_sweep_turns_ninety_degrees_about_the_handle_axis() {
         // Cursor swings +X → +Y about the Z ring: a right-handed quarter turn about +Z.
-        let q = drag_rotate(Axis::Z, Mat3::IDENTITY, Vec3::ZERO, down(10.0, 0.0), down(0.0, 10.0));
+        let q = drag_rotate(
+            Axis::Z,
+            Mat3::IDENTITY,
+            Vec3::ZERO,
+            down(10.0, 0.0),
+            down(0.0, 10.0),
+        );
         let (n, a) = q.to_axis_angle();
         assert!((n - Vec3::Z).length() < 1e-4, "about +Z: {n:?}");
         assert!((a.to_degrees() - 90.0).abs() < 1e-3, "{}°", a.to_degrees());
         // The other way round is the same turn negated.
-        let back = drag_rotate(Axis::Z, Mat3::IDENTITY, Vec3::ZERO, down(0.0, 10.0), down(10.0, 0.0));
-        assert!(
-            (drag_angle(Vec3::Z, Vec3::ZERO, down(0.0, 10.0), down(10.0, 0.0)).to_degrees() + 90.0).abs() < 1e-3
+        let back = drag_rotate(
+            Axis::Z,
+            Mat3::IDENTITY,
+            Vec3::ZERO,
+            down(0.0, 10.0),
+            down(10.0, 0.0),
         );
-        assert!((q * back).w.abs() > 1.0 - 1e-5, "the two cancel: {:?}", q * back);
+        assert!(
+            (drag_angle(Vec3::Z, Vec3::ZERO, down(0.0, 10.0), down(10.0, 0.0)).to_degrees() + 90.0)
+                .abs()
+                < 1e-3
+        );
+        assert!(
+            (q * back).w.abs() > 1.0 - 1e-5,
+            "the two cancel: {:?}",
+            q * back
+        );
     }
 
     #[test]
     fn a_rotate_sweep_is_ill_conditioned_on_the_pivot_and_edge_on() {
         // Cursor ON the pivot: no radius, no angle.
-        assert_eq!(drag_angle(Vec3::Z, Vec3::ZERO, down(0.0, 0.0), down(0.0, 5.0)), 0.0);
+        assert_eq!(
+            drag_angle(Vec3::Z, Vec3::ZERO, down(0.0, 0.0), down(0.0, 5.0)),
+            0.0
+        );
         // Ray running IN the ring's plane never meets it.
         let edge = (Vec3::new(0.0, 0.0, 0.0), Vec3::X);
         assert_eq!(drag_angle(Vec3::Z, Vec3::ZERO, edge, edge), 0.0);
-        assert_eq!(drag_angle(Vec3::ZERO, Vec3::ZERO, down(1.0, 0.0), down(0.0, 1.0)), 0.0);
+        assert_eq!(
+            drag_angle(Vec3::ZERO, Vec3::ZERO, down(1.0, 0.0), down(0.0, 1.0)),
+            0.0
+        );
     }
 
     #[test]
     fn a_rotate_drag_reports_degrees_turned() {
-        let mut d = DragState::begin(GizmoMode::Rotate, Some(Axis::Z), Mat3::IDENTITY, Vec3::ZERO, down(10.0, 0.0), None);
+        let mut d = DragState::begin(
+            GizmoMode::Rotate,
+            Some(Axis::Z),
+            Mat3::IDENTITY,
+            Vec3::ZERO,
+            down(10.0, 0.0),
+            None,
+        );
         let step = d.update(down(0.0, 10.0));
         let DragDelta::Rotate(q) = step else {
             panic!("rotate drag yields a rotation, got {step:?}");
@@ -1010,7 +1049,14 @@ mod tests {
 
     #[test]
     fn dragging_a_scale_handle_outward_doubles_only_its_axis() {
-        let mut d = DragState::begin(GizmoMode::Scale, Some(Axis::X), Mat3::IDENTITY, Vec3::ZERO, down(5.0, 0.0), None);
+        let mut d = DragState::begin(
+            GizmoMode::Scale,
+            Some(Axis::X),
+            Mat3::IDENTITY,
+            Vec3::ZERO,
+            down(5.0, 0.0),
+            None,
+        );
         let DragDelta::Scale(f) = d.update(down(10.0, 0.0)) else {
             panic!("scale drag yields factors");
         };
@@ -1020,7 +1066,14 @@ mod tests {
 
     #[test]
     fn the_uniform_handle_scales_all_three_axes() {
-        let mut d = DragState::begin(GizmoMode::Scale, None, Mat3::IDENTITY, Vec3::ZERO, down(5.0, 0.0), None);
+        let mut d = DragState::begin(
+            GizmoMode::Scale,
+            None,
+            Mat3::IDENTITY,
+            Vec3::ZERO,
+            down(5.0, 0.0),
+            None,
+        );
         let DragDelta::Scale(f) = d.update(down(10.0, 0.0)) else {
             panic!("scale drag yields factors");
         };
@@ -1029,14 +1082,36 @@ mod tests {
 
     #[test]
     fn a_scale_drag_never_falls_below_the_minimum() {
-        let mut d = DragState::begin(GizmoMode::Scale, Some(Axis::Y), Mat3::IDENTITY, Vec3::ZERO, down(0.0, 10.0), None);
+        let mut d = DragState::begin(
+            GizmoMode::Scale,
+            Some(Axis::Y),
+            Mat3::IDENTITY,
+            Vec3::ZERO,
+            down(0.0, 10.0),
+            None,
+        );
         for _ in 0..8 {
             d.update(down(0.0, 1e-4)); // collapse hard onto the pivot, over and over
-            assert!(d.total() >= MIN_SCALE, "pinned at the floor, got {}", d.total());
+            assert!(
+                d.total() >= MIN_SCALE,
+                "pinned at the floor, got {}",
+                d.total()
+            );
         }
         // And the ratio never goes negative through the pivot — it pins, it does not mirror.
-        assert!(drag_scale(Axis::Y, Mat3::IDENTITY, Vec3::ZERO, down(0.0, 5.0), down(0.0, -5.0)) >= MIN_SCALE);
-        assert_eq!(scale_factors(Some(Axis::Z), -4.0), Vec3::new(1.0, 1.0, MIN_SCALE));
+        assert!(
+            drag_scale(
+                Axis::Y,
+                Mat3::IDENTITY,
+                Vec3::ZERO,
+                down(0.0, 5.0),
+                down(0.0, -5.0)
+            ) >= MIN_SCALE
+        );
+        assert_eq!(
+            scale_factors(Some(Axis::Z), -4.0),
+            Vec3::new(1.0, 1.0, MIN_SCALE)
+        );
     }
 
     // ── Flip ──────────────────────────────────────────────────────────────────────────────────
@@ -1056,7 +1131,10 @@ mod tests {
         }
         // About a pivot: the plane moves with it.
         let m = flip_matrix(Axis::X, Mat3::IDENTITY, Vec3::new(2.0, 0.0, 0.0));
-        assert!((m.transform_point3(Vec3::new(5.0, 1.0, 0.0)) - Vec3::new(-1.0, 1.0, 0.0)).length() < 1e-5);
+        assert!(
+            (m.transform_point3(Vec3::new(5.0, 1.0, 0.0)) - Vec3::new(-1.0, 1.0, 0.0)).length()
+                < 1e-5
+        );
     }
 
     /// The guard seam of invariant C670523A: the CornerVector range `[-0.5, +2.5]` is asymmetric
@@ -1094,30 +1172,60 @@ mod tests {
     #[test]
     fn an_axis_lock_keeps_an_off_axis_drag_on_its_axis() {
         // The cursor moves diagonally; the X-locked drag takes only the X component.
-        let mut d = DragState::begin(GizmoMode::Translate, Some(Axis::X), Mat3::IDENTITY, Vec3::ZERO, down(0.0, 0.0), None);
+        let mut d = DragState::begin(
+            GizmoMode::Translate,
+            Some(Axis::X),
+            Mat3::IDENTITY,
+            Vec3::ZERO,
+            down(0.0, 0.0),
+            None,
+        );
         let DragDelta::Translate(v) = d.update(down(3.0, 7.0)) else {
             panic!("translate drag yields a translation");
         };
-        assert!((v - Vec3::new(3.0, 0.0, 0.0)).length() < 1e-4, "locked to X: {v:?}");
+        assert!(
+            (v - Vec3::new(3.0, 0.0, 0.0)).length() < 1e-4,
+            "locked to X: {v:?}"
+        );
         // Unlocked, the same motion moves in the whole view plane.
-        let mut free = DragState::begin(GizmoMode::Translate, None, Mat3::IDENTITY, Vec3::ZERO, down(0.0, 0.0), None);
+        let mut free = DragState::begin(
+            GizmoMode::Translate,
+            None,
+            Mat3::IDENTITY,
+            Vec3::ZERO,
+            down(0.0, 0.0),
+            None,
+        );
         let DragDelta::Translate(v) = free.update(down(3.0, 7.0)) else {
             panic!("translate drag yields a translation");
         };
-        assert!((v - Vec3::new(3.0, 7.0, 0.0)).length() < 1e-4, "free in the view plane: {v:?}");
+        assert!(
+            (v - Vec3::new(3.0, 7.0, 0.0)).length() < 1e-4,
+            "free in the view plane: {v:?}"
+        );
     }
 
     #[test]
     fn a_snapped_sweep_steps_at_the_halfway_point() {
         // 37° with a 15° step reads 30°; passing 37.5° it reads 45°.
-        let mut d = DragState::begin(GizmoMode::Rotate, Some(Axis::Z), Mat3::IDENTITY, Vec3::ZERO, down(10.0, 0.0), Some(15.0));
+        let mut d = DragState::begin(
+            GizmoMode::Rotate,
+            Some(Axis::Z),
+            Mat3::IDENTITY,
+            Vec3::ZERO,
+            down(10.0, 0.0),
+            Some(15.0),
+        );
         let at = |deg: f32| down(10.0 * deg.to_radians().cos(), 10.0 * deg.to_radians().sin());
         // A 37° sweep has not reached the 37.5° halfway point, so it reads 30° — two whole steps
         // crossed in this frame, and the 7° remainder stays in the raw accumulator.
         let DragDelta::Rotate(q) = d.update(at(37.0)) else {
             panic!("rotate drag yields a rotation");
         };
-        assert!((q.to_axis_angle().1.to_degrees() - 30.0).abs() < 1e-3, "{q:?}");
+        assert!(
+            (q.to_axis_angle().1.to_degrees() - 30.0).abs() < 1e-3,
+            "{q:?}"
+        );
         assert!((d.total() - 30.0).abs() < 1e-3, "{}°", d.total());
         // Nudging within the same step emits nothing at all.
         assert!(d.update(at(37.4)).is_identity(), "still short of 37.5°");
@@ -1127,13 +1235,23 @@ mod tests {
         let DragDelta::Rotate(q) = step else {
             panic!("rotate drag yields a rotation");
         };
-        assert!((q.to_axis_angle().1.to_degrees() - 15.0).abs() < 1e-3, "one whole step, not a fraction");
+        assert!(
+            (q.to_axis_angle().1.to_degrees() - 15.0).abs() < 1e-3,
+            "one whole step, not a fraction"
+        );
     }
 
     #[test]
     fn a_long_snapped_drag_does_not_drift_off_the_step() {
         // 90° swept in 90 one-degree frames, snapped to 15°: exactly 90°, and exactly 6 steps.
-        let mut d = DragState::begin(GizmoMode::Rotate, Some(Axis::Z), Mat3::IDENTITY, Vec3::ZERO, down(10.0, 0.0), Some(15.0));
+        let mut d = DragState::begin(
+            GizmoMode::Rotate,
+            Some(Axis::Z),
+            Mat3::IDENTITY,
+            Vec3::ZERO,
+            down(10.0, 0.0),
+            Some(15.0),
+        );
         let at = |deg: f32| down(10.0 * deg.to_radians().cos(), 10.0 * deg.to_radians().sin());
         let mut steps = 0;
         for i in 1..=90 {
@@ -1141,13 +1259,27 @@ mod tests {
                 steps += 1;
             }
         }
-        assert!((d.total() - 90.0).abs() < 1e-2, "no drift over 90 frames: {}°", d.total());
-        assert_eq!(steps, 6, "one emission per crossed step, never a fraction of one");
+        assert!(
+            (d.total() - 90.0).abs() < 1e-2,
+            "no drift over 90 frames: {}°",
+            d.total()
+        );
+        assert_eq!(
+            steps, 6,
+            "one emission per crossed step, never a fraction of one"
+        );
     }
 
     #[test]
     fn a_snapped_translate_lands_on_multiples_of_the_step() {
-        let mut d = DragState::begin(GizmoMode::Translate, Some(Axis::X), Mat3::IDENTITY, Vec3::ZERO, down(0.0, 0.0), Some(0.25));
+        let mut d = DragState::begin(
+            GizmoMode::Translate,
+            Some(Axis::X),
+            Mat3::IDENTITY,
+            Vec3::ZERO,
+            down(0.0, 0.0),
+            Some(0.25),
+        );
         let mut total = Vec3::ZERO;
         for i in 1..=40 {
             let DragDelta::Translate(v) = d.update(down(i as f32 * 0.1, 0.0)) else {
@@ -1156,7 +1288,10 @@ mod tests {
             total += v;
         }
         // 40 frames of 0.1 = 4.0 raw, quantized to the 0.25 grid = 4.0 exactly.
-        assert!((total - Vec3::new(4.0, 0.0, 0.0)).length() < 1e-4, "{total:?}");
+        assert!(
+            (total - Vec3::new(4.0, 0.0, 0.0)).length() < 1e-4,
+            "{total:?}"
+        );
         assert!((d.total() - 4.0).abs() < 1e-4);
         // Every emitted total sits on the grid.
         assert!(((d.total() / 0.25).round() * 0.25 - d.total()).abs() < 1e-5);
@@ -1164,8 +1299,18 @@ mod tests {
 
     #[test]
     fn a_snapped_scale_steps_in_ratio() {
-        let mut d = DragState::begin(GizmoMode::Scale, Some(Axis::X), Mat3::IDENTITY, Vec3::ZERO, down(4.0, 0.0), Some(0.5));
-        assert!(d.update(down(4.8, 0.0)).is_identity(), "ratio 1.2 rounds back to 1.0");
+        let mut d = DragState::begin(
+            GizmoMode::Scale,
+            Some(Axis::X),
+            Mat3::IDENTITY,
+            Vec3::ZERO,
+            down(4.0, 0.0),
+            Some(0.5),
+        );
+        assert!(
+            d.update(down(4.8, 0.0)).is_identity(),
+            "ratio 1.2 rounds back to 1.0"
+        );
         let DragDelta::Scale(f) = d.update(down(6.0, 0.0)) else {
             panic!("scale drag yields factors");
         };
@@ -1177,18 +1322,43 @@ mod tests {
     fn a_drag_holds_its_value_through_an_unresolvable_ray() {
         // A ray running ALONG the locked axis cannot be projected: the frame contributes nothing.
         let along = (Vec3::ZERO, Vec3::X);
-        let mut d = DragState::begin(GizmoMode::Translate, Some(Axis::X), Mat3::IDENTITY, Vec3::ZERO, down(0.0, 0.0), None);
+        let mut d = DragState::begin(
+            GizmoMode::Translate,
+            Some(Axis::X),
+            Mat3::IDENTITY,
+            Vec3::ZERO,
+            down(0.0, 0.0),
+            None,
+        );
         d.update(down(2.0, 0.0));
         assert!(d.update(along).is_identity(), "the drag holds");
-        assert!((d.total() - 2.0).abs() < 1e-4, "and keeps what it had: {}", d.total());
+        assert!(
+            (d.total() - 2.0).abs() < 1e-4,
+            "and keeps what it had: {}",
+            d.total()
+        );
     }
 
     #[test]
     fn a_drag_reports_the_handle_it_was_begun_on() {
-        let d = DragState::begin(GizmoMode::Rotate, Some(Axis::X), Mat3::IDENTITY, Vec3::ZERO, down(0.0, 0.0), None);
+        let d = DragState::begin(
+            GizmoMode::Rotate,
+            Some(Axis::X),
+            Mat3::IDENTITY,
+            Vec3::ZERO,
+            down(0.0, 0.0),
+            None,
+        );
         assert_eq!(d.mode(), GizmoMode::Rotate);
         assert_eq!(d.axis(), Some(Axis::X));
-        let free = DragState::begin(GizmoMode::Scale, None, Mat3::IDENTITY, Vec3::ZERO, down(0.0, 0.0), None);
+        let free = DragState::begin(
+            GizmoMode::Scale,
+            None,
+            Mat3::IDENTITY,
+            Vec3::ZERO,
+            down(0.0, 0.0),
+            None,
+        );
         assert_eq!(free.axis(), None, "the uniform centre handle");
     }
 
@@ -1213,11 +1383,17 @@ mod tests {
         assert_eq!(no_flip.modes().collect::<Vec<_>>(), GizmoMode::ALL.to_vec());
         // A placement-only surface: the disabled modes have no handles and leave the cycle.
         let place = GadgetModes::TRANSLATE.with(GadgetModes::ROTATE);
-        assert_eq!(place.modes().collect::<Vec<_>>(), vec![GizmoMode::Translate, GizmoMode::Rotate]);
+        assert_eq!(
+            place.modes().collect::<Vec<_>>(),
+            vec![GizmoMode::Translate, GizmoMode::Rotate]
+        );
         assert!(place.handles_for(GizmoMode::Scale).is_empty());
         assert!(!place.allows_flip());
         assert_eq!(GadgetModes::NONE.modes().count(), 0);
-        assert_eq!(GadgetModes::ALL.modes().collect::<Vec<_>>(), GizmoMode::ALL.to_vec());
+        assert_eq!(
+            GadgetModes::ALL.modes().collect::<Vec<_>>(),
+            GizmoMode::ALL.to_vec()
+        );
         // Every mode owns a distinct bit — no two modes gate each other.
         for m in GizmoMode::ALL {
             let only = GadgetModes::NONE.with(GadgetModes(1 << (m as u8)));
@@ -1225,6 +1401,10 @@ mod tests {
             assert!(!only.allows_flip());
         }
         assert!(GadgetModes::FLIP.allows_flip());
-        assert_eq!(GadgetModes::FLIP.modes().count(), 0, "flip is not a drag mode");
+        assert_eq!(
+            GadgetModes::FLIP.modes().count(),
+            0,
+            "flip is not a drag mode"
+        );
     }
 }

@@ -618,10 +618,7 @@ impl UiState {
         // A stage that walks on keeps the resting value it was opened with: by the
         // second press `results` already carry the first stage (seeded for the draw),
         // and the scene must keep seeing the ORIGINAL value until the commit.
-        let resting = self
-            .staged
-            .get(bind)
-            .map_or(resting, |(_, r, _)| r.clone());
+        let resting = self.staged.get(bind).map_or(resting, |(_, r, _)| r.clone());
         self.staged.insert(bind.to_string(), (value, resting, pane));
     }
 
@@ -2320,10 +2317,7 @@ fn measure(node: &UiNode, model: &ValueMap) -> Vec2 {
                 let ts = pnum(node, "text_size").unwrap_or(12.0) as f32;
                 BINDING_ICON_GAP + label_width(&label, ts)
             };
-            Vec2::new(
-                node.width.unwrap_or(aff + lw),
-                node.height.unwrap_or(sq),
-            )
+            Vec2::new(node.width.unwrap_or(aff + lw), node.height.unwrap_or(sq))
         }
         // The nav-footer band hugs its tallest CLUSTER child (a button's DS ladder rung
         // under the author's hand) plus the vertical pad — the bench-footer height
@@ -9020,8 +9014,8 @@ fn footer_layout(node: &UiNode, outer: Rect, model: &ValueMap) -> FooterLayout {
         .iter()
         .map(|(_, c)| child_main(c, model, true))
         .collect();
-    let total = (widths.iter().sum::<f32>() + node.gap * kids.len().saturating_sub(1) as f32)
-        .min(inner.w);
+    let total =
+        (widths.iter().sum::<f32>() + node.gap * kids.len().saturating_sub(1) as f32).min(inner.w);
     let cluster_rect = Rect {
         x: inner.x + inner.w - total,
         y: inner.y,
@@ -9428,7 +9422,11 @@ fn draw_binding_icon(r: Rect, node: &UiNode, props: &Json, out: &mut Vec<HudComm
         return;
     }
     let ts = pnum(node, "text_size").unwrap_or(12.0) as f32;
-    let x = if aw > 0.0 { r.x + aw + BINDING_ICON_GAP } else { r.x };
+    let x = if aw > 0.0 {
+        r.x + aw + BINDING_ICON_GAP
+    } else {
+        r.x
+    };
     let ty = r.y + (r.h - text_line_h(ts)) * 0.5;
     push_text(
         out,
@@ -10861,7 +10859,11 @@ mod tests {
         assert!(state.staged_any(), "…but the stage is held");
         state.push_nudge("dial", 1, false);
         let f = run_ui(&page, &model, &styles, &idle, &mut state);
-        assert_eq!(f.results.number("dial"), Some(4.0), "still resting for the scene");
+        assert_eq!(
+            f.results.number("dial"),
+            Some(4.0),
+            "still resting for the scene"
+        );
         assert_eq!(
             state.staged_value("dial"),
             Some(&Value::Number(6.0)),
@@ -13182,18 +13184,31 @@ mod tests {
         ui.begin_edit("n", false, 0);
 
         let typing = input_at(0.0, 0.0, false);
-        ui.push_text(TextStream { typed: "a3".into(), ..Default::default() });
+        ui.push_text(TextStream {
+            typed: "a3".into(),
+            ..Default::default()
+        });
         let frame = run_ui(&screen, &model, &Json::Null, &typing, &mut ui);
-        assert_eq!(frame.results.text("n"), Some("123"), "digits only, at the end");
+        assert_eq!(
+            frame.results.text("n"),
+            Some("123"),
+            "digits only, at the end"
+        );
         assert_eq!(ui.edit.as_ref().unwrap().origin.as_deref(), Some("12"));
 
         // Home, then type: inserts at the caret.
         let model = ValueMap::new().with("n", Value::Text("123".into()));
         let home = input_at(0.0, 0.0, false);
-        ui.push_text(TextStream { home: true, ..Default::default() });
+        ui.push_text(TextStream {
+            home: true,
+            ..Default::default()
+        });
         run_ui(&screen, &model, &Json::Null, &home, &mut ui);
         let ins = input_at(0.0, 0.0, false);
-        ui.push_text(TextStream { typed: "9".into(), ..Default::default() });
+        ui.push_text(TextStream {
+            typed: "9".into(),
+            ..Default::default()
+        });
         let frame = run_ui(&screen, &model, &Json::Null, &ins, &mut ui);
         assert_eq!(frame.results.text("n"), Some("9123"));
         assert_eq!(ui.edit.as_ref().unwrap().caret, Some(1));
@@ -13201,20 +13216,36 @@ mod tests {
         // Delete removes after the caret; max_len caps further typing.
         let model = ValueMap::new().with("n", Value::Text("9123".into()));
         let del = input_at(0.0, 0.0, false);
-        ui.push_text(TextStream { delete: true, ..Default::default() });
+        ui.push_text(TextStream {
+            delete: true,
+            ..Default::default()
+        });
         let frame = run_ui(&screen, &model, &Json::Null, &del, &mut ui);
         assert_eq!(frame.results.text("n"), Some("923"));
         let model = ValueMap::new().with("n", Value::Text("9123".into()));
         let more = input_at(0.0, 0.0, false);
-        ui.push_text(TextStream { typed: "77".into(), ..Default::default() });
+        ui.push_text(TextStream {
+            typed: "77".into(),
+            ..Default::default()
+        });
         let frame = run_ui(&screen, &model, &Json::Null, &more, &mut ui);
         assert_eq!(frame.results.text("n").map(|t| t.chars().count()), Some(4));
 
         // Cancel: the next fold puts the origin back.
         ui.end_edit(true);
         let model = ValueMap::new().with("n", Value::Text("9123".into()));
-        let frame = run_ui(&screen, &model, &Json::Null, &input_at(0.0, 0.0, false), &mut ui);
-        assert_eq!(frame.results.text("n"), Some("12"), "the pre-edit value is restored");
+        let frame = run_ui(
+            &screen,
+            &model,
+            &Json::Null,
+            &input_at(0.0, 0.0, false),
+            &mut ui,
+        );
+        assert_eq!(
+            frame.results.text("n"),
+            Some("12"),
+            "the pre-edit value is restored"
+        );
         assert!(!ui.text_entry());
     }
 
@@ -13234,19 +13265,43 @@ mod tests {
         let mut ui = UiState::new();
         ui.begin_edit("r", true, 0);
         let k = input_at(0.0, 0.0, false);
-        ui.push_text(TextStream { typed: "K".into(), ..Default::default() });
-        assert_eq!(run_ui(&screen, &model, &Json::Null, &k, &mut ui).results.text("r"), Some("K"));
+        ui.push_text(TextStream {
+            typed: "K".into(),
+            ..Default::default()
+        });
+        assert_eq!(
+            run_ui(&screen, &model, &Json::Null, &k, &mut ui)
+                .results
+                .text("r"),
+            Some("K")
+        );
         let model = ValueMap::new().with("r", Value::Text("K".into()));
         let more = input_at(0.0, 0.0, false);
-        ui.push_text(TextStream { typed: "atana".into(), ..Default::default() });
-        assert_eq!(run_ui(&screen, &model, &Json::Null, &more, &mut ui).results.text("r"), Some("Katana"));
+        ui.push_text(TextStream {
+            typed: "atana".into(),
+            ..Default::default()
+        });
+        assert_eq!(
+            run_ui(&screen, &model, &Json::Null, &more, &mut ui)
+                .results
+                .text("r"),
+            Some("Katana")
+        );
         // Backspace first means "edit this name": no replace.
         let mut ui = UiState::new();
         ui.begin_edit("r", true, 0);
         let model = ValueMap::new().with("r", Value::Text("Alpha.json".into()));
         let bs = input_at(0.0, 0.0, false);
-        ui.push_text(TextStream { backspace: true, ..Default::default() });
-        assert_eq!(run_ui(&screen, &model, &Json::Null, &bs, &mut ui).results.text("r"), Some("Alpha.jso"));
+        ui.push_text(TextStream {
+            backspace: true,
+            ..Default::default()
+        });
+        assert_eq!(
+            run_ui(&screen, &model, &Json::Null, &bs, &mut ui)
+                .results
+                .text("r"),
+            Some("Alpha.jso")
+        );
     }
 
     /// The entry guard drops the trigger key's own committed character (the frame it
@@ -13267,9 +13322,14 @@ mod tests {
         let t = input_at(0.0, 0.0, false);
         // The route delivers the trigger key's own character on each of the next frames.
         for expect in ["", "", "t"] {
-            ui.push_text(TextStream { typed: "t".into(), ..Default::default() });
+            ui.push_text(TextStream {
+                typed: "t".into(),
+                ..Default::default()
+            });
             assert_eq!(
-                run_ui(&screen, &model, &Json::Null, &t, &mut ui).results.text("c"),
+                run_ui(&screen, &model, &Json::Null, &t, &mut ui)
+                    .results
+                    .text("c"),
                 Some(expect)
             );
         }
@@ -13323,7 +13383,10 @@ mod tests {
         // the prior frame's result back as the model, as the engine would.
         let model = ValueMap::new().with("name", f.results.text("name").unwrap_or("").to_string());
         let typing = input_at(100.0, 30.0, false);
-        state.push_text(TextStream { typed: "Hi".into(), ..Default::default() });
+        state.push_text(TextStream {
+            typed: "Hi".into(),
+            ..Default::default()
+        });
         let f = run_ui(&page, &model, &styles, &typing, &mut state);
         assert_eq!(
             f.results.text("name"),
@@ -13334,7 +13397,10 @@ mod tests {
         // Backspace → pops the last char.
         let model = ValueMap::new().with("name", f.results.text("name").unwrap().to_string());
         let bs = input_at(100.0, 30.0, false);
-        state.push_text(TextStream { backspace: true, ..Default::default() });
+        state.push_text(TextStream {
+            backspace: true,
+            ..Default::default()
+        });
         let f = run_ui(&page, &model, &styles, &bs, &mut state);
         assert_eq!(
             f.results.text("name"),
@@ -13393,7 +13459,10 @@ mod tests {
         // A keystroke while unfocused is ignored.
         let model = ValueMap::new().with("name", "H");
         let typing = input_at(400.0, 300.0, false);
-        state.push_text(TextStream { typed: "X".into(), ..Default::default() });
+        state.push_text(TextStream {
+            typed: "X".into(),
+            ..Default::default()
+        });
         let f = run_ui(&page, &model, &styles, &typing, &mut state);
         assert_eq!(
             f.results.text("name"),
@@ -14641,7 +14710,11 @@ mod tests {
         let footer = || {
             let mut hint = node("option");
             hint = prop(hint, "signal", Value::Text("Interact".into()));
-            hint = prop(hint, "label", Value::Text("Press {Interact} to Consume".into()));
+            hint = prop(
+                hint,
+                "label",
+                Value::Text("Press {Interact} to Consume".into()),
+            );
             let mut dead = node("option");
             dead = prop(dead, "label", Value::Text("Hold {Grapple} to Climb".into()));
             let mut btn = node("button");
@@ -14726,9 +14799,9 @@ mod tests {
             &mut UiState::new(),
         );
         assert!(
-            f.commands
-                .iter()
-                .any(|c| matches!(c, HudCommand::Text { text, .. } if text == "Press A to Consume")),
+            f.commands.iter().any(
+                |c| matches!(c, HudCommand::Text { text, .. } if text == "Press A to Consume")
+            ),
             "pad substitutes the control's cap inline"
         );
     }
@@ -14747,7 +14820,11 @@ mod tests {
             icon.id = "bi".into();
             icon.anchor = Some(UiAnchor::TopLeft);
             icon = prop(icon, "signal", Value::Text(sig.into()));
-            icon = prop(icon, "label", Value::Text(format!("Press {{{sig}}} to Consume")));
+            icon = prop(
+                icon,
+                "label",
+                Value::Text(format!("Press {{{sig}}} to Consume")),
+            );
             let mut screen = node("surface");
             screen.children = vec![icon];
             screen
@@ -14771,7 +14848,10 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert!(texts.contains(&"E"), "kbm draws the key as a keycap: {texts:?}");
+        assert!(
+            texts.contains(&"E"),
+            "kbm draws the key as a keycap: {texts:?}"
+        );
         assert!(
             texts.contains(&"Press E to Consume"),
             "the label substitutes the bound key: {texts:?}"
@@ -14782,7 +14862,10 @@ mod tests {
                 .any(|c| matches!(c, HudCommand::Text { color, bold, .. } if *color == KEYCAP_INK && *bold)),
             "the keycap ink is bold black"
         );
-        assert!(!f.results.is_on("hud_hit"), "a binding icon never claims a click");
+        assert!(
+            !f.results.is_on("hud_hit"),
+            "a binding icon never claims a click"
+        );
         let r = f.rect("bi").expect("placed");
         assert_eq!(r.size.y, 20.0, "a square affordance of the default size");
         assert!(r.size.x > 20.0, "…plus the measured label");
@@ -14805,9 +14888,9 @@ mod tests {
             "pad draws the atlas glyph"
         );
         assert!(
-            f.commands
-                .iter()
-                .any(|c| matches!(c, HudCommand::Text { text, .. } if text == "Press A to Consume")),
+            f.commands.iter().any(
+                |c| matches!(c, HudCommand::Text { text, .. } if text == "Press A to Consume")
+            ),
             "the label substitutes the control's cap"
         );
 
@@ -14827,7 +14910,10 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert!(texts.contains(&"Grapple"), "an unbound signal names itself: {texts:?}");
+        assert!(
+            texts.contains(&"Grapple"),
+            "an unbound signal names itself: {texts:?}"
+        );
         assert!(
             texts.contains(&"Press {Grapple} to Consume"),
             "…and its placeholder stays visibly literal: {texts:?}"
@@ -15131,7 +15217,10 @@ mod tests {
 
         // Typing frame: pointer/buttons identical to the previous frame.
         let typing = input_at(100.0, 30.0, false);
-        state.push_text(TextStream { typed: "Q".into(), ..Default::default() });
+        state.push_text(TextStream {
+            typed: "Q".into(),
+            ..Default::default()
+        });
         let f = run_ui(&page, &model, &styles, &typing, &mut state);
         assert_eq!(
             f.results.text("name"),
@@ -15164,7 +15253,10 @@ mod tests {
             &mut state,
         );
         let typing = input_at(100.0, 30.0, false);
-        state.push_text(TextStream { typed: "é⬥".into(), ..Default::default() });
+        state.push_text(TextStream {
+            typed: "é⬥".into(),
+            ..Default::default()
+        });
         let f = run_ui(
             &page,
             &ValueMap::new().with("name", ""),
@@ -15176,7 +15268,10 @@ mod tests {
 
         let model = ValueMap::new().with("name", f.results.text("name").unwrap().to_string());
         let bs = input_at(100.0, 30.0, false);
-        state.push_text(TextStream { backspace: true, ..Default::default() });
+        state.push_text(TextStream {
+            backspace: true,
+            ..Default::default()
+        });
         let f = run_ui(&page, &model, &styles, &bs, &mut state);
         assert_eq!(f.results.text("name"), Some("é"), "the whole ⬥ popped");
     }
@@ -16068,7 +16163,13 @@ mod tests {
         let mut state = UiState::new();
 
         // Press inside the source → the payload is in flight.
-        let f = run_ui(&tree, &model, &styles(), &at(20.0, 20.0, true, true), &mut state);
+        let f = run_ui(
+            &tree,
+            &model,
+            &styles(),
+            &at(20.0, 20.0, true, true),
+            &mut state,
+        );
         assert!(f.results.is_on("drag_active"));
 
         // Release over the TARGET → its action fires, carrying the payload.
@@ -16101,7 +16202,13 @@ mod tests {
         );
         let model = ValueMap::new();
         let mut state = UiState::new();
-        run_ui(&tree, &model, &styles(), &at(20.0, 20.0, true, true), &mut state);
+        run_ui(
+            &tree,
+            &model,
+            &styles(),
+            &at(20.0, 20.0, true, true),
+            &mut state,
+        );
         let f = run_ui(
             &tree,
             &model,
@@ -16110,10 +16217,7 @@ mod tests {
             &mut state,
         );
         assert!(f.results.is_on("bind_clip"), "the drop fires `drop_action`");
-        assert!(
-            !f.results.is_on("open_bin"),
-            "…not the node's click action"
-        );
+        assert!(!f.results.is_on("open_bin"), "…not the node's click action");
     }
 
     /// **A non-matching kind is not a drop on that node at all.** The release keeps
@@ -16125,7 +16229,13 @@ mod tests {
         let model = ValueMap::new();
         let mut state = UiState::new();
 
-        run_ui(&tree, &model, &styles(), &at(20.0, 20.0, true, true), &mut state);
+        run_ui(
+            &tree,
+            &model,
+            &styles(),
+            &at(20.0, 20.0, true, true),
+            &mut state,
+        );
         let f = run_ui(
             &tree,
             &model,
@@ -16133,7 +16243,10 @@ mod tests {
             &at(130.0, 20.0, false, false),
             &mut state,
         );
-        assert!(!f.results.is_on("bind_clip"), "the wrong kind fires nothing");
+        assert!(
+            !f.results.is_on("bind_clip"),
+            "the wrong kind fires nothing"
+        );
         assert!(f.results.text("drop_id").is_none());
         assert!(f.results.text("drop_target").is_none());
         assert!(
@@ -16145,7 +16258,13 @@ mod tests {
         // The SAME target, releasing over NOTHING: also unchanged, also no fire.
         let tree = drag_pair("clip", Some("bind_clip"));
         let mut state = UiState::new();
-        run_ui(&tree, &model, &styles(), &at(20.0, 20.0, true, true), &mut state);
+        run_ui(
+            &tree,
+            &model,
+            &styles(),
+            &at(20.0, 20.0, true, true),
+            &mut state,
+        );
         let f = run_ui(
             &tree,
             &model,
@@ -16165,7 +16284,13 @@ mod tests {
         let tree = drag_pair("marker clip node", Some("bind_clip"));
         let model = ValueMap::new();
         let mut state = UiState::new();
-        run_ui(&tree, &model, &styles(), &at(20.0, 20.0, true, true), &mut state);
+        run_ui(
+            &tree,
+            &model,
+            &styles(),
+            &at(20.0, 20.0, true, true),
+            &mut state,
+        );
         let f = run_ui(
             &tree,
             &model,
@@ -16206,7 +16331,10 @@ mod tests {
         // Confirm on the focused TARGET → the drop, through the same path.
         state.push_drag_confirm("bin");
         let f = run_ui(&tree, &model, &styles(), &idle, &mut state);
-        assert!(f.results.is_on("bind_clip"), "the pad fires the drop action");
+        assert!(
+            f.results.is_on("bind_clip"),
+            "the pad fires the drop action"
+        );
         assert_eq!(f.results.text("drop_id"), Some("walk_forward"));
         assert_eq!(f.results.text("drop_target"), Some("bin"));
         assert!(state.drag().is_none(), "the drag clears after the pad drop");

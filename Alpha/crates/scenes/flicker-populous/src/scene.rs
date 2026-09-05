@@ -2255,7 +2255,9 @@ fn style_rgba(styles: &serde_json::Value, path: &str) -> [f32; 4] {
             out
         }
         _ => {
-            tracing::warn!("populous: style `{path}` is not a resolved rgba — that ink stays unset");
+            tracing::warn!(
+                "populous: style `{path}` is not a resolved rgba — that ink stays unset"
+            );
             [0.0; 4]
         }
     }
@@ -3933,7 +3935,11 @@ mod tests {
         // TICK mid-step: the open tick completes FIRST, then one full cycle
         // runs — two ticks on the clock, the cursor at rest between cycles.
         bench.apply_results(&fire(ui::EVOLVE_TICK_ACTION));
-        assert_eq!(bench.evolve().ticks(), 2, "complete the open tick, then play one");
+        assert_eq!(
+            bench.evolve().ticks(),
+            2,
+            "complete the open tick, then play one"
+        );
         assert_eq!(
             bench.evolve().current_phase(),
             flicker_worldengine::PHASES[0],
@@ -4976,10 +4982,17 @@ mod tests {
             Some(cells),
             "a pad step STAGES: the bench keeps seeing the resting value"
         );
-        assert!(ui.staged_any(), "…and `ui_staged` lights the footer's apply hint");
+        assert!(
+            ui.staged_any(),
+            "…and `ui_staged` lights the footer's apply hint"
+        );
 
         press(&mut ui, ActionSignal::NavRight);
-        assert_eq!(ui.focused(), Some("pop_spots"), "Right hops to the next dial");
+        assert_eq!(
+            ui.focused(),
+            Some("pop_spots"),
+            "Right hops to the next dial"
+        );
         press(&mut ui, ActionSignal::NavRight);
         assert_eq!(
             ui.focused(),
@@ -5061,7 +5074,10 @@ mod tests {
             r.set(name, true);
             r
         };
-        assert!(bench.climate_history.is_empty(), "a fresh era has no history");
+        assert!(
+            bench.climate_history.is_empty(),
+            "a fresh era has no history"
+        );
         assert_eq!(
             bench.climate_history.capacity(),
             CLIMATE_HISTORY,
@@ -5094,7 +5110,10 @@ mod tests {
         assert_eq!(bench.evolve().ticks(), ticks + 1);
         // Every sample is the gauge's own fraction, so the fixed 0..1 range is honest.
         assert!(
-            bench.climate_history.iter().all(|v| (0.0..=1.05).contains(&v)),
+            bench
+                .climate_history
+                .iter()
+                .all(|v| (0.0..=1.05).contains(&v)),
             "the history holds the climate READING, not some other number"
         );
         // RESET returns the bare shell — and the history goes with the era.
@@ -5166,7 +5185,9 @@ mod tests {
         );
         // Seated, with a ring behind it, the filler draws — inside its own well.
         for i in 0..200 {
-            bench.climate_history.push((i as f32 * 0.05).sin() * 0.5 + 0.5);
+            bench
+                .climate_history
+                .push((i as f32 * 0.05).sin() * 0.5 + 0.5);
         }
         bench.climate_plot.seat(frame.surface(ui::TEMP_PLOT_SLOT));
         let cmds = bench.climate_plot.commands(&bench.climate_history);
@@ -5210,5 +5231,4 @@ mod tests {
         // And an unauthored path is transparent rather than a stand-in colour.
         assert_eq!(style_rgba(&bench.ui_styles, "plot.nope"), [0.0; 4]);
     }
-
 }

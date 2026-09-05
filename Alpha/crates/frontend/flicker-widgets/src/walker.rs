@@ -569,9 +569,7 @@ impl<'a> WalkerHandler<'a> {
         // stands: resolve the focused control to its container first, then step that
         // container among its peers (geometric with rects) and descend into the landing
         // pane. A flat-group member has no container → hop groups.
-        let pane = current
-            .and_then(|c| self.pane_of(c))
-            .map(str::to_string);
+        let pane = current.and_then(|c| self.pane_of(c)).map(str::to_string);
         match pane {
             Some(p) => {
                 // The stick steps the pane among its peers in AUTHORED `nav_ordinal`
@@ -619,7 +617,9 @@ impl<'a> WalkerHandler<'a> {
     /// the cursor: its rim shows and its camera consumes the sticks.
     fn descend(&mut self) {
         loop {
-            let Some(cur) = self.ui.focused().map(str::to_string) else { return };
+            let Some(cur) = self.ui.focused().map(str::to_string) else {
+                return;
+            };
             if !self.is_container(&cur) {
                 return;
             }
@@ -1427,11 +1427,7 @@ mod tests {
                 h.handle(&press(ActionSignal::PanelNext, &raw), &mut RouteCtx::new()),
                 Flow::Consumed
             );
-            assert_eq!(
-                h.ui.focused(),
-                Some("dial"),
-                "the move is parked, not made"
-            );
+            assert_eq!(h.ui.focused(), Some("dial"), "the move is parked, not made");
         };
 
         // Keep editing: the cursor stays, the stage stands, the move is forgotten.
@@ -1475,7 +1471,11 @@ mod tests {
         }
         let frame = crate::run_ui(&tree, &model, &styles, &idle, &mut ui);
         assert!(!ui.staged_any());
-        assert_eq!(frame.results.number("v"), Some(50.0), "reverted to the model");
+        assert_eq!(
+            frame.results.number("v"),
+            Some(50.0),
+            "reverted to the model"
+        );
     }
 
     /// **Every slider owns the pad channel** — the component-level contract,
@@ -1835,7 +1835,10 @@ mod tests {
         h.handle(&press(ActionSignal::Confirm, &raw), &mut rc);
         assert_eq!(h.ui.focused(), Some("pop_left"));
         assert_eq!(h.ui.focused_pane(), Some("pop_left"));
-        assert!(h.take_fired().is_empty(), "an actionless pane fires nothing");
+        assert!(
+            h.take_fired().is_empty(),
+            "an actionless pane fires nothing"
+        );
 
         // PanelNext is never gated — the stick always switches panes.
         h.handle(&press(ActionSignal::PanelNext, &raw), &mut rc);
@@ -1850,7 +1853,10 @@ mod tests {
             h.handle(&press(ActionSignal::Cancel, &raw), &mut rc),
             Flow::Consumed
         );
-        assert!(h.cancelled(), "Cancel is scene-level under the implied context");
+        assert!(
+            h.cancelled(),
+            "Cancel is scene-level under the implied context"
+        );
         assert_eq!(
             h.ui.focused_pane(),
             Some("pop_view"),
@@ -2031,7 +2037,11 @@ mod tests {
             Some("voice_2"),
             "the stick steps panes in authored order, not by geometry"
         );
-        assert_eq!(h.ui.focused(), Some("voice_2_c"), "…descending into the pane");
+        assert_eq!(
+            h.ui.focused(),
+            Some("voice_2_c"),
+            "…descending into the pane"
+        );
         // Stick-right (PanelNext) → back to the view.
         h.handle(&press(ActionSignal::PanelNext, &raw), &mut rc);
         assert_eq!(h.ui.focused_pane(), Some("view"), "…and back, both ways");
@@ -2039,7 +2049,11 @@ mod tests {
         // …and PanelNext past the last pane WRAPS to the first — every pane is
         // reachable by the stick alone.
         h.handle(&press(ActionSignal::PanelNext, &raw), &mut rc);
-        assert_eq!(h.ui.focused_pane(), Some("voice_1"), "wraps in authored order");
+        assert_eq!(
+            h.ui.focused_pane(),
+            Some("voice_1"),
+            "wraps in authored order"
+        );
     }
 
     /// **Authored subpanels under the implied context.** A rack of subpanels: the stick
@@ -2091,7 +2105,11 @@ mod tests {
 
         // The stick acquires the rack and descends: rack → voice_1 → v1_a.
         h.handle(&press(ActionSignal::PanelNext, &raw), &mut rc);
-        assert_eq!(h.ui.focused(), Some("v1_a"), "descends to the first control");
+        assert_eq!(
+            h.ui.focused(),
+            Some("v1_a"),
+            "descends to the first control"
+        );
         assert_eq!(
             h.ui.focused_pane(),
             Some("voice_1"),
@@ -2106,7 +2124,11 @@ mod tests {
 
         // The stick moves the SUBPANEL among its peers, descending again.
         h.handle(&press(ActionSignal::PanelNext, &raw), &mut rc);
-        assert_eq!(h.ui.focused_pane(), Some("voice_2"), "the stick switches subpanels");
+        assert_eq!(
+            h.ui.focused_pane(),
+            Some("voice_2"),
+            "the stick switches subpanels"
+        );
         assert_eq!(h.ui.focused(), Some("v2_a"));
 
         // Cancel never pops a level — it is the scene's.
@@ -2165,11 +2187,19 @@ mod tests {
         assert_eq!(h.ui.focused(), Some("a_two"), "the d-pad walks the pane");
         h.handle(&press(ActionSignal::NavDown, &raw), &mut rc);
         assert_eq!(h.ui.focused(), Some("a_one"), "…and wraps within it");
-        assert_eq!(h.ui.focused_pane(), Some("pane_a"), "the pane never changed");
+        assert_eq!(
+            h.ui.focused_pane(),
+            Some("pane_a"),
+            "the pane never changed"
+        );
 
         // The STICK switches panes, descending into the next one.
         h.handle(&press(ActionSignal::PanelNext, &raw), &mut rc);
-        assert_eq!(h.ui.focused_pane(), Some("pane_b"), "the stick switches panes");
+        assert_eq!(
+            h.ui.focused_pane(),
+            Some("pane_b"),
+            "the stick switches panes"
+        );
         assert_eq!(h.ui.focused(), Some("b_one"));
 
         // Confirm on the focused control fires its action on the one drain.
@@ -2186,8 +2216,8 @@ mod tests {
     #[test]
     fn the_pad_picks_up_a_payload_and_drops_it_on_an_accepting_target() {
         use crate::component::{run_ui, UiInput};
-        use flicker_script::{UiAnchor, Value};
         use flicker_render::Vec2;
+        use flicker_script::{UiAnchor, Value};
 
         let raw = InputState::new();
         let styles = serde_json::json!({});
@@ -2255,7 +2285,10 @@ mod tests {
             );
         }
         let f = run_ui(&tree, &model, &styles, &idle, &mut ui);
-        assert!(f.results.is_on("bind_clip"), "…it lands as the DROP instead");
+        assert!(
+            f.results.is_on("bind_clip"),
+            "…it lands as the DROP instead"
+        );
         assert_eq!(f.results.text("drop_id"), Some("walk_forward"));
         assert_eq!(f.results.text("drop_target"), Some("bin"));
         assert!(ui.drag().is_none(), "the payload is delivered");
@@ -2267,8 +2300,8 @@ mod tests {
     #[test]
     fn cancel_abandons_an_in_flight_drag_and_stays_scene_level() {
         use crate::component::{run_ui, UiInput};
-        use flicker_script::Value;
         use flicker_render::Vec2;
+        use flicker_script::Value;
 
         let raw = InputState::new();
         let styles = serde_json::json!({});
@@ -2544,7 +2577,11 @@ mod tests {
         UiNode {
             id: "root".into(),
             component: "column".into(),
-            children: vec![button("apply", "form", 0, "apply"), field("count", "form", 1), chat],
+            children: vec![
+                button("apply", "form", 0, "apply"),
+                field("count", "form", 1),
+                chat,
+            ],
             ..Default::default()
         }
     }
@@ -2628,7 +2665,10 @@ mod tests {
                 Flow::Consumed,
                 "{signal:?}"
             );
-            assert!(rc.requests.contains(&RouterRequest::PopContext), "{signal:?}");
+            assert!(
+                rc.requests.contains(&RouterRequest::PopContext),
+                "{signal:?}"
+            );
             assert!(!h.ui.text_entry(), "{signal:?} closed the session");
             assert_eq!(h.ui.focused(), None, "{signal:?} released the focus");
             assert_eq!(h.take_fired(), vec![name.to_string()], "{signal:?}");

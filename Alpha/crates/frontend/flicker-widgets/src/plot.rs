@@ -545,7 +545,11 @@ mod tests {
     #[test]
     fn the_range_is_auto_by_default_and_fixed_when_authored() {
         let s = series(&[2.0, -1.0, 5.0, 0.0]);
-        assert_eq!(s.range(), (-1.0, 5.0), "auto range is the samples' own span");
+        assert_eq!(
+            s.range(),
+            (-1.0, 5.0),
+            "auto range is the samples' own span"
+        );
         let s = series(&[2.0, -1.0, 5.0]).fixed_range(0.0, 10.0);
         assert_eq!(s.range(), (0.0, 10.0), "an authored range wins");
         let mut s = s;
@@ -562,7 +566,11 @@ mod tests {
             let p = seated(kind);
             // EMPTY: the band's chrome, no series marks at all.
             let empty = p.commands(&PlotSeries::new(16));
-            assert_eq!(lines(&empty) + rects(&empty), chrome(&style), "{kind:?} empty");
+            assert_eq!(
+                lines(&empty) + rects(&empty),
+                chrome(&style),
+                "{kind:?} empty"
+            );
             // ALL NaN: a full ring of missing measurements draws exactly the same.
             let nan = series(&[f32::NAN; 6]);
             let cmds = p.commands(&nan);
@@ -592,7 +600,11 @@ mod tests {
         let p = seated(PlotKind::Sparkline);
         let whole = p.commands(&series(&[0.0, 1.0, 2.0, 3.0, 4.0]));
         let holed = p.commands(&series(&[0.0, 1.0, f32::NAN, 3.0, 4.0]));
-        assert_eq!(lines(&whole), chrome(&lit()) + 4, "4 segments over 5 samples");
+        assert_eq!(
+            lines(&whole),
+            chrome(&lit()) + 4,
+            "4 segments over 5 samples"
+        );
         assert_eq!(
             lines(&holed),
             chrome(&lit()) + 2,
@@ -608,7 +620,11 @@ mod tests {
 
         let bars = seated(PlotKind::Bars).commands(&series(&samples));
         assert_eq!(rects(&bars), n, "one bar per column — a histogram");
-        assert_eq!(lines(&bars), chrome, "bars are quads; the rules are the chrome");
+        assert_eq!(
+            lines(&bars),
+            chrome,
+            "bars are quads; the rules are the chrome"
+        );
 
         let spark = seated(PlotKind::Sparkline).commands(&series(&samples));
         assert_eq!(rects(&spark), 0, "a sparkline is stroke only");
@@ -624,7 +640,10 @@ mod tests {
     fn an_unseated_plot_draws_nothing_and_a_seat_with_no_extent_unseats_it() {
         let mut p = Plot::new(PlotKind::Curve, lit());
         assert!(p.rect().is_none());
-        assert!(p.commands(&series(&[1.0, 2.0])).is_empty(), "no seat, no cost");
+        assert!(
+            p.commands(&series(&[1.0, 2.0])).is_empty(),
+            "no seat, no cost"
+        );
         p.seat(None);
         assert!(p.commands(&series(&[1.0, 2.0])).is_empty());
         // A gated tab reserves a zero-extent slot; that is not a seat.
@@ -698,9 +717,7 @@ mod tests {
                 }
             }
             assert!(
-                !cmds
-                    .iter()
-                    .any(|c| matches!(c, HudCommand::Clip { .. })),
+                !cmds.iter().any(|c| matches!(c, HudCommand::Clip { .. })),
                 "a filler never resets its host's clip"
             );
         }
