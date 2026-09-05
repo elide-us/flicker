@@ -2117,87 +2117,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(d);
     }
 
-    /// The drift gates every shipped screen wires, walked against the AUTHORED
-    /// tree off the shipped scene file, plus the pair-scene contracts: the
-    /// declared-intent set is exactly the ratified signal contract's (C2C98408),
-    /// no walker-owned signal is declared anywhere, and the pair script loads.
-    #[test]
-    fn the_tree_passes_the_drift_gates() {
-        let def = SceneDef::parse("quartermaster", QM_SCENE).expect("scene file parses");
-        let tree = def.tree.expect("the scene file ships a tree");
-
-        let unknown = flicker::ui::unknown_kinds(&tree);
-        assert!(unknown.is_empty(), "unknown component kinds: {unknown:?}");
-
-        let raw = flicker::ui::raw_display_literals(&tree);
-        assert!(
-            raw.is_empty(),
-            "raw display literals (must be $tokens): {raw:?}"
-        );
-
-        let flags = flicker::ui::strings::raw_model_publish_literals(include_str!("lib.rs"));
-        assert!(
-            flags.is_empty(),
-            "raw display copy published into the Model: {flags:?}"
-        );
-
-        // The declared intents are the ratified contract, exactly.
-        let intents = UiIntents::of(&tree);
-        for (sig, name) in [
-            (ActionSignal::Menu, "pause_open"),
-            (ActionSignal::Undo, "undo"),
-            (ActionSignal::Redo, "redo"),
-            (ActionSignal::Cut, "cut"),
-            (ActionSignal::Paste, "paste"),
-            (ActionSignal::Rename, "rename"),
-            (ActionSignal::CreateFolder, "create_folder"),
-            (ActionSignal::ContextMenu, "menu_open"),
-            (ActionSignal::TabNext, "tab_next"),
-            (ActionSignal::TabPrev, "tab_prev"),
-        ] {
-            assert_eq!(
-                intents.result_for(sig),
-                Some(name),
-                "declared intent for {sig:?}"
-            );
-        }
-        // The inverse: no node anywhere declares a walker-owned signal.
-        fn no_walker_owned(n: &UiNode) {
-            for k in n.props.keys() {
-                assert!(
-                    !matches!(
-                        k.as_str(),
-                        "on_confirm"
-                            | "on_cancel"
-                            | "on_nav_up"
-                            | "on_nav_down"
-                            | "on_nav_left"
-                            | "on_nav_right"
-                            | "on_panel_next"
-                            | "on_panel_prev"
-                            | "on_chord_begin"
-                    ),
-                    "walker-owned signal declared on node {:?}",
-                    n.id
-                );
-            }
-            for c in &n.children {
-                no_walker_owned(c);
-            }
-        }
-        no_walker_owned(&tree);
-
-        // The pair script loads and derives.
-        let host = ScriptHost::new(QM_SCRIPT, "quartermaster.lua").expect("pair script loads");
-        host.set_model(&ValueMap::new().with("tab", "tab_files"))
-            .expect("model publishes");
-        let derived = host
-            .derive()
-            .expect("derive runs")
-            .expect("derive returns a table");
-        assert!(derived.is_on("files_on"), "the Files page gate derives on");
-    }
-
     /// The caret set is Aaron's ruling (2026-08-13): `^` collapsed · `>` expanded
     /// · `·` leaf — pinned so it cannot quietly reverse, and every glyph is one
     /// all four shipped faces carry. Indentation is REAL pixels riding the
@@ -3191,46 +3110,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(d);
     }
 
-    /// THE INLINE DIALOG IS GONE: no `qm_prompt` subtree, no `conflict_*` binds and no
-    /// `scrim` block survive in the shipped pair. A migration that left the old copy
-    /// behind would still publish into it — dark, mouse-only and unreachable — forever
-    /// (rule 98232A50: no caller left on an old path).
-    #[test]
-    fn no_inline_conflict_dialog_is_left_in_the_scene_pair() {
-        // Every needle is ASSEMBLED from stems rather than written out: a gate that
-        // spells the thing it forbids trips over its own source below.
-        let scene = include_str!("../../../../content/sensorium/scenes/quartermaster.scene.json");
-        for stem in [
-            "qm_promp",
-            "has_promp",
-            "conflict_apply_res",
-            "qm_conflict",
-            "quartermaster.scri",
-        ] {
-            let needle = [stem, "t"].concat();
-            assert!(
-                !scene.contains(&needle),
-                "quartermaster.scene.json still carries `{needle}` — the collision \
-                 dialog lifted to the shared modal tree"
-            );
-        }
-        // The bench's own source must not publish the retired binds either. The needles
-        // are ASSEMBLED, not written: a gate that names the thing it forbids trips over
-        // its own text.
-        let src = include_str!("lib.rs");
-        for (stem, tail) in [
-            ("has_promp", "t"),
-            ("conflict_mult", "i"),
-            ("conflict_res", "t"),
-        ] {
-            let needle = ["\"", stem, tail, "\""].concat();
-            assert!(
-                !src.contains(&needle),
-                "lib.rs still publishes `{needle}` into a subtree that no longer exists"
-            );
-        }
-    }
-
     /// Rename must act on the item the user is LOOKING at. `confirm`, `cancel`
     /// and `nav` all dispatch on `self.pane`; `begin_rename` read the listing
     /// cursor unconditionally, so firing it while the TREE held focus opened an
@@ -3455,5 +3334,136 @@ mod tests {
     /// dialog, because the modal is a scene and the kernel freezes the bench under it.
     fn answer(qm: &mut Quartermaster, verb: &str) {
         qm.modal_closed(flicker_shell::MODAL_CONFLICT, verb, Some("0"));
+    }
+
+    /// DEVELOPMENT-TIER GATES (Aaron 2026-09-05, ruling 977B4D38): the hard-coded handoff
+    /// conditions of a refactor — tests that read this crate's own source and assert a
+    /// transition holds. `cargo test -- --skip gates::` is the production tier (every OS);
+    /// `cargo test -- gates::` runs only these (one OS in CI). A gate names the transition
+    /// it enforces and is deleted when that transition closes.
+    mod gates {
+        use super::*;
+
+        /// The drift gates every shipped screen wires, walked against the AUTHORED
+        /// tree off the shipped scene file, plus the pair-scene contracts: the
+        /// declared-intent set is exactly the ratified signal contract's (C2C98408),
+        /// no walker-owned signal is declared anywhere, and the pair script loads.
+        #[test]
+        fn the_tree_passes_the_drift_gates() {
+            let def = SceneDef::parse("quartermaster", QM_SCENE).expect("scene file parses");
+            let tree = def.tree.expect("the scene file ships a tree");
+
+            let unknown = flicker::ui::unknown_kinds(&tree);
+            assert!(unknown.is_empty(), "unknown component kinds: {unknown:?}");
+
+            let raw = flicker::ui::raw_display_literals(&tree);
+            assert!(
+                raw.is_empty(),
+                "raw display literals (must be $tokens): {raw:?}"
+            );
+
+            let flags = flicker::ui::strings::raw_model_publish_literals(include_str!("lib.rs"));
+            assert!(
+                flags.is_empty(),
+                "raw display copy published into the Model: {flags:?}"
+            );
+
+            // The declared intents are the ratified contract, exactly.
+            let intents = UiIntents::of(&tree);
+            for (sig, name) in [
+                (ActionSignal::Menu, "pause_open"),
+                (ActionSignal::Undo, "undo"),
+                (ActionSignal::Redo, "redo"),
+                (ActionSignal::Cut, "cut"),
+                (ActionSignal::Paste, "paste"),
+                (ActionSignal::Rename, "rename"),
+                (ActionSignal::CreateFolder, "create_folder"),
+                (ActionSignal::ContextMenu, "menu_open"),
+                (ActionSignal::TabNext, "tab_next"),
+                (ActionSignal::TabPrev, "tab_prev"),
+            ] {
+                assert_eq!(
+                    intents.result_for(sig),
+                    Some(name),
+                    "declared intent for {sig:?}"
+                );
+            }
+            // The inverse: no node anywhere declares a walker-owned signal.
+            fn no_walker_owned(n: &UiNode) {
+                for k in n.props.keys() {
+                    assert!(
+                        !matches!(
+                            k.as_str(),
+                            "on_confirm"
+                                | "on_cancel"
+                                | "on_nav_up"
+                                | "on_nav_down"
+                                | "on_nav_left"
+                                | "on_nav_right"
+                                | "on_panel_next"
+                                | "on_panel_prev"
+                                | "on_chord_begin"
+                        ),
+                        "walker-owned signal declared on node {:?}",
+                        n.id
+                    );
+                }
+                for c in &n.children {
+                    no_walker_owned(c);
+                }
+            }
+            no_walker_owned(&tree);
+
+            // The pair script loads and derives.
+            let host = ScriptHost::new(QM_SCRIPT, "quartermaster.lua").expect("pair script loads");
+            host.set_model(&ValueMap::new().with("tab", "tab_files"))
+                .expect("model publishes");
+            let derived = host
+                .derive()
+                .expect("derive runs")
+                .expect("derive returns a table");
+            assert!(derived.is_on("files_on"), "the Files page gate derives on");
+        }
+
+        /// THE INLINE DIALOG IS GONE: no `qm_prompt` subtree, no `conflict_*` binds and no
+        /// `scrim` block survive in the shipped pair. A migration that left the old copy
+        /// behind would still publish into it — dark, mouse-only and unreachable — forever
+        /// (rule 98232A50: no caller left on an old path).
+        #[test]
+        fn no_inline_conflict_dialog_is_left_in_the_scene_pair() {
+            // Every needle is ASSEMBLED from stems rather than written out: a gate that
+            // spells the thing it forbids trips over its own source below.
+            let scene =
+                include_str!("../../../../content/sensorium/scenes/quartermaster.scene.json");
+            for stem in [
+                "qm_promp",
+                "has_promp",
+                "conflict_apply_res",
+                "qm_conflict",
+                "quartermaster.scri",
+            ] {
+                let needle = [stem, "t"].concat();
+                assert!(
+                    !scene.contains(&needle),
+                    "quartermaster.scene.json still carries `{needle}` — the collision \
+                     dialog lifted to the shared modal tree"
+                );
+            }
+            // The bench's own source must not publish the retired binds either. The needles
+            // are ASSEMBLED, not written: a gate that names the thing it forbids trips over
+            // its own text.
+            let src = include_str!("lib.rs");
+            for (stem, tail) in [
+                ("has_promp", "t"),
+                ("conflict_mult", "i"),
+                ("conflict_res", "t"),
+            ] {
+                let needle = ["\"", stem, tail, "\""].concat();
+                assert!(
+                    !src.contains(&needle),
+                    "lib.rs still publishes `{needle}` into a subtree that no longer exists"
+                );
+            }
+        }
     }
 }

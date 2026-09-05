@@ -880,96 +880,105 @@ mod tests {
         );
     }
 
-    #[test]
-    fn hud_tree_is_well_formed_and_draws_the_roster() {
-        use flicker::render::Vec2;
-        use flicker::ui::run_ui;
+    /// DEVELOPMENT-TIER GATES (Aaron 2026-09-05, ruling 977B4D38): the hard-coded handoff
+    /// conditions of a refactor — tests that read this crate's own source and assert a
+    /// transition holds. `cargo test -- --skip gates::` is the production tier (every OS);
+    /// `cargo test -- gates::` runs only these (one OS in CI). A gate names the transition
+    /// it enforces and is deleted when that transition closes.
+    mod gates {
+        use super::*;
 
-        let planets = system::roster();
-        let def = shipped_def();
-        let authored = def.tree.clone().expect("it declares a tree");
-        let tree =
-            hud_tree(Some(&authored), &planets).expect("solarbirth.scene.json builds the HUD");
-        assert!(
-            flicker::ui::unknown_kinds(&tree).is_empty(),
-            "the scene tree names unknown kinds: {:?}",
-            flicker::ui::unknown_kinds(&tree)
-        );
-        // The strings gate (S10): every display literal is a `$token`.
-        assert!(
-            flicker::ui::raw_display_literals(&tree).is_empty(),
-            "the scene tree ships raw display literals: {:?}",
-            flicker::ui::raw_display_literals(&tree)
-        );
-        // The MODEL-CHANNEL strings gate (S10's blind side): display copy published
-        // from Rust into the Model bypasses the tree gate above, so the crate
-        // self-gates its OWN source — every `.set`/`.with` value must be a resolved
-        // `$token`, a data shape, or carry an explicit `strings-gate-exempt` reason.
-        let flags = strings::raw_model_publish_literals(include_str!("scene.rs"));
-        assert!(
-            flags.is_empty(),
-            "raw display copy published into the Model: {flags:?}"
-        );
-        let intents = UiIntents::of(&tree);
-        assert_eq!(intents.result_for(ActionSignal::Menu), Some("pause_open"));
+        #[test]
+        fn hud_tree_is_well_formed_and_draws_the_roster() {
+            use flicker::render::Vec2;
+            use flicker::ui::run_ui;
 
-        // The scene's OWN style blocks ride its file (five-line split) — the
-        // exact merge `enter` runs.
-        let styles = flicker::ui::load_shared_styles(def.styles.as_ref());
-        // The phase line, composed around its tokens exactly as `hud_model` does
-        // ("glide" stands in for the data-driven segment name).
-        let mut model = ValueMap::new().with(
-            "phase",
-            format!(
-                "{} · {} · {} 40%",
-                strings::resolve("$sb_the_prism_system"),
-                "glide",
-                strings::resolve("$sb_approaching"),
-            ),
-        );
-        for (i, p) in planets.iter().enumerate() {
-            model.set(format!("roster_{}", i + 1), Sim::roster_row(p));
+            let planets = system::roster();
+            let def = shipped_def();
+            let authored = def.tree.clone().expect("it declares a tree");
+            let tree =
+                hud_tree(Some(&authored), &planets).expect("solarbirth.scene.json builds the HUD");
+            assert!(
+                flicker::ui::unknown_kinds(&tree).is_empty(),
+                "the scene tree names unknown kinds: {:?}",
+                flicker::ui::unknown_kinds(&tree)
+            );
+            // The strings gate (S10): every display literal is a `$token`.
+            assert!(
+                flicker::ui::raw_display_literals(&tree).is_empty(),
+                "the scene tree ships raw display literals: {:?}",
+                flicker::ui::raw_display_literals(&tree)
+            );
+            // The MODEL-CHANNEL strings gate (S10's blind side): display copy published
+            // from Rust into the Model bypasses the tree gate above, so the crate
+            // self-gates its OWN source — every `.set`/`.with` value must be a resolved
+            // `$token`, a data shape, or carry an explicit `strings-gate-exempt` reason.
+            let flags = strings::raw_model_publish_literals(include_str!("scene.rs"));
+            assert!(
+                flags.is_empty(),
+                "raw display copy published into the Model: {flags:?}"
+            );
+            let intents = UiIntents::of(&tree);
+            assert_eq!(intents.result_for(ActionSignal::Menu), Some("pause_open"));
+
+            // The scene's OWN style blocks ride its file (five-line split) — the
+            // exact merge `enter` runs.
+            let styles = flicker::ui::load_shared_styles(def.styles.as_ref());
+            // The phase line, composed around its tokens exactly as `hud_model` does
+            // ("glide" stands in for the data-driven segment name).
+            let mut model = ValueMap::new().with(
+                "phase",
+                format!(
+                    "{} · {} · {} 40%",
+                    strings::resolve("$sb_the_prism_system"),
+                    "glide",
+                    strings::resolve("$sb_approaching"),
+                ),
+            );
+            for (i, p) in planets.iter().enumerate() {
+                model.set(format!("roster_{}", i + 1), Sim::roster_row(p));
+            }
+            let snap = UiInput {
+                mouse: Vec2::new(30.0, 30.0), // parked ON the readout panel
+                clicked: false,
+                down: false,
+                right_down: false,
+                screen: Vec2::new(1920.0, 1080.0),
+                wheel: 0.0,
+                exclusive: false,
+                motion: Default::default(),
+            };
+            let frame = run_ui(&tree, &model, &styles, &snap, &mut UiState::new());
+            let texts = frame
+                .commands
+                .iter()
+                .filter(|c| matches!(c, HudCommand::Text { .. }))
+                .count();
+            // The readout (title + phase + roster header + one row per planet) plus the
+            // footer's control-hint labels + MENU button all render as text.
+            assert!(
+                texts >= 3 + planets.len(),
+                "readout + footer text renders ({texts} lines for {} planets)",
+                planets.len()
+            );
+            // The readout is a PANEL over the full-screen rtt now: the pointer on it is a
+            // UI hit, so the camera (which gates on `!hud_hit`) won't orbit there — the
+            // opposite of the old bare-text drag-through.
+            assert!(
+                frame.results.is_on("hud_hit"),
+                "the readout panel claims the pointer (camera drag is blocked over it)"
+            );
+            // The full-screen 3D viewport must reserve a slot — a source-LESS `rtt` is
+            // skipped by the walker (`surface_rect` → None → the scene draws nothing), which
+            // is exactly the blank-viewport bug this guards against at build time.
+            let vp = frame
+                .surface_rect("solarbirth_view")
+                .expect("the rtt viewport reserved a slot");
+            assert!(
+                vp.size.x > 100.0 && vp.size.y > 100.0,
+                "the viewport has real extent: {:?}",
+                vp.size
+            );
         }
-        let snap = UiInput {
-            mouse: Vec2::new(30.0, 30.0), // parked ON the readout panel
-            clicked: false,
-            down: false,
-            right_down: false,
-            screen: Vec2::new(1920.0, 1080.0),
-            wheel: 0.0,
-            exclusive: false,
-            motion: Default::default(),
-        };
-        let frame = run_ui(&tree, &model, &styles, &snap, &mut UiState::new());
-        let texts = frame
-            .commands
-            .iter()
-            .filter(|c| matches!(c, HudCommand::Text { .. }))
-            .count();
-        // The readout (title + phase + roster header + one row per planet) plus the
-        // footer's control-hint labels + MENU button all render as text.
-        assert!(
-            texts >= 3 + planets.len(),
-            "readout + footer text renders ({texts} lines for {} planets)",
-            planets.len()
-        );
-        // The readout is a PANEL over the full-screen rtt now: the pointer on it is a
-        // UI hit, so the camera (which gates on `!hud_hit`) won't orbit there — the
-        // opposite of the old bare-text drag-through.
-        assert!(
-            frame.results.is_on("hud_hit"),
-            "the readout panel claims the pointer (camera drag is blocked over it)"
-        );
-        // The full-screen 3D viewport must reserve a slot — a source-LESS `rtt` is
-        // skipped by the walker (`surface_rect` → None → the scene draws nothing), which
-        // is exactly the blank-viewport bug this guards against at build time.
-        let vp = frame
-            .surface_rect("solarbirth_view")
-            .expect("the rtt viewport reserved a slot");
-        assert!(
-            vp.size.x > 100.0 && vp.size.y > 100.0,
-            "the viewport has real extent: {:?}",
-            vp.size
-        );
     }
 }

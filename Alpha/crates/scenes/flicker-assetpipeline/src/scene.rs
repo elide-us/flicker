@@ -1009,34 +1009,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&fixture);
     }
 
-    /// THE OS DIALOG IS THE PICKER, and it is reached through ONE seam. `rfd` may be
-    /// named only by `Document::pick_folder` in `services.rs` (and by the manifest that
-    /// pulls it in): a second `FileDialog` anywhere in the bench would be a second door
-    /// with its own start directory and its own title (rule 98232A50 — one path, no
-    /// caller left on another). The needle is assembled rather than written, so this
-    /// gate does not trip over its own text.
-    #[test]
-    fn the_os_dialog_is_reached_through_the_one_pick_seam() {
-        let needle = ["r", "fd", "::"].concat();
-        assert_eq!(
-            include_str!("services.rs").matches(&needle).count(),
-            1,
-            "`services.rs` names the native-dialog crate exactly once — inside \
-             `Document::pick_folder`, the bench's ONE dialog seam"
-        );
-        for (what, src) in [
-            ("scene.rs", include_str!("scene.rs")),
-            ("compose.rs", include_str!("compose.rs")),
-            ("ui.rs", include_str!("ui.rs")),
-        ] {
-            assert!(
-                !src.contains(&needle),
-                "{what} reaches for the native dialog directly — it goes through \
-                 `Document::pick_folder` or it is a second door"
-            );
-        }
-    }
-
     /// The Source step shows the four import cards with real extent; the Prep step shows
     /// the stature dial, the target field and its two verbs; the Rig step reserves the
     /// four view panels — presence AND extent, the twice-burned lesson.
@@ -1261,5 +1233,42 @@ mod tests {
         assert!(model.is_on("shown_view_clip"));
         assert!(!model.is_on("shown_view_quad"));
         assert_eq!(model.text(ui::STEP_TITLE), Some(Step::Clip.title()));
+    }
+
+    /// DEVELOPMENT-TIER GATES (Aaron 2026-09-05, ruling 977B4D38): the hard-coded handoff
+    /// conditions of a refactor — tests that read this crate's own source and assert a
+    /// transition holds. `cargo test -- --skip gates::` is the production tier (every OS);
+    /// `cargo test -- gates::` runs only these (one OS in CI). A gate names the transition
+    /// it enforces and is deleted when that transition closes.
+    mod gates {
+        use super::*;
+
+        /// THE OS DIALOG IS THE PICKER, and it is reached through ONE seam. `rfd` may be
+        /// named only by `Document::pick_folder` in `services.rs` (and by the manifest that
+        /// pulls it in): a second `FileDialog` anywhere in the bench would be a second door
+        /// with its own start directory and its own title (rule 98232A50 — one path, no
+        /// caller left on another). The needle is assembled rather than written, so this
+        /// gate does not trip over its own text.
+        #[test]
+        fn the_os_dialog_is_reached_through_the_one_pick_seam() {
+            let needle = ["r", "fd", "::"].concat();
+            assert_eq!(
+                include_str!("services.rs").matches(&needle).count(),
+                1,
+                "`services.rs` names the native-dialog crate exactly once — inside \
+                 `Document::pick_folder`, the bench's ONE dialog seam"
+            );
+            for (what, src) in [
+                ("scene.rs", include_str!("scene.rs")),
+                ("compose.rs", include_str!("compose.rs")),
+                ("ui.rs", include_str!("ui.rs")),
+            ] {
+                assert!(
+                    !src.contains(&needle),
+                    "{what} reaches for the native dialog directly — it goes through \
+                     `Document::pick_folder` or it is a second door"
+                );
+            }
+        }
     }
 }

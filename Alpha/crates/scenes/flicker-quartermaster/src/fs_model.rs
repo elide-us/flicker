@@ -204,26 +204,35 @@ mod tests {
         let _ = std::fs::remove_dir_all(r.package.parent().unwrap());
     }
 
-    /// THE NO-DUPLICATE GATE: the browsing model lives in the ENGINE crate now
-    /// ([`flicker_content::browse`]) and this bench re-exports it. A private copy
-    /// growing back here is the drift rule `DDD070C7` exists to stop, so the
-    /// module's own source is asserted to hold no second listing.
-    #[test]
-    fn the_bench_keeps_no_private_listing_of_its_own() {
-        let src = include_str!("fs_model.rs");
-        // The needles are ASSEMBLED, not written: a gate that names the thing it forbids
-        // trips over its own text.
-        for stem in ["list_dir", "tree_rows", "breadcrumb", "files_under"] {
-            let banned = ["fn ", stem].concat();
+    /// DEVELOPMENT-TIER GATES (Aaron 2026-09-05, ruling 977B4D38): the hard-coded handoff
+    /// conditions of a refactor — tests that read this crate's own source and assert a
+    /// transition holds. `cargo test -- --skip gates::` is the production tier (every OS);
+    /// `cargo test -- gates::` runs only these (one OS in CI). A gate names the transition
+    /// it enforces and is deleted when that transition closes.
+    mod gates {
+        use super::*;
+
+        /// THE NO-DUPLICATE GATE: the browsing model lives in the ENGINE crate now
+        /// ([`flicker_content::browse`]) and this bench re-exports it. A private copy
+        /// growing back here is the drift rule `DDD070C7` exists to stop, so the
+        /// module's own source is asserted to hold no second listing.
+        #[test]
+        fn the_bench_keeps_no_private_listing_of_its_own() {
+            let src = include_str!("fs_model.rs");
+            // The needles are ASSEMBLED, not written: a gate that names the thing it forbids
+            // trips over its own text.
+            for stem in ["list_dir", "tree_rows", "breadcrumb", "files_under"] {
+                let banned = ["fn ", stem].concat();
+                assert!(
+                    !src.contains(&banned),
+                    "fs_model.rs re-implements `{banned}` — the browsing model lives in \
+                     the engine crate, and a second copy is exactly the drift the move removed"
+                );
+            }
             assert!(
-                !src.contains(&banned),
-                "fs_model.rs re-implements `{banned}` — the browsing model lives in \
-                 the engine crate, and a second copy is exactly the drift the move removed"
+                src.contains("pub use flicker_content::browse::"),
+                "the bench reaches the engine model through the ONE re-export"
             );
         }
-        assert!(
-            src.contains("pub use flicker_content::browse::"),
-            "the bench reaches the engine model through the ONE re-export"
-        );
     }
 }

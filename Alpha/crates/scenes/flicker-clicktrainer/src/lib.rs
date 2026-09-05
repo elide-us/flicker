@@ -516,35 +516,6 @@ mod tests {
         }
     }
 
-    /// The vocabulary gate + the screen's S9 declaration: every kind in the real
-    /// tree is one the engine knows, and the root declares the pause intent.
-    #[test]
-    fn tree_is_well_formed_and_declares_the_pause_intent() {
-        let (tree, _) = tree_and_styles();
-        assert!(
-            flicker::ui::unknown_kinds(&tree).is_empty(),
-            "clicktrainer.scene.json names unknown kinds: {:?}",
-            flicker::ui::unknown_kinds(&tree)
-        );
-        // The strings gate (S10): every display literal is a `$token`.
-        assert!(
-            flicker::ui::raw_display_literals(&tree).is_empty(),
-            "clicktrainer.scene.json ships raw display literals: {:?}",
-            flicker::ui::raw_display_literals(&tree)
-        );
-        // The MODEL-CHANNEL strings gate (S10's blind side): display copy published
-        // from Rust into the Model bypasses the tree gate above, so the crate
-        // self-gates its OWN source — every `.set`/`.with` value must be a resolved
-        // `$token`, a data shape, or carry an explicit `strings-gate-exempt` reason.
-        let flags = flicker::ui::strings::raw_model_publish_literals(include_str!("lib.rs"));
-        assert!(
-            flags.is_empty(),
-            "raw display copy published into the Model: {flags:?}"
-        );
-        let intents = UiIntents::of(&tree);
-        assert_eq!(intents.result_for(ActionSignal::Menu), Some("pause_open"));
-    }
-
     /// The click-routing contract through the REAL tree: a pointer on the panel
     /// sets `hud_hit`; one on the play-field does not; a click on RESET fires the
     /// `reset` action; and the whole panel draws.
@@ -602,5 +573,43 @@ mod tests {
             frame.results.is_on("hud_hit"),
             "…and it is a HUD click, never a game miss"
         );
+    }
+
+    /// DEVELOPMENT-TIER GATES (Aaron 2026-09-05, ruling 977B4D38): the hard-coded handoff
+    /// conditions of a refactor — tests that read this crate's own source and assert a
+    /// transition holds. `cargo test -- --skip gates::` is the production tier (every OS);
+    /// `cargo test -- gates::` runs only these (one OS in CI). A gate names the transition
+    /// it enforces and is deleted when that transition closes.
+    mod gates {
+        use super::*;
+
+        /// The vocabulary gate + the screen's S9 declaration: every kind in the real
+        /// tree is one the engine knows, and the root declares the pause intent.
+        #[test]
+        fn tree_is_well_formed_and_declares_the_pause_intent() {
+            let (tree, _) = tree_and_styles();
+            assert!(
+                flicker::ui::unknown_kinds(&tree).is_empty(),
+                "clicktrainer.scene.json names unknown kinds: {:?}",
+                flicker::ui::unknown_kinds(&tree)
+            );
+            // The strings gate (S10): every display literal is a `$token`.
+            assert!(
+                flicker::ui::raw_display_literals(&tree).is_empty(),
+                "clicktrainer.scene.json ships raw display literals: {:?}",
+                flicker::ui::raw_display_literals(&tree)
+            );
+            // The MODEL-CHANNEL strings gate (S10's blind side): display copy published
+            // from Rust into the Model bypasses the tree gate above, so the crate
+            // self-gates its OWN source — every `.set`/`.with` value must be a resolved
+            // `$token`, a data shape, or carry an explicit `strings-gate-exempt` reason.
+            let flags = flicker::ui::strings::raw_model_publish_literals(include_str!("lib.rs"));
+            assert!(
+                flags.is_empty(),
+                "raw display copy published into the Model: {flags:?}"
+            );
+            let intents = UiIntents::of(&tree);
+            assert_eq!(intents.result_for(ActionSignal::Menu), Some("pause_open"));
+        }
     }
 }

@@ -845,28 +845,37 @@ mod tests {
         assert_eq!(nearest_joint(ray, joints.iter().copied(), 0.1), None);
     }
 
-    /// THE ABSORBED CODE IS GONE: the private press table, the pick tolerance, the arrow length
-    /// and the handle composer moved into `flicker_rigview::Gadget` (7811D68B), and a copy left
-    /// behind here would be a second source of truth for what a press means and how big a handle
-    /// is. The needles are assembled rather than written, so the gate does not trip over itself.
-    #[test]
-    fn the_old_decide_table_and_handle_composer_are_deleted() {
-        let needles = [
-            ["GIZMO", "ARROW", "FRAC"].join("_"),
-            ["PICK", "TOL", "FRAC"].join("_"),
-            ["gizmo", "segments"].join("_"),
-            ["fn ", "decide("].concat(),
-        ];
-        for (what, src) in [
-            ("gizmo.rs", include_str!("gizmo.rs")),
-            ("compose.rs", include_str!("compose.rs")),
-            ("scene.rs", include_str!("scene.rs")),
-        ] {
-            for needle in &needles {
-                assert!(
-                    !src.contains(needle),
-                    "{what} still carries `{needle}` — the gadget absorbed it"
-                );
+    /// DEVELOPMENT-TIER GATES (Aaron 2026-09-05, ruling 977B4D38): the hard-coded handoff
+    /// conditions of a refactor — tests that read this crate's own source and assert a
+    /// transition holds. `cargo test -- --skip gates::` is the production tier (every OS);
+    /// `cargo test -- gates::` runs only these (one OS in CI). A gate names the transition
+    /// it enforces and is deleted when that transition closes.
+    mod gates {
+        use super::*;
+
+        /// THE ABSORBED CODE IS GONE: the private press table, the pick tolerance, the arrow length
+        /// and the handle composer moved into `flicker_rigview::Gadget` (7811D68B), and a copy left
+        /// behind here would be a second source of truth for what a press means and how big a handle
+        /// is. The needles are assembled rather than written, so the gate does not trip over itself.
+        #[test]
+        fn the_old_decide_table_and_handle_composer_are_deleted() {
+            let needles = [
+                ["GIZMO", "ARROW", "FRAC"].join("_"),
+                ["PICK", "TOL", "FRAC"].join("_"),
+                ["gizmo", "segments"].join("_"),
+                ["fn ", "decide("].concat(),
+            ];
+            for (what, src) in [
+                ("gizmo.rs", include_str!("gizmo.rs")),
+                ("compose.rs", include_str!("compose.rs")),
+                ("scene.rs", include_str!("scene.rs")),
+            ] {
+                for needle in &needles {
+                    assert!(
+                        !src.contains(needle),
+                        "{what} still carries `{needle}` — the gadget absorbed it"
+                    );
+                }
             }
         }
     }

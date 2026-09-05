@@ -1619,32 +1619,6 @@ mod tests {
         }
     }
 
-    /// The shipped tree names only kinds the engine knows (S10 vocabulary gate) and ships
-    /// NO raw display literal — every label is a `$token`, in the tree or a bound value
-    /// this source publishes (the strings gate + its model-publish twin).
-    #[test]
-    fn the_scene_ships_clean_kinds_and_no_raw_literals() {
-        let tree = SceneDef::parse("componentcatalog", CATALOG_SCENE)
-            .expect("componentcatalog.scene.json loads")
-            .tree
-            .expect("it declares a tree");
-        assert!(
-            flicker::ui::unknown_kinds(&tree).is_empty(),
-            "unknown component kinds: {:?}",
-            flicker::ui::unknown_kinds(&tree)
-        );
-        assert!(
-            flicker::ui::raw_display_literals(&tree).is_empty(),
-            "raw display literals in the tree (need a $token): {:?}",
-            flicker::ui::raw_display_literals(&tree)
-        );
-        let flags = flicker::ui::strings::raw_model_publish_literals(include_str!("lib.rs"));
-        assert!(
-            flags.is_empty(),
-            "raw model-published copy (need a $token): {flags:?}"
-        );
-    }
-
     /// One bookmark + one card box per component, counts agreeing: [`CARD_COUNT`] and the
     /// tree's `nav_<i>` bookmarks + `card_<i>` boxes.
     #[test]
@@ -2372,5 +2346,40 @@ mod tests {
             Some("12 / 240"),
             "…and the readout is that number, not a second copy of it"
         );
+    }
+
+    /// DEVELOPMENT-TIER GATES (Aaron 2026-09-05, ruling 977B4D38): the hard-coded handoff
+    /// conditions of a refactor — tests that read this crate's own source and assert a
+    /// transition holds. `cargo test -- --skip gates::` is the production tier (every OS);
+    /// `cargo test -- gates::` runs only these (one OS in CI). A gate names the transition
+    /// it enforces and is deleted when that transition closes.
+    mod gates {
+        use super::*;
+
+        /// The shipped tree names only kinds the engine knows (S10 vocabulary gate) and ships
+        /// NO raw display literal — every label is a `$token`, in the tree or a bound value
+        /// this source publishes (the strings gate + its model-publish twin).
+        #[test]
+        fn the_scene_ships_clean_kinds_and_no_raw_literals() {
+            let tree = SceneDef::parse("componentcatalog", CATALOG_SCENE)
+                .expect("componentcatalog.scene.json loads")
+                .tree
+                .expect("it declares a tree");
+            assert!(
+                flicker::ui::unknown_kinds(&tree).is_empty(),
+                "unknown component kinds: {:?}",
+                flicker::ui::unknown_kinds(&tree)
+            );
+            assert!(
+                flicker::ui::raw_display_literals(&tree).is_empty(),
+                "raw display literals in the tree (need a $token): {:?}",
+                flicker::ui::raw_display_literals(&tree)
+            );
+            let flags = flicker::ui::strings::raw_model_publish_literals(include_str!("lib.rs"));
+            assert!(
+                flags.is_empty(),
+                "raw model-published copy (need a $token): {flags:?}"
+            );
+        }
     }
 }

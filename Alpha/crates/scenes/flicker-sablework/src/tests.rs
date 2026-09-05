@@ -105,22 +105,6 @@ fn the_hud_ships_no_raw_display_literals() {
     );
 }
 
-/// The STRINGS gate's blind side: copy published from RUST into the Model bypasses
-/// the tree gate entirely, so the crate self-gates its own source.
-#[test]
-fn no_raw_display_copy_is_published_into_the_model() {
-    for (file, src) in [
-        ("lib.rs", include_str!("lib.rs")),
-        ("route.rs", include_str!("route.rs")),
-    ] {
-        let flagged = strings::raw_model_publish_literals(src);
-        assert!(
-            flagged.is_empty(),
-            "{file} publishes raw display copy: {flagged:?}"
-        );
-    }
-}
-
 /// Every `$token` the bench publishes or the tree names must EXIST in the
 /// stringtable. A token that resolves to nothing is the "authored name that fails
 /// to nothing" failure: the control renders blank and looks like a layout bug.
@@ -172,52 +156,6 @@ fn every_declared_intent_reaches_a_handler() {
     assert_ne!(bench.patch, before, "patch_next reaches the dispatcher");
     fire(&mut bench, "patch_prev", true);
     assert_eq!(bench.patch, before, "patch_prev steps back");
-}
-
-/// THE ANTI-DOUBLE-STEP GATE (the skipped-tab bug, MCP 801B1B09): a name an
-/// authored rail claims as its `next_action`/`prev_action` is stepped by the RAIL
-/// inside the walker — the scene reads only the echoed index. A dispatcher arm
-/// stepping the same name is a SECOND consumer: +2 per bumper press. This pins
-/// the fix at both levels — behaviour (the fired name moves nothing scene-side;
-/// the echoed bind is what moves the view) and source (no `is_on` on any
-/// rail-claimed name anywhere in the dispatcher).
-#[test]
-fn the_scene_never_hand_steps_a_rail_owned_name() {
-    // Behaviour: the fired rail name is a scene-side no-op; the echoed bind moves.
-    let mut bench = Sablework::shipped();
-    let before = bench.selected_map();
-    fire(&mut bench, "map_next", true);
-    assert_eq!(
-        bench.selected_map(),
-        before,
-        "the scene does not step on the fired name"
-    );
-    fire(&mut bench, "sel_map", 2.0);
-    assert_eq!(
-        bench.sel_map, 2,
-        "the echoed rail index is what the scene adopts"
-    );
-
-    // Source: no dispatcher arm reads any rail-claimed step name.
-    let tree = tree_of(&Sablework::shipped());
-    let mut nodes = Vec::new();
-    flatten(&tree, &mut nodes);
-    let mut rail_names = Vec::new();
-    for n in &nodes {
-        for key in ["next_action", "prev_action"] {
-            if let Some(Value::Text(name)) = n.props.get(key) {
-                rail_names.push(name.clone());
-            }
-        }
-    }
-    assert!(!rail_names.is_empty(), "the tree authors rail step names");
-    let src = include_str!("route.rs");
-    for name in rail_names {
-        assert!(
-            !src.contains(&format!("is_on(\"{name}\")")),
-            "route.rs hand-steps rail-owned name `{name}` — the rail already steps it (+2 per press)"
-        );
-    }
 }
 
 // ── the three authored artifacts stay in lockstep ─────────────────────────────
@@ -1417,4 +1355,75 @@ fn the_materials_page_tokens_resolve() {
         unresolved.is_empty(),
         "materials page tokens: {unresolved:?}"
     );
+}
+
+/// DEVELOPMENT-TIER GATES (Aaron 2026-09-05, ruling 977B4D38): the hard-coded handoff
+/// conditions of a refactor — tests that read this crate's own source and assert a
+/// transition holds. `cargo test -- --skip gates::` is the production tier (every OS);
+/// `cargo test -- gates::` runs only these (one OS in CI). A gate names the transition
+/// it enforces and is deleted when that transition closes.
+mod gates {
+    use super::*;
+
+    /// The STRINGS gate's blind side: copy published from RUST into the Model bypasses
+    /// the tree gate entirely, so the crate self-gates its own source.
+    #[test]
+    fn no_raw_display_copy_is_published_into_the_model() {
+        for (file, src) in [
+            ("lib.rs", include_str!("lib.rs")),
+            ("route.rs", include_str!("route.rs")),
+        ] {
+            let flagged = strings::raw_model_publish_literals(src);
+            assert!(
+                flagged.is_empty(),
+                "{file} publishes raw display copy: {flagged:?}"
+            );
+        }
+    }
+
+    /// THE ANTI-DOUBLE-STEP GATE (the skipped-tab bug, MCP 801B1B09): a name an
+    /// authored rail claims as its `next_action`/`prev_action` is stepped by the RAIL
+    /// inside the walker — the scene reads only the echoed index. A dispatcher arm
+    /// stepping the same name is a SECOND consumer: +2 per bumper press. This pins
+    /// the fix at both levels — behaviour (the fired name moves nothing scene-side;
+    /// the echoed bind is what moves the view) and source (no `is_on` on any
+    /// rail-claimed name anywhere in the dispatcher).
+    #[test]
+    fn the_scene_never_hand_steps_a_rail_owned_name() {
+        // Behaviour: the fired rail name is a scene-side no-op; the echoed bind moves.
+        let mut bench = Sablework::shipped();
+        let before = bench.selected_map();
+        fire(&mut bench, "map_next", true);
+        assert_eq!(
+            bench.selected_map(),
+            before,
+            "the scene does not step on the fired name"
+        );
+        fire(&mut bench, "sel_map", 2.0);
+        assert_eq!(
+            bench.sel_map, 2,
+            "the echoed rail index is what the scene adopts"
+        );
+
+        // Source: no dispatcher arm reads any rail-claimed step name.
+        let tree = tree_of(&Sablework::shipped());
+        let mut nodes = Vec::new();
+        flatten(&tree, &mut nodes);
+        let mut rail_names = Vec::new();
+        for n in &nodes {
+            for key in ["next_action", "prev_action"] {
+                if let Some(Value::Text(name)) = n.props.get(key) {
+                    rail_names.push(name.clone());
+                }
+            }
+        }
+        assert!(!rail_names.is_empty(), "the tree authors rail step names");
+        let src = include_str!("route.rs");
+        for name in rail_names {
+            assert!(
+                !src.contains(&format!("is_on(\"{name}\")")),
+                "route.rs hand-steps rail-owned name `{name}` — the rail already steps it (+2 per press)"
+            );
+        }
+    }
 }

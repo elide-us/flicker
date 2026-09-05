@@ -2632,59 +2632,68 @@ mod menu_tree_tests {
         }
     }
 
-    /// VOCABULARY GATE for the screens every client ships — including the launcher's
-    /// mode tiers (root + the three tier-2 pages). A component kind the engine does
-    /// not know draws NOTHING — the walker anchor-overlays its children and the draw
-    /// arm falls through — so a typo or a name left behind by a rename is invisible
-    /// until someone opens the window. This turns that into a build failure.
-    #[test]
-    fn the_shipped_screens_name_only_kinds_the_engine_knows() {
-        // The shipped popup screens are SHARED modal trees (`scenes/shared/*.scene.json`,
-        // Aaron 2026-08-14) — the whole registry, so a modal added to `SHARED_MODALS` is
-        // gated the day it lands. The live main menu's vocabulary is gated by
-        // `the_main_menu_composes_from_the_rust_components`.
-        for (screen, json, _) in SHARED_MODALS {
-            let tree = shared_tree(json);
+    /// DEVELOPMENT-TIER GATES (Aaron 2026-09-05, ruling 977B4D38): the hard-coded handoff
+    /// conditions of a refactor — tests that read this crate's own source and assert a
+    /// transition holds. `cargo test -- --skip gates::` is the production tier (every OS);
+    /// `cargo test -- gates::` runs only these (one OS in CI). A gate names the transition
+    /// it enforces and is deleted when that transition closes.
+    mod gates {
+        use super::*;
+
+        /// VOCABULARY GATE for the screens every client ships — including the launcher's
+        /// mode tiers (root + the three tier-2 pages). A component kind the engine does
+        /// not know draws NOTHING — the walker anchor-overlays its children and the draw
+        /// arm falls through — so a typo or a name left behind by a rename is invisible
+        /// until someone opens the window. This turns that into a build failure.
+        #[test]
+        fn the_shipped_screens_name_only_kinds_the_engine_knows() {
+            // The shipped popup screens are SHARED modal trees (`scenes/shared/*.scene.json`,
+            // Aaron 2026-08-14) — the whole registry, so a modal added to `SHARED_MODALS` is
+            // gated the day it lands. The live main menu's vocabulary is gated by
+            // `the_main_menu_composes_from_the_rust_components`.
+            for (screen, json, _) in SHARED_MODALS {
+                let tree = shared_tree(json);
+                assert!(
+                    flicker::ui::unknown_kinds(&tree).is_empty(),
+                    "shared modal '{screen}' names unknown kinds: {:?}",
+                    flicker::ui::unknown_kinds(&tree)
+                );
+                // The strings gate (S10): every display literal is a `$token`.
+                assert!(
+                    flicker::ui::raw_display_literals(&tree).is_empty(),
+                    "shared modal '{screen}' ships raw display literals: {:?}",
+                    flicker::ui::raw_display_literals(&tree)
+                );
+            }
+
+            // The settings screen is the STATIC scene now (`settings.scene.json`), filled with
+            // hardened Rust rows ([`settings_tree`]) — the untrusted Lua composes NO structure.
+            // Gate the PRODUCTION tree the scene walks: it must name only native component kinds
+            // (`paged_menu` / `popup_panel` / `tabs` / …, no unknown kind → a kind draws nothing)
+            // and ship no raw display literal (every label a `$token`).
+            let tree = settings_tree(&display::RESOLUTIONS);
             assert!(
                 flicker::ui::unknown_kinds(&tree).is_empty(),
-                "shared modal '{screen}' names unknown kinds: {:?}",
+                "settings screen names unknown kinds: {:?}",
                 flicker::ui::unknown_kinds(&tree)
             );
             // The strings gate (S10): every display literal is a `$token`.
             assert!(
                 flicker::ui::raw_display_literals(&tree).is_empty(),
-                "shared modal '{screen}' ships raw display literals: {:?}",
+                "settings screen ships raw display literals: {:?}",
                 flicker::ui::raw_display_literals(&tree)
             );
+
+            // The MODEL-CHANNEL strings gate (S10's blind side): display copy published
+            // from Rust into the Model bypasses the tree gates above, so the crate
+            // self-gates its OWN source — every `.set`/`.with` value must be a resolved
+            // `$token`, a data shape, or carry an explicit `strings-gate-exempt` reason.
+            let flags = flicker::ui::strings::raw_model_publish_literals(include_str!("shell.rs"));
+            assert!(
+                flags.is_empty(),
+                "raw display copy published into the Model: {flags:?}"
+            );
         }
-
-        // The settings screen is the STATIC scene now (`settings.scene.json`), filled with
-        // hardened Rust rows ([`settings_tree`]) — the untrusted Lua composes NO structure.
-        // Gate the PRODUCTION tree the scene walks: it must name only native component kinds
-        // (`paged_menu` / `popup_panel` / `tabs` / …, no unknown kind → a kind draws nothing)
-        // and ship no raw display literal (every label a `$token`).
-        let tree = settings_tree(&display::RESOLUTIONS);
-        assert!(
-            flicker::ui::unknown_kinds(&tree).is_empty(),
-            "settings screen names unknown kinds: {:?}",
-            flicker::ui::unknown_kinds(&tree)
-        );
-        // The strings gate (S10): every display literal is a `$token`.
-        assert!(
-            flicker::ui::raw_display_literals(&tree).is_empty(),
-            "settings screen ships raw display literals: {:?}",
-            flicker::ui::raw_display_literals(&tree)
-        );
-
-        // The MODEL-CHANNEL strings gate (S10's blind side): display copy published
-        // from Rust into the Model bypasses the tree gates above, so the crate
-        // self-gates its OWN source — every `.set`/`.with` value must be a resolved
-        // `$token`, a data shape, or carry an explicit `strings-gate-exempt` reason.
-        let flags = flicker::ui::strings::raw_model_publish_literals(include_str!("shell.rs"));
-        assert!(
-            flags.is_empty(),
-            "raw display copy published into the Model: {flags:?}"
-        );
     }
 }
 

@@ -2777,96 +2777,105 @@ mod script_smoke {
         );
     }
 
-    /// Walk the REAL tree with the REAL derived model (+ a pick fixture so the
-    /// gated inspector panel draws too) and gate the authored data: known kinds
-    /// only, no raw display literals in the tree, no raw display copy published
-    /// from Rust into the Model.
-    #[test]
-    fn hud_tree_walks_with_model() {
-        load_strings();
-        let def = scene_def();
-        let tree = def.tree.clone().expect("scene defines a tree");
-        let styles = flicker::ui::load_shared_styles(def.styles.as_ref());
+    /// DEVELOPMENT-TIER GATES (Aaron 2026-09-05, ruling 977B4D38): the hard-coded handoff
+    /// conditions of a refactor — tests that read this crate's own source and assert a
+    /// transition holds. `cargo test -- --skip gates::` is the production tier (every OS);
+    /// `cargo test -- gates::` runs only these (one OS in CI). A gate names the transition
+    /// it enforces and is deleted when that transition closes.
+    mod gates {
+        use super::*;
 
-        // Vocabulary gate: an unknown kind renders NOTHING, so a name left
-        // behind by a rename would be invisible until someone opened the window.
-        assert!(
-            flicker::ui::unknown_kinds(&tree).is_empty(),
-            "pocclusters.scene.json names unknown kinds: {:?}",
-            flicker::ui::unknown_kinds(&tree)
-        );
-        // The strings gate (S10): every display literal is a `$token`.
-        assert!(
-            flicker::ui::raw_display_literals(&tree).is_empty(),
-            "pocclusters.scene.json ships raw display literals: {:?}",
-            flicker::ui::raw_display_literals(&tree)
-        );
-        // The MODEL-CHANNEL strings gate (S10's blind side): every `.set`/`.with`
-        // display value in this crate is a resolved `$token`, a data shape, or
-        // carries an explicit `strings-gate-exempt` reason.
-        let flags = strings::raw_model_publish_literals(include_str!("lib.rs"));
-        assert!(
-            flags.is_empty(),
-            "raw display copy published into the Model: {flags:?}"
-        );
+        /// Walk the REAL tree with the REAL derived model (+ a pick fixture so the
+        /// gated inspector panel draws too) and gate the authored data: known kinds
+        /// only, no raw display literals in the tree, no raw display copy published
+        /// from Rust into the Model.
+        #[test]
+        fn hud_tree_walks_with_model() {
+            load_strings();
+            let def = scene_def();
+            let tree = def.tree.clone().expect("scene defines a tree");
+            let styles = flicker::ui::load_shared_styles(def.styles.as_ref());
 
-        // The real derived model, plus a pick fixture so the `has_pick`-gated
-        // inspector panel draws (a real pick needs a meshed world; the fixture
-        // exercises the authored panel with the same key shapes derive() emits).
-        let scene = GameScene::new(&def);
-        let mut m = scene.hud_model();
-        m.set("has_pick", true);
-        m.set("no_pick", false);
-        let r = |t: &str| strings::resolve(t).into_owned();
-        m.set("insp_title", format!("{} (10, 20, 30)", r("$pc_cell")));
-        m.set(
-            "insp_sub",
-            format!(
-                "{} (1, 0, 2) {} 0 · 8 {}",
-                r("$pc_cluster"),
-                r("$pc_lod"),
-                r("$pc_corners")
-            ),
-        );
-        for i in 0..8 {
-            m.set(format!("insp_c{i}_name"), format!("c{i} +--"));
-            for ax in ["lx", "ly", "lz", "wx", "wy", "wz"] {
-                m.set(format!("insp_c{i}_{ax}"), "0.50");
+            // Vocabulary gate: an unknown kind renders NOTHING, so a name left
+            // behind by a rename would be invisible until someone opened the window.
+            assert!(
+                flicker::ui::unknown_kinds(&tree).is_empty(),
+                "pocclusters.scene.json names unknown kinds: {:?}",
+                flicker::ui::unknown_kinds(&tree)
+            );
+            // The strings gate (S10): every display literal is a `$token`.
+            assert!(
+                flicker::ui::raw_display_literals(&tree).is_empty(),
+                "pocclusters.scene.json ships raw display literals: {:?}",
+                flicker::ui::raw_display_literals(&tree)
+            );
+            // The MODEL-CHANNEL strings gate (S10's blind side): every `.set`/`.with`
+            // display value in this crate is a resolved `$token`, a data shape, or
+            // carries an explicit `strings-gate-exempt` reason.
+            let flags = strings::raw_model_publish_literals(include_str!("lib.rs"));
+            assert!(
+                flags.is_empty(),
+                "raw display copy published into the Model: {flags:?}"
+            );
+
+            // The real derived model, plus a pick fixture so the `has_pick`-gated
+            // inspector panel draws (a real pick needs a meshed world; the fixture
+            // exercises the authored panel with the same key shapes derive() emits).
+            let scene = GameScene::new(&def);
+            let mut m = scene.hud_model();
+            m.set("has_pick", true);
+            m.set("no_pick", false);
+            let r = |t: &str| strings::resolve(t).into_owned();
+            m.set("insp_title", format!("{} (10, 20, 30)", r("$pc_cell")));
+            m.set(
+                "insp_sub",
+                format!(
+                    "{} (1, 0, 2) {} 0 · 8 {}",
+                    r("$pc_cluster"),
+                    r("$pc_lod"),
+                    r("$pc_corners")
+                ),
+            );
+            for i in 0..8 {
+                m.set(format!("insp_c{i}_name"), format!("c{i} +--"));
+                for ax in ["lx", "ly", "lz", "wx", "wy", "wz"] {
+                    m.set(format!("insp_c{i}_{ax}"), "0.50");
+                }
             }
-        }
 
-        let snap = UiInput {
-            mouse: Vec2::new(-1.0, -1.0),
-            clicked: false,
-            down: false,
-            right_down: false,
-            screen: Vec2::new(1920.0, 1080.0),
-            wheel: 0.0,
-            exclusive: false,
-            motion: Default::default(),
-        };
-        let frame = run_ui(&tree, &m, &styles, &snap, &mut UiState::new());
-        assert!(
-            !frame.commands.is_empty(),
-            "the HUD draws its panels + controls"
-        );
-        let has_text = |needle: &str| {
-            frame
-                .commands
-                .iter()
-                .any(|c| matches!(c, HudCommand::Text { text, .. } if text.contains(needle)))
-        };
-        assert!(has_text("Cluster field"), "the title line renders");
-        assert!(
-            has_text("Wireframe overlay"),
-            "the authored checkbox labels render"
-        );
-        assert!(has_text("Celestial Cycle"), "the celestial panel renders");
-        assert!(has_text("Corner"), "the inspector table header renders");
-        assert!(
-            has_text("Cell (10, 20, 30)"),
-            "the inspector panel renders while has_pick is set"
-        );
+            let snap = UiInput {
+                mouse: Vec2::new(-1.0, -1.0),
+                clicked: false,
+                down: false,
+                right_down: false,
+                screen: Vec2::new(1920.0, 1080.0),
+                wheel: 0.0,
+                exclusive: false,
+                motion: Default::default(),
+            };
+            let frame = run_ui(&tree, &m, &styles, &snap, &mut UiState::new());
+            assert!(
+                !frame.commands.is_empty(),
+                "the HUD draws its panels + controls"
+            );
+            let has_text = |needle: &str| {
+                frame
+                    .commands
+                    .iter()
+                    .any(|c| matches!(c, HudCommand::Text { text, .. } if text.contains(needle)))
+            };
+            assert!(has_text("Cluster field"), "the title line renders");
+            assert!(
+                has_text("Wireframe overlay"),
+                "the authored checkbox labels render"
+            );
+            assert!(has_text("Celestial Cycle"), "the celestial panel renders");
+            assert!(has_text("Corner"), "the inspector table header renders");
+            assert!(
+                has_text("Cell (10, 20, 30)"),
+                "the inspector panel renders while has_pick is set"
+            );
+        }
     }
 }
 

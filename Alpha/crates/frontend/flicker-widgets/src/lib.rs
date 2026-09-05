@@ -832,151 +832,6 @@ mod tests {
         )
     }
 
-    /// **Every neutral fallback in `component.rs` is a byte copy of a `theme.tokens`
-    /// entry.** A control's missing-style floor (`const INK: [f32; 4] = […]`) is what
-    /// it draws with when its style block omits a key, so a fallback that drifts from
-    /// the palette is a control that looks subtly wrong only in the case nobody
-    /// authored.
-    ///
-    /// This ran as a Lua-side gate until the container slice (2026-08-09) moved
-    /// `STONE`/`SAP`/`INK`/`DIM`/`CLEAR` into the engine; it reads `component.rs`
-    /// directly now, which is where every fallback lives.
-    #[test]
-    fn rust_fallback_consts_mirror_theme_tokens_exactly() {
-        let tokens = theme_tokens();
-        let mut checked = 0;
-        let mut bad = Vec::new();
-        for line in include_str!("component.rs").lines() {
-            let Some(rest) = line.strip_prefix("const ") else {
-                continue;
-            };
-            let Some((name, value)) = rest.split_once(": [f32; 4] = [") else {
-                continue;
-            };
-            let Some((inner, _)) = value.split_once(']') else {
-                continue;
-            };
-            let parts: Vec<f64> = inner
-                .split(',')
-                .filter_map(|p| p.trim().parse::<f64>().ok())
-                .collect();
-            if parts.len() != 4 {
-                continue;
-            }
-            checked += 1;
-            if let Some(near) = nearest_token(&tokens, &parts) {
-                bad.push(format!(
-                    "component.rs `{name}` = {parts:?} (nearest token: ${near})"
-                ));
-            }
-        }
-        assert!(
-            checked >= 9,
-            "the gate must actually find the fallback consts ({checked})"
-        );
-        assert!(
-            bad.is_empty(),
-            "engine fallback consts drifted from theme.tokens:\n{}",
-            bad.join("\n")
-        );
-    }
-
-    /// The NAMED half of the same law, and the replacement for the Lua fallback gate
-    /// that died with the `ui/*.lua` component tier (2026-08-10). That gate walked
-    /// `UI_COMPONENT_MODULES` checking each module's `local INK = {…}` against
-    /// `theme.tokens`; with the list deleted it would have iterated NOTHING and passed
-    /// — a gate certifying the very drift it exists to catch. This one carries the
-    /// obligation over to the tier that now owns those colours.
-    ///
-    /// The gate above proves each fallback equals SOME token. That is not enough on a
-    /// palette this dense: `$stone1` and `$stone2` are 0.02 apart, so a const could
-    /// silently re-anchor to its neighbour and still pass. Here each const is pinned to
-    /// the token it is NAMED for — `INK` is `$ink`, `STONE` is `$stone1` — so a retune
-    /// that moves a token while its copy stands still fails the build instead of
-    /// drifting the missing-style floor by one shade.
-    ///
-    /// The pairing is also a completeness ledger: a new `const X: [f32; 4]` must name
-    /// its token here or be declared token-less, so no fallback escapes the discipline
-    /// by being born after the gate.
-    #[test]
-    fn component_consts_mirror_their_named_theme_tokens() {
-        // (the `const` in component.rs, the `theme.tokens` entry it copies)
-        const PAIRS: &[(&str, &str)] = &[
-            ("INK", "ink"),
-            ("PANEL", "stone2"),
-            ("RUNE", "rune_glow"),
-            ("SAP", "sap_base"),
-            ("CLEAR", "stage_void"),
-            ("BRONZE", "bronze"),
-            ("BRONZE_DIM", "bronze_dim"),
-            ("FLASH_LIT", "rune_glow_hi"),
-            ("DIM", "dim"),
-            ("STONE", "stone1"),
-            ("WELL", "well"),
-            ("STONE_BTN", "stone_btn"),
-            ("MARKER", "stam_hi"),
-            ("SIG_BLUE", "sig_blue"),
-            ("KEYCAP_FACE", "ink"),
-            ("KEYCAP_EDGE", "dim"),
-            ("KEYCAP_INK", "stage_black"),
-        ];
-        // Consts with no `$token` twin — the authored block carries the literal. Listed
-        // so the completeness check below stays honest about them.
-        const TOKENLESS: &[&str] = &["BAND"];
-
-        let tokens = theme_tokens();
-        // The top-level fallback consts as `component.rs` actually declares them (the
-        // `#[cfg(test)]` locals inside functions are indented, so they are not picked up).
-        let found: Vec<(String, Vec<f64>)> = include_str!("component.rs")
-            .lines()
-            .filter_map(|line| {
-                let rest = line.strip_prefix("const ")?;
-                let (name, value) = rest.split_once(": [f32; 4] = [")?;
-                let (inner, _) = value.split_once(']')?;
-                let parts: Vec<f64> = inner
-                    .split(',')
-                    .filter_map(|p| p.trim().parse::<f64>().ok())
-                    .collect();
-                (parts.len() == 4).then(|| (name.to_string(), parts))
-            })
-            .collect();
-
-        let mut bad = Vec::new();
-        for (name, token) in PAIRS {
-            let Some((_, parts)) = found.iter().find(|(n, _)| n == name) else {
-                bad.push(format!(
-                    "`{name}` is gone from component.rs — the pairing is stale"
-                ));
-                continue;
-            };
-            let Some((_, want)) = tokens.iter().find(|(t, _)| t == token) else {
-                bad.push(format!(
-                    "`{name}` names `${token}`, which theme.tokens does not have"
-                ));
-                continue;
-            };
-            if !want.iter().zip(parts).all(|(a, b)| (a - b).abs() < 1e-6) {
-                bad.push(format!("`{name}` = {parts:?} but `${token}` = {want:?}"));
-            }
-        }
-        assert!(
-            bad.is_empty(),
-            "engine fallback consts drifted from their tokens:\n{}",
-            bad.join("\n")
-        );
-
-        let unpaired: Vec<&str> = found
-            .iter()
-            .map(|(n, _)| n.as_str())
-            .filter(|n| !PAIRS.iter().any(|(p, _)| p == n) && !TOKENLESS.contains(n))
-            .collect();
-        assert!(
-            unpaired.is_empty(),
-            "component.rs fallback consts with no named token: {unpaired:?} — pair each with \
-             its `theme.tokens` entry above, or declare it TOKENLESS"
-        );
-    }
-
     /// The vocabulary gate has to be able to FAIL, or the screens it guards prove
     /// nothing. Also pins that `core` — the emitter library the deleted Lua tier
     /// exported, never a component — is still rejected, now because it is in neither
@@ -1208,156 +1063,6 @@ mod tests {
         );
     }
 
-    /// **NO SCENE READS A DEVICE OR NAMES A PANE STYLE.** A source-level sweep of
-    /// every scene crate — the channel three separate defects travelled, closed
-    /// in one gate so none of them can grow back quietly. (Moved here verbatim
-    /// when the template tier was deleted — 201F4F51; it is a scene-crate source
-    /// sweep, never template-specific.)
-    ///
-    /// * `input.gamepad(` / `.gamepad(0)` — a scene reaching past the input map
-    ///   for a stick. The camera reads BOUND SIGNALS (`signal_axis`); a raw read
-    ///   re-applies the deadzone a second time, which is a bug you can only find
-    ///   by measuring. `flicker-controllertester` is exempt and only it: that
-    ///   bench IS the device visualizer, so reading the device is its subject.
-    /// * `tri_pane.` — the retired per-bench pane palette. There is ONE pane
-    ///   palette now (`panel.resting` / `panel.focused`) and the PANEL draws
-    ///   itself from the focus the walker holds; a scene naming a pane skin is a
-    ///   scene deciding what focus looks like.
-    /// * a walker-owned `on_*` declaration — Confirm, Cancel, `Nav*`, `Panel*`
-    ///   and `ChordBegin` mean one thing on every screen, so no scene may name
-    ///   them in its own props. (The template/proto channel that once needed its
-    ///   own gate is GONE with the template tier — 201F4F51 — so a scene's props
-    ///   are now the ONLY channel a declaration travels.) The allow-list below is
-    ///   EMPTY: the gate fails the moment any scene falls in (rule 98232A50).
-    /// * a private globe: `fn build_shell` / `struct OrbitCam` in a scene. There
-    ///   is ONE globe in Prism (`flicker-globe`) and it was three copies twice.
-    #[test]
-    fn no_scene_reads_a_device_or_names_a_pane_style() {
-        use flicker_input_core::ActionSignal;
-        use std::path::{Path, PathBuf};
-
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../scenes");
-        let root = root.canonicalize().expect("Alpha/crates/scenes resolves");
-
-        fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
-            for e in std::fs::read_dir(dir).expect("scene dir reads").flatten() {
-                let p = e.path();
-                if p.is_dir() {
-                    rust_files(&p, out);
-                } else if p.extension().is_some_and(|x| x == "rs") {
-                    out.push(p);
-                }
-            }
-        }
-        let mut files = Vec::new();
-        rust_files(&root, &mut files);
-        files.sort();
-        assert!(
-            files.len() > 20,
-            "the sweep found the scene crates: {}",
-            files.len()
-        );
-        let crate_of = |p: &Path| -> String {
-            p.strip_prefix(&root)
-                .ok()
-                .and_then(|r| {
-                    r.components()
-                        .next()
-                        .map(|c| c.as_os_str().to_string_lossy().into_owned())
-                })
-                .unwrap_or_default()
-        };
-
-        // The walker's OWN answer to "whose signal is this", folded into the two
-        // shapes a DECLARATION takes in Rust — the `(prop, result)` pair a bench
-        // folds into its root, and a direct `props.insert`. Never a second list
-        // here that could drift from what the layer actually consumes; and
-        // naming the SHAPE rather than the bare string is what lets a migrated
-        // bench's own absence gate mention the signal it is disowning.
-        let owned: Vec<String> = ActionSignal::ALL
-            .iter()
-            .copied()
-            .filter(|s| crate::walker_owned(*s))
-            .flat_map(|s| {
-                let mut key = String::from("on");
-                for c in s.name().chars() {
-                    if c.is_uppercase() {
-                        key.push('_');
-                    }
-                    key.extend(c.to_lowercase());
-                }
-                [format!("(\"{key}\", \""), format!("insert(\"{key}\"")]
-            })
-            .collect();
-        assert!(
-            owned.iter().any(|k| k == "(\"on_confirm\", \"")
-                && owned.iter().any(|k| k == "insert(\"on_panel_next\""),
-            "the fold produced the declaration shapes a scene writes: {owned:?}"
-        );
-
-        // A scene camera that is NOT the globe's: Solar Birth's `OrbitCam` is a
-        // cinematic POSE HOLDER — the `.flight` player drives it and hands over to
-        // the pointer mid-shot — and it frames a solar system, not a planet at
-        // `flicker_globe::RADIUS`. Folding it in is a real change to the shared
-        // camera's contract, so it is named here rather than waved through.
-        const CAMERAS_NOT_THE_GLOBES: [&str; 1] = ["flicker-solarbirth"];
-
-        // The scenes that still declare a walker-owned signal. EMPTY as of the
-        // template-tier removal (2026-08-12): quartermaster / godmode / assetpipeline
-        // each folded one in from their template-built UI; stubbing those benches off
-        // templates removed the declarations, so the gate now enforces ZERO. A NEW name
-        // here means a scene stole a walker signal (violation F1) — migrate it, don't
-        // allow-list it. (Rule 98232A50: the backlog shrinks as benches migrate.)
-        const NOT_YET_MIGRATED: [&str; 0] = [];
-
-        let (mut devices, mut panes, mut globes) = (Vec::new(), Vec::new(), Vec::new());
-        let mut declarers: Vec<String> = Vec::new();
-        for f in &files {
-            let krate = crate_of(f);
-            let src = std::fs::read_to_string(f).expect("scene source reads");
-            for (n, line) in src.lines().enumerate() {
-                let at = format!("{}:{}", f.strip_prefix(&root).unwrap().display(), n + 1);
-                if krate != "flicker-controllertester"
-                    && (line.contains("input.gamepad(") || line.contains(".gamepad(0)"))
-                {
-                    devices.push(at.clone());
-                }
-                if line.contains("tri_pane.") {
-                    panes.push(at.clone());
-                }
-                if line.contains("fn build_shell")
-                    || (line.contains("struct OrbitCam")
-                        && !CAMERAS_NOT_THE_GLOBES.contains(&krate.as_str()))
-                {
-                    globes.push(at.clone());
-                }
-                if owned.iter().any(|o| line.contains(o.as_str())) && !declarers.contains(&krate) {
-                    declarers.push(krate.clone());
-                }
-            }
-        }
-        assert!(
-            devices.is_empty(),
-            "a scene reached past the input map for a device: {devices:?}"
-        );
-        assert!(
-            panes.is_empty(),
-            "a scene named the retired pane palette: {panes:?}"
-        );
-        assert!(
-            globes.is_empty(),
-            "a scene grew its own globe again: {globes:?}"
-        );
-        declarers.sort();
-        let mut expected: Vec<String> = NOT_YET_MIGRATED.iter().map(|s| s.to_string()).collect();
-        expected.sort();
-        assert_eq!(
-            declarers, expected,
-            "the walker-owned backlog moved. A NEW name means a scene stole a walker signal; a \
-             MISSING name means a bench migrated and this list must shrink with it"
-        );
-    }
-
     /// **ABSENCE GATE: no shipped scene names the removed template tier.** The
     /// `template` / `slots` keys are gone (201F4F51) and both readers reject them,
     /// but a scene file could still be authored with one and only fail when it
@@ -1468,5 +1173,419 @@ mod tests {
             "the gate found the shipped scene files in {}",
             dir.display()
         );
+    }
+
+    /// DEVELOPMENT-TIER GATES (Aaron 2026-09-05, ruling 977B4D38): the hard-coded handoff
+    /// conditions of a refactor — tests that read this crate's own source and assert a
+    /// transition holds. `cargo test -- --skip gates::` is the production tier (every OS);
+    /// `cargo test -- gates::` runs only these (one OS in CI). A gate names the transition
+    /// it enforces and is deleted when that transition closes.
+    mod gates {
+        use super::*;
+
+        /// **Every neutral fallback in `component.rs` is a byte copy of a `theme.tokens`
+        /// entry.** A control's missing-style floor (`const INK: [f32; 4] = […]`) is what
+        /// it draws with when its style block omits a key, so a fallback that drifts from
+        /// the palette is a control that looks subtly wrong only in the case nobody
+        /// authored.
+        ///
+        /// This ran as a Lua-side gate until the container slice (2026-08-09) moved
+        /// `STONE`/`SAP`/`INK`/`DIM`/`CLEAR` into the engine; it reads `component.rs`
+        /// directly now, which is where every fallback lives.
+        #[test]
+        fn rust_fallback_consts_mirror_theme_tokens_exactly() {
+            let tokens = theme_tokens();
+            let mut checked = 0;
+            let mut bad = Vec::new();
+            for line in include_str!("component.rs").lines() {
+                let Some(rest) = line.strip_prefix("const ") else {
+                    continue;
+                };
+                let Some((name, value)) = rest.split_once(": [f32; 4] = [") else {
+                    continue;
+                };
+                let Some((inner, _)) = value.split_once(']') else {
+                    continue;
+                };
+                let parts: Vec<f64> = inner
+                    .split(',')
+                    .filter_map(|p| p.trim().parse::<f64>().ok())
+                    .collect();
+                if parts.len() != 4 {
+                    continue;
+                }
+                checked += 1;
+                if let Some(near) = nearest_token(&tokens, &parts) {
+                    bad.push(format!(
+                        "component.rs `{name}` = {parts:?} (nearest token: ${near})"
+                    ));
+                }
+            }
+            assert!(
+                checked >= 9,
+                "the gate must actually find the fallback consts ({checked})"
+            );
+            assert!(
+                bad.is_empty(),
+                "engine fallback consts drifted from theme.tokens:\n{}",
+                bad.join("\n")
+            );
+        }
+
+        /// The NAMED half of the same law, and the replacement for the Lua fallback gate
+        /// that died with the `ui/*.lua` component tier (2026-08-10). That gate walked
+        /// `UI_COMPONENT_MODULES` checking each module's `local INK = {…}` against
+        /// `theme.tokens`; with the list deleted it would have iterated NOTHING and passed
+        /// — a gate certifying the very drift it exists to catch. This one carries the
+        /// obligation over to the tier that now owns those colours.
+        ///
+        /// The gate above proves each fallback equals SOME token. That is not enough on a
+        /// palette this dense: `$stone1` and `$stone2` are 0.02 apart, so a const could
+        /// silently re-anchor to its neighbour and still pass. Here each const is pinned to
+        /// the token it is NAMED for — `INK` is `$ink`, `STONE` is `$stone1` — so a retune
+        /// that moves a token while its copy stands still fails the build instead of
+        /// drifting the missing-style floor by one shade.
+        ///
+        /// The pairing is also a completeness ledger: a new `const X: [f32; 4]` must name
+        /// its token here or be declared token-less, so no fallback escapes the discipline
+        /// by being born after the gate.
+        #[test]
+        fn component_consts_mirror_their_named_theme_tokens() {
+            // (the `const` in component.rs, the `theme.tokens` entry it copies)
+            const PAIRS: &[(&str, &str)] = &[
+                ("INK", "ink"),
+                ("PANEL", "stone2"),
+                ("RUNE", "rune_glow"),
+                ("SAP", "sap_base"),
+                ("CLEAR", "stage_void"),
+                ("BRONZE", "bronze"),
+                ("BRONZE_DIM", "bronze_dim"),
+                ("FLASH_LIT", "rune_glow_hi"),
+                ("DIM", "dim"),
+                ("STONE", "stone1"),
+                ("WELL", "well"),
+                ("STONE_BTN", "stone_btn"),
+                ("MARKER", "stam_hi"),
+                ("SIG_BLUE", "sig_blue"),
+                ("KEYCAP_FACE", "ink"),
+                ("KEYCAP_EDGE", "dim"),
+                ("KEYCAP_INK", "stage_black"),
+            ];
+            // Consts with no `$token` twin — the authored block carries the literal. Listed
+            // so the completeness check below stays honest about them.
+            const TOKENLESS: &[&str] = &["BAND"];
+
+            let tokens = theme_tokens();
+            // The top-level fallback consts as `component.rs` actually declares them (the
+            // `#[cfg(test)]` locals inside functions are indented, so they are not picked up).
+            let found: Vec<(String, Vec<f64>)> = include_str!("component.rs")
+                .lines()
+                .filter_map(|line| {
+                    let rest = line.strip_prefix("const ")?;
+                    let (name, value) = rest.split_once(": [f32; 4] = [")?;
+                    let (inner, _) = value.split_once(']')?;
+                    let parts: Vec<f64> = inner
+                        .split(',')
+                        .filter_map(|p| p.trim().parse::<f64>().ok())
+                        .collect();
+                    (parts.len() == 4).then(|| (name.to_string(), parts))
+                })
+                .collect();
+
+            let mut bad = Vec::new();
+            for (name, token) in PAIRS {
+                let Some((_, parts)) = found.iter().find(|(n, _)| n == name) else {
+                    bad.push(format!(
+                        "`{name}` is gone from component.rs — the pairing is stale"
+                    ));
+                    continue;
+                };
+                let Some((_, want)) = tokens.iter().find(|(t, _)| t == token) else {
+                    bad.push(format!(
+                        "`{name}` names `${token}`, which theme.tokens does not have"
+                    ));
+                    continue;
+                };
+                if !want.iter().zip(parts).all(|(a, b)| (a - b).abs() < 1e-6) {
+                    bad.push(format!("`{name}` = {parts:?} but `${token}` = {want:?}"));
+                }
+            }
+            assert!(
+                bad.is_empty(),
+                "engine fallback consts drifted from their tokens:\n{}",
+                bad.join("\n")
+            );
+
+            let unpaired: Vec<&str> = found
+                .iter()
+                .map(|(n, _)| n.as_str())
+                .filter(|n| !PAIRS.iter().any(|(p, _)| p == n) && !TOKENLESS.contains(n))
+                .collect();
+            assert!(
+                unpaired.is_empty(),
+                "component.rs fallback consts with no named token: {unpaired:?} — pair each with \
+                 its `theme.tokens` entry above, or declare it TOKENLESS"
+            );
+        }
+
+        /// **NO SCENE READS A DEVICE OR NAMES A PANE STYLE.** A source-level sweep of
+        /// every scene crate — the channel three separate defects travelled, closed
+        /// in one gate so none of them can grow back quietly. (Moved here verbatim
+        /// when the template tier was deleted — 201F4F51; it is a scene-crate source
+        /// sweep, never template-specific.)
+        ///
+        /// * `input.gamepad(` / `.gamepad(0)` — a scene reaching past the input map
+        ///   for a stick. The camera reads BOUND SIGNALS (`signal_axis`); a raw read
+        ///   re-applies the deadzone a second time, which is a bug you can only find
+        ///   by measuring. `flicker-controllertester` is exempt and only it: that
+        ///   bench IS the device visualizer, so reading the device is its subject.
+        /// * `tri_pane.` — the retired per-bench pane palette. There is ONE pane
+        ///   palette now (`panel.resting` / `panel.focused`) and the PANEL draws
+        ///   itself from the focus the walker holds; a scene naming a pane skin is a
+        ///   scene deciding what focus looks like.
+        /// * a walker-owned `on_*` declaration — Confirm, Cancel, `Nav*`, `Panel*`
+        ///   and `ChordBegin` mean one thing on every screen, so no scene may name
+        ///   them in its own props. (The template/proto channel that once needed its
+        ///   own gate is GONE with the template tier — 201F4F51 — so a scene's props
+        ///   are now the ONLY channel a declaration travels.) The allow-list below is
+        ///   EMPTY: the gate fails the moment any scene falls in (rule 98232A50).
+        /// * a private globe: `fn build_shell` / `struct OrbitCam` in a scene. There
+        ///   is ONE globe in Prism (`flicker-globe`) and it was three copies twice.
+        #[test]
+        fn no_scene_reads_a_device_or_names_a_pane_style() {
+            use flicker_input_core::ActionSignal;
+            use std::path::{Path, PathBuf};
+
+            let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../scenes");
+            let root = root.canonicalize().expect("Alpha/crates/scenes resolves");
+
+            fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
+                for e in std::fs::read_dir(dir).expect("scene dir reads").flatten() {
+                    let p = e.path();
+                    if p.is_dir() {
+                        rust_files(&p, out);
+                    } else if p.extension().is_some_and(|x| x == "rs") {
+                        out.push(p);
+                    }
+                }
+            }
+            let mut files = Vec::new();
+            rust_files(&root, &mut files);
+            files.sort();
+            assert!(
+                files.len() > 20,
+                "the sweep found the scene crates: {}",
+                files.len()
+            );
+            let crate_of = |p: &Path| -> String {
+                p.strip_prefix(&root)
+                    .ok()
+                    .and_then(|r| {
+                        r.components()
+                            .next()
+                            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                    })
+                    .unwrap_or_default()
+            };
+
+            // The walker's OWN answer to "whose signal is this", folded into the two
+            // shapes a DECLARATION takes in Rust — the `(prop, result)` pair a bench
+            // folds into its root, and a direct `props.insert`. Never a second list
+            // here that could drift from what the layer actually consumes; and
+            // naming the SHAPE rather than the bare string is what lets a migrated
+            // bench's own absence gate mention the signal it is disowning.
+            let owned: Vec<String> = ActionSignal::ALL
+                .iter()
+                .copied()
+                .filter(|s| crate::walker_owned(*s))
+                .flat_map(|s| {
+                    let mut key = String::from("on");
+                    for c in s.name().chars() {
+                        if c.is_uppercase() {
+                            key.push('_');
+                        }
+                        key.extend(c.to_lowercase());
+                    }
+                    [format!("(\"{key}\", \""), format!("insert(\"{key}\"")]
+                })
+                .collect();
+            assert!(
+                owned.iter().any(|k| k == "(\"on_confirm\", \"")
+                    && owned.iter().any(|k| k == "insert(\"on_panel_next\""),
+                "the fold produced the declaration shapes a scene writes: {owned:?}"
+            );
+
+            // A scene camera that is NOT the globe's: Solar Birth's `OrbitCam` is a
+            // cinematic POSE HOLDER — the `.flight` player drives it and hands over to
+            // the pointer mid-shot — and it frames a solar system, not a planet at
+            // `flicker_globe::RADIUS`. Folding it in is a real change to the shared
+            // camera's contract, so it is named here rather than waved through.
+            const CAMERAS_NOT_THE_GLOBES: [&str; 1] = ["flicker-solarbirth"];
+
+            // The scenes that still declare a walker-owned signal. EMPTY as of the
+            // template-tier removal (2026-08-12): quartermaster / godmode / assetpipeline
+            // each folded one in from their template-built UI; stubbing those benches off
+            // templates removed the declarations, so the gate now enforces ZERO. A NEW name
+            // here means a scene stole a walker signal (violation F1) — migrate it, don't
+            // allow-list it. (Rule 98232A50: the backlog shrinks as benches migrate.)
+            const NOT_YET_MIGRATED: [&str; 0] = [];
+
+            let (mut devices, mut panes, mut globes) = (Vec::new(), Vec::new(), Vec::new());
+            let mut declarers: Vec<String> = Vec::new();
+            for f in &files {
+                let krate = crate_of(f);
+                let src = std::fs::read_to_string(f).expect("scene source reads");
+                for (n, line) in src.lines().enumerate() {
+                    let at = format!("{}:{}", f.strip_prefix(&root).unwrap().display(), n + 1);
+                    if krate != "flicker-controllertester"
+                        && (line.contains("input.gamepad(") || line.contains(".gamepad(0)"))
+                    {
+                        devices.push(at.clone());
+                    }
+                    if line.contains("tri_pane.") {
+                        panes.push(at.clone());
+                    }
+                    if line.contains("fn build_shell")
+                        || (line.contains("struct OrbitCam")
+                            && !CAMERAS_NOT_THE_GLOBES.contains(&krate.as_str()))
+                    {
+                        globes.push(at.clone());
+                    }
+                    if owned.iter().any(|o| line.contains(o.as_str()))
+                        && !declarers.contains(&krate)
+                    {
+                        declarers.push(krate.clone());
+                    }
+                }
+            }
+            assert!(
+                devices.is_empty(),
+                "a scene reached past the input map for a device: {devices:?}"
+            );
+            assert!(
+                panes.is_empty(),
+                "a scene named the retired pane palette: {panes:?}"
+            );
+            assert!(
+                globes.is_empty(),
+                "a scene grew its own globe again: {globes:?}"
+            );
+            declarers.sort();
+            let mut expected: Vec<String> =
+                NOT_YET_MIGRATED.iter().map(|s| s.to_string()).collect();
+            expected.sort();
+            assert_eq!(
+                declarers, expected,
+                "the walker-owned backlog moved. A NEW name means a scene stole a walker signal; a \
+                 MISSING name means a bench migrated and this list must shrink with it"
+            );
+        }
+
+        /// **Every source-scanning test lives under `gates::`** (Aaron 2026-09-05, ruling
+        /// 977B4D38): a test that reads `.rs` source text is a DEVELOPMENT gate — the hard-coded
+        /// handoff condition of a refactor — and the CI tiers select it by that namespace
+        /// (`cargo test -- --skip gates::` is the production tier on every OS, `-- gates::` the
+        /// one-OS gates job). Enforced by NAME here so the convention cannot lapse: the workspace
+        /// is walked and every `#[test]` whose body reads Rust source must sit under a `mod
+        /// gates`. CRLF- and separator-agnostic (rule FDDDE106): the Windows runner checks out
+        /// CRLF and walks `\`-separated paths.
+        #[test]
+        fn every_source_scanning_test_lives_under_gates() {
+            fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+                let Ok(rd) = std::fs::read_dir(dir) else {
+                    return;
+                };
+                for e in rd.flatten() {
+                    let p = e.path();
+                    if p.is_dir() {
+                        if p.file_name().is_some_and(|n| n == "target") {
+                            continue;
+                        }
+                        walk(&p, out);
+                    } else if p.extension().is_some_and(|x| x == "rs") {
+                        out.push(p);
+                    }
+                }
+            }
+            let here = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+            let mut files = Vec::new();
+            walk(&here.join("../../.."), &mut files); // Alpha/
+            walk(&here.join("../../../../crates"), &mut files); // the root reference crates
+            assert!(
+                files.len() > 100,
+                "the walk saw the workspace ({})",
+                files.len()
+            );
+            // What makes a test a source-scanning gate: it reads `.rs` text.
+            let reads_source = |body: &str| {
+                body.lines().any(|l| {
+                    (l.contains("include_str!(") && l.contains(".rs\""))
+                        || (l.contains("read_to_string(") && l.contains(".rs\""))
+                }) || (body.contains("read_dir(") && body.contains("\"rs\""))
+            };
+            let mod_line = regex_lite_mod;
+            let mut offenders = Vec::new();
+            for path in files {
+                let src = std::fs::read_to_string(&path)
+                    .unwrap_or_default()
+                    .replace("\r\n", "\n");
+                let lines: Vec<&str> = src.lines().collect();
+                for (i, line) in lines.iter().enumerate() {
+                    if line.trim() != "#[test]" {
+                        continue;
+                    }
+                    let indent = line.len() - line.trim_start().len();
+                    let Some(fn_at) =
+                        (i + 1..lines.len()).find(|&j| lines[j].trim_start().starts_with("fn "))
+                    else {
+                        continue;
+                    };
+                    let end = (fn_at + 1..lines.len())
+                        .find(|&j| lines[j] == format!("{}}}", " ".repeat(indent)))
+                        .unwrap_or(lines.len() - 1);
+                    let body = lines[fn_at..=end].join("\n");
+                    if !reads_source(&body) {
+                        continue;
+                    }
+                    // The enclosing module: the nearest line above at a SMALLER indentation that
+                    // opens a module. Under `gates` or it is an offender.
+                    let enclosing = (0..i).rev().find_map(|j| mod_line(lines[j], indent));
+                    if enclosing.as_deref() != Some("gates") {
+                        let name = lines[fn_at].trim().trim_start_matches("fn ");
+                        let name = name.split('(').next().unwrap_or(name);
+                        let shown = path.to_string_lossy().replace('\\', "/");
+                        offenders.push(format!("{shown}: `{name}` (module {enclosing:?})"));
+                    }
+                }
+            }
+            assert!(
+                offenders.is_empty(),
+                "source-scanning tests outside `mod gates` — move them into the crate's `gates` \
+                 submodule so the CI tiers can tell a development gate from a production test:\n{}",
+                offenders.join("\n")
+            );
+        }
+
+        /// `line` opens a module at an indentation smaller than `indent`? Then its name.
+        fn regex_lite_mod(line: &str, indent: usize) -> Option<String> {
+            let li = line.len() - line.trim_start().len();
+            if li >= indent {
+                return None;
+            }
+            let t = line.trim_start();
+            let t = t
+                .strip_prefix("pub(crate) ")
+                .or_else(|| t.strip_prefix("pub "))
+                .unwrap_or(t);
+            let rest = t.strip_prefix("mod ")?;
+            let name: String = rest
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            rest[name.len()..]
+                .trim_start()
+                .starts_with('{')
+                .then_some(name)
+        }
     }
 }

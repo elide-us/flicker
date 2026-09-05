@@ -2544,73 +2544,6 @@ fn short_path(p: &Path) -> String {
 mod tests {
     use super::*;
 
-    /// **The extraction gate.** The canvas and the timeline MOVED into
-    /// `flicker-canvas`; they were not copied. If a geometry function, a card
-    /// constant or a hand-rolled line quad reappears in this crate, the two copies
-    /// have started to drift and every other bench that seats these fillers inherits
-    /// the drift — so this fails the moment one comes back rather than the day
-    /// someone notices the DM tech tree behaves differently from this bench.
-    ///
-    /// Scans the SHIPPED half of each source file (everything before its own test
-    /// module), so the gate's own vocabulary is not what it catches.
-    #[test]
-    fn no_canvas_or_timeline_geometry_survives_in_this_crate() {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        assert!(
-            !dir.join("canvas.rs").exists(),
-            "canvas.rs is the graph filler now — it must not exist here"
-        );
-        // The geometry that moved, by the name it had: layout + transforms + picking
-        // (canvas.rs), the strip's frame/lane mapping (tae.rs), and the thin-quad line
-        // fake the `HudCommand::Line` primitive retired.
-        let banned = [
-            "fn layout",
-            "fn hit_test",
-            "fn edge_points",
-            "fn clip_to_border",
-            "fn dist_to_segment",
-            "fn hit_edge",
-            "fn grid_slot",
-            "fn card_stage_rect",
-            "fn zoom_at",
-            "fn lane_rect",
-            "fn frame_x",
-            "fn event_rect",
-            "fn ruler_ticks",
-            "fn track_x",
-            "fn lane_h",
-            "draw_triangle",
-            "const CARD_W",
-            "const CARD_H",
-            "const GUTTER_W",
-            "const RULER_H",
-            "const POINT_W",
-            "const ZOOM_MIN",
-            "const SELF_LOOP_LIFT",
-            "const EDGE_GRAB",
-        ];
-        for entry in std::fs::read_dir(&dir).expect("src/ is readable") {
-            let path = entry.expect("a readable dir entry").path();
-            if path.extension().is_none_or(|e| e != "rs") {
-                continue;
-            }
-            let src = std::fs::read_to_string(&path).expect("a readable source file");
-            let shipped = src
-                .split_once("#[cfg(test)]\nmod tests {")
-                .map(|(before, _)| before)
-                .unwrap_or(&src);
-            for needle in banned {
-                assert!(
-                    !shipped.contains(needle),
-                    "{}: `{needle}` is canvas/timeline geometry — it lives in \
-                     flicker-canvas, and a second copy here is the drift this gate exists \
-                     to stop",
-                    path.display()
-                );
-            }
-        }
-    }
-
     /// Load the shipped stringtable (en-us) into the process-wide table, so tests
     /// asserting composed copy read FINAL text. Safe across parallel test threads —
     /// every caller loads the same content.
@@ -2621,19 +2554,6 @@ mod tests {
         ))
         .expect("stringtable reads");
         flicker::ui::strings::load_str(&strings, "en-us");
-    }
-
-    /// The MODEL-CHANNEL strings gate: display copy published from Rust into the
-    /// Model bypasses the tree-walking strings gate, so the crate self-gates its
-    /// own source — every `.set`/`.with` value must be a resolved `$token`, a data
-    /// shape, or carry an explicit `strings-gate-exempt` reason.
-    #[test]
-    fn no_raw_display_copy_published_into_the_model() {
-        let flags = flicker::ui::strings::raw_model_publish_literals(include_str!("lib.rs"));
-        assert!(
-            flags.is_empty(),
-            "raw display copy published into the Model: {flags:?}"
-        );
     }
 
     /// The tab set + their ids are what the authored tree and the action router agree
@@ -2801,71 +2721,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    /// **The extraction gate.** The scene-owned doll rig MOVED to `flicker-rigview`; a
-    /// second copy here is the drift this exists to stop. It also gates the CHANNEL the
-    /// old leak travelled: this crate must own no render target at all, and must hand the
-    /// ones the filler owns back in `exit`.
-    #[test]
-    fn no_scene_owned_doll_rig_or_render_target_survives_in_this_crate() {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        assert!(
-            !dir.join("stage.rs").exists(),
-            "stage.rs is the `Doll` filler now — it must not exist here"
-        );
-        // The rig that moved, by the names it had, plus every way a scene can come to own
-        // a target or a stage pass of its own.
-        let banned = [
-            "StageRig",
-            "StageReq",
-            "fn palette_for",
-            "fn ground_transform",
-            "fn line_layers",
-            "retain_slots",
-            "slot_count",
-            "create_render_target",
-            "free_render_target",
-            "resize_render_target",
-            "composite_panel",
-            "draw_skinned_instanced",
-            "upload_skinned_mesh",
-            "ring_segments",
-            "grid_segments",
-            "fg.surface(",
-            "CompositeTarget",
-        ];
-        for entry in std::fs::read_dir(&dir).expect("src/ is readable") {
-            let path = entry.expect("a readable dir entry").path();
-            if path.extension().is_none_or(|e| e != "rs") {
-                continue;
-            }
-            let src = std::fs::read_to_string(&path).expect("a readable source file");
-            let shipped = src
-                .split_once("#[cfg(test)]\nmod tests {")
-                .map(|(before, _)| before)
-                .unwrap_or(&src);
-            for needle in banned {
-                assert!(
-                    !shipped.contains(needle),
-                    "{}: `{needle}` is doll-rig or render-target ownership — it lives in \
-                     flicker-rigview, and a copy here is how the targets leaked",
-                    path.display()
-                );
-            }
-        }
-        // And the bench MUST override `exit` — the seam that gives them back. A handle is
-        // an index into the renderer's slot pool, so dropping the bench reclaims nothing.
-        let lib = std::fs::read_to_string(dir.join("lib.rs")).expect("lib.rs is readable");
-        assert!(
-            lib.contains("fn exit(&mut self, renderer: &mut Renderer)"),
-            "LoomforgeBench must override Scene::exit — without it every doll target the \
-             session showed is stranded (incident 5C9C27E1, rule 728E682F)"
-        );
-        assert!(
-            lib.contains("doll.release(renderer)") && lib.contains("DollRig::release"),
-            "exit must release every doll AND the shared rig's mesh"
-        );
     }
 
     /// Walk the REAL tree with the REAL derived model and gate the authored data:
@@ -3343,5 +3198,169 @@ mod tests {
         results.set("save", true);
         bench.apply_actions(&results);
         assert!(bench.status.contains("Nothing to save"));
+    }
+
+    /// DEVELOPMENT-TIER GATES (Aaron 2026-09-05, ruling 977B4D38): the hard-coded handoff
+    /// conditions of a refactor — tests that read this crate's own source and assert a
+    /// transition holds. `cargo test -- --skip gates::` is the production tier (every OS);
+    /// `cargo test -- gates::` runs only these (one OS in CI). A gate names the transition
+    /// it enforces and is deleted when that transition closes.
+    mod gates {
+        use super::*;
+
+        /// **The extraction gate.** The canvas and the timeline MOVED into
+        /// `flicker-canvas`; they were not copied. If a geometry function, a card
+        /// constant or a hand-rolled line quad reappears in this crate, the two copies
+        /// have started to drift and every other bench that seats these fillers inherits
+        /// the drift — so this fails the moment one comes back rather than the day
+        /// someone notices the DM tech tree behaves differently from this bench.
+        ///
+        /// Scans the SHIPPED half of each source file (everything before its own test
+        /// module), so the gate's own vocabulary is not what it catches.
+        #[test]
+        fn no_canvas_or_timeline_geometry_survives_in_this_crate() {
+            let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+            assert!(
+                !dir.join("canvas.rs").exists(),
+                "canvas.rs is the graph filler now — it must not exist here"
+            );
+            // The geometry that moved, by the name it had: layout + transforms + picking
+            // (canvas.rs), the strip's frame/lane mapping (tae.rs), and the thin-quad line
+            // fake the `HudCommand::Line` primitive retired.
+            let banned = [
+                "fn layout",
+                "fn hit_test",
+                "fn edge_points",
+                "fn clip_to_border",
+                "fn dist_to_segment",
+                "fn hit_edge",
+                "fn grid_slot",
+                "fn card_stage_rect",
+                "fn zoom_at",
+                "fn lane_rect",
+                "fn frame_x",
+                "fn event_rect",
+                "fn ruler_ticks",
+                "fn track_x",
+                "fn lane_h",
+                "draw_triangle",
+                "const CARD_W",
+                "const CARD_H",
+                "const GUTTER_W",
+                "const RULER_H",
+                "const POINT_W",
+                "const ZOOM_MIN",
+                "const SELF_LOOP_LIFT",
+                "const EDGE_GRAB",
+            ];
+            for entry in std::fs::read_dir(&dir).expect("src/ is readable") {
+                let path = entry.expect("a readable dir entry").path();
+                if path.extension().is_none_or(|e| e != "rs") {
+                    continue;
+                }
+                // CRLF-agnostic: the Windows runner checks the tree out with autocrlf, and a
+                // `\n`-only split never found the test module there — so the gate scanned its
+                // own banned-name list and failed on every needle (CI 2026-09-05).
+                let src = std::fs::read_to_string(&path)
+                    .expect("a readable source file")
+                    .replace("\r\n", "\n");
+                let shipped = src
+                    .split_once("#[cfg(test)]\nmod tests {")
+                    .map(|(before, _)| before)
+                    .unwrap_or(&src);
+                for needle in banned {
+                    assert!(
+                        !shipped.contains(needle),
+                        "{}: `{needle}` is canvas/timeline geometry — it lives in \
+                         flicker-canvas, and a second copy here is the drift this gate exists \
+                         to stop",
+                        path.display()
+                    );
+                }
+            }
+        }
+
+        /// The MODEL-CHANNEL strings gate: display copy published from Rust into the
+        /// Model bypasses the tree-walking strings gate, so the crate self-gates its
+        /// own source — every `.set`/`.with` value must be a resolved `$token`, a data
+        /// shape, or carry an explicit `strings-gate-exempt` reason.
+        #[test]
+        fn no_raw_display_copy_published_into_the_model() {
+            let flags = flicker::ui::strings::raw_model_publish_literals(include_str!("lib.rs"));
+            assert!(
+                flags.is_empty(),
+                "raw display copy published into the Model: {flags:?}"
+            );
+        }
+
+        /// **The extraction gate.** The scene-owned doll rig MOVED to `flicker-rigview`; a
+        /// second copy here is the drift this exists to stop. It also gates the CHANNEL the
+        /// old leak travelled: this crate must own no render target at all, and must hand the
+        /// ones the filler owns back in `exit`.
+        #[test]
+        fn no_scene_owned_doll_rig_or_render_target_survives_in_this_crate() {
+            let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+            assert!(
+                !dir.join("stage.rs").exists(),
+                "stage.rs is the `Doll` filler now — it must not exist here"
+            );
+            // The rig that moved, by the names it had, plus every way a scene can come to own
+            // a target or a stage pass of its own.
+            let banned = [
+                "StageRig",
+                "StageReq",
+                "fn palette_for",
+                "fn ground_transform",
+                "fn line_layers",
+                "retain_slots",
+                "slot_count",
+                "create_render_target",
+                "free_render_target",
+                "resize_render_target",
+                "composite_panel",
+                "draw_skinned_instanced",
+                "upload_skinned_mesh",
+                "ring_segments",
+                "grid_segments",
+                "fg.surface(",
+                "CompositeTarget",
+            ];
+            for entry in std::fs::read_dir(&dir).expect("src/ is readable") {
+                let path = entry.expect("a readable dir entry").path();
+                if path.extension().is_none_or(|e| e != "rs") {
+                    continue;
+                }
+                // CRLF-agnostic: the Windows runner checks the tree out with autocrlf, and a
+                // `\n`-only split never found the test module there — so the gate scanned its
+                // own banned-name list and failed on every needle (CI 2026-09-05).
+                let src = std::fs::read_to_string(&path)
+                    .expect("a readable source file")
+                    .replace("\r\n", "\n");
+                let shipped = src
+                    .split_once("#[cfg(test)]\nmod tests {")
+                    .map(|(before, _)| before)
+                    .unwrap_or(&src);
+                for needle in banned {
+                    assert!(
+                        !shipped.contains(needle),
+                        "{}: `{needle}` is doll-rig or render-target ownership — it lives in \
+                         flicker-rigview, and a copy here is how the targets leaked",
+                        path.display()
+                    );
+                }
+            }
+            // And the bench MUST override `exit` — the seam that gives them back. A handle is
+            // an index into the renderer's slot pool, so dropping the bench reclaims nothing.
+            let lib = std::fs::read_to_string(dir.join("lib.rs")).expect("lib.rs is readable");
+            assert!(
+                lib.contains("fn exit(&mut self, renderer: &mut Renderer)"),
+                "LoomforgeBench must override Scene::exit — without it every doll target the \
+                 session showed is stranded (incident 5C9C27E1, rule 728E682F)"
+            );
+            assert!(
+                lib.contains("doll.release(renderer)") && lib.contains("DollRig::release"),
+                "exit must release every doll AND the shared rig's mesh"
+            );
+        }
     }
 }

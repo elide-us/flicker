@@ -1546,63 +1546,6 @@ mod tests {
 
     // ── The scene pair (five-line split; ruling DC217431) ────────────────────
 
-    /// **The shipped scene file authors the chrome.** The tree parses, the
-    /// screen declares the pause + context-cycle intents, the four tab buttons
-    /// carry the context actions, and every component kind and display literal
-    /// in the file is legal — the same def the manifest hands the runtime.
-    #[test]
-    fn the_shipped_scene_authors_the_chrome() {
-        use flicker::script::Value;
-
-        let scene = ControllerTester::shipped();
-        let tree = scene.authored.as_ref().expect("the def declares a tree");
-        for (intent, name) in [
-            ("on_menu", "pause_open"),
-            ("on_tab_next", "ctx_next"),
-            ("on_tab_prev", "ctx_prev"),
-        ] {
-            assert_eq!(
-                tree.props.get(intent),
-                Some(&Value::Text(name.into())),
-                "the screen declares {intent} = {name}"
-            );
-        }
-
-        // One tab button per context, wearing its action.
-        fn actions(n: &UiNode, out: &mut Vec<String>) {
-            if let Some(a) = &n.action {
-                out.push(a.clone());
-            }
-            for c in &n.children {
-                actions(c, out);
-            }
-        }
-        let mut found = Vec::new();
-        actions(tree, &mut found);
-        for ctx in CONTEXTS {
-            let want = format!("ctx_{}", ctx_word(ctx));
-            assert!(
-                found.contains(&want),
-                "a tab button fires '{want}': {found:?}"
-            );
-        }
-
-        assert!(
-            flicker::ui::unknown_kinds(tree).is_empty(),
-            "unknown component kinds: {:?}",
-            flicker::ui::unknown_kinds(tree)
-        );
-        assert!(
-            flicker::ui::raw_display_literals(tree).is_empty(),
-            "raw display literals (labels must ride $tokens): {:?}",
-            flicker::ui::raw_display_literals(tree)
-        );
-        // …and the same law at the Rust publish seam (state words and dotted
-        // paths are wiring; the feed's draw-site copy rides strings::resolve).
-        let flags = flicker::ui::strings::raw_model_publish_literals(include_str!("lib.rs"));
-        assert!(flags.is_empty(), "raw Model-publish copy: {flags:?}");
-    }
-
     /// **The declared chrome intents fire through the AUTHORED tree** — Menu
     /// opens the pause, TabNext cycles the context ring; the walker is the
     /// scene's ONE input layer (the demo chain is the exhibit, not the seam).
@@ -1685,5 +1628,71 @@ mod tests {
             Some("controllertester.tab_active")
         );
         assert_eq!(m.text("ctx_world_style"), Some("controllertester.tab_idle"));
+    }
+
+    /// DEVELOPMENT-TIER GATES (Aaron 2026-09-05, ruling 977B4D38): the hard-coded handoff
+    /// conditions of a refactor — tests that read this crate's own source and assert a
+    /// transition holds. `cargo test -- --skip gates::` is the production tier (every OS);
+    /// `cargo test -- gates::` runs only these (one OS in CI). A gate names the transition
+    /// it enforces and is deleted when that transition closes.
+    mod gates {
+        use super::*;
+
+        /// **The shipped scene file authors the chrome.** The tree parses, the
+        /// screen declares the pause + context-cycle intents, the four tab buttons
+        /// carry the context actions, and every component kind and display literal
+        /// in the file is legal — the same def the manifest hands the runtime.
+        #[test]
+        fn the_shipped_scene_authors_the_chrome() {
+            use flicker::script::Value;
+
+            let scene = ControllerTester::shipped();
+            let tree = scene.authored.as_ref().expect("the def declares a tree");
+            for (intent, name) in [
+                ("on_menu", "pause_open"),
+                ("on_tab_next", "ctx_next"),
+                ("on_tab_prev", "ctx_prev"),
+            ] {
+                assert_eq!(
+                    tree.props.get(intent),
+                    Some(&Value::Text(name.into())),
+                    "the screen declares {intent} = {name}"
+                );
+            }
+
+            // One tab button per context, wearing its action.
+            fn actions(n: &UiNode, out: &mut Vec<String>) {
+                if let Some(a) = &n.action {
+                    out.push(a.clone());
+                }
+                for c in &n.children {
+                    actions(c, out);
+                }
+            }
+            let mut found = Vec::new();
+            actions(tree, &mut found);
+            for ctx in CONTEXTS {
+                let want = format!("ctx_{}", ctx_word(ctx));
+                assert!(
+                    found.contains(&want),
+                    "a tab button fires '{want}': {found:?}"
+                );
+            }
+
+            assert!(
+                flicker::ui::unknown_kinds(tree).is_empty(),
+                "unknown component kinds: {:?}",
+                flicker::ui::unknown_kinds(tree)
+            );
+            assert!(
+                flicker::ui::raw_display_literals(tree).is_empty(),
+                "raw display literals (labels must ride $tokens): {:?}",
+                flicker::ui::raw_display_literals(tree)
+            );
+            // …and the same law at the Rust publish seam (state words and dotted
+            // paths are wiring; the feed's draw-site copy rides strings::resolve).
+            let flags = flicker::ui::strings::raw_model_publish_literals(include_str!("lib.rs"));
+            assert!(flags.is_empty(), "raw Model-publish copy: {flags:?}");
+        }
     }
 }

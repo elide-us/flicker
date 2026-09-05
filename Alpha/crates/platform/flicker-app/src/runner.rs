@@ -525,46 +525,55 @@ mod text_route_tests {
         }
     }
 
-    /// GREP GATE: the keyboard's text is read by the input system alone. No scene, widget
-    /// or shell crate touches the snapshot's text channel — the route delivers it.
-    #[test]
-    fn no_crate_outside_the_input_system_reads_the_text_channel() {
-        let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let mut offenders = Vec::new();
-        fn walk(dir: &std::path::Path, out: &mut Vec<String>) {
-            let Ok(rd) = std::fs::read_dir(dir) else {
-                return;
-            };
-            for e in rd.flatten() {
-                let p = e.path();
-                if p.is_dir() {
-                    if p.file_name().is_some_and(|n| n == "target") {
-                        continue;
-                    }
-                    walk(&p, out);
-                } else if p.extension().is_some_and(|x| x == "rs") {
-                    // Separator-agnostic: the Windows runner walks `Alpha\crates\...`, and
-                    // a `/`-only test let the input system's own readers through as
-                    // offenders there (CI 2026-09-05, windows-latest).
-                    let s = p.to_string_lossy().replace('\\', "/");
-                    if s.contains("/crates/input/") || s.contains("/crates/platform/") {
-                        continue;
-                    }
-                    let Ok(src) = std::fs::read_to_string(&p) else {
-                        continue;
-                    };
-                    for needle in ["text_stream(", ".typed()", ".backspace()", ".preedit()"] {
-                        if src.contains(needle) {
-                            out.push(format!("{s}: {needle}"));
+    /// DEVELOPMENT-TIER GATES (Aaron 2026-09-05, ruling 977B4D38): the hard-coded handoff
+    /// conditions of a refactor — tests that read this crate's own source and assert a
+    /// transition holds. `cargo test -- --skip gates::` is the production tier (every OS);
+    /// `cargo test -- gates::` runs only these (one OS in CI). A gate names the transition
+    /// it enforces and is deleted when that transition closes.
+    mod gates {
+        use super::*;
+
+        /// GREP GATE: the keyboard's text is read by the input system alone. No scene, widget
+        /// or shell crate touches the snapshot's text channel — the route delivers it.
+        #[test]
+        fn no_crate_outside_the_input_system_reads_the_text_channel() {
+            let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+            let mut offenders = Vec::new();
+            fn walk(dir: &std::path::Path, out: &mut Vec<String>) {
+                let Ok(rd) = std::fs::read_dir(dir) else {
+                    return;
+                };
+                for e in rd.flatten() {
+                    let p = e.path();
+                    if p.is_dir() {
+                        if p.file_name().is_some_and(|n| n == "target") {
+                            continue;
+                        }
+                        walk(&p, out);
+                    } else if p.extension().is_some_and(|x| x == "rs") {
+                        // Separator-agnostic: the Windows runner walks `Alpha\crates\...`, and
+                        // a `/`-only test let the input system's own readers through as
+                        // offenders there (CI 2026-09-05, windows-latest).
+                        let s = p.to_string_lossy().replace('\\', "/");
+                        if s.contains("/crates/input/") || s.contains("/crates/platform/") {
+                            continue;
+                        }
+                        let Ok(src) = std::fs::read_to_string(&p) else {
+                            continue;
+                        };
+                        for needle in ["text_stream(", ".typed()", ".backspace()", ".preedit()"] {
+                            if src.contains(needle) {
+                                out.push(format!("{s}: {needle}"));
+                            }
                         }
                     }
                 }
             }
+            walk(&crates, &mut offenders);
+            assert!(
+                offenders.is_empty(),
+                "the text channel is read outside the input system: {offenders:?}"
+            );
         }
-        walk(&crates, &mut offenders);
-        assert!(
-            offenders.is_empty(),
-            "the text channel is read outside the input system: {offenders:?}"
-        );
     }
 }
