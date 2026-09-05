@@ -58,7 +58,8 @@
 //! -- frame), or widget values. `sw`/`sh` are the screen size.
 //! function M.update(mouse_x, mouse_y, clicked, sw, sh) ... return { ... } end
 //! -- Called once per frame. Return a sequence of draw-command tables; see
-//! -- HudCommand for the recognised shapes ("rect"/"sprite"/"panel"/"text"). Globals:
+//! -- HudCommand for the recognised shapes ("rect"/"sprite"/"panel"/"text"/"caret"/
+//! -- "line"/"clip"). Globals:
 //! -- `Model` (engine data this frame) and `Textures` (name → sprite id).
 //! function M.draw(sw, sh) return { ... } end
 //! return M
@@ -222,6 +223,25 @@ pub enum HudCommand {
         border: f32,
         border_color: [f32; 4],
         feather: f32,
+        layer: f32,
+    },
+    /// A **straight line segment** of `width` px from `from` to `to`, drawn as one
+    /// ROTATED quad by the consumer (`line_quad` → the existing sprite batch), so it
+    /// costs exactly what a `Rect` costs and honours the active [`Self::Clip`]. The
+    /// 2D vector primitive edges, plots, rulers and gizmo leaders are drawn from — a
+    /// scene faking one with a thin axis-aligned `Rect` can only draw it horizontal
+    /// or vertical.
+    ///
+    /// **There is deliberately no polyline variant**: a polyline IS a loop over this
+    /// one (append the first point again for a closed ring), and a segment-per-quad
+    /// polyline draws exactly what a batched one would — no mitre joins either way —
+    /// so a second variant would duplicate this one's every arm (parse, fade, layer
+    /// offset, draw) to save the caller a `for`.
+    Line {
+        from: [f32; 2],
+        to: [f32; 2],
+        width: f32,
+        color: [f32; 4],
         layer: f32,
     },
     /// A **scissor clip** state command: `rect` (px x,y,w,h) masks every later 2D
@@ -924,6 +944,16 @@ fn parse_commands(list: &Table) -> mlua::Result<Vec<HudCommand>> {
                     layer: read_layer(&cmd)?,
                 });
             }
+            // `{ kind = "line", x1, y1, x2, y2, width, r,g,b,a }` — the endpoints are
+            // named per-axis like every other command's coordinates rather than as
+            // nested tables, so the Lua side stays one flat table.
+            "line" => commands.push(HudCommand::Line {
+                from: [cmd.get("x1")?, cmd.get("y1")?],
+                to: [cmd.get("x2")?, cmd.get("y2")?],
+                width: cmd.get::<Option<f32>>("width")?.unwrap_or(1.0),
+                color: read_color(&cmd)?,
+                layer: read_layer(&cmd)?,
+            }),
             other => tracing::warn!("hud script emitted unknown command kind '{other}'"),
         }
     }
@@ -1697,6 +1727,45 @@ mod tests {
                     border: 0.0,
                     border_color: [0.0, 0.0, 0.0, 0.0], // no br → transparent (no border)
                     feather: 0.0,
+                    layer: 0.0,
+                },
+            ]
+        );
+    }
+
+    const LINE_SCRIPT: &str = r#"
+        local M = {}
+        function M.update(mx, my, clicked, sw, sh) return {} end
+        function M.draw(sw, sh)
+            return {
+                { kind = "line", x1 = 10, y1 = 20, x2 = 110, y2 = 20,
+                  width = 2, r = 0.9, g = 0.8, b = 0.7, a = 0.6, layer = 4 },
+                -- No width / colour / layer: the 1px hairline default.
+                { kind = "line", x1 = 0, y1 = 0, x2 = 4, y2 = 8 },
+            }
+        end
+        return M
+    "#;
+
+    #[test]
+    fn line_command_parses() {
+        let host = ScriptHost::new(LINE_SCRIPT, "line").unwrap();
+        let cmds = host.draw(800.0, 600.0).unwrap();
+        assert_eq!(
+            cmds,
+            vec![
+                HudCommand::Line {
+                    from: [10.0, 20.0],
+                    to: [110.0, 20.0],
+                    width: 2.0,
+                    color: [0.9, 0.8, 0.7, 0.6],
+                    layer: 4.0,
+                },
+                HudCommand::Line {
+                    from: [0.0, 0.0],
+                    to: [4.0, 8.0],
+                    width: 1.0,                  // no `width` → a hairline
+                    color: [1.0, 1.0, 1.0, 1.0], // no r/g/b/a → opaque white
                     layer: 0.0,
                 },
             ]

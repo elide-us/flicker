@@ -1,3 +1,6 @@
+//! **LEGACY (frozen v1 toolbox — zero live consumers; the live planet driver is
+//! [`crate::Evolution`]).** Kept as engine inventory, not dead code.
+//!
 //! [`WorldEngine`] — the forward-regenerative facade. It owns the topology, the
 //! per-world [`WorldConfig`], and a lazy cache of one immutable [`EpochSnapshot`]
 //! per epoch, and exposes the "play god" verbs behind the manifesto's locked

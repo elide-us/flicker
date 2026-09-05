@@ -1,0 +1,42 @@
+[package]
+name = "flicker-csgtest"
+version = "0.1.10"
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# The CSG Test Scene (library only) — a stripped voxel-field `Scene` for exercising
+# the QEF mesher / vector-stretch on the baked wave field: flat one-light stage, no
+# celestial / water / shadow / grass. Hosted by `prism-alpha`; exposes `scene()`.
+[lib]
+name = "flicker_csgtest"
+path = "src/lib.rs"
+
+[dependencies]
+flicker = { version = "0.1.0", path = "../../core/flicker" }
+# The new input model (Resolver/Fired/EventKind/ActionSignal) + the event bus
+# (Router/InputHandler/RouteCtx) this scene now routes all input through (spec §9).
+flicker-input-core.workspace = true
+flicker-input-router.workspace = true
+# The reusable front-end shell (splash / menu / settings / pause) this scene runs
+# inside; it also provides the pause overlay + theme.
+flicker-shell.workspace = true
+# The shared planet-layout model (roster + orbits) the from-Home sky draws.
+flicker-orrery.workspace = true
+flicker-voxel.workspace = true
+# The gz-at-rest content seam (flicker-core::compression): cluster bakes are read by
+# LOGICAL name (`cluster_X_Y_Z.json`), resolved gz-first through the shared routine.
+flicker-core.workspace = true
+flicker-worker.workspace = true
+# The material catalog (materials.json) — colours for the mesh palette the
+# voxel field renders with — resolved through the roots service.
+flicker-materials.workspace = true
+flicker-content.workspace = true
+# The island heightfield sampler (island_height) + the static-prop rig loader (load_mesh), used by
+# the POC grass scatter over the terrain.
+flicker-primitive.workspace = true
+flicker-skeletal.workspace = true
+glam.workspace = true
+# Resolves the walker's node `style` paths against `ui_theme.json` (styles Value).
+serde_json.workspace = true
+tracing.workspace = true

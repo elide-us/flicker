@@ -32,10 +32,9 @@
 //! which is exactly how a canyon wall comes to show a layer cake. They are stored
 //! separately from the first because they stop being proportional immediately.
 
-use flicker_poc_chemistry::{crust_thickness_m, density_kg_m3, World};
-
 use crate::mask::{HexMask, TileFrame, TILE_DIM};
 use crate::shape::Neighbourhood;
+use crate::source::TileSource;
 
 /// One materialised cell: a stack of thickness maps, bottom bed first.
 ///
@@ -54,6 +53,10 @@ pub struct Tile {
     /// One map per stratum, bottom → top. `TILE_DIM²` metres of thickness, zero
     /// outside the mask.
     pub strata: Vec<Vec<f32>>,
+    /// Each stratum's material code, parallel to `strata` — the source's own
+    /// registry ([`crate::source`]); what the exposed-bed material texture
+    /// reads.
+    pub materials: Vec<u8>,
     /// The ground just OUTSIDE the rim — every pixel not in the mask that touches
     /// one that is, at the height the global field puts there. This is how water at
     /// the edge knows whether the world continues uphill or falls away: the tile is
@@ -161,11 +164,18 @@ impl Tile {
 ///
 /// Deterministic: same world, same cell, same maps. Nothing random happens here —
 /// there is no seed, because there is nothing to seed. The shape comes from the
-/// neighbourhood and the mass comes from the ledger.
-pub fn materialize(world: &World, cell: usize, radius_m: f64, outline: &[glam::Vec3]) -> Tile {
-    let frame = TileFrame::new(cell as u32, world.grid.dirs[cell], outline, radius_m);
+/// neighbourhood and the mass comes from the ledger. Generic over the
+/// [`TileSource`] — the chemistry world and the Populous planet epoch walk
+/// through the same door.
+pub fn materialize<S: TileSource>(
+    src: &S,
+    cell: usize,
+    radius_m: f64,
+    outline: &[glam::Vec3],
+) -> Tile {
+    let frame = TileFrame::new(cell as u32, src.grid().dirs[cell], outline, radius_m);
     let mask = HexMask::new(&frame, outline);
-    let hood = Neighbourhood::around(world, cell);
+    let hood = Neighbourhood::around(src, cell);
 
     // The surface the global field puts here, and how far each pixel is from the
     // cell boundary. Both are gathered in one pass over the mask.
@@ -184,7 +194,7 @@ pub fn materialize(world: &World, cell: usize, radius_m: f64, outline: &[glam::V
     }
 
     let owned = mask.count().max(1) as f64;
-    let column = &world.columns[cell];
+    let beds = src.beds_m(cell);
 
     // ── The ground, in metres, exactly as the global field puts it. ──
     //
@@ -197,7 +207,7 @@ pub fn materialize(world: &World, cell: usize, radius_m: f64, outline: &[glam::V
     // the *beds* — and that is correct, because two columns genuinely have different
     // stacks, and a bed is entitled to end at a cell boundary. What may never differ
     // is the ground you stand on.
-    let want_total = crust_thickness_m(column, world.cell_area_m2());
+    let want_total = src.thickness_m(cell);
     let laid: f64 = mask.iter().map(|(x, y)| relief[idx(x, y)]).sum();
     let residual = want_total * owned - laid;
     let per_unit = if interior_sum > 0.0 {
@@ -239,16 +249,11 @@ pub fn materialize(world: &World, cell: usize, radius_m: f64, outline: &[glam::V
     // nothing about how it varied inside the cell, so every bed follows the same
     // shape in proportion. Inventing a per-bed variation would be inventing data.
     // Erosion is what makes them diverge, and it starts the moment T7 does.
-    let mut strata = Vec::with_capacity(column.layers.len());
-    for bed in &column.layers {
-        let density = density_kg_m3(bed);
-        let bed_thickness = if density > 0.0 {
-            bed.mass_kg() / (density * world.cell_area_m2())
-        } else {
-            0.0
-        };
+    let mut strata = Vec::with_capacity(beds.len());
+    let mut materials = Vec::with_capacity(beds.len());
+    for bed in &beds {
         let share = if want_total > 0.0 {
-            bed_thickness / want_total
+            bed.thickness_m / want_total
         } else {
             0.0
         };
@@ -258,6 +263,7 @@ pub fn materialize(world: &World, cell: usize, radius_m: f64, outline: &[glam::V
             map[i] = (composite[i] * share) as f32;
         }
         strata.push(map);
+        materials.push(bed.material);
     }
 
     Tile {
@@ -265,6 +271,7 @@ pub fn materialize(world: &World, cell: usize, radius_m: f64, outline: &[glam::V
         frame,
         mask,
         strata,
+        materials,
         skirt,
         pixel_born: 0,
     }
@@ -361,7 +368,8 @@ mod tests {
     use super::*;
     use flicker_materials::{JsonTableSource, Tables};
     use flicker_poc_chemistry::{
-        budget::Budget, config::content_data_dir, formation_stages, scheduler::Scheduler,
+        budget::Budget, config::content_data_dir, density_kg_m3, formation_stages,
+        scheduler::Scheduler, World,
     };
     use flicker_worldgrid::icosphere_with_outlines;
     use std::sync::Arc;

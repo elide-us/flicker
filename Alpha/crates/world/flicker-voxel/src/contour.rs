@@ -35,10 +35,14 @@
 //! vertex is stored on the sample-aligned min-corner voxel
 //! `((sample_dim−1)·stride, …)`.
 //!
-//! Stored corners are in **cell-units** `[0, 1]`: `corner = (v − origin)
-//! /stride`. Mesh decodes back to cluster-local voxel coords by
-//! `voxel + corner·stride`. At LOD 0 (`stride = 1`) the encode is the
-//! identity, so LOD-0 storage is byte-identical to the pre-§2 path.
+//! Stored corners are in **cell-units**: `corner = (v − origin)/stride`,
+//! and the contour keeps them STRICTLY inside the cell (see
+//! [`cell_qef_corner`] — the mesh seal guarantee). The [`CornerVector`]
+//! spec range `[-0.5, 2.5]` is wider than what the contour emits; the
+//! reach exists for editor-authored cross-cell welds. Mesh decodes back
+//! to cluster-local voxel coords by `voxel + corner·stride`. At LOD 0
+//! (`stride = 1`) the encode is the identity mapping on cell-units, so
+//! LOD-0 storage is byte-stable across LOD reworks.
 //!
 //! # Per-voxel expansion at higher LOD
 //!
@@ -291,9 +295,22 @@ pub fn contour(primitive: &dyn Primitive, material: Material, id: ClusterId) -> 
 /// Compute the QEF dual vertex for a single cell and return its
 /// cell-units corner encoding. The cell spans `[cell_v, cell_v +
 /// stride]` in cluster-local voxel coords; the QEF runs in cluster-
-/// local voxel units (so LOD-0 byte path is unchanged), then re-encodes
-/// the result in `[0, 1]` cell-units. Returns the default corner when
-/// the cell has no sign-crossing edges (degenerate input).
+/// local voxel units, then re-encodes the result in cell-units,
+/// clamped STRICTLY inside the cell (one encode step of margin).
+///
+/// The strict interior is the mesh seal guarantee: the four cells
+/// around any sign-change edge occupy the four quadrants of the quad's
+/// plane, so four strictly-interior vertices land one per quadrant and
+/// the quad's projected perimeter is always a SIMPLE polygon — which
+/// always has an interior diagonal for the mesher's diagonal selection
+/// to find. A vertex allowed to sit on or past the cell boundary breaks
+/// the quadrant order and produces bowtie perimeters no triangulation
+/// can cover (the un-sealable holes). The wider `CornerVector` range
+/// `[-0.5, 2.5]` remains for editor-authored data that deliberately
+/// welds vertices across cells; the terrain QEF does not stray.
+///
+/// Returns the default corner when the cell has no sign-crossing edges
+/// (degenerate input).
 fn cell_qef_corner(
     primitive: &dyn Primitive,
     corner_solid: &[bool; 8],
@@ -334,14 +351,15 @@ fn cell_qef_corner(
         return CornerVector::DEFAULT;
     }
     let v = qef.solve(QEF_LAMBDA);
-    let fx = cell_v[0] as f32;
-    let fy = cell_v[1] as f32;
-    let fz = cell_v[2] as f32;
     let fs = stride as f32;
-    let vx = v[0].clamp(fx, fx + fs);
-    let vy = v[1].clamp(fy, fy + fs);
-    let vz = v[2].clamp(fz, fz + fs);
-    CornerVector::from_components((vx - fx) / fs, (vy - fy) / fs, (vz - fz) / fs)
+    // One encode step of margin: 0.003 encodes to byte 43 and 0.997 to
+    // byte 127, so the stored offset decodes strictly inside (0, 1).
+    const EPS: f32 = 0.003;
+    CornerVector::from_components(
+        ((v[0] - cell_v[0] as f32) / fs).clamp(EPS, 1.0 - EPS),
+        ((v[1] - cell_v[1] as f32) / fs).clamp(EPS, 1.0 - EPS),
+        ((v[2] - cell_v[2] as f32) / fs).clamp(EPS, 1.0 - EPS),
+    )
 }
 
 #[cfg(test)]
@@ -450,9 +468,11 @@ mod tests {
         assert_eq!(outside.material(), Material::EMPTY);
         // Sparse override count is bounded by the cube's surface
         // cells (the boundary-spanning LOD-0 cells whose QEF is
-        // non-default). It's nonzero — the cube has a surface — but
-        // small relative to the solid-voxel count (which is 27).
-        assert!(c.override_count() > 0);
+        // non-default) — small relative to the solid-voxel count (27).
+        // For this axis-aligned cube every dual vertex lands exactly
+        // on its cell center, which encodes byte-equal to the default
+        // corner and therefore stores nothing: zero overrides is
+        // correct here (the default decodes to the same vertex).
         assert!(c.override_count() < 27);
     }
 
@@ -607,22 +627,18 @@ mod tests {
     }
 
     #[test]
-    fn lod0_byte_identical_to_pre_lod_path() {
-        // Regression: the LOD-0 contour result must be unchanged by the
-        // §2 rework. Compare the override count and a few representative
-        // cells against known values from the §1 baseline.
+    fn lod0_byte_stable_tracer_cell() {
+        // Regression: LOD-0 contour bytes at a tracer cell must not drift
+        // across reworks. Under the ratified [-0.5, 2.5] encoding (bake
+        // v4) with the strict-interior clamp, the flat-field cell's
+        // vertex (0.5, 1.0, 0.5) stores as (0.5, 0.997, 0.5) → bytes
+        // [85, 127, 85]: encode_axis(0.5)=85, encode_axis(0.997)=127.
         let c = contour(&FlatField::at_half(), grey(), origin_id());
-        // §1 stores 256² seam-shell cells along the surface plus the
-        // dense solid fill below the plane (256² · 128 cells). The
-        // specific count is whatever §1 produced; what we guard is
-        // that exact byte-equality at a tracer cell.
         let cell = c.get(LocalCoord::new(10, 127, 10).unwrap());
         let bytes = cell.corner().bytes();
-        // The pre-§2 path encoded this cell as (0.5, 1.0, 0.5) →
-        // bytes [128, 191, 128]. (encode_axis(0.5)=128, encode_axis(1.0)=191.)
         assert_eq!(
             bytes,
-            [128, 191, 128],
+            [85, 127, 85],
             "LOD-0 cell corner bytes drifted: {bytes:?}"
         );
     }

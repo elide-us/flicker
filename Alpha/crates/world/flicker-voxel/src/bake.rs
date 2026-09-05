@@ -17,7 +17,7 @@
 //! surface data (sparse, `(corner, material)` at active cells only).
 //! On-disk fields:
 //!
-//! - `version` — `3`.
+//! - `version` — `4`.
 //! - `id` — `(lod, x, y, z)` from the `ClusterId`.
 //! - `default_material` — 4-byte little-endian `Material::raw()` for the
 //!   cluster's bulk-fill.
@@ -64,7 +64,12 @@ use crate::voxel_state::{StateField, STATE_FIELD_WORDS};
 /// v3 (2026-08-19): the packed material narrowed from 12-bit subfields to
 /// u8 primary/secondary/blend (bits 0-7/8-15/16-23; bit 31 = direct-RGB
 /// escape) — v2 material words decode differently, so v2 bakes are rejected.
-pub const BAKE_VERSION: u32 = 3;
+///
+/// v4 (2026-08-28): `CornerVector` axis range widened from `[-0.5, 1.5]`
+/// to the ratified `[-0.5, 2.5]` (default byte 128 → 85, step 2/255 →
+/// 3/255) — v3 corner bytes decode to different world offsets under the
+/// new mapping, so v3 bakes are rejected and must be re-baked.
+pub const BAKE_VERSION: u32 = 4;
 
 /// A `Cluster` plus its bake-time metadata, ready to round-trip through
 /// JSON. Use [`Self::from_cluster`] to construct from a freshly
@@ -443,7 +448,7 @@ mod tests {
 
     #[test]
     fn version_constant_matches_format() {
-        assert_eq!(BAKE_VERSION, 3);
+        assert_eq!(BAKE_VERSION, 4);
     }
 
     #[test]
@@ -551,7 +556,7 @@ mod tests {
                 err,
                 BakeError::UnsupportedVersion {
                     got: 99,
-                    expected: 3
+                    expected: 4
                 }
             ),
             "wrong error: {err:?}"
@@ -565,7 +570,7 @@ mod tests {
         let zero_state = "0".repeat(STATE_FIELD_WORDS * 16);
         let json = format!(
             r#"{{
-                "version": 3,
+                "version": 4,
                 "id": {{ "lod": 0, "x": 0, "y": 0, "z": 0 }},
                 "default_material": [0, 0, 0, 0],
                 "state": "{zero_state}",

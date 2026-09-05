@@ -1,14 +1,15 @@
-//! The **TAE timeline** — the event-track strip under the graph.
+//! The TAE lane VOCABULARY and the authoring BUDGETS — the domain half of the
+//! timeline.
 //!
-//! Scene-drawn for the same reasons as the node canvas: event bars are absolutely
-//! positioned along a frame axis, and the walker's component set has no template for a
-//! ruler, a playhead, or a bar placed by `{left, width}`. The walker still owns every
-//! other piece of chrome on the page.
+//! The strip's geometry (lane placement, frame→pixel mapping, bars, ruler, picking)
+//! is not Loomforge's: it is the shared [`flicker_canvas::Timeline`] filler, which the
+//! Dungeon Maker's waves and the Game Master's event timelines seat exactly as this
+//! bench does. What stays here is what only an animation pack knows — which lanes
+//! exist, which event kind belongs on which, and the two budgets an authored window
+//! is judged against.
 //!
-//! Everything here is a PURE function of the strip rect and the authored events — no
-//! renderer, no GPU — so lane placement and frame→pixel mapping are unit-tested directly.
+//! All of it is pure and unit-tested; nothing here touches a renderer or a rect.
 
-use flicker::render::Vec2;
 use flicker_skeletal::state::EventKind;
 
 /// The event lanes, top to bottom. **Window-shaped facts only** — the combat authoring
@@ -185,113 +186,9 @@ pub const TIER_MAX: u32 = 10;
 /// Within this multiple of the floor, a telegraph reads as tight rather than comfortable.
 const TELEGRAPH_COMFORT_FACTOR: f32 = 1.15;
 
-/// Width of the lane-label gutter (design: 120px).
-pub const GUTTER_W: f32 = 120.0;
-/// The frame ruler's height, above the lanes.
-pub const RULER_H: f32 = 15.0;
-/// Vertical gap between lane tracks.
-const LANE_GAP: f32 = 2.0;
-/// A point event (no end tick) draws this wide instead of as a span (design: 5px).
-pub const POINT_W: f32 = 5.0;
-
-/// A rectangle on screen.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Rect {
-    pub pos: Vec2,
-    pub size: Vec2,
-}
-
-/// The timeline strip's box on screen.
-#[derive(Clone, Copy, Debug)]
-pub struct Strip {
-    pub pos: Vec2,
-    pub size: Vec2,
-}
-
-impl Strip {
-    /// Left edge of the track area — right of the label gutter.
-    pub fn track_x(&self) -> f32 {
-        self.pos.x + GUTTER_W
-    }
-
-    /// Width of the track area. Never zero, so frame→pixel can't divide by nothing.
-    pub fn track_w(&self) -> f32 {
-        (self.size.x - GUTTER_W).max(1.0)
-    }
-
-    /// Height of one lane track. The seven lanes share whatever is left under the ruler,
-    /// so the strip stays correct at any window height rather than only at the mock's.
-    pub fn lane_h(&self) -> f32 {
-        let n = Lane::ALL.len() as f32;
-        ((self.size.y - RULER_H - LANE_GAP * (n + 1.0)) / n).max(1.0)
-    }
-
-    /// A lane track's rect.
-    pub fn lane_rect(&self, index: usize) -> Rect {
-        let h = self.lane_h();
-        Rect {
-            pos: Vec2::new(
-                self.track_x(),
-                self.pos.y + RULER_H + LANE_GAP + index as f32 * (h + LANE_GAP),
-            ),
-            size: Vec2::new(self.track_w(), h),
-        }
-    }
-
-    /// Where a frame sits along the track. Clamped into the strip, so an event authored
-    /// past the end of its clip is still visible at the edge rather than drawn off-screen.
-    pub fn frame_x(&self, frame: u32, frames: u32) -> f32 {
-        let t = if frames == 0 {
-            0.0
-        } else {
-            (frame as f32 / frames as f32).clamp(0.0, 1.0)
-        };
-        self.track_x() + t * self.track_w()
-    }
-
-    /// An event's bar. `end` absent = a one-shot, drawn as a fixed-width marker; the
-    /// point-vs-span distinction comes from the DATA, not from which lane it is on.
-    pub fn event_rect(&self, lane: usize, start: u32, end: Option<u32>, frames: u32) -> Rect {
-        let track = self.lane_rect(lane);
-        let x0 = self.frame_x(start, frames);
-        let w = match end {
-            Some(e) => (self.frame_x(e.max(start), frames) - x0).max(POINT_W),
-            None => POINT_W,
-        };
-        // Keep the bar inside the track even when it starts at the very last frame.
-        let x0 = x0.min(track.pos.x + track.size.x - w);
-        Rect {
-            pos: Vec2::new(x0, track.pos.y),
-            size: Vec2::new(w, track.size.y),
-        }
-    }
-}
-
-/// Ruler tick frames: a round step that keeps the label count readable at any clip
-/// length (the design's 40-frame clip yields 0,5,…,40 — nine ticks).
-pub fn ruler_ticks(frames: u32) -> Vec<u32> {
-    if frames == 0 {
-        return vec![0];
-    }
-    const STEPS: [u32; 9] = [1, 2, 5, 10, 15, 20, 30, 60, 120];
-    let step = STEPS
-        .iter()
-        .copied()
-        .find(|s| frames / s <= 10)
-        .unwrap_or(frames.max(1));
-    (0..=frames / step).map(|i| i * step).collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn strip() -> Strip {
-        Strip {
-            pos: Vec2::new(0.0, 900.0),
-            size: Vec2::new(1920.0, 180.0),
-        }
-    }
 
     /// Every runtime event kind must land on exactly one design lane — an unmapped kind
     /// would silently vanish from the timeline rather than fail loudly.
@@ -435,115 +332,5 @@ mod tests {
             !Lane::ALL.iter().any(|l| l.id() == "root"),
             "Root Motion left the strip; it lives on StateDef.root_motion"
         );
-    }
-
-    /// The seven lanes tile the strip below the ruler, in order, without overlapping.
-    #[test]
-    fn lanes_stack_in_order_inside_the_strip() {
-        let s = strip();
-        let rects: Vec<Rect> = (0..Lane::ALL.len()).map(|i| s.lane_rect(i)).collect();
-        for w in rects.windows(2) {
-            assert!(w[1].pos.y > w[0].pos.y, "lanes descend");
-            assert!(
-                w[1].pos.y >= w[0].pos.y + w[0].size.y,
-                "lanes must not overlap"
-            );
-        }
-        let first = rects[0];
-        let last = rects[rects.len() - 1];
-        assert!(
-            first.pos.y >= s.pos.y + RULER_H,
-            "lanes start below the ruler"
-        );
-        assert!(
-            last.pos.y + last.size.y <= s.pos.y + s.size.y + 0.01,
-            "the last lane stays inside the strip"
-        );
-        assert!(
-            first.pos.x >= s.pos.x + GUTTER_W,
-            "tracks clear the label gutter"
-        );
-    }
-
-    /// A cramped strip must still produce usable, positive geometry rather than negative
-    /// heights that would draw inverted quads.
-    #[test]
-    fn lane_geometry_survives_a_tiny_strip() {
-        let s = Strip {
-            pos: Vec2::ZERO,
-            size: Vec2::new(40.0, 10.0),
-        };
-        assert!(s.lane_h() > 0.0);
-        assert!(s.track_w() > 0.0);
-        let r = s.lane_rect(6);
-        assert!(r.size.x > 0.0 && r.size.y > 0.0);
-    }
-
-    #[test]
-    fn frames_map_across_the_track_and_clamp() {
-        let s = strip();
-        assert!(
-            (s.frame_x(0, 40) - s.track_x()).abs() < 0.01,
-            "frame 0 at the left"
-        );
-        assert!(
-            (s.frame_x(40, 40) - (s.track_x() + s.track_w())).abs() < 0.01,
-            "the last frame reaches the right"
-        );
-        assert!(
-            s.frame_x(20, 40) > s.frame_x(10, 40),
-            "frames advance rightward"
-        );
-        // A zero-length clip and an over-long event are both survivable.
-        assert!(s.frame_x(5, 0).is_finite());
-        assert!(
-            (s.frame_x(999, 40) - (s.track_x() + s.track_w())).abs() < 0.01,
-            "clamped"
-        );
-    }
-
-    /// A window event spans its frames; a one-shot draws as a marker. Both stay inside
-    /// their lane, including one authored on the very last frame.
-    #[test]
-    fn event_bars_span_windows_and_mark_one_shots() {
-        let s = strip();
-        let span = s.event_rect(0, 10, Some(20), 40);
-        let point = s.event_rect(0, 10, None, 40);
-        assert!(
-            span.size.x > point.size.x,
-            "a window is wider than a one-shot"
-        );
-        assert_eq!(point.size.x, POINT_W);
-        assert_eq!(span.pos.y, s.lane_rect(0).pos.y, "the bar sits in its lane");
-        assert_eq!(span.size.y, s.lane_rect(0).size.y);
-
-        // A zero-length window is still visible, not a hairline.
-        assert_eq!(s.event_rect(0, 10, Some(10), 40).size.x, POINT_W);
-        // An inverted window (end before start) does not produce a negative width.
-        assert!(s.event_rect(0, 30, Some(5), 40).size.x > 0.0);
-
-        // An event on the last frame is pulled back inside the track.
-        let edge = s.event_rect(0, 40, None, 40);
-        let track = s.lane_rect(0);
-        assert!(
-            edge.pos.x + edge.size.x <= track.pos.x + track.size.x + 0.01,
-            "an end-of-clip marker stays inside the track"
-        );
-    }
-
-    #[test]
-    fn ruler_ticks_stay_readable_at_any_clip_length() {
-        assert_eq!(ruler_ticks(40), vec![0, 5, 10, 15, 20, 25, 30, 35, 40]);
-        for frames in [0, 1, 7, 40, 120, 600, 3600] {
-            let t = ruler_ticks(frames);
-            assert!(!t.is_empty(), "{frames}: always at least frame 0");
-            assert!(t.len() <= 11, "{frames}: {} ticks is unreadable", t.len());
-            assert_eq!(t[0], 0);
-            assert!(t.windows(2).all(|w| w[1] > w[0]), "{frames}: ticks ascend");
-            assert!(
-                t.iter().all(|f| *f <= frames.max(1)),
-                "{frames}: tick past the clip"
-            );
-        }
     }
 }

@@ -1,0 +1,161 @@
+{
+  "_comment": "SHARED name-conflict modal (scenes/shared/ — Aaron 2026-08-14 ruling 2A3592D0; catalog review B05B3D09 §4c). LIFTED from the Quartermaster's inline `qm_prompt` subtree, which was mouse-only (QoL 49307EC7 #4: its three buttons and its checkbox carried no `tab_group`/`nav_ordinal`, so a pad could never answer the question) — every control here is pad-reachable, which is the whole reason the dialog moved. The design of record is F5E9D671: the colliding name over the folder it lands in, EXISTING vs INCOMING compare cards, an `Apply to the remaining N` checkbox shown only when more than one conflict is outstanding, and Skip / Keep both / Replace. The three answers ride the SAME fixed slots every choice_dialog uses (`modal_opt_0..2`), so `SharedModal` maps them back to the caller's own action names with no bespoke channel; the checkbox rides out as the close PAYLOAD (\"1\" / \"0\"), which is what lets a caller resolve the whole batch as ONE undo entry. Esc / pad-B fold to `modal_cancel` via the root `on_cancel`, honoured only when the caller declared the modal cancellable. NO `behaviour` key (the manifest skips scenes/shared/); NO pair script (the params ARE the arrangement); chrome styles ride Main.scene.json's carrier through `main_scene_styles()`.",
+  "tree": {
+    "component": "surface",
+    "anchor": "top_left",
+    "width_frac": 1.0,
+    "height_frac": 1.0,
+    "on_cancel": "modal_cancel",
+    "children": [
+      {
+        "component": "cell",
+        "anchor": "top_left",
+        "style": "screens.confirm",
+        "width_frac": 1.0,
+        "height_frac": 1.0,
+        "layer": 0
+      },
+      {
+        "component": "popup_panel",
+        "id": "popup",
+        "anchor": "center",
+        "layer": 1,
+        "divider": true,
+        "panel_w": 560,
+        "title_bind": "modal_title",
+        "title_size": 34,
+        "children": [
+          {
+            "component": "text",
+            "id": "conflict_name",
+            "text_bind": "modal_conflict_name",
+            "text_size": 15,
+            "size": 24,
+            "align": "center"
+          },
+          {
+            "component": "text",
+            "id": "conflict_where",
+            "text_bind": "modal_conflict_where",
+            "text_size": 12,
+            "size": 20,
+            "align": "center",
+            "color": "$dim"
+          },
+          {
+            "component": "row",
+            "gap": 10,
+            "size": 76,
+            "children": [
+              {
+                "component": "cell",
+                "id": "conflict_card_existing",
+                "grow": 1,
+                "style": "menu.panel",
+                "pad": 8,
+                "children": [
+                  {
+                    "component": "text",
+                    "text": "$modal_conflict_existing",
+                    "text_size": 11,
+                    "size": 18,
+                    "color": "$dim"
+                  },
+                  {
+                    "component": "text",
+                    "text_bind": "modal_conflict_existing_facts",
+                    "text_size": 11,
+                    "wrap": true,
+                    "grow": 1
+                  }
+                ]
+              },
+              {
+                "component": "cell",
+                "id": "conflict_card_incoming",
+                "grow": 1,
+                "style": "menu.panel",
+                "pad": 8,
+                "children": [
+                  {
+                    "component": "text",
+                    "text": "$modal_conflict_incoming",
+                    "text_size": 11,
+                    "size": 18,
+                    "color": "$dim"
+                  },
+                  {
+                    "component": "text",
+                    "text_bind": "modal_conflict_incoming_facts",
+                    "text_size": 11,
+                    "wrap": true,
+                    "grow": 1
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "component": "checkbox",
+            "id": "modal_conflict_apply_rest",
+            "bind": "modal_conflict_apply_rest",
+            "visible_bind": "modal_conflict_multi",
+            "label_bind": "modal_conflict_rest_label",
+            "box": 14,
+            "label_size": 12,
+            "size": 26,
+            "tab_group": "modal",
+            "nav_ordinal": 0
+          },
+          {
+            "_comment": "NO `align` here. A row's `align` is a CROSS-AXIS instruction: anything but the default `stretch` sizes each child to its own INTRINSIC cross extent, and a `button` that names no `size` / `height` / `size_class` measures ZERO (flicker-widgets component.rs, the `button` arm of `measure`). `align: center` on this row is what made all three answers lay out 154×0 — drawn as nothing, and unreachable by pointer or pad, which is exactly what Aaron hit in-window (incident B89FAC21; the same zeroing as 10A07012). These buttons FILL the row's 44px, so the row must stretch them.",
+            "component": "row",
+            "gap": 10,
+            "size": 44,
+            "children": [
+              {
+                "component": "button",
+                "id": "modal_opt_0",
+                "action": "modal_opt_0",
+                "visible_bind": "opt0_shown",
+                "label_bind": "opt0_label",
+                "variant_bind": "opt0_variant",
+                "label_size": 14,
+                "grow": 1,
+                "variant": "secondary",
+                "tab_group": "modal",
+                "nav_ordinal": 1
+              },
+              {
+                "component": "button",
+                "id": "modal_opt_1",
+                "action": "modal_opt_1",
+                "visible_bind": "opt1_shown",
+                "label_bind": "opt1_label",
+                "variant_bind": "opt1_variant",
+                "label_size": 14,
+                "grow": 1,
+                "variant": "secondary",
+                "tab_group": "modal",
+                "nav_ordinal": 2
+              },
+              {
+                "component": "button",
+                "id": "modal_opt_2",
+                "action": "modal_opt_2",
+                "visible_bind": "opt2_shown",
+                "label_bind": "opt2_label",
+                "variant_bind": "opt2_variant",
+                "label_size": 14,
+                "grow": 1,
+                "variant": "primary",
+                "tab_group": "modal",
+                "nav_ordinal": 3
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,55 +1,90 @@
--- Clayworks Bench (assetpipeline) — the scene's LOGIC (the SceneName.lua half
--- of the pair; bench migration 2026-08-19).
+-- Clayworks bench — the Lua ORCHESTRATION layer.
 --
--- The behaviour publishes RAW runtime variables into `Model` each frame:
---   wf_task_state / wf_conform_state / wf_preview_state / wf_attach_state / wf_review_state
---       -- each rail chip's step state: "active" | "visited" | "todo"
---   pick_sel / pick_window, bone_sel / bone_window,
---   sock_sel / sock_window, att_sel_idx
---       -- the four bank cursors, NUMBERS (an index is a number — 1B64FF03);
---          the window is the bank's first visible row
---   …plus every readout/label bind the tree names (pre-formatted in Rust).
+-- The bench's whole component tree is authored as DATA (assetpipeline.scene.json).
+-- This script's ONE job is `arrange()`: given the SELECTION the engine publishes —
+-- which WORKFLOW is open (`wf`, a name) and which STEP tab is selected (`tab`, the
+-- rail's bound index) — return which slice of the tree is shown.
 --
--- `derive()` owns the PRESENTATION selection only: which chip style block a
--- rail chip wears, and which slot wash a bank row wears. Every value returned
--- is a dotted style path into the scene's own style blocks.
-
+-- It NEVER touches per-frame data. Slider values, the facts column, the bone list and
+-- the status lines flow engine<->component directly and never pass through here;
+-- `arrange()` reads only the selection, on change, and returns on/off.
+--
+-- Gating is by SELECTION, not by content: every component authored for a step is
+-- wrapped in the tree on the key `shown_t_<step>`; the step rail for a workflow on
+-- `shown_wf_<workflow>`; the centre view on `shown_view_<kind>`. A new step or a new
+-- workflow is one more entry in STEPS here and one more gated slice in the tree —
+-- never a change to HOW it works.
 local M = {}
 
-local CHIPS = { "task", "prep", "conform", "preview", "attach", "review" }
+-- Each workflow's step rail, in the rail's authored order (the `tab` index indexes it).
+local STEPS = {
+  character = { "source", "prep", "rig", "preview", "attach", "review" },
+  prop      = { "source", "mount", "review" },
+  animation = { "source", "clip", "review" },
+}
 
-local ROWSEL = "assetpipeline.rowsel"
-local ROWSEL_OFF = "assetpipeline.rowsel_off"
-local ROWS = 6
+-- Which centre view a step shows: the four-panel rig view while a body is being
+-- prepared or rigged, the bake view on preview, the two-clip pair on the clip step.
+local VIEW = {
+  prep = "quad", rig = "quad", mount = "quad", preview = "bake", clip = "clip",
+}
 
-local function n(key)
-  return (Model and Model[key]) or 0
-end
+-- WHAT THE 3D GADGET MAY DO, per step. This is the gadget's per-surface gate (direction
+-- F28531B5) authored where every other per-step decision lives. A mode is listed only
+-- where the DOCUMENT has something for it to write:
+--   rig — the joint's authored BoneOffset carries translation, a roll, and a per-axis
+--         scale, and a left/right joint can be mirrored onto its twin. All four.
+-- Every other step publishes nothing, which is an inert gadget: the Prep/Mount/Attach
+-- documents have no gadget consumer wired yet, and a mode listed here without one would
+-- be a control that silently does nothing.
+local GADGET = {
+  rig = { "translate", "rotate", "scale", "flip" },
+}
+local GADGET_MODES = { "translate", "rotate", "scale", "flip" }
 
--- One bank's six row washes: the visible row holding the selection wears the
--- accent wash, the rest draw (almost) nothing under their bound labels.
-local function bank(out, prefix, sel, window)
-  for i = 0, ROWS - 1 do
-    out[prefix .. i .. "_sty"] = (window + i == sel) and ROWSEL or ROWSEL_OFF
+function M.arrange()
+  local wf = (Model and Model.wf) or "character"
+  local tab = (Model and Model.tab) or 0
+  local steps = STEPS[wf] or STEPS.character
+  local step = steps[tab + 1] or steps[1]
+  local view = VIEW[step] or "none"
+  local out = {
+    ["shown_wf_character"] = { on = (wf == "character") },
+    ["shown_wf_prop"]      = { on = (wf == "prop") },
+    ["shown_wf_animation"] = { on = (wf == "animation") },
+    ["shown_view_quad"]    = { on = (view == "quad") },
+    ["shown_view_bake"]    = { on = (view == "bake") },
+    ["shown_view_clip"]    = { on = (view == "clip") },
+    ["shown_view_none"]    = { on = (view == "none") },
+    -- The footer's one swap: the flow's LAST stop (review) shows EXPORT where every
+    -- other stop shows NEXT.
+    ["shown_ft_commit"]    = { on = (step == "review") },
+    ["shown_ft_next"]      = { on = (step ~= "review") },
+  }
+  for _, name in ipairs({ "source", "prep", "rig", "mount", "preview", "attach", "clip", "review" }) do
+    out["shown_t_" .. name] = { on = (step == name) }
   end
-end
-
-function M.derive()
-  local out = {}
-
-  -- The step rail: each chip's style path from the state the runtime published.
-  for _, id in ipairs(CHIPS) do
-    local state = (Model and Model["wf_" .. id .. "_state"]) or "todo"
-    out["wf_" .. id .. "_style"] = "workflow.chip." .. state
+  -- The gadget's gate, one key per mode: the scene's Rust collects the ON names and hands
+  -- them to the ONE mode vocabulary (`modes_from_names`), so a step's manipulations are
+  -- authored here rather than compiled in.
+  local allowed = {}
+  for _, name in ipairs(GADGET[step] or {}) do allowed[name] = true end
+  for _, name in ipairs(GADGET_MODES) do
+    out["gadget_" .. name] = { on = (allowed[name] == true) }
   end
-
-  -- The four slot banks' selection washes.
-  bank(out, "pick_", n("pick_sel"), n("pick_window"))
-  bank(out, "bone_", n("bone_sel"), n("bone_window"))
-  bank(out, "sock_", n("sock_sel"), n("sock_window"))
-  bank(out, "att_", n("att_sel_idx"), 0)
-
   return out
+end
+
+-- The ORCHESTRATION half: given a scene-level signal, say where the rail goes. The
+-- engine folds the returned writes into the same results drain a click lands in, so
+-- `tab = 1` here IS a step change — the one place the flow's "what happens after"
+-- lives (the successor of the old workflow runtime's wf_next).
+--   loaded      — a folder opened into `sig.wf`: leave Source for the first working stop.
+--   next_piece  — the next mesh of a multi-mesh folder was started: back to Source.
+function M.react(sig)
+  if sig.loaded then return { tab = 1 } end
+  if sig.next_piece then return { tab = 0 } end
+  return {}
 end
 
 return M

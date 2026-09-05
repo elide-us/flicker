@@ -1,0 +1,52 @@
+{
+  "_comment": "SHARED popup-menu modal (scenes/shared/ — Aaron 2026-08-14 ruling 2A3592D0). DECOMPOSED, not invented: a variable-length option list is a `list` with `rows_from` over ONE button prototype — the ratified data-driven-rows mechanism (read data, not code) — so no new component kind appears here. `SharedModal` expands the caller's options through `instantiate_rows` ONCE when the modal opens (a modal's options do not change while it is up), which clones the prototype per option, substitutes `{row}` / `{id}`, steps each clone's `nav_ordinal` so the d-pad walks the list in order, and publishes each row's label onto its `label_bind` key — the tree therefore ships no option copy at all. Each row fires its own id, which IS the caller's action name. Esc / pad-B fold to `modal_cancel` via the root `on_cancel` (a menu is always dismissable, like pause's `resume`). NO `behaviour` key (the manifest skips scenes/shared/); NO pair script (the params ARE the arrangement); chrome styles ride Main.scene.json's carrier through `main_scene_styles()`.",
+  "tree": {
+    "component": "surface",
+    "anchor": "top_left",
+    "width_frac": 1.0,
+    "height_frac": 1.0,
+    "on_cancel": "modal_cancel",
+    "children": [
+      {
+        "component": "cell",
+        "anchor": "top_left",
+        "style": "screens.confirm",
+        "width_frac": 1.0,
+        "height_frac": 1.0,
+        "layer": 0
+      },
+      {
+        "component": "popup_panel",
+        "id": "popup",
+        "anchor": "center",
+        "layer": 1,
+        "divider": true,
+        "title_bind": "modal_title",
+        "title_size": 38,
+        "children": [
+          {
+            "component": "list",
+            "id": "modal_options",
+            "bind": "modal_options_scroll",
+            "rows_from": "modal_options",
+            "size": 240,
+            "pad": 4,
+            "children": [
+              {
+                "component": "button",
+                "id": "modal_opt_{row}",
+                "action": "{id}",
+                "label_bind": "modal_opt_{row}_label",
+                "label_size": 15,
+                "size": 40,
+                "variant": "secondary",
+                "tab_group": "modal",
+                "nav_ordinal": 0
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

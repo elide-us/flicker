@@ -284,6 +284,12 @@ impl GlobeWorld {
         self.arrows.extend(arrows);
     }
 
+    /// The composed overlay list currently drawn (stage frame + the bench's
+    /// own groups) — what a gate inspects to prove an overlay really stands.
+    pub fn arrows(&self) -> &Arrows {
+        &self.arrows
+    }
+
     /// The data behind the picture moved; the shells no longer match it.
     pub fn mark_dirty(&mut self) {
         self.dirty = true;
@@ -339,10 +345,10 @@ impl GlobeWorld {
     /// the barrier: present only while the cursor is over the planet with no UI over it,
     /// or while a press that began there is still held. `look` is the (yaw, pitch, zoom)
     /// deflection the SCENE resolved from its signal source (see
-    /// [`look_from`](GlobeWorld::look_from)); the walker's ENTERED pane decides whether
-    /// it is ours: a world in a pane owns the camera while that pane is entered, a ROOT
-    /// world (no pane) owns it whenever NO pane is entered — the root is entered by
-    /// default (Aaron 2026-08-21).
+    /// [`look_from`](GlobeWorld::look_from)); the walker's FOCUSED pane decides whether
+    /// it is ours: a world in a pane owns the camera while that pane is the focused one
+    /// (the implied panel context, Aaron 2026-09-02), a ROOT world (no pane) owns it
+    /// whenever NO pane is focused — the root is the context by default.
     pub fn update(
         &mut self,
         dt: f32,

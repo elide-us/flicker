@@ -327,6 +327,10 @@ impl InputMap {
         map.bind(ActionSignal::MoveDown, InputBinding::Key(Key::F));
         map.bind(ActionSignal::Quit, InputBinding::Key(Key::Escape));
         map.bind(ActionSignal::Menu, InputBinding::Key(Key::Escape));
+        // Text entry from the keyboard: T is the bound way INTO a text field (the chat
+        // line's old raw hand-off, now a binding — Aaron 2026-09-03). A click into a
+        // field and a pad Confirm on it reach the same signal through the walker.
+        map.bind(ActionSignal::EnterText, InputBinding::Key(Key::T));
         // Gamepad menu-open: the Start / hamburger button also opens the menu, so a
         // scene on this KBM preset is pad-openable too (Start is otherwise unbound
         // here, so one-input-one-action holds). Mirrors the gamepad presets.

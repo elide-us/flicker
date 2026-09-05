@@ -17,14 +17,22 @@
 //! The scene owns no resolver and no bindings — the PUMP hands it resolved signals,
 //! the walker consumes the screen's declared intents (`on_menu` / `on_tab_*` = page
 //! cycling / `on_mode_*` = tool cycling), and both input channels land in the ONE
-//! dispatch as result names. The node-graph canvas and TAE timeline stay scene-drawn
-//! (free 2D positioning, edges, drop targets) inside the walker-reserved rtt rects
-//! (`lf_canvas` / `lf_tae_strip` / `lf_tae_page_strip`).
+//! dispatch as result names.
+//!
+//! # The canvas and the timeline are FILLERS, not scene code
+//!
+//! The node-graph canvas and the TAE strip are [`flicker_canvas::GraphCanvas`] and
+//! [`flicker_canvas::Timeline`] — shared engine fillers seated in the
+//! walker-reserved rects (`lf_canvas` / `lf_tae_strip` / `lf_tae_page_strip`), the
+//! same pattern as `RigView` and `WorldMap`. This bench keeps only what a pack means:
+//! what a press on a card DOES (bind a clip, weave a transition, delete a state),
+//! which lane an event kind belongs on, and what an authored window costs. Layout,
+//! zoom, panning, picking, edge geometry and every draw belong to the fillers, so the
+//! Dungeon Maker's tech tree and the Game Master's event timelines get them without a
+//! second copy.
 
-mod canvas;
 mod doc;
 mod packs;
-mod stage;
 mod tae;
 
 pub use doc::{EditorDoc, Tab, Tool};
@@ -32,20 +40,25 @@ pub use doc::{EditorDoc, Tab, Tool};
 use doc::{next_trigger, trigger_label, EdgeRef};
 use flicker_skeletal::state::{EventKind, Response, Trigger};
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
-use canvas::{CanvasArea, CardRect};
 use flicker::render::{FrameGraph, Rate, Rect as StageRect, Renderer, TextureHandle, Vec2};
 use flicker::scene::{Scene, SceneInput, Transition};
 use flicker::script::{HudCommand, ScriptHost, UiNode, Value, ValueMap};
 use flicker::ui::{
     render_hud, run_ui, strings, SceneDef, UiInput, UiIntents, UiState, WalkerHandler,
 };
+use flicker_canvas::{
+    CanvasMetrics, CanvasMode, CanvasStyle, EdgeInk, GraphCanvas, GraphEdge, GraphNode, LaneStyle,
+    PointerSample, Timeline, TimelineEvent, TimelineLane, TimelineMetrics, TimelineStyle,
+};
 use flicker_input_core::{AbstractControls, GamepadConfig, InputMap, InputState};
 use flicker_input_router::{InputHandler, Router};
+use flicker_rigview::{Doll, DollRig};
 use flicker_shell::{PauseScene, Theme};
-use stage::{StageReq, StageRig};
 
 /// The pair script — the scene's LOGIC half, by name (five-line architecture).
 const LF_SCRIPT: &str = include_str!("../../../../content/sensorium/scripts/loomforge.lua");
@@ -107,8 +120,6 @@ const NOTE_WRAP: usize = 34;
 const NOTE_MAX_LINES: usize = 8;
 /// Node id of the TAE preview doll, so the scene can pose it from the edited clip.
 const TAE_STAGE_ID: &str = "taedoll";
-/// Pointer grab radius for picking an event bar on the timeline, in pixels.
-const TAE_GRAB: f32 = 4.0;
 /// One press of the capsule stepper, in metres.
 const CAPSULE_STEP_M: f32 = 0.05;
 /// One press of the parry-window-scale stepper.
@@ -116,12 +127,8 @@ const PARRY_SCALE_STEP: f32 = 0.05;
 /// The TAE strips' header line, above the ruler and lanes (drawn inside the
 /// walker-reserved rtt rects).
 const TAE_HEADER_H: f32 = 20.0;
-/// Zoom per wheel notch over the graph.
-const ZOOM_STEP: f32 = 0.12;
 /// Clip rows the rail moves per wheel notch.
 const CLIP_SCROLL_ROWS: usize = 3;
-/// How far a self-transition's loop arc rises above its card, at zoom 1.
-const SELF_LOOP_LIFT: f32 = 20.0;
 
 /// The editor scene.
 pub struct LoomforgeBench {
@@ -157,46 +164,43 @@ pub struct LoomforgeBench {
     sm_strip_rect: Option<StageRect>,
     page_strip_rect: Option<StageRect>,
 
-    /// This frame's state-card rects — the scene-owned canvas geometry, recomputed in
-    /// `update` so hit-testing (select / drop) and `render` agree on one layout.
-    cards: Vec<CardRect>,
-    /// The rect the cards live in.
-    canvas_area: CanvasArea,
-    /// This frame's transition geometry, built once so picking and drawing agree.
-    edges: Vec<Edge>,
+    /// The node-graph FILLER: it owns the layout, the camera, the hand placements and
+    /// every canvas gesture. This scene owns only what a gesture MEANS to a pack.
+    canvas: GraphCanvas,
+    /// The lane-strip FILLER, re-seated each frame into whichever timeline rect the
+    /// current page reserved — one strip is visible at a time.
+    tae_strip: Timeline,
+    /// This frame's edges, in the order the filler laid them out: `graph_edges[i]`
+    /// draws the transition `edge_refs[i]` names. Built in `update`, so a pick and a
+    /// draw can never disagree about which transition is which.
+    graph_edges: Vec<GraphEdge>,
+    edge_refs: Vec<EdgeRef>,
     /// The transition being edited, if any. Selecting an edge swaps the pack rail over to
     /// its inspector — you are editing one edge, not binding clips.
     selected_edge: Option<EdgeRef>,
 
     /// Active canvas tool.
     tool: Tool,
-    /// While the Link tool is mid-drag: the source card.
-    link_from: Option<usize>,
     /// Trigger stamped on transitions the Link tool creates (cycled from the rail).
     link_trigger: Trigger,
-    /// Previous frame's held state, so a release edge can be detected.
-    prev_down: bool,
-    /// Last cursor position — `render` needs it for the link rubber-band.
+    /// Last cursor position — the drop hit-test and the doll hover read it.
     cursor: Vec2,
 
-    /// How the author has the graph panned/zoomed, and any cards they placed by hand.
-    /// Editor-side only — never written into the pack.
-    view: canvas::View,
-    /// Card being dragged, with the grab offset in canvas-local space so it moves under
-    /// the cursor rather than snapping its corner there.
-    drag_card: Option<(usize, Vec2)>,
-    /// Cursor position when a canvas pan began.
-    pan_from: Option<Vec2>,
     /// First clip row shown — the rail scrolls a 91-clip library instead of truncating it.
     clip_scroll: usize,
 
-    /// The live-preview dolls: one uploaded rig plus a render target per stage slot.
-    stage_rig: StageRig,
+    /// The ONE uploaded rig every doll on the page poses from — one mesh and one
+    /// skeleton for a screen carrying a dozen previews. Freed in `exit`.
+    rig: Option<Arc<DollRig>>,
+    /// The live-preview dolls, one [`Doll`] per seated slot, keyed by the slot id.
+    /// **The key encodes everything the image depends on** (`card_<state>#<clip>`), so
+    /// re-binding a card's clip mints a new doll and a still one can never go stale under
+    /// its own state. Every one of them is released in `exit` — the render targets the
+    /// scene-owned rig used to strand there.
+    dolls: HashMap<String, Doll>,
     /// Doll play-head, seconds. ONE clock drives every stage — each clip loops on its
     /// own duration, so a shared time needs a single add per frame rather than per doll.
     time: f32,
-    /// This frame's stage requests, built in `update` and consumed in `render`.
-    stage_reqs: Vec<StageReq>,
     /// The slot the pointer was inside last frame — the hovered clip row is the one that
     /// animates. Resolved from the previous frame's rects, so hover costs no extra pass.
     hot_stage: Option<String>,
@@ -218,24 +222,6 @@ pub struct LoomforgeBench {
     /// Transport: the TAE page's playhead advances only while playing, so an author can
     /// park on a frame and step it. The dolls keep running off the same clock.
     tae_playing: bool,
-}
-
-/// A transition's on-screen geometry, built once per frame so that what is drawn and what
-/// the pointer picks can never disagree.
-struct Edge {
-    id: EdgeRef,
-    /// A straight edge is one segment; a self-transition is a three-segment loop arc over
-    /// the card, because a straight line to itself would vanish inside the card.
-    segs: [(Vec2, Vec2); 3],
-    n: usize,
-}
-
-impl Edge {
-    /// The segment the pointer picks against — the middle one, which is the whole edge
-    /// for a straight run and the top bar of a self-loop.
-    fn pick(&self) -> (Vec2, Vec2) {
-        self.segs[self.n / 2]
-    }
 }
 
 impl Default for LoomforgeBench {
@@ -308,25 +294,18 @@ impl LoomforgeBench {
             theme: None,
             sm_strip_rect: None,
             page_strip_rect: None,
-            cards: Vec::new(),
-            canvas_area: CanvasArea {
-                pos: Vec2::ZERO,
-                size: Vec2::ZERO,
-            },
-            edges: Vec::new(),
+            canvas: GraphCanvas::new(CanvasMetrics::default()),
+            tae_strip: Timeline::new(TimelineMetrics::default()),
+            graph_edges: Vec::new(),
+            edge_refs: Vec::new(),
             selected_edge: None,
             tool: Tool::default(),
-            link_from: None,
             link_trigger: Trigger::ClipDone,
-            prev_down: false,
             cursor: Vec2::ZERO,
-            view: canvas::View::default(),
-            drag_card: None,
-            pan_from: None,
             clip_scroll: 0,
-            stage_rig: StageRig::new(),
+            rig: None,
+            dolls: HashMap::new(),
             time: 0.0,
-            stage_reqs: Vec::new(),
             hot_stage: None,
             packs: Vec::new(),
             pack_sel: 0,
@@ -1074,19 +1053,6 @@ impl LoomforgeBench {
         Some((ev, tae::lane_of(ev.kind)))
     }
 
-    /// The transition under `p`, if the pointer is close enough to grab one.
-    fn hit_edge(&self, p: Vec2) -> Option<EdgeRef> {
-        let segs: Vec<(EdgeRef, Vec2, Vec2)> = self
-            .edges
-            .iter()
-            .map(|e| {
-                let (a, b) = e.pick();
-                (e.id, a, b)
-            })
-            .collect();
-        canvas::hit_edge(&segs, p)
-    }
-
     /// Apply the transition inspector's actions. Each reports through the status line, so
     /// an edit that the document refuses (a stale edge, a clamped dial) says so instead of
     /// looking like it worked.
@@ -1140,53 +1106,70 @@ impl LoomforgeBench {
         };
     }
 
-    /// This frame's transition geometry. One pass, consumed by both picking and drawing.
-    fn build_edges(&self) -> Vec<Edge> {
-        let Some(doc) = &self.doc else {
-            return Vec::new();
-        };
-        let mut out = Vec::new();
+    /// This frame's transitions, as the filler's node-index pairs plus the pack's own
+    /// name for each — the ONE list picking and drawing both address, so what lights
+    /// up is what was hit. A transition whose target no longer exists is skipped, and
+    /// skipping it must not renumber the ones that remain.
+    /// What the left button does on the canvas for each bench tool. The filler knows
+    /// three gestures; the bench has four tools, and Add / Delete both act on what a
+    /// press LANDS on rather than moving anything — so they share `Inspect`.
+    ///
+    /// Changing the mode is also what abandons a half-drawn edge: the filler drops the
+    /// gesture in flight rather than letting a link started with the Link tool complete
+    /// under Delete.
+    fn canvas_mode(tool: Tool) -> CanvasMode {
+        match tool {
+            Tool::Select => CanvasMode::Select,
+            Tool::Link => CanvasMode::Link,
+            Tool::AddState | Tool::Delete => CanvasMode::Inspect,
+        }
+    }
+
+    /// The states' names, in order — the graph filler's stable node keys (a card's
+    /// hand placement is stored against its state's NAME, so it survives states being
+    /// added, removed or reordered). Takes the field rather than `&self` so the
+    /// borrow stays off the filler it is handed to.
+    fn node_keys(doc: &Option<EditorDoc>) -> Vec<&str> {
+        match doc {
+            Some(d) => d.states().iter().map(|s| s.name.as_str()).collect(),
+            None => Vec::new(),
+        }
+    }
+
+    fn build_edges(doc: &EditorDoc) -> (Vec<GraphEdge>, Vec<EdgeRef>) {
+        let mut edges = Vec::new();
+        let mut refs = Vec::new();
         for (i, st) in doc.states().iter().enumerate() {
-            let Some(&from) = self.cards.get(i) else {
-                continue;
-            };
             for (index, t) in st.transitions.iter().enumerate() {
                 let Some(j) = doc.state_index(&t.to) else {
                     continue;
                 };
-                let Some(&to) = self.cards.get(j) else {
-                    continue;
-                };
-                let id = EdgeRef { from: i, index };
-                if i == j {
-                    // Self-transition: a loop arc over the card's top edge.
-                    let lift = SELF_LOOP_LIFT * self.view.zoom;
-                    let (x0, x1) = (
-                        from.pos.x + from.size.x * 0.35,
-                        from.pos.x + from.size.x * 0.65,
-                    );
-                    let (y0, y1) = (from.pos.y, from.pos.y - lift);
-                    out.push(Edge {
-                        id,
-                        segs: [
-                            (Vec2::new(x1, y0), Vec2::new(x1, y1)),
-                            (Vec2::new(x1, y1), Vec2::new(x0, y1)),
-                            (Vec2::new(x0, y1), Vec2::new(x0, y0)),
-                        ],
-                        n: 3,
-                    });
-                } else {
-                    let (p, q) = canvas::edge_points(from, to);
-                    let zero = (Vec2::ZERO, Vec2::ZERO);
-                    out.push(Edge {
-                        id,
-                        segs: [(p, q), zero, zero],
-                        n: 1,
-                    });
-                }
+                edges.push(GraphEdge {
+                    from: i,
+                    to: j,
+                    ink: EdgeInk::Idle,
+                });
+                refs.push(EdgeRef { from: i, index });
             }
         }
-        out
+        (edges, refs)
+    }
+
+    /// Re-ink this frame's edges from the CURRENT selection, at the end of `update` —
+    /// after every action and canvas gesture has had its say, so the highlight the
+    /// next `render` paints is the selection the author just made, not last frame's.
+    fn retint_edges(&mut self) {
+        let Some(doc) = &self.doc else { return };
+        for (e, r) in self.graph_edges.iter_mut().zip(&self.edge_refs) {
+            let lit = self.selected_edge == Some(*r)
+                || doc.selected() == Some(e.from)
+                || doc.selected() == Some(e.to);
+            e.ink = match (self.selected_edge == Some(*r), lit) {
+                (true, _) => EdgeInk::Selected,
+                (_, true) => EdgeInk::Lit,
+                _ => EdgeInk::Idle,
+            };
+        }
     }
 
     /// Move the clip-rail window. Positive delta = wheel up = back toward the first clip.
@@ -1275,95 +1258,115 @@ impl LoomforgeBench {
         doc.clip_index(&state.clip)
     }
 
-    fn build_stage_reqs(&self, slots: Vec<flicker::ui::SurfaceSlot>) -> Vec<StageReq> {
-        /// A doll the bench has decided is not the one being watched is a POSTER: its
-        /// target keeps the last image and costs no submit. The bench's own selection
-        /// rules are booleans, and this is the ONE place they become a rate.
-        fn poster_unless(live: bool) -> Rate {
-            if live {
-                Rate::Live
-            } else {
-                Rate::Poster
-            }
-        }
-
+    /// Where one doll sits this frame, and what it shows. A walker-reserved `surface`
+    /// node seats most of them; a state card is placed by the graph FILLER's own layout,
+    /// so its rect comes from there — but it is the identical [`Doll`] either way.
+    fn doll_plan(&self, slots: Vec<flicker::ui::SurfaceSlot>) -> Vec<DollSeat> {
         let Some(doc) = &self.doc else {
             return Vec::new();
         };
-        if !self.stage_rig.has_source(DOLL_SOURCE) {
-            return Vec::new();
-        }
 
-        // Clip rows — the walker already laid these out and resolved their `live_bind`.
-        let mut reqs: Vec<StageReq> = slots
+        // Walker-reserved dolls: clip rows, pack-card thumbs, the TAE preview. The walker
+        // already laid these out and resolved each one's `live_bind`.
+        let mut plan: Vec<DollSeat> = slots
             .into_iter()
             .filter_map(|s| {
                 // A clip row's id carries the clip NAME; a pack card's carries its index.
-                let (clip, rate) = if let Some(name) = s.id.strip_prefix(STAGE_PREFIX) {
-                    (doc.clip_index(name), s.rate)
+                let (clip, live) = if let Some(name) = s.id.strip_prefix(STAGE_PREFIX) {
+                    (doc.clip_index(name), s.rate == Rate::Live)
                 } else if let Some(i) = s.id.strip_prefix(PACK_STAGE_PREFIX) {
                     let i: usize = i.parse().ok()?;
-                    // Only the selected card animates — a live target is a GPU submit.
-                    (
-                        self.pack_card_clip(i, doc),
-                        poster_unless(i == self.pack_sel),
-                    )
+                    // Only the selected card animates — a live doll is a GPU submit.
+                    (self.pack_card_clip(i, doc), i == self.pack_sel)
                 } else if s.id == TAE_STAGE_ID {
                     // The TAE preview poses from the clip being edited, and re-renders
                     // only while the transport is running — a parked playhead is a poster.
                     let clip = self
                         .tae_axis()
                         .and_then(|(_, name, _, _)| doc.clip_index(&name));
-                    (clip, poster_unless(self.tae_playing))
+                    (clip, self.tae_playing)
                 } else {
                     return None;
                 };
-                Some(StageReq {
-                    rect: StageRect {
-                        pos: Vec2::new(s.x, s.y),
-                        size: Vec2::new(s.w, s.h),
-                    },
-                    // Walker chrome sits one layer above the scene-drawn canvas.
-                    layer: s.layer + 1.0,
-                    tint: s.tint,
-                    rate,
-                    // A still doll is a still doll: the ground ring lights on the same
-                    // condition that makes the slot animate.
-                    active: rate != Rate::Poster,
+                Some(DollSeat {
+                    id: s.id.clone(),
                     clip,
-                    time: self.time,
-                    source: s.source,
-                    id: s.id,
+                    live,
+                    at: DollAt::Slot(s),
                 })
             })
             .collect();
 
-        // State cards. Only the SELECTED card animates: a live target is a GPU submit,
-        // and a graph page carries one card per state.
+        // State cards. Only the SELECTED card animates: a graph page carries one card per
+        // state, and a live doll is a GPU submit.
         if self.tab == Tab::StateMachine {
             for (i, st) in doc.states().iter().enumerate() {
-                let Some(&c) = self.cards.get(i) else {
+                // The doll's rect comes from the FILLER's own card layout, so the backdrop
+                // it paints and the image composited over it cannot drift.
+                let Some(doll) = self.canvas.icon_rect(i) else {
                     continue;
                 };
-                let sel = self.selected_is(i);
-                let doll = canvas::card_stage_rect(c, self.view.zoom);
-                reqs.push(StageReq {
+                plan.push(DollSeat {
+                    // **The key encodes everything the image depends on**, so re-binding a
+                    // card's clip mints a NEW doll and a poster can never go stale.
                     id: format!("card_{}#{}", st.name, st.clip),
-                    source: DOLL_SOURCE.to_string(),
-                    rect: StageRect {
+                    clip: doc.clip_index(&st.clip),
+                    live: self.selected_is(i),
+                    at: DollAt::Card(StageRect {
                         pos: doll.pos,
                         size: doll.size,
-                    },
-                    layer: 0.0,
-                    tint: [1.0; 4],
-                    rate: poster_unless(sel),
-                    clip: doc.clip_index(&st.clip),
-                    time: self.time,
-                    active: sel,
+                    }),
                 });
             }
         }
-        reqs
+        plan
+    }
+
+    /// Seat this frame's dolls and advance the live ones. Called from `update`, which has
+    /// no renderer: seating and posing are CPU-side, and the passes are declared in
+    /// `render`. A doll off this page is unseated (it declares nothing) but keeps its
+    /// target, so flipping a tab back does not pay for a re-render.
+    fn seat_dolls(&mut self, slots: Vec<flicker::ui::SurfaceSlot>, dt: f32) {
+        let plan = self.doll_plan(slots);
+        let tae_time = self.time;
+        // Split the borrow: the doll bank is mutated while the styles and the shared rig
+        // are read.
+        let Self {
+            dolls,
+            ui_styles,
+            rig,
+            ..
+        } = self;
+        for d in dolls.values_mut() {
+            d.unseat();
+        }
+        for p in plan {
+            let live = p.live;
+            let source = p.at.source();
+            let doll = dolls
+                .entry(p.id)
+                .or_insert_with(|| Doll::new(source, ui_styles));
+            doll.set_rig(rig.clone());
+            doll.set_clip(p.clip);
+            doll.set_live(live);
+            // A still doll is a still doll: the ground ring lights on the same condition
+            // that makes the slot animate.
+            doll.set_active(live);
+            match &p.at {
+                DollAt::Slot(s) => doll.seat(Some(s)),
+                // Walker chrome sits one layer above the scene-drawn canvas the card was
+                // laid out on.
+                DollAt::Card(rect) => doll.seat_at(*rect, 1.0, [1.0; 4]),
+            }
+            if live && matches!(p.at, DollAt::Slot(ref s) if s.id == TAE_STAGE_ID) {
+                // The preview shows the TRANSPORT's frame, not a clock of its own, so the
+                // playhead and the doll cannot disagree. Parked, it keeps the frame it
+                // stopped on (stepping a parked transport is inert — a known gap).
+                doll.set_time(tae_time);
+            } else {
+                doll.tick(dt);
+            }
+        }
     }
 
     /// Apply this frame's fired UI actions.
@@ -1492,9 +1495,9 @@ impl LoomforgeBench {
                 );
                 self.doc = Some(doc);
                 // The graph's layout and selection belong to the pack that is open.
-                self.view = canvas::View::default();
+                self.canvas.reset_view();
+                self.tae_strip.reset_view();
                 self.selected_edge = None;
-                self.link_from = None;
                 self.clip_scroll = 0;
                 // A new document is an EVENT: the clip rail's rows refill for it.
                 self.refill_clip_rows();
@@ -1525,8 +1528,9 @@ impl LoomforgeBench {
         }
         for t in Tool::ALL {
             if results.is_on(t.id()) {
+                // Switching tools abandons a half-drawn edge — the filler does it
+                // itself when `set_mode` sees the change, next frame.
                 self.tool = t;
-                self.link_from = None; // switching tools abandons a half-drawn edge
             }
         }
         // The declared `on_mode_next` / `on_mode_prev` intents CYCLE the canvas tools.
@@ -1535,7 +1539,6 @@ impl LoomforgeBench {
             let n = Tool::ALL.len() as i32;
             let i = Tool::ALL.iter().position(|t| *t == self.tool).unwrap_or(0) as i32;
             self.tool = Tool::ALL[((i + tooled).rem_euclid(n)) as usize];
-            self.link_from = None;
         }
         // The clip rail's pager buttons ride the same window the wheel scrolls.
         if results.is_on("clip_prev") {
@@ -1607,7 +1610,7 @@ impl Scene for LoomforgeBench {
                 );
                 // The dolls share ONE uploaded rig — the GPU skins each instance from its
                 // own bone palette, so a screen full of stages costs one mesh, not N.
-                self.stage_rig.load(renderer, doc.model(), &self.ui_styles);
+                self.rig = Some(Arc::new(DollRig::upload(renderer, doc.model_arc())));
                 self.doc = Some(doc);
             }
             Err(e) => {
@@ -1642,8 +1645,6 @@ impl Scene for LoomforgeBench {
             down: input.mouse_left,
             right_down: input.mouse_right,
             screen,
-            typed: String::new(),
-            backspace: false,
             wheel: input.mouse_wheel_delta,
             exclusive: false,
             motion: Default::default(),
@@ -1669,33 +1670,29 @@ impl Scene for LoomforgeBench {
         let mut results = frame.results.clone();
         self.hud_commands = frame.commands;
 
-        // Canvas geometry off THIS frame's reserved rect, so hit-testing (select /
-        // drop) and the draw pass agree on one layout.
-        self.canvas_area = canvas_rect
-            .map(|r| CanvasArea {
-                pos: r.pos,
-                size: r.size,
-            })
-            .unwrap_or(CanvasArea {
-                pos: Vec2::ZERO,
-                size: Vec2::ZERO,
-            });
-        self.cards = match &self.doc {
-            Some(d) => canvas::layout(
-                d.states().iter().map(|s| s.name.as_str()),
-                self.canvas_area,
-                &self.view,
-            ),
-            None => Vec::new(),
+        // Seat the graph filler in THIS frame's reserved rect and lay this frame's
+        // states out in it, so picking (select / drop) and drawing agree on one
+        // layout. An off-screen surface reserves nothing and seats a zero rect.
+        self.canvas.seat(canvas_rect.unwrap_or(StageRect {
+            pos: Vec2::ZERO,
+            size: Vec2::ZERO,
+        }));
+        self.canvas.set_mode(Self::canvas_mode(self.tool));
+        let (edges, refs) = match &self.doc {
+            Some(d) => Self::build_edges(d),
+            None => (Vec::new(), Vec::new()),
         };
-        self.edges = self.build_edges();
+        self.graph_edges = edges;
+        self.edge_refs = refs;
+        self.canvas
+            .layout(&Self::node_keys(&self.doc), &self.graph_edges);
 
         // ── The input seam (input-P3): the PUMP resolved this frame's events — the
         // scene owns no Resolver. One dispatch through the walker, which owns the
         // focus graph, consumes the pointer while it is over the HUD, and fires the
         // screen's DECLARED intents (`on_menu` / `on_tab_*` / `on_mode_*`) as result
-        // names. The bespoke canvas/timeline tools below stay scene-owned
-        // raw-pointer logic, gated on `over_hud` + the reserved rects. ──
+        // names. The canvas and timeline FILLERS take the pointer sample below,
+        // gated on `over_hud` + the reserved rects. ──
         let mut walker = WalkerHandler::hud(&mut self.ui_state, over_hud)
             .with_nav(&tree, &model)
             .with_rects(&frame.rects)
@@ -1717,12 +1714,15 @@ impl Scene for LoomforgeBench {
         self.apply_actions(&results);
 
         // Dolls for this frame, and which one the pointer is inside (for the next).
-        self.stage_reqs = self.build_stage_reqs(slots);
+        self.seat_dolls(slots, dt.as_secs_f32());
+        let cursor = self.cursor;
         self.hot_stage = self
-            .stage_reqs
+            .dolls
             .iter()
-            .find(|r| r.id.starts_with(STAGE_PREFIX) && rect_contains(&r.rect, self.cursor))
-            .map(|r| r.id.clone());
+            .find(|(id, d)| {
+                id.starts_with(STAGE_PREFIX) && d.rect().is_some_and(|r| rect_contains(&r, cursor))
+            })
+            .map(|(id, _)| id.clone());
 
         // The screen DECLARED `on_menu = "pause_open"` (S9): the walker layer consumed
         // the Menu press and fired the name; the ONE dispatch maps it onto the shell
@@ -1745,71 +1745,52 @@ impl Scene for LoomforgeBench {
 
         let r = |t: &str| strings::resolve(t).into_owned();
         if self.tab == Tab::StateMachine {
-            let hit = canvas::hit_test(&self.cards, input.mouse_position);
-            let released = self.prev_down && !input.mouse_left;
-
-            // ── Navigating the workspace ──────────────────────────────────────────
-            // The wheel means "more of what is under the cursor": over the clip library
-            // it pages the list, over the graph it zooms about the pointer.
-            if input.mouse_wheel_delta != 0.0 {
-                let over_rail = rail_rect.is_some_and(|[x, y, w, h]| {
-                    self.cursor.x >= x
-                        && self.cursor.x <= x + w
-                        && self.cursor.y >= y
-                        && self.cursor.y <= y + h
-                });
-                if over_rail {
-                    self.scroll_clips(input.mouse_wheel_delta);
-                } else if self.canvas_area.contains(self.cursor) {
-                    let factor = 1.0 + input.mouse_wheel_delta * ZOOM_STEP;
-                    self.view.zoom_at(self.canvas_area, self.cursor, factor);
-                }
+            // The wheel means "more of what is under the cursor": over the clip
+            // library it pages the list, over the graph the FILLER zooms about the
+            // pointer. Which of the bench's own rails wants it is the only part of
+            // that the scene can answer, so it answers exactly that and hands the
+            // rest over in the sample.
+            let over_rail = rail_rect.is_some_and(|[x, y, w, h]| {
+                self.cursor.x >= x
+                    && self.cursor.x <= x + w
+                    && self.cursor.y >= y
+                    && self.cursor.y <= y + h
+            });
+            if input.mouse_wheel_delta != 0.0 && over_rail {
+                self.scroll_clips(input.mouse_wheel_delta);
             }
-            // Middle-drag pans, whichever tool is active — so panning never competes with
-            // what the left button means on this tool.
-            if input.mouse_middle {
-                if let Some(from) = self.pan_from {
-                    self.view.pan += self.cursor - from;
-                }
-                self.pan_from = Some(self.cursor);
-            } else {
-                self.pan_from = None;
-            }
-
-            // Move a grabbed card. The position is stored by state NAME, editor-side —
-            // the pack has no notion of where a state sits on screen.
-            if let Some((i, grab)) = self.drag_card {
-                if input.mouse_left {
-                    let local = self.view.to_local(self.canvas_area, self.cursor) - grab;
-                    if let Some(name) = self.doc.as_ref().and_then(|d| d.states().get(i)) {
-                        self.view.placed.insert(name.name.clone(), local);
-                    }
+            let in_canvas = rect_contains(&self.canvas.area(), self.cursor);
+            let sample = PointerSample {
+                cursor: self.cursor,
+                left: input.mouse_left,
+                middle: input.mouse_middle,
+                // The chrome gets first refusal on a press, and a press outside the
+                // reserved rect is nobody's: chrome coverage alone would let a click
+                // on empty page place or delete a state.
+                pressed: input.mouse_left_pressed && !over_hud && in_canvas,
+                wheel: if over_rail {
+                    0.0
                 } else {
-                    self.drag_card = None;
-                }
-            }
+                    input.mouse_wheel_delta
+                },
+                inside: in_canvas,
+            };
+            let gestures = self.canvas.pointer(&sample, &Self::node_keys(&self.doc));
 
-            // Canvas tools. Gated on `!over_hud` so a rail click never also acts on the
-            // card behind it, AND on the reserved canvas rect — chrome coverage alone
-            // would let a click elsewhere place or delete a state.
-            let in_canvas = self.canvas_area.contains(input.mouse_position);
-            if input.mouse_left_pressed && !over_hud && in_canvas {
+            // ── What a gesture MEANS to a pack — the only half that is this bench's ──
+            if let Some(p) = gestures.pressed {
                 match self.tool {
-                    Tool::Select => match hit {
+                    Tool::Select => match p.card {
                         Some(i) => {
                             if let Some(doc) = self.doc.as_mut() {
                                 doc.select(Some(i));
                             }
                             self.selected_edge = None;
-                            // Grab it where it was clicked, so it tracks the pointer
-                            // instead of snapping its corner under the cursor.
-                            let grab = self.view.to_local(self.canvas_area, self.cursor)
-                                - self.view.to_local(self.canvas_area, self.cards[i].pos);
-                            self.drag_card = Some((i, grab));
                         }
                         // Cards are on top, so an edge is only picked where no card is.
                         None => {
-                            self.selected_edge = self.hit_edge(self.cursor);
+                            self.selected_edge =
+                                p.edge.and_then(|e| self.edge_refs.get(e).copied());
                             if let Some(e) = self.selected_edge {
                                 self.status = match self
                                     .doc
@@ -1827,10 +1808,11 @@ impl Scene for LoomforgeBench {
                             }
                         }
                     },
-                    // Press starts an edge; the release below completes it.
-                    Tool::Link => self.link_from = hit,
+                    // The Link tool's press and release are the filler's rubber band;
+                    // only the completed pair below is the pack's business.
+                    Tool::Link => {}
                     Tool::AddState => {
-                        if hit.is_none() {
+                        if p.card.is_none() {
                             let clip = self
                                 .doc
                                 .as_ref()
@@ -1853,7 +1835,7 @@ impl Scene for LoomforgeBench {
                     // Delete acts on whatever is under the pointer: a card removes the
                     // state (and every reference to it), an edge removes just that one
                     // transition and leaves both states standing.
-                    Tool::Delete => match hit {
+                    Tool::Delete => match p.card {
                         Some(i) => {
                             let name = self
                                 .doc
@@ -1871,7 +1853,7 @@ impl Scene for LoomforgeBench {
                             }
                         }
                         None => {
-                            if let Some(e) = self.hit_edge(self.cursor) {
+                            if let Some(e) = p.edge.and_then(|e| self.edge_refs.get(e).copied()) {
                                 if self.doc.as_mut().is_some_and(|d| d.remove_transition(e)) {
                                     self.status = r("$lf_transition_removed");
                                     self.selected_edge = None;
@@ -1882,16 +1864,18 @@ impl Scene for LoomforgeBench {
                 }
             }
 
-            // Link release: land on a DIFFERENT card to weave the transition.
-            if released && self.tool == Tool::Link {
-                if let (Some(from), Some(to)) = (self.link_from, hit) {
+            // A completed link weaves the transition. A self-link is refused HERE —
+            // the filler reports the pair it was given; whether a state may point at
+            // itself is a rule about state machines, not about graphs.
+            if let (Some(l), Tool::Link) = (gestures.linked, self.tool) {
+                if let Some(to) = l.to {
                     let on = self.link_trigger;
-                    self.status = if from == to {
+                    self.status = if l.from == to {
                         r("$lf_no_self_link")
                     } else if self
                         .doc
                         .as_mut()
-                        .is_some_and(|d| d.add_transition(from, to, on))
+                        .is_some_and(|d| d.add_transition(l.from, to, on))
                     {
                         format!("{} {}", r("$lf_linked_on"), trigger_label(on))
                     } else {
@@ -1903,13 +1887,15 @@ impl Scene for LoomforgeBench {
                         )
                     };
                 }
-                self.link_from = None;
             }
+
             // A clip dropped onto a card binds it — the drag channel closing the loop
-            // into the document (and marking it dirty for Save).
+            // into the document (and marking it dirty for Save). The cards are not
+            // walker nodes, so this stays a canvas-side hit-test rather than a
+            // `drop_accept` prop.
             if dropped && drag_is_clip {
                 if let Some(id) = drag_id {
-                    self.status = match canvas::hit_test(&self.cards, input.mouse_position) {
+                    self.status = match self.canvas.card_at(self.cursor) {
                         Some(i) => {
                             let name = self
                                 .doc
@@ -1931,19 +1917,71 @@ impl Scene for LoomforgeBench {
                     };
                 }
             }
+        } else {
+            // The canvas is not being driven this frame: abandon anything in flight,
+            // so a release that lands on another page cannot weave a link on return.
+            self.canvas.cancel();
         }
 
-        // TAE Editor: a press on the scene-drawn timeline (never over the chrome) selects
-        // the event under the cursor, opening it in the inspector. A press on empty track
+        // Seat the lane FILLER in whichever timeline rect this page reserved — the
+        // State Machine page's preview strip or the TAE Editor's full-height one; one
+        // is visible at a time, so one strip serves both and the two can never drift
+        // in how a window or a one-shot is drawn. The frame axis is the SELECTED
+        // state's clip, read after every action so a selection made this frame is the
+        // one the strip shows.
+        let (frames, rate) = self
+            .tae_axis()
+            .map(|(_, _, f, r)| (f, r))
+            .unwrap_or((0, 60));
+        let strip = match self.tab {
+            Tab::StateMachine => self.sm_strip_rect,
+            Tab::TaeEditor => self.page_strip_rect,
+            _ => None,
+        };
+        self.tae_strip.seat(
+            strip.map(strip_of).unwrap_or(StageRect {
+                pos: Vec2::ZERO,
+                size: Vec2::ZERO,
+            }),
+            tae::Lane::ALL.len(),
+            frames,
+        );
+        // The playhead runs off the SAME clock as the Stage dolls, so the bar sweeping
+        // the timeline and the pose on the selected card show the same instant.
+        self.tae_strip.set_playhead(self.tae_playhead(frames, rate));
+
+        // TAE Editor: a press on the timeline (never over the chrome) selects the
+        // event under the cursor, opening it in the inspector. A press on empty track
         // clears the selection, matching the graph canvas's "click nothing = deselect".
-        if self.tab == Tab::TaeEditor && input.mouse_left_pressed && !over_hud {
-            if let Some(rect) = self.page_strip_rect {
-                if rect_contains(&rect, input.mouse_position) {
-                    self.tae_event = self.tae_pick_event(input.mouse_position);
-                }
+        if self.tab == Tab::TaeEditor {
+            let in_strip = self
+                .page_strip_rect
+                .is_some_and(|r| rect_contains(&r, self.cursor));
+            let sample = PointerSample {
+                cursor: self.cursor,
+                left: input.mouse_left,
+                middle: input.mouse_middle,
+                pressed: input.mouse_left_pressed && !over_hud && in_strip,
+                wheel: if in_strip && !over_hud {
+                    input.mouse_wheel_delta
+                } else {
+                    0.0
+                },
+                inside: in_strip,
+            };
+            let events = self.tae_events();
+            let state = self.doc.as_ref().and_then(|d| d.selected());
+            if let Some(p) = self.tae_strip.pointer(&sample, &events).pressed {
+                self.tae_event = match (state, p.event) {
+                    (Some(s), Some(index)) => Some(doc::EventRef { state: s, index }),
+                    _ => None,
+                };
             }
         }
-        self.prev_down = input.mouse_left;
+
+        // The selection is final for this frame: ink the edges once, here, so what
+        // `render` paints is the selection the author just made.
+        self.retint_edges();
 
         Transition::None
     }
@@ -1951,89 +1989,89 @@ impl Scene for LoomforgeBench {
     fn render<'f>(&'f mut self, renderer: &mut Renderer, fg: &mut FrameGraph<'f>) {
         let base = fg.base_layer();
 
-        // Offscreen doll passes — declared into the frame's graph; the manager runs every
-        // offscreen pass before the overlay, so the doll composites land under the chrome.
-        if !self.stage_reqs.is_empty() {
-            if let Some(doc) = &self.doc {
-                self.stage_rig
-                    .stage(renderer, fg, doc.model(), base, &self.stage_reqs);
-            }
-        }
-        // Amortised cleanup: a page change strands the previous page's targets, but a
-        // steady page never trips this, so the common frame does no bookkeeping at all.
-        // Runs BEFORE the overlay is declared, so its `&mut stage_rig` never overlaps the
-        // overlay's shared `&self`.
-        if self.stage_rig.slot_count() > self.stage_reqs.len() + STALE_SLOT_SLACK {
-            let shown: Vec<&str> = self.stage_reqs.iter().map(|r| r.id.as_str()).collect();
-            self.stage_rig
-                .retain_slots(renderer, &|id| shown.contains(&id));
+        // Amortised cleanup: a page change strands the previous page's dolls, but a steady
+        // page never trips this, so the common frame does no bookkeeping at all. Runs
+        // first, so a released target is never one this frame declares.
+        let seated = self.dolls.values().filter(|d| d.rect().is_some()).count();
+        if self.dolls.len() > seated + STALE_SLOT_SLACK {
+            self.dolls.retain(|_, d| {
+                if d.rect().is_some() {
+                    return true;
+                }
+                d.release(renderer);
+                false
+            });
         }
 
-        // The scene's 2D chrome — the canvas, the TAE strips, and the walker HUD — as the
-        // screen surface's final overlay, run after the doll composites. The scene-owned
-        // canvas paints on the base layer, UNDER the walker chrome — otherwise the rails'
-        // panels and the cards would interleave by submission order within one layer (the
-        // paperdoll HUD-behind-panels trap). The dolls composited above ride the sprite
-        // pass, which runs after ui-panels within a layer, so each lands over its own
-        // backdrop without a layer of its own.
-        let me = &*self;
+        // The scene's 2D chrome — the two fillers and the walker HUD — as the screen
+        // surface's final overlay, run after the doll composites (the graph schedules
+        // overlays last, whatever order they are declared in). The fillers paint on the
+        // base layer, UNDER the walker chrome, otherwise the rails' panels and the cards
+        // would interleave by submission order within one layer (the paperdoll
+        // HUD-behind-panels trap). The dolls composited below ride the sprite pass, which
+        // runs after ui-panels within a layer, so each lands over its own backdrop without
+        // a layer of its own.
+        //
+        // Both fillers emit `HudCommand`s, so they ride the SAME bridge the walker's own
+        // tree does — one `render_hud` per layer, no scene-side drawing code. The lists
+        // are built HERE and MOVED into the overlay rather than read back through `&self`:
+        // the dolls below hold the bench borrowed for the graph's whole lifetime, so
+        // nothing may capture it. Same work, same frame, one move instead of a borrow.
+        let white = self.hud_white;
+        let mut commands = Vec::new();
+        if self.tab == Tab::StateMachine {
+            self.canvas_commands(&mut commands);
+            if let Some(rect) = self.sm_strip_rect {
+                self.tae_commands(rect, "$lf_tae_timeline", true, &mut commands);
+            }
+        }
+        if self.tab == Tab::TaeEditor {
+            if let Some(rect) = self.page_strip_rect {
+                self.tae_commands(rect, "$lf_timeline", false, &mut commands);
+            }
+        }
+        // Taken, not cloned — `update` refills them every frame.
+        let hud = std::mem::take(&mut self.hud_commands);
         fg.overlay(move |r| {
-            if me.tab == Tab::StateMachine {
-                me.draw_canvas(r);
-                if let Some(rect) = me.sm_strip_rect {
-                    me.draw_tae(r, rect);
-                }
-            }
-            if me.tab == Tab::TaeEditor {
-                if let Some(rect) = me.page_strip_rect {
-                    me.draw_tae_page(r, rect);
-                }
-            }
-            if let Some(white) = me.hud_white {
-                r.set_layer(base + 1.0);
-                render_hud(r, &me.hud_commands, white, &[]);
-                r.set_layer(base);
-            }
+            let Some(white) = white else { return };
+            render_hud(r, &commands, white, &[]);
+            r.set_layer(base + 1.0);
+            render_hud(r, &hud, white, &[]);
+            r.set_layer(base);
         });
+
+        // Offscreen doll passes — declared into the frame's graph; the manager runs every
+        // offscreen pass before the overlay, so the doll composites land under the chrome.
+        // An unseated doll declares nothing, and a POSTER's pass is skipped by the
+        // renderer's per-surface clock, so a page of a dozen dolls costs one live pass.
+        for doll in self.dolls.values_mut() {
+            doll.render(renderer, fg, base);
+        }
+    }
+
+    /// Give every render target and the shared rig's mesh back. A `RenderTargetHandle` is
+    /// an INDEX into the renderer's slot pool — dropping the bench reclaims nothing, so
+    /// leaving without this strands a target per doll the session ever showed
+    /// (incident 5C9C27E1, rule 728E682F).
+    fn exit(&mut self, renderer: &mut Renderer) {
+        for (_, mut doll) in self.dolls.drain() {
+            doll.release(renderer);
+        }
+        // Every doll is dropped above, so this is the last handle on the rig.
+        if let Some(mut rig) = self.rig.take() {
+            DollRig::release(&mut rig, renderer);
+        }
     }
 }
 
 impl LoomforgeBench {
-    /// Draw the node-graph canvas: ground, transition edges, then the state cards.
-    fn draw_canvas(&self, r: &mut Renderer) {
+    /// The node-graph canvas's draw commands: the FILLER paints ground, edges, cards
+    /// and the in-flight rubber band; this bench supplies only the content it laid out
+    /// this frame and the colours, read by dotted path out of the one palette.
+    fn canvas_commands(&self, out: &mut Vec<HudCommand>) {
         let Some(doc) = &self.doc else { return };
-        let a = self.canvas_area;
-        let bg = self.color("loomforge.canvas.bg", [0.03, 0.035, 0.047, 1.0]);
-        r.draw_ui_panel(a.pos, a.size, bg, bg, 0.0, 0.0, 0.0, [0.0; 4], 0.0);
 
-        let edge_c = self.color("loomforge.canvas.edge", [0.72, 0.59, 0.35, 1.0]);
-        let edge_sel = self.color("loomforge.canvas.edge_sel", [0.435, 0.592, 1.0, 1.0]);
-        // Edges first so the cards sit on top of them. The geometry was built in `update`
-        // — the same list the pointer picks against, so what lights up is what was hit.
-        for e in &self.edges {
-            let picked = self.selected_edge == Some(e.id);
-            let lit = picked
-                || self.selected_is(e.id.from)
-                || doc
-                    .states()
-                    .get(e.id.from)
-                    .and_then(|s| s.transitions.get(e.id.index))
-                    .and_then(|t| doc.state_index(&t.to))
-                    .is_some_and(|j| self.selected_is(j));
-            let c = if lit { edge_sel } else { edge_c };
-            let w = if picked {
-                3.0
-            } else if lit {
-                2.4
-            } else {
-                1.4
-            };
-            for (a, b) in &e.segs[..e.n] {
-                draw_line(r, *a, *b, w, c);
-            }
-        }
-
-        // In-degree for the card's `IN n · OUT n` meta line.
+        // In-degree for each card's `IN n · OUT n` meta line.
         let mut in_deg = vec![0usize; doc.states().len()];
         for st in doc.states() {
             for t in &st.transitions {
@@ -2042,259 +2080,149 @@ impl LoomforgeBench {
                 }
             }
         }
+        let io: Vec<String> = doc
+            .states()
+            .iter()
+            .enumerate()
+            .map(|(i, st)| format!("IN {} · OUT {}", in_deg[i], st.transitions.len()))
+            .collect();
+        let meta: Vec<[&str; 2]> = doc
+            .states()
+            .iter()
+            .enumerate()
+            .map(|(i, st)| [io[i].as_str(), st.clip.as_str()])
+            .collect();
+        let nodes: Vec<GraphNode> = doc
+            .states()
+            .iter()
+            .enumerate()
+            .map(|(i, st)| GraphNode {
+                title: &st.name,
+                meta: &meta[i],
+                selected: self.selected_is(i),
+                // Every state card carries a live doll; the filler paints its backdrop
+                // and the frame graph composites the image into the same rect.
+                icon: true,
+                ports: 0,
+            })
+            .collect();
 
-        let fill_top = self.color("loomforge.canvas.card_fill_top", [0.10, 0.12, 0.15, 1.0]);
-        let fill_bot = self.color("loomforge.canvas.card_fill_bot", [0.07, 0.08, 0.11, 1.0]);
-        let border = self.color("loomforge.canvas.card_border", [0.17, 0.19, 0.24, 1.0]);
-        let border_sel = self.color("loomforge.canvas.card_border_sel", [0.23, 0.35, 0.63, 1.0]);
-        let label = self.color("loomforge.canvas.card_label", [0.91, 0.88, 0.82, 1.0]);
-        let label_sel = self.color("loomforge.canvas.card_label_sel", [0.62, 0.72, 1.0, 1.0]);
-        let meta = self.color("loomforge.canvas.card_meta", [0.56, 0.54, 0.49, 1.0]);
-        let stage_top = self.color("loomforge.canvas.stage_top", [0.11, 0.125, 0.161, 1.0]);
-        let stage_bot = self.color("loomforge.canvas.stage_bot", [0.03, 0.035, 0.047, 1.0]);
-        let stage_border = self.color("loomforge.canvas.stage_border", [0.15, 0.17, 0.21, 1.0]);
-        // The doll's image lands here via the frame graph; this is only its backdrop, so
-        // the card reads correctly even before a poster has been rendered. Everything on
-        // a card scales with the zoom, text included.
-        let z = self.view.zoom;
-        let text_x = canvas::card_text_x(z);
-
-        for (i, st) in doc.states().iter().enumerate() {
-            let Some(&c) = self.cards.get(i) else {
-                continue;
-            };
-            let sel = self.selected_is(i);
-            r.draw_ui_panel(
-                c.pos,
-                c.size,
-                fill_top,
-                fill_bot,
-                1.0,
-                5.0 * z,
-                if sel { 2.0 } else { 1.0 },
-                if sel { border_sel } else { border },
-                0.0,
-            );
-            let doll = canvas::card_stage_rect(c, z);
-            r.draw_ui_panel(
-                doll.pos,
-                doll.size,
-                stage_top,
-                stage_bot,
-                1.0,
-                4.0 * z,
-                1.0,
-                stage_border,
-                0.0,
-            );
-            r.draw_text(
-                &st.name,
-                c.pos + Vec2::new(text_x, 12.0 * z),
-                17.0 * z,
-                if sel { label_sel } else { label },
-            );
-            let io = format!("IN {} · OUT {}", in_deg[i], st.transitions.len());
-            r.draw_text(&io, c.pos + Vec2::new(text_x, 38.0 * z), 11.0 * z, meta);
-            r.draw_text(
-                &st.clip,
-                c.pos + Vec2::new(text_x, 56.0 * z),
-                12.0 * z,
-                meta,
-            );
-        }
-
-        // Rubber-band for an in-flight Link drag, drawn last so it rides over the cards.
-        if let Some(from) = self.link_from.and_then(|i| self.cards.get(i)) {
-            let hint = self.color("loomforge.canvas.drop_hint", [0.435, 0.592, 1.0, 1.0]);
-            draw_line(r, from.center(), self.cursor, 2.0, hint);
-        }
+        let style = CanvasStyle {
+            bg: self.color("loomforge.canvas.bg", [0.03, 0.035, 0.047, 1.0]),
+            edge: self.color("loomforge.canvas.edge", [0.72, 0.59, 0.35, 1.0]),
+            edge_lit: self.color("loomforge.canvas.edge_sel", [0.435, 0.592, 1.0, 1.0]),
+            card_fill_top: self.color("loomforge.canvas.card_fill_top", [0.10, 0.12, 0.15, 1.0]),
+            card_fill_bot: self.color("loomforge.canvas.card_fill_bot", [0.07, 0.08, 0.11, 1.0]),
+            card_border: self.color("loomforge.canvas.card_border", [0.17, 0.19, 0.24, 1.0]),
+            card_border_selected: self
+                .color("loomforge.canvas.card_border_sel", [0.23, 0.35, 0.63, 1.0]),
+            label: self.color("loomforge.canvas.card_label", [0.91, 0.88, 0.82, 1.0]),
+            label_selected: self.color("loomforge.canvas.card_label_sel", [0.62, 0.72, 1.0, 1.0]),
+            meta: self.color("loomforge.canvas.card_meta", [0.56, 0.54, 0.49, 1.0]),
+            icon_top: self.color("loomforge.canvas.stage_top", [0.11, 0.125, 0.161, 1.0]),
+            icon_bot: self.color("loomforge.canvas.stage_bot", [0.03, 0.035, 0.047, 1.0]),
+            icon_border: self.color("loomforge.canvas.stage_border", [0.15, 0.17, 0.21, 1.0]),
+            port: self.color("loomforge.canvas.edge", [0.72, 0.59, 0.35, 1.0]),
+            link: self.color("loomforge.canvas.drop_hint", [0.435, 0.592, 1.0, 1.0]),
+        };
+        self.canvas
+            .draw(&nodes, &self.graph_edges, &style, 0.0, out);
     }
 
-    /// Draw the TAE timeline into the walker-reserved `lf_tae_strip` rect: header,
-    /// frame ruler, the nine lanes, the selected state's events, and the playhead.
+    /// A timeline strip's draw commands: this bench's own frame and header line, then
+    /// the FILLER's ruler, lanes, event bars and playhead inside it.
     ///
-    /// The playhead runs off the SAME clock as the Stage dolls, so the bar sweeping the
-    /// timeline and the pose on the selected card are showing the same instant.
-    fn draw_tae(&self, r: &mut Renderer, rect: StageRect) {
-        let top = self.color("loomforge.tae.fill_top", [0.055, 0.063, 0.086, 1.0]);
-        let bot = self.color("loomforge.tae.fill_bot", [0.031, 0.035, 0.047, 1.0]);
-        let frame_c = self.color("loomforge.tae.border", [0.431, 0.353, 0.204, 0.35]);
-        r.draw_ui_panel(rect.pos, rect.size, top, bot, 1.0, 0.0, 1.0, frame_c, 0.0);
-
+    /// `summary` puts the State Machine page's one-line clip readout beside the title;
+    /// the TAE Editor page's own header carries that information in its inspector.
+    fn tae_commands(&self, rect: StageRect, title: &str, summary: bool, out: &mut Vec<HudCommand>) {
+        out.push(HudCommand::Panel {
+            x: rect.pos.x,
+            y: rect.pos.y,
+            w: rect.size.x,
+            h: rect.size.y,
+            color: self.color("loomforge.tae.fill_top", [0.055, 0.063, 0.086, 1.0]),
+            color2: self.color("loomforge.tae.fill_bot", [0.031, 0.035, 0.047, 1.0]),
+            grad: 1.0,
+            radius: 0.0,
+            border: 1.0,
+            border_color: self.color("loomforge.tae.border", [0.431, 0.353, 0.204, 0.35]),
+            feather: 0.0,
+            layer: 0.0,
+        });
         let title_c = self.color("loomforge.rail_title.color", [0.722, 0.592, 0.353, 1.0]);
-        let text_c = self.color("loomforge.rail_text.color", [0.871, 0.847, 0.788, 1.0]);
-        r.draw_text(
-            &strings::resolve("$lf_tae_timeline"),
+        out.push(hud_text(
+            &strings::resolve(title),
             rect.pos + Vec2::new(12.0, 4.0),
             12.0,
             title_c,
-        );
-        r.draw_text(
-            &self.tae_summary(),
-            rect.pos + Vec2::new(tae::GUTTER_W + 12.0, 4.0),
-            12.0,
-            text_c,
-        );
+        ));
+        if summary {
+            out.push(hud_text(
+                &self.tae_summary(),
+                rect.pos + Vec2::new(self.tae_strip.metrics().gutter + 12.0, 4.0),
+                12.0,
+                self.color("loomforge.rail_text.color", [0.871, 0.847, 0.788, 1.0]),
+            ));
+        }
 
-        self.draw_tae_strip(r, strip_of(rect));
+        // The lane vocabulary is this bench's; the geometry is the filler's.
+        let labels: Vec<String> = tae::Lane::ALL
+            .iter()
+            .map(|l| strings::resolve(lane_token(*l)).into_owned())
+            .collect();
+        let lanes: Vec<TimelineLane> = tae::Lane::ALL
+            .iter()
+            .zip(&labels)
+            .map(|(l, label)| TimelineLane {
+                label,
+                style: LaneStyle {
+                    row: self.lane_color(*l, "row", [0.078, 0.09, 0.122, 1.0]),
+                    row_border: self.lane_color(*l, "row_border", [0.169, 0.188, 0.235, 1.0]),
+                    swatch: self.lane_color(*l, "swatch", [0.561, 0.541, 0.49, 1.0]),
+                    event: self.lane_color(*l, "event", [0.561, 0.541, 0.49, 1.0]),
+                },
+            })
+            .collect();
+        let style = TimelineStyle {
+            ruler: self.color("loomforge.tae_lane.ruler", [0.561, 0.541, 0.49, 1.0]),
+            tick: self.color(
+                "loomforge.tae_lane.track_border",
+                [0.149, 0.169, 0.208, 1.0],
+            ),
+            playhead: self.color("loomforge.tae_lane.playhead", [0.435, 0.592, 1.0, 1.0]),
+            event_selected: self.color("loomforge.tae_lane.event_sel", [0.435, 0.592, 1.0, 1.0]),
+        };
+        // NOTE: root motion is deliberately NOT drawn on the strip. It is
+        // `StateDef.root_motion`, a per-state bool — a state-shaped fact, which the
+        // authoring contract keeps off the timeline so it has exactly one source of
+        // truth. It surfaces in the state inspector instead.
+        self.tae_strip
+            .draw(&lanes, &self.tae_events(), &style, 0.0, out);
     }
 
-    /// Draw the lane strip itself — ruler, seven tracks + labels, the selected state's
-    /// event bars, root motion, the selected-event highlight, and the playhead. Shared by
-    /// the State Machine preview strip and the full-height TAE Editor page, so the two can
-    /// never drift in how a window or a point event is drawn.
-    fn draw_tae_strip(&self, r: &mut Renderer, strip: tae::Strip) {
-        // The frame axis comes from the SELECTED state's clip; with nothing selected the
-        // lanes still draw, empty, so the strip never collapses to a blank bar.
-        let selected = self
-            .doc
-            .as_ref()
-            .and_then(|d| d.selected().and_then(|i| d.states().get(i)).map(|s| (d, s)));
-        let (frames, rate) = selected
-            .and_then(|(d, s)| d.clip_axis(&s.clip))
-            .unwrap_or((0, 60));
-
-        // Ruler.
-        let ruler_c = self.color("loomforge.tae_lane.ruler", [0.561, 0.541, 0.49, 1.0]);
-        let track_border = self.color(
-            "loomforge.tae_lane.track_border",
-            [0.149, 0.169, 0.208, 1.0],
-        );
-        for f in tae::ruler_ticks(frames) {
-            let x = strip.frame_x(f, frames);
-            r.draw_text(
-                &f.to_string(),
-                Vec2::new(x + 3.0, strip.pos.y),
-                10.0,
-                ruler_c,
-            );
-            draw_line(
-                r,
-                Vec2::new(x, strip.pos.y + tae::RULER_H - 4.0),
-                Vec2::new(x, strip.pos.y + tae::RULER_H),
-                1.0,
-                track_border,
-            );
-        }
-
-        // Lane tracks + gutter labels.
-        for (i, lane) in tae::Lane::ALL.iter().enumerate() {
-            let rect = strip.lane_rect(i);
-            let row = self.lane_color(*lane, "row", [0.078, 0.09, 0.122, 1.0]);
-            let row_border = self.lane_color(*lane, "row_border", [0.169, 0.188, 0.235, 1.0]);
-            let swatch = self.lane_color(*lane, "swatch", [0.561, 0.541, 0.49, 1.0]);
-            r.draw_ui_panel(
-                rect.pos, rect.size, row, row, 0.0, 3.0, 1.0, row_border, 0.0,
-            );
-            // The design's 9px lane chip, then the label beside it.
-            let chip = (rect.size.y * 0.4).clamp(4.0, 9.0);
-            let cy = rect.pos.y + (rect.size.y - chip) * 0.5;
-            r.draw_ui_panel(
-                Vec2::new(strip.pos.x + 8.0, cy),
-                Vec2::splat(chip),
-                swatch,
-                swatch,
-                0.0,
-                1.0,
-                0.0,
-                [0.0; 4],
-                0.0,
-            );
-            r.draw_text(
-                &strings::resolve(lane_token(*lane)),
-                Vec2::new(strip.pos.x + 8.0 + chip + 6.0, cy - 1.0),
-                10.0,
-                swatch,
-            );
-        }
-
-        // Events of the selected state, each on its mapped lane.
-        let Some((_, state)) = selected else { return };
-        let sel_state = self.doc.as_ref().and_then(|d| d.selected());
-        let lane_index = |l: tae::Lane| tae::Lane::ALL.iter().position(|x| *x == l).unwrap_or(0);
-        let border_c = self.color("loomforge.tae_lane.event_sel", [0.435, 0.592, 1.0, 1.0]);
-        for (idx, ev) in state.events.iter().enumerate() {
-            let lane = tae::lane_of(ev.kind);
-            let i = lane_index(lane);
-            let bar = strip.event_rect(i, ev.tick, ev.end, frames);
-            let fill = self.lane_color(lane, "event", [0.561, 0.541, 0.49, 1.0]);
-            r.draw_ui_panel(bar.pos, bar.size, fill, fill, 0.0, 2.0, 0.0, [0.0; 4], 0.0);
-            // The selected event gets the design's rune-blue outline.
-            let is_sel = self.tae_event
-                == sel_state.map(|s| doc::EventRef {
-                    state: s,
-                    index: idx,
-                });
-            if is_sel {
-                draw_rect_outline(r, bar.pos, bar.size, 1.0, border_c);
-            }
-        }
-        // NOTE: root motion is deliberately NOT drawn here. It is `StateDef.root_motion`, a
-        // per-state bool — a state-shaped fact, which the authoring contract keeps off the
-        // timeline so it has exactly one source of truth. It surfaces in the state
-        // inspector instead.
-
-        // Playhead, on the dolls' clock so the bar and the pose agree.
-        if frames > 0 {
-            let head = self.tae_playhead(frames, rate);
-            let x = strip.frame_x(head, frames);
-            let c = self.color("loomforge.tae_lane.playhead", [0.435, 0.592, 1.0, 1.0]);
-            draw_line(
-                r,
-                Vec2::new(x, strip.pos.y),
-                Vec2::new(x, strip.pos.y + strip.size.y),
-                2.0,
-                c,
-            );
-        }
-    }
-
-    /// The TAE Editor page's full-height timeline: the same lane strip as the preview,
-    /// drawn into the walker-reserved `lf_tae_page_strip` rect and pickable (click an
-    /// event bar to inspect it).
-    fn draw_tae_page(&self, r: &mut Renderer, rect: StageRect) {
-        let top = self.color("loomforge.tae.fill_top", [0.055, 0.063, 0.086, 1.0]);
-        let bot = self.color("loomforge.tae.fill_bot", [0.031, 0.035, 0.047, 1.0]);
-        let frame_c = self.color("loomforge.tae.border", [0.431, 0.353, 0.204, 0.35]);
-        r.draw_ui_panel(rect.pos, rect.size, top, bot, 1.0, 0.0, 1.0, frame_c, 0.0);
-        let title_c = self.color("loomforge.rail_title.color", [0.722, 0.592, 0.353, 1.0]);
-        r.draw_text(
-            &strings::resolve("$lf_timeline"),
-            rect.pos + Vec2::new(12.0, 4.0),
-            12.0,
-            title_c,
-        );
-        self.draw_tae_strip(r, strip_of(rect));
-    }
-
-    /// Pick the event under the cursor on the full-page timeline. Returns the event to
-    /// select — a bar hit within its lane, nearest-first so overlapping windows resolve to
-    /// the closest edge. Point events get the grab radius so a 5px marker is still clickable.
-    fn tae_pick_event(&self, cursor: Vec2) -> Option<doc::EventRef> {
-        let doc = self.doc.as_ref()?;
-        let state = doc.selected()?;
-        let st = doc.states().get(state)?;
-        let (frames, _) = doc.clip_axis(&st.clip)?;
-        let strip = strip_of(self.page_strip_rect?);
-        let lane_index = |l: tae::Lane| tae::Lane::ALL.iter().position(|x| *x == l).unwrap_or(0);
+    /// The selected state's events as the filler's lane-and-frame content. The
+    /// timeline index IS the event's index in the state, so a pick comes straight
+    /// back as an [`doc::EventRef`].
+    fn tae_events(&self) -> Vec<TimelineEvent> {
+        let Some(doc) = &self.doc else {
+            return Vec::new();
+        };
+        let Some(state) = doc.selected() else {
+            return Vec::new();
+        };
+        let Some(st) = doc.states().get(state) else {
+            return Vec::new();
+        };
         st.events
             .iter()
             .enumerate()
-            .filter_map(|(idx, ev)| {
-                let i = lane_index(tae::lane_of(ev.kind));
-                let bar = strip.event_rect(i, ev.tick, ev.end, frames);
-                let within_y = cursor.y >= bar.pos.y && cursor.y <= bar.pos.y + bar.size.y;
-                let x0 = bar.pos.x - TAE_GRAB;
-                let x1 = bar.pos.x + bar.size.x + TAE_GRAB;
-                if within_y && cursor.x >= x0 && cursor.x <= x1 {
-                    let dist = (cursor.x - (bar.pos.x + bar.size.x * 0.5)).abs();
-                    Some((doc::EventRef { state, index: idx }, dist))
-                } else {
-                    None
-                }
+            .map(|(index, ev)| TimelineEvent {
+                lane: lane_index(tae::lane_of(ev.kind)),
+                start: ev.tick,
+                end: ev.end,
+                selected: self.tae_event == Some(doc::EventRef { state, index }),
             })
-            .min_by(|a, b| a.1.total_cmp(&b.1))
-            .map(|(e, _)| e)
+            .collect()
     }
 
     /// One of a lane's four colours, read without building a path string per lookup —
@@ -2341,29 +2269,30 @@ fn json_rgba(v: Option<&serde_json::Value>, fallback: [f32; 4]) -> [f32; 4] {
     }
 }
 
-/// Draw a 2D line as a thin quad. The HUD has no line/curve command, and the canvas is
-/// scene-drawn, so a transition edge is two triangles.
-/// A hollow rectangle outline — four lines. Used for the selected event's highlight, which
-/// must not cover the bar's own fill the way a filled panel would.
-fn draw_rect_outline(r: &mut Renderer, pos: Vec2, size: Vec2, width: f32, color: [f32; 4]) {
-    let tr = Vec2::new(pos.x + size.x, pos.y);
-    let bl = Vec2::new(pos.x, pos.y + size.y);
-    let br = pos + size;
-    draw_line(r, pos, tr, width, color);
-    draw_line(r, tr, br, width, color);
-    draw_line(r, br, bl, width, color);
-    draw_line(r, bl, pos, width, color);
+/// A HUD text command in the bench's own default face — the same shape
+/// `Renderer::draw_text` produces, so the header lines this scene draws beside the
+/// fillers sit in exactly the type they do.
+fn hud_text(s: &str, at: Vec2, size: f32, color: [f32; 4]) -> HudCommand {
+    HudCommand::Text {
+        x: at.x,
+        y: at.y,
+        text: s.to_string(),
+        size,
+        color,
+        layer: 0.0,
+        align: flicker::script::TextAlign::Left,
+        font: flicker::script::FontRole::Body,
+        italic: false,
+        bold: false,
+        tracking: -1.0,
+        wrap: None,
+    }
 }
 
-fn draw_line(r: &mut Renderer, a: Vec2, b: Vec2, width: f32, color: [f32; 4]) {
-    let d = b - a;
-    let len = d.length();
-    if len < 0.001 {
-        return;
-    }
-    let n = Vec2::new(-d.y, d.x) / len * (width * 0.5);
-    r.draw_triangle(a + n, b + n, b - n, color);
-    r.draw_triangle(a + n, b - n, a - n, color);
+/// A lane's index in `Lane::ALL` — the row the timeline filler places it on. Sized
+/// from the list rather than a literal, so adding a lane cannot leave this behind.
+fn lane_index(l: tae::Lane) -> usize {
+    tae::Lane::ALL.iter().position(|x| *x == l).unwrap_or(0)
 }
 
 /// Build the Loomforge Bench as a boxed [`Scene`] — the CLIENT BEHAVIOUR the roster
@@ -2488,6 +2417,34 @@ fn pack_card(idx: usize) -> UiNode {
     card
 }
 
+/// One doll this frame: its bank key, where it sits, what it poses, and whether it
+/// animates. The key encodes every dependency of the image, so a poster can never go
+/// stale under its own state.
+struct DollSeat {
+    id: String,
+    at: DollAt,
+    clip: Option<usize>,
+    live: bool,
+}
+
+/// Where a doll sits: in a rect the WALKER reserved for a `surface` node, or in one the
+/// graph FILLER placed for a state card. Both are the same `Doll`; only the seat differs.
+enum DollAt {
+    Slot(flicker::ui::SurfaceSlot),
+    Card(StageRect),
+}
+
+impl DollAt {
+    /// Which `stages.<source>` this seat draws under. A walker slot carries the authored
+    /// name; a card is placed by the scene, which uses the bench's one doll source.
+    fn source(&self) -> &str {
+        match self {
+            DollAt::Slot(s) => &s.source,
+            DollAt::Card(_) => DOLL_SOURCE,
+        }
+    }
+}
+
 /// A clip-row doll's node id. It doubles as the stage cache key, so it must name
 /// everything the rendered image depends on — for a clip row, that is the clip.
 fn stage_id(clip: &str) -> String {
@@ -2501,9 +2458,9 @@ fn live_key(clip: &str) -> String {
 
 /// The lane strip inside a walker-reserved timeline rect: the header line is drawn
 /// above it, so the strip proper starts `TAE_HEADER_H` down. ONE derivation, shared
-/// by drawing and picking, so the two can never disagree.
-fn strip_of(rect: StageRect) -> tae::Strip {
-    tae::Strip {
+/// by the seat and the header, so drawing and picking cannot disagree.
+fn strip_of(rect: StageRect) -> StageRect {
+    StageRect {
         pos: rect.pos + Vec2::new(0.0, TAE_HEADER_H),
         size: Vec2::new(rect.size.x, (rect.size.y - TAE_HEADER_H).max(1.0)),
     }
@@ -2599,19 +2556,6 @@ mod tests {
         flicker::ui::strings::load_str(&strings, "en-us");
     }
 
-    /// The MODEL-CHANNEL strings gate: display copy published from Rust into the
-    /// Model bypasses the tree-walking strings gate, so the crate self-gates its
-    /// own source — every `.set`/`.with` value must be a resolved `$token`, a data
-    /// shape, or carry an explicit `strings-gate-exempt` reason.
-    #[test]
-    fn no_raw_display_copy_published_into_the_model() {
-        let flags = flicker::ui::strings::raw_model_publish_literals(include_str!("lib.rs"));
-        assert!(
-            flags.is_empty(),
-            "raw display copy published into the Model: {flags:?}"
-        );
-    }
-
     /// The tab set + their ids are what the authored tree and the action router agree
     /// on — a mismatch would silently break tab switching.
     #[test]
@@ -2699,6 +2643,86 @@ mod tests {
         assert_eq!(m.text("tab_tae_sty"), Some("loomforge.tab_active"));
     }
 
+    /// **The doll extent gate.** Every Stage the design puts on a page must resolve to a
+    /// reserved `surface` with REAL pixels, at the size the design asks for — a doll can
+    /// be perfectly formed in the tree and still seat a zero rect, which is exactly how
+    /// the six sizes have gone missing before. Walked at 1600x900, per page, over the
+    /// real content library.
+    #[test]
+    fn every_doll_surface_is_reserved_with_extent_on_its_page() {
+        load_shipped_strings();
+        let Ok(doc) = EditorDoc::load(&pack_path(), &[&base_dir(), &clips_dir()]) else {
+            return; // content tree absent in this checkout
+        };
+        let mut bench = LoomforgeBench::shipped();
+        bench.packs = packs::scan_packs(&content_characters());
+        bench.doc = Some(doc);
+        bench.refill_skel_rows();
+        bench.refill_pack_cards();
+        bench.refill_clip_rows();
+
+        let styles = bench.ui_styles.clone();
+        // The doll source every one of them names must actually exist, or each seat is a
+        // surface reserved for nothing.
+        assert!(
+            flicker::ui::stage_def(&styles, DOLL_SOURCE).is_some(),
+            "`{DOLL_SOURCE}` must exist in the shared `stages` block"
+        );
+
+        // (page, id prefix, the design's size in px). Clip rows are on the State Machine
+        // page's rail; pack thumbs on the browser's grid; the preview on the TAE page.
+        let pages: [(Tab, &str, f32); 3] = [
+            (Tab::StateMachine, STAGE_PREFIX, CLIP_STAGE),
+            (Tab::PackBrowser, PACK_STAGE_PREFIX, PACK_STAGE),
+            (Tab::TaeEditor, TAE_STAGE_ID, 300.0),
+        ];
+        for (tab, prefix, size) in pages {
+            bench.tab = tab;
+            let tree = bench.authored.clone().expect("authored tree held");
+            let m = bench.model();
+            let snap = UiInput {
+                mouse: Vec2::new(-1.0, -1.0),
+                clicked: false,
+                down: false,
+                right_down: false,
+                screen: Vec2::new(1600.0, 900.0),
+                wheel: 0.0,
+                exclusive: false,
+                motion: Default::default(),
+            };
+            let frame = run_ui(&tree, &m, &styles, &snap, &mut UiState::new());
+            let seated: Vec<&flicker::ui::SurfaceSlot> = frame
+                .surfaces
+                .iter()
+                .filter(|s| s.id.starts_with(prefix))
+                .collect();
+            assert!(
+                !seated.is_empty(),
+                "{tab:?}: no `{prefix}` doll surface was reserved"
+            );
+            for s in &seated {
+                assert_eq!(s.source, DOLL_SOURCE, "{}: seats the doll stage", s.id);
+                assert!(
+                    s.w >= size && s.h >= size,
+                    "{} resolved {}x{} — the design's Stage is {size}px",
+                    s.id,
+                    s.w,
+                    s.h
+                );
+            }
+            // And a doll belonging to another page reserves nothing here — the whole
+            // reason a page of a dozen dolls is affordable.
+            for (other, off, _) in pages {
+                if other != tab {
+                    assert!(
+                        !frame.surfaces.iter().any(|s| s.id.starts_with(off)),
+                        "{tab:?} reserved {off} — an off-page doll must seat nothing"
+                    );
+                }
+            }
+        }
+    }
+
     /// Walk the REAL tree with the REAL derived model and gate the authored data:
     /// known kinds only, no raw display literals, and the chrome actually draws
     /// with real extents for the must-hit controls.
@@ -2728,8 +2752,6 @@ mod tests {
             down: false,
             right_down: false,
             screen: Vec2::new(1920.0, 1080.0),
-            typed: String::new(),
-            backspace: false,
             wheel: 0.0,
             exclusive: false,
             motion: Default::default(),
@@ -2834,25 +2856,31 @@ mod tests {
         bench.apply_actions(&r);
         assert_ne!(bench.link_trigger, before, "cycling advances the trigger");
 
-        // Switching tools mid-drag abandons the half-drawn edge rather than leaving a
-        // stale source that would link to whatever is clicked next.
-        bench.link_from = Some(0);
         let mut r = ValueMap::new();
         r.set(Tool::Select.id(), true);
         bench.apply_actions(&r);
         assert_eq!(bench.tool, Tool::Select);
-        assert!(
-            bench.link_from.is_none(),
-            "switching tools abandons the pending edge"
-        );
 
-        // The declared mode-cycle intents walk the ring (and also drop a pending edge).
-        bench.link_from = Some(0);
+        // The declared mode-cycle intents walk the ring.
         bench.apply_actions(&ValueMap::new().with("tool_next", true));
         assert_eq!(bench.tool, Tool::AddState, "tool_next steps the ring");
-        assert!(bench.link_from.is_none());
         bench.apply_actions(&ValueMap::new().with("tool_prev", true));
         assert_eq!(bench.tool, Tool::Select, "tool_prev steps back");
+
+        // Every tool maps onto one of the canvas filler's three gestures — the ONE
+        // place the bench's tools meet the filler, and the reason switching tools
+        // abandons a half-drawn edge (the filler drops the gesture on a mode change;
+        // that half is gated in `flicker-canvas`).
+        assert_eq!(
+            Tool::ALL.map(LoomforgeBench::canvas_mode),
+            [
+                CanvasMode::Select,
+                CanvasMode::Inspect,
+                CanvasMode::Link,
+                CanvasMode::Inspect
+            ],
+            "Add and Delete act on what a press LANDS on; they never move a card"
+        );
     }
 
     /// The Phase-3 deliverable end to end, against the REAL pack: load → bind a clip
@@ -3170,5 +3198,167 @@ mod tests {
         results.set("save", true);
         bench.apply_actions(&results);
         assert!(bench.status.contains("Nothing to save"));
+    }
+
+    /// DEVELOPMENT-TIER GATES (Aaron 2026-09-05, ruling 977B4D38): the hard-coded handoff
+    /// conditions of a refactor — tests that read this crate's own source and assert a
+    /// transition holds. `cargo test -- --skip gates::` is the production tier (every OS);
+    /// `cargo test -- gates::` runs only these (one OS in CI). A gate names the transition
+    /// it enforces and is deleted when that transition closes.
+    mod gates {
+        /// **The extraction gate.** The canvas and the timeline MOVED into
+        /// `flicker-canvas`; they were not copied. If a geometry function, a card
+        /// constant or a hand-rolled line quad reappears in this crate, the two copies
+        /// have started to drift and every other bench that seats these fillers inherits
+        /// the drift — so this fails the moment one comes back rather than the day
+        /// someone notices the DM tech tree behaves differently from this bench.
+        ///
+        /// Scans the SHIPPED half of each source file (everything before its own test
+        /// module), so the gate's own vocabulary is not what it catches.
+        #[test]
+        fn no_canvas_or_timeline_geometry_survives_in_this_crate() {
+            let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+            assert!(
+                !dir.join("canvas.rs").exists(),
+                "canvas.rs is the graph filler now — it must not exist here"
+            );
+            // The geometry that moved, by the name it had: layout + transforms + picking
+            // (canvas.rs), the strip's frame/lane mapping (tae.rs), and the thin-quad line
+            // fake the `HudCommand::Line` primitive retired.
+            let banned = [
+                "fn layout",
+                "fn hit_test",
+                "fn edge_points",
+                "fn clip_to_border",
+                "fn dist_to_segment",
+                "fn hit_edge",
+                "fn grid_slot",
+                "fn card_stage_rect",
+                "fn zoom_at",
+                "fn lane_rect",
+                "fn frame_x",
+                "fn event_rect",
+                "fn ruler_ticks",
+                "fn track_x",
+                "fn lane_h",
+                "draw_triangle",
+                "const CARD_W",
+                "const CARD_H",
+                "const GUTTER_W",
+                "const RULER_H",
+                "const POINT_W",
+                "const ZOOM_MIN",
+                "const SELF_LOOP_LIFT",
+                "const EDGE_GRAB",
+            ];
+            for entry in std::fs::read_dir(&dir).expect("src/ is readable") {
+                let path = entry.expect("a readable dir entry").path();
+                if path.extension().is_none_or(|e| e != "rs") {
+                    continue;
+                }
+                // CRLF-agnostic: the Windows runner checks the tree out with autocrlf, and a
+                // `\n`-only split never found the test module there — so the gate scanned its
+                // own banned-name list and failed on every needle (CI 2026-09-05).
+                let src = std::fs::read_to_string(&path)
+                    .expect("a readable source file")
+                    .replace("\r\n", "\n");
+                let shipped = src
+                    .split_once("#[cfg(test)]\nmod tests {")
+                    .map(|(before, _)| before)
+                    .unwrap_or(&src);
+                for needle in banned {
+                    assert!(
+                        !shipped.contains(needle),
+                        "{}: `{needle}` is canvas/timeline geometry — it lives in \
+                         flicker-canvas, and a second copy here is the drift this gate exists \
+                         to stop",
+                        path.display()
+                    );
+                }
+            }
+        }
+
+        /// The MODEL-CHANNEL strings gate: display copy published from Rust into the
+        /// Model bypasses the tree-walking strings gate, so the crate self-gates its
+        /// own source — every `.set`/`.with` value must be a resolved `$token`, a data
+        /// shape, or carry an explicit `strings-gate-exempt` reason.
+        #[test]
+        fn no_raw_display_copy_published_into_the_model() {
+            let flags = flicker::ui::strings::raw_model_publish_literals(include_str!("lib.rs"));
+            assert!(
+                flags.is_empty(),
+                "raw display copy published into the Model: {flags:?}"
+            );
+        }
+
+        /// **The extraction gate.** The scene-owned doll rig MOVED to `flicker-rigview`; a
+        /// second copy here is the drift this exists to stop. It also gates the CHANNEL the
+        /// old leak travelled: this crate must own no render target at all, and must hand the
+        /// ones the filler owns back in `exit`.
+        #[test]
+        fn no_scene_owned_doll_rig_or_render_target_survives_in_this_crate() {
+            let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+            assert!(
+                !dir.join("stage.rs").exists(),
+                "stage.rs is the `Doll` filler now — it must not exist here"
+            );
+            // The rig that moved, by the names it had, plus every way a scene can come to own
+            // a target or a stage pass of its own.
+            let banned = [
+                "StageRig",
+                "StageReq",
+                "fn palette_for",
+                "fn ground_transform",
+                "fn line_layers",
+                "retain_slots",
+                "slot_count",
+                "create_render_target",
+                "free_render_target",
+                "resize_render_target",
+                "composite_panel",
+                "draw_skinned_instanced",
+                "upload_skinned_mesh",
+                "ring_segments",
+                "grid_segments",
+                "fg.surface(",
+                "CompositeTarget",
+            ];
+            for entry in std::fs::read_dir(&dir).expect("src/ is readable") {
+                let path = entry.expect("a readable dir entry").path();
+                if path.extension().is_none_or(|e| e != "rs") {
+                    continue;
+                }
+                // CRLF-agnostic: the Windows runner checks the tree out with autocrlf, and a
+                // `\n`-only split never found the test module there — so the gate scanned its
+                // own banned-name list and failed on every needle (CI 2026-09-05).
+                let src = std::fs::read_to_string(&path)
+                    .expect("a readable source file")
+                    .replace("\r\n", "\n");
+                let shipped = src
+                    .split_once("#[cfg(test)]\nmod tests {")
+                    .map(|(before, _)| before)
+                    .unwrap_or(&src);
+                for needle in banned {
+                    assert!(
+                        !shipped.contains(needle),
+                        "{}: `{needle}` is doll-rig or render-target ownership — it lives in \
+                         flicker-rigview, and a copy here is how the targets leaked",
+                        path.display()
+                    );
+                }
+            }
+            // And the bench MUST override `exit` — the seam that gives them back. A handle is
+            // an index into the renderer's slot pool, so dropping the bench reclaims nothing.
+            let lib = std::fs::read_to_string(dir.join("lib.rs")).expect("lib.rs is readable");
+            assert!(
+                lib.contains("fn exit(&mut self, renderer: &mut Renderer)"),
+                "LoomforgeBench must override Scene::exit — without it every doll target the \
+                 session showed is stranded (incident 5C9C27E1, rule 728E682F)"
+            );
+            assert!(
+                lib.contains("doll.release(renderer)") && lib.contains("DollRig::release"),
+                "exit must release every doll AND the shared rig's mesh"
+            );
+        }
     }
 }

@@ -221,6 +221,12 @@
   "cat_lbl_cancel": {
     "en-us": "Cancel"
   },
+  "cat_lbl_dismissable": {
+    "en-us": "Dismissable (Escape closes)"
+  },
+  "cat_popup_toggle_note": {
+    "en-us": "Untick it and Escape does nothing on this page \u2014 the walker swallows Cancel while the topmost popup panel is not dismissable. Tick it back to restore it; Menu always still opens."
+  },
   "cat_pm_body": {
     "en-us": "Page and tab content"
   },
@@ -404,8 +410,14 @@
   "ap_found": {
     "en-us": "found"
   },
+  "ap_gizmo_flip": {
+    "en-us": "Flip"
+  },
   "ap_gizmo_mode": {
     "en-us": "GIZMO MODE"
+  },
+  "ap_gizmo_snap": {
+    "en-us": "Snap"
   },
   "ap_grip_hand_l": {
     "en-us": "Grip · Hand L"
@@ -2105,6 +2117,42 @@
   "menu_update_available": {
     "en-us": "UPDATE AVAILABLE"
   },
+  "modal_busy_title": {
+    "en-us": "WORKING"
+  },
+  "modal_lbl_cancel": {
+    "en-us": "CANCEL"
+  },
+  "modal_lbl_discard": {
+    "en-us": "DISCARD"
+  },
+  "modal_lbl_keep_editing": {
+    "en-us": "KEEP EDITING"
+  },
+  "modal_apply_title": {
+    "en-us": "APPLY CHANGES?"
+  },
+  "modal_apply_body": {
+    "en-us": "This panel has changes you have not applied yet."
+  },
+  "modal_lbl_apply": {
+    "en-us": "APPLY"
+  },
+  "modal_lbl_revert": {
+    "en-us": "REVERT"
+  },
+  "modal_lbl_ok": {
+    "en-us": "OK"
+  },
+  "modal_lbl_save": {
+    "en-us": "SAVE"
+  },
+  "modal_unsaved_body": {
+    "en-us": "THIS WORK HAS NOT BEEN SAVED."
+  },
+  "modal_unsaved_title": {
+    "en-us": "UNSAVED CHANGES"
+  },
   "pause_esc_to_return": {
     "en-us": "ESC TO RETURN"
   },
@@ -2135,25 +2183,25 @@
   "pc_cell": {
     "en-us": "Cell"
   },
-  "pc_chat_connected": {
+  "chat_connected": {
     "en-us": "connected"
   },
-  "pc_chat_disconnected": {
+  "chat_disconnected": {
     "en-us": "disconnected"
   },
-  "pc_chat_is_now": {
+  "chat_is_now": {
     "en-us": "is now"
   },
-  "pc_chat_joined": {
+  "chat_joined": {
     "en-us": "joined"
   },
-  "pc_chat_left": {
+  "chat_left": {
     "en-us": "left"
   },
-  "pc_chat_you": {
+  "chat_you": {
     "en-us": "You"
   },
-  "pc_chat_you_are_now": {
+  "chat_you_are_now": {
     "en-us": "you are now"
   },
   "pc_cluster": {
@@ -2427,19 +2475,58 @@
     "en-us": "CELLS"
   },
   "pop_bootstrap": {
-    "en-us": "BAKING 1200 TICKS"
+    "en-us": "RUNNING TICKS"
   },
   "pop_evolve_reset": {
     "en-us": "RESET"
   },
+  "pop_stat_green": {
+    "en-us": "GREEN"
+  },
+  "pop_ft_menu": {
+    "en-us": "Menu"
+  },
+  "pop_ft_back": {
+    "en-us": "Back"
+  },
+  "pop_ft_next": {
+    "en-us": "Next"
+  },
+  "pop_ft_commit": {
+    "en-us": "Commit"
+  },
+  "pop_ft_map": {
+    "en-us": "Map"
+  },
+  "pop_ft_apply": {
+    "en-us": "Press {Confirm} to apply"
+  },
+  "pop_map_title": {
+    "en-us": "World Map"
+  },
+  "pop_map_close": {
+    "en-us": "Close"
+  },
   "pop_evolve_roll": {
-    "en-us": "TICK 1200"
+    "en-us": "PLAY N"
   },
   "pop_evolve_run": {
-    "en-us": "RUN · PAUSE"
+    "en-us": "PLAY · PAUSE"
+  },
+  "pop_evolve_tick": {
+    "en-us": "TICK"
   },
   "pop_evolve_step": {
     "en-us": "STEP"
+  },
+  "pop_show_air": {
+    "en-us": "ATMOSPHERE"
+  },
+  "pop_show_water": {
+    "en-us": "WATER"
+  },
+  "pop_show_rivers": {
+    "en-us": "RIVERS"
   },
   "pop_page_hex": {
     "en-us": "Hex"
@@ -2492,6 +2579,57 @@
   "pop_spots": {
     "en-us": "SPOTS"
   },
+  "pop_hex_materials": {
+    "en-us": "MATERIAL COLUMN"
+  },
+  "pop_hex_sed": {
+    "en-us": "SEDIMENT · W"
+  },
+  "pop_hex_rock": {
+    "en-us": "LOOSE ROCK · W ×HARD"
+  },
+  "pop_hex_l4": {
+    "en-us": "L4 VOLCANIC · W ×HARD"
+  },
+  "pop_hex_l3": {
+    "en-us": "L3 VEIN BED · W ×HARD"
+  },
+  "pop_hex_vein": {
+    "en-us": "ORE BODY"
+  },
+  "pop_hex_base": {
+    "en-us": "PLATE BASE · W ×PRESS"
+  },
+  "pop_hex_bedrock": {
+    "en-us": "DEEP CRUST · W"
+  },
+  "pop_hex_fluids": {
+    "en-us": "FLUIDS & SKY"
+  },
+  "pop_hex_moist": {
+    "en-us": "MOISTURE"
+  },
+  "pop_hex_rain": {
+    "en-us": "RAINFALL · MM"
+  },
+  "pop_phase_weather": {
+    "en-us": "Weather"
+  },
+  "pop_hex_river": {
+    "en-us": "STREAM FLOW"
+  },
+  "pop_hex_ice": {
+    "en-us": "ICE CAP · W"
+  },
+  "pop_hex_water": {
+    "en-us": "SEA DEPTH · W"
+  },
+  "pop_hex_wtemp": {
+    "en-us": "SEA TEMP · SFC / DEEP"
+  },
+  "pop_hex_heat": {
+    "en-us": "MOLTEN HEAT"
+  },
   "pop_stat_diameter": {
     "en-us": "DIAMETER · MI"
   },
@@ -2515,6 +2653,9 @@
   },
   "pop_water_target": {
     "en-us": "TARGET"
+  },
+  "pop_veg_target": {
+    "en-us": "GREEN %"
   },
   "pop_tab_map": {
     "en-us": "Map"
@@ -2674,6 +2815,9 @@
   },
   "qm_tree_header": {
     "en-us": "CONTENT TREES"
+  },
+  "qm_warn_epoch_invalid": {
+    "en-us": "world will not load — the .epoch is unreadable or fails its own validation"
   },
   "qm_warn_missing_textures": {
     "en-us": "referenced textures are missing beside the rig"
@@ -3318,7 +3462,7 @@
     "en-us": "Condition the mesh"
   },
   "ap_prep_blurb": {
-    "en-us": "Raw meshes arrive at any size and triangle count. Set the real-world height and trim the triangle budget, then rig."
+    "en-us": "Raw meshes arrive at any size and triangle count. Set the real-world height, type a triangle target and apply it, then rig."
   },
   "ap_stature": {
     "en-us": "Height"
@@ -3329,11 +3473,11 @@
   "ap_decimate": {
     "en-us": "Decimate"
   },
-  "ap_keep_pct": {
-    "en-us": "Keep %"
+  "ap_decimate_reset": {
+    "en-us": "RESET"
   },
-  "ap_prep_keep": {
-    "en-us": "Keeping"
+  "ap_decimate_apply": {
+    "en-us": "APPLY"
   },
   "ap_prep_rigged": {
     "en-us": "Already rigged — game-ready, no prep needed"
@@ -3346,6 +3490,21 @@
   },
   "cat_nav_surface": {
     "en-us": "Surface"
+  },
+  "cat_nav_binding_icon": {
+    "en-us": "Binding Icon"
+  },
+  "cat_bi_interact": {
+    "en-us": "Press {Interact} to interact"
+  },
+  "cat_bi_menu": {
+    "en-us": "{Menu} opens the pause menu"
+  },
+  "cat_bi_confirm": {
+    "en-us": "{Confirm} activates the focused control"
+  },
+  "cat_bi_note": {
+    "en-us": "Each row reads the live binding of its signal — a keycap on keyboard, the controller glyph on a pad. Never a control: it cannot be focused or clicked."
   },
   "cat_surface_note": {
     "en-us": "3D surface (quad layout) — left-drag a panel to orbit"
@@ -3364,27 +3523,6 @@
   },
   "qm_menu_newfolder": {
     "en-us": "New folder"
-  },
-  "qm_conflict_title": {
-    "en-us": "Already exists"
-  },
-  "qm_conflict_existing": {
-    "en-us": "EXISTING"
-  },
-  "qm_conflict_incoming": {
-    "en-us": "INCOMING"
-  },
-  "qm_conflict_apply_rest": {
-    "en-us": "Apply to the remaining conflicts"
-  },
-  "qm_conflict_skip": {
-    "en-us": "Skip"
-  },
-  "qm_conflict_keep_both": {
-    "en-us": "Keep both"
-  },
-  "qm_conflict_replace": {
-    "en-us": "Replace"
   },
   "qm_rename_hint": {
     "en-us": "Enter commits · Esc cancels"
@@ -3583,6 +3721,9 @@
   },
   "sig_cancel_text": {
     "en-us": "Cancel Text"
+  },
+  "sig_enter_text": {
+    "en-us": "Enter Text"
   },
   "siggroup_movement": {
     "en-us": "MOVEMENT"
@@ -4048,5 +4189,410 @@
   },
   "load_footer_contact": {
     "en-us": "Discord @elideus · aaron@elideus.net"
+  },
+  "ap_ft_menu": {
+    "en-us": "MENU"
+  },
+  "ap_ft_select": {
+    "en-us": "Select"
+  },
+  "ap_ft_back": {
+    "en-us": "Back"
+  },
+  "ap_ft_steps": {
+    "en-us": "Walk steps"
+  },
+  "ap_ft_orbit": {
+    "en-us": "Right stick orbits the view"
+  },
+  "qm_ft_menu": {
+    "en-us": "MENU"
+  },
+  "qm_ft_open": {
+    "en-us": "Open / promote"
+  },
+  "qm_ft_up": {
+    "en-us": "Up / close"
+  },
+  "qm_ft_tabs": {
+    "en-us": "Switch tab"
+  },
+  "ap_step_source": {
+    "en-us": "Source"
+  },
+  "ap_facts_status": {
+    "en-us": "Status"
+  },
+  "ap_view_empty": {
+    "en-us": "Choose a workflow and open a folder to see the asset here."
+  },
+  "modal_conflict_title": {
+    "en-us": "NAME CONFLICT"
+  },
+  "modal_conflict_existing": {
+    "en-us": "EXISTING"
+  },
+  "modal_conflict_incoming": {
+    "en-us": "INCOMING"
+  },
+  "modal_conflict_apply_rest": {
+    "en-us": "APPLY TO THE REMAINING"
+  },
+  "modal_conflict_lbl_skip": {
+    "en-us": "SKIP"
+  },
+  "modal_conflict_lbl_keep_both": {
+    "en-us": "KEEP BOTH"
+  },
+  "modal_conflict_lbl_replace": {
+    "en-us": "REPLACE"
+  },
+  "cat_nav_recipes": {
+    "en-us": "Recipes"
+  },
+  "cat_nav_fillers": {
+    "en-us": "Fillers"
+  },
+  "cat_nav_modals": {
+    "en-us": "Modals"
+  },
+  "cat_rec_intro": {
+    "en-us": "Canonical ARRANGEMENTS, standard kinds only. Each card is the catalog's answer to \"that looks like a missing component\"."
+  },
+  "cat_fill_intro": {
+    "en-us": "Engine-crate surface fillers, each seated live on a plain surface."
+  },
+  "cat_modal_intro": {
+    "en-us": "Every shared modal tree, opened by id through the host seam."
+  },
+  "cat_rec_toast": {
+    "en-us": "Toast + Undo"
+  },
+  "cat_rec_property": {
+    "en-us": "Property row"
+  },
+  "cat_rec_tree": {
+    "en-us": "Tree row"
+  },
+  "cat_rec_breadcrumb": {
+    "en-us": "Breadcrumb"
+  },
+  "cat_rec_notice": {
+    "en-us": "Notice card"
+  },
+  "cat_rec_transport": {
+    "en-us": "Transport bar"
+  },
+  "cat_rec_resource": {
+    "en-us": "Resource readout"
+  },
+  "cat_rec_command": {
+    "en-us": "Command card"
+  },
+  "cat_rec_legend": {
+    "en-us": "Legend row"
+  },
+  "cat_rec_collapse": {
+    "en-us": "Collapsible group"
+  },
+  "cat_rec_dragdrop": {
+    "en-us": "Drag to drop"
+  },
+  "cat_rec_toast_msg": {
+    "en-us": "Three items were deleted."
+  },
+  "cat_rec_toast_undo": {
+    "en-us": "Undo"
+  },
+  "cat_rec_toast_note": {
+    "en-us": "panel > row > text + button. One message, one verb."
+  },
+  "cat_rec_prop_name": {
+    "en-us": "Name"
+  },
+  "cat_rec_prop_kind": {
+    "en-us": "Kind"
+  },
+  "cat_rec_prop_count": {
+    "en-us": "Count"
+  },
+  "cat_rec_ph_name": {
+    "en-us": "unnamed"
+  },
+  "cat_rec_ph_kind": {
+    "en-us": "pick one"
+  },
+  "cat_rec_opt_mesh": {
+    "en-us": "Mesh"
+  },
+  "cat_rec_opt_bone": {
+    "en-us": "Bone"
+  },
+  "cat_rec_opt_clip": {
+    "en-us": "Clip"
+  },
+  "cat_rec_prop_note": {
+    "en-us": "text + text_field, select or stepper. A property sheet is a stack of these."
+  },
+  "cat_rec_caret_open": {
+    "en-us": "▾"
+  },
+  "cat_rec_caret_shut": {
+    "en-us": "▸"
+  },
+  "cat_rec_tree_n1": {
+    "en-us": "Rig"
+  },
+  "cat_rec_tree_n2": {
+    "en-us": "Spine"
+  },
+  "cat_rec_tree_n3": {
+    "en-us": "Head"
+  },
+  "cat_rec_tree_note": {
+    "en-us": "caret button + name button. The depth is an arrange bind on the row, not a nest of containers."
+  },
+  "cat_rec_crumb_note": {
+    "en-us": "row + rows_from over one button prototype. The path is data, so a deeper path is more rows."
+  },
+  "cat_rec_crumb_root": {
+    "en-us": "content"
+  },
+  "cat_rec_crumb_mid": {
+    "en-us": "sensorium"
+  },
+  "cat_rec_crumb_leaf": {
+    "en-us": "scenes"
+  },
+  "cat_rec_notice_glyph": {
+    "en-us": "▲"
+  },
+  "cat_rec_notice_title": {
+    "en-us": "The bake is out of date"
+  },
+  "cat_rec_notice_body": {
+    "en-us": "This cluster changed after the last bake. Re-bake before shipping it."
+  },
+  "cat_rec_notice_copy": {
+    "en-us": "Copy"
+  },
+  "cat_rec_notice_note": {
+    "en-us": "A severity panel over a glyph and its copy. The severity is a colour token."
+  },
+  "cat_rec_tp_prev": {
+    "en-us": "⏮"
+  },
+  "cat_rec_tp_play": {
+    "en-us": "▶"
+  },
+  "cat_rec_tp_next": {
+    "en-us": "⏭"
+  },
+  "cat_rec_tp_readout": {
+    "en-us": "frame 0"
+  },
+  "cat_rec_tp_note": {
+    "en-us": "Three verbs and a readout. Every timeline consumer wears this bar."
+  },
+  "cat_rec_res_label": {
+    "en-us": "Hull"
+  },
+  "cat_rec_res_readout": {
+    "en-us": "0 / 100"
+  },
+  "cat_rec_res_note": {
+    "en-us": "resource_gauge + text. A readout strip is a row of these."
+  },
+  "cat_rec_cmd_note": {
+    "en-us": "A grid of action_slot. The hotbar and the command card are one arrangement at two densities."
+  },
+  "cat_rec_legend_a": {
+    "en-us": "Live"
+  },
+  "cat_rec_legend_b": {
+    "en-us": "Stale"
+  },
+  "cat_rec_legend_c": {
+    "en-us": "Missing"
+  },
+  "cat_rec_legend_note": {
+    "en-us": "stat_dot + text, once per series."
+  },
+  "cat_rec_collapse_hdr": {
+    "en-us": "Advanced"
+  },
+  "cat_rec_collapse_body": {
+    "en-us": "The body is an ordinary cell behind a visible_bind the header flips."
+  },
+  "cat_rec_collapse_note": {
+    "en-us": "header button + visible_bind cell. No collapsible prop was promoted."
+  },
+  "cat_rec_drag_tile": {
+    "en-us": "Ore"
+  },
+  "cat_rec_drop_here": {
+    "en-us": "Drop it here"
+  },
+  "cat_rec_drop_result": {
+    "en-us": "nothing dropped yet"
+  },
+  "cat_rec_drop_note": {
+    "en-us": "drag_kind on the source, drop_accept and drop_action on the target. Pointer release and pad confirm both land here."
+  },
+  "cat_fill_plot": {
+    "en-us": "Plot"
+  },
+  "cat_fill_graph": {
+    "en-us": "Graph canvas"
+  },
+  "cat_fill_timeline": {
+    "en-us": "Timeline"
+  },
+  "cat_fill_gadget": {
+    "en-us": "Gadget"
+  },
+  "cat_fill_doll": {
+    "en-us": "Doll"
+  },
+  "cat_fill_plot_spark": {
+    "en-us": "sparkline"
+  },
+  "cat_fill_plot_bars": {
+    "en-us": "bars"
+  },
+  "cat_fill_plot_curve": {
+    "en-us": "curve"
+  },
+  "cat_fill_plot_note": {
+    "en-us": "One demo series read three ways, drawn as line primitives inside the seated rect."
+  },
+  "cat_fill_graph_note": {
+    "en-us": "Three demo nodes and one self-loop. Drag a card, wheel to zoom, middle-drag to pan."
+  },
+  "cat_fill_timeline_note": {
+    "en-us": "Seven lanes of span and point events under a moving playhead. Wheel zooms about the cursor."
+  },
+  "cat_fill_gadget_note": {
+    "en-us": "The reusable manipulation overlay in translate mode. Aim, locked and modifying each colour the handle."
+  },
+  "cat_fill_doll_note": {
+    "en-us": "The small-panel rig preview on its authored stage. No rig is uploaded here, so the ground ring is what draws."
+  },
+  "cat_modal_choice": {
+    "en-us": "Choice dialog"
+  },
+  "cat_modal_menu": {
+    "en-us": "Popup menu"
+  },
+  "cat_modal_prompt": {
+    "en-us": "Text prompt"
+  },
+  "cat_modal_busy": {
+    "en-us": "Busy"
+  },
+  "cat_modal_conflict": {
+    "en-us": "Conflict"
+  },
+  "cat_modal_result_title": {
+    "en-us": "Last modal result"
+  },
+  "cat_modal_result": {
+    "en-us": "Result"
+  },
+  "cat_modal_payload": {
+    "en-us": "Payload"
+  },
+  "cat_modal_none": {
+    "en-us": "—"
+  },
+  "cat_modal_note": {
+    "en-us": "Each button opens the shared tree by id; the answer returns through the scene's modal-closed hook. Busy refuses Escape mid-work and allows it at done."
+  },
+  "cat_modal_demo_title": {
+    "en-us": "Catalog demo"
+  },
+  "cat_modal_demo_body": {
+    "en-us": "The catalog opened this shared tree with demo params, and prints whatever it answers."
+  },
+  "cat_modal_busy_title": {
+    "en-us": "Working"
+  },
+  "cat_modal_busy_body": {
+    "en-us": "A demo job runs for about two seconds. Escape is refused while it works, honoured once the bar is full \u2014 wait and it closes itself with done."
+  },
+  "cat_modal_prompt_title": {
+    "en-us": "Name this thing"
+  },
+  "cat_modal_prompt_body": {
+    "en-us": "The shared text prompt, seeded with demo text."
+  },
+  "cat_modal_menu_title": {
+    "en-us": "Pick an action"
+  },
+  "cat_modal_conflict_name": {
+    "en-us": "cluster_0_0_0.json"
+  },
+  "cat_modal_conflict_folder": {
+    "en-us": "content / package / bakes"
+  },
+  "cat_modal_conflict_existing": {
+    "en-us": "412 KB, baked yesterday"
+  },
+  "cat_modal_conflict_incoming": {
+    "en-us": "418 KB, baked just now"
+  },
+  "cat_modal_ok": {
+    "en-us": "OK"
+  },
+  "cat_modal_cancel": {
+    "en-us": "Cancel"
+  },
+  "cat_modal_skip": {
+    "en-us": "Skip"
+  },
+  "cat_modal_keep_both": {
+    "en-us": "Keep both"
+  },
+  "cat_modal_replace": {
+    "en-us": "Replace"
+  },
+  "cat_fill_graph_n1": {
+    "en-us": "Idle"
+  },
+  "cat_fill_graph_n2": {
+    "en-us": "Walk"
+  },
+  "cat_fill_graph_n3": {
+    "en-us": "Loop"
+  },
+  "cat_fill_graph_m1": {
+    "en-us": "entry state"
+  },
+  "cat_fill_graph_m2": {
+    "en-us": "blend over 0.3s"
+  },
+  "cat_fill_graph_m3": {
+    "en-us": "self transition"
+  },
+  "cat_fill_lane_1": {
+    "en-us": "Hitbox"
+  },
+  "cat_fill_lane_2": {
+    "en-us": "Spawn"
+  },
+  "cat_fill_lane_3": {
+    "en-us": "Camera"
+  },
+  "cat_fill_lane_4": {
+    "en-us": "Sound"
+  },
+  "cat_fill_lane_5": {
+    "en-us": "Effect"
+  },
+  "cat_fill_lane_6": {
+    "en-us": "Script"
+  },
+  "cat_fill_lane_7": {
+    "en-us": "Marker"
   }
 }

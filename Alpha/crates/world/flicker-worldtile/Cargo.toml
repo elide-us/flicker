@@ -1,6 +1,6 @@
 [package]
 name = "flicker-worldtile"
-version = "0.1.0"
+version = "0.1.10"
 edition.workspace = true
 license.workspace = true
 publish = false
@@ -16,6 +16,17 @@ path = "src/lib.rs"
 flicker-poc-chemistry.workspace = true
 flicker-worldgrid.workspace = true
 glam.workspace = true
+# The engine's world-defining constants: cluster span, the planet size
+# model — what the atlas frame and the WorldClusterId are calibrated to.
+clayengine.workspace = true
+# The planet epoch (.epoch v2) — the Populous bench's committed world, the
+# SOURCE the gameplay bake materializes tiles from.
+flicker-worldengine.workspace = true
+# The gz-at-rest seam the baked map planes ride (same as every artifact).
+flicker-core.workspace = true
+# The bake index — a small machine-read JSON header beside the planes.
+serde.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 flicker-materials.workspace = true

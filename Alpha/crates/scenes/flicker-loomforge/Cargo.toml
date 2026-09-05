@@ -1,6 +1,6 @@
 [package]
 name = "flicker-loomforge"
-version = "0.1.9"
+version = "0.1.10"
 edition.workspace = true
 license.workspace = true
 publish = false
@@ -15,8 +15,9 @@ publish = false
 #
 # UI split (design decision): the surrounding chrome — tab bar, rails, lists,
 # inspectors — is the `flicker-widgets` component walker; the node-graph canvas and TAE
-# timeline are drawn by the scene itself (they need free 2D positioning, edges/curves,
-# and drag-drop the closed walker has no components for).
+# timeline are `flicker-canvas` SURFACE FILLERS seated in walker-reserved rects (they
+# need free 2D positioning, edges and drop targets the closed walker has no components
+# for). This crate keeps only what those gestures MEAN to an animation pack.
 
 # A library-only scene package, driven by the unified `prism-alpha` launcher.
 [lib]
@@ -29,6 +30,16 @@ path = "src/lib.rs"
 # Value), and flicker-widgets (the component walker: run_ui/UiState/UiInput/render_hud +
 # WalkerHandler, the walker's bus adapter).
 flicker = { version = "0.1.0", path = "../../core/flicker" }
+# The two 2D editor surface FILLERS this bench seats: the node-graph canvas and the
+# lane timeline. Both were written here first and now live in the engine crate, so the
+# Dungeon Maker's tech tree and the Game Master's event timelines share one copy
+# (rule DDD070C7 — the code MOVED; there is no second implementation left behind).
+flicker-canvas.workspace = true
+# The `Doll` — the small-panel skinned-rig preview the bench's six Stage sizes are. It
+# was the scene-owned `stage.rs` and now lives beside `RigView` in the animation cluster,
+# so Clayworks's bake view and the equipment paperdoll share one copy (rule DDD070C7 —
+# the code MOVED; there is no second implementation left behind).
+flicker-rigview.workspace = true
 # The new input model (Resolver/Fired/ActionSignal) + the event bus
 # (Router/InputHandler/RouteCtx) this scene routes Menu + the HUD pointer-consume
 # through (spec §9); the bespoke node/timeline canvas tools stay scene-owned.

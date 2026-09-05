@@ -120,6 +120,17 @@
         "handle": "$sap_border",
         "handle_w": 14
       },
+      "field": {
+        "top": "$well",
+        "bot": "$well",
+        "border": "$edge2",
+        "caret": "$sap_border",
+        "focus_border": "$sap_border",
+        "focus_border_w": 2,
+        "label": "$ink_bright",
+        "placeholder": "$dim",
+        "radius": 3
+      },
       "button": {
         "fill_top": "$stone4",
         "fill_bot": "$stone2",
@@ -240,14 +251,18 @@
                 ]
               },
               {
-                "component": "text",
+                "component": "text_field",
                 "id": "rename_field",
-                "text_bind": "rename_draft",
+                "bind": "rename_draft",
                 "visible_bind": "renaming",
-                "text_size": 13,
-                "font": "label",
-                "color": "sablework.col.accent",
-                "size": 150
+                "select_all_on_enter": true,
+                "submit_action": "rename_commit",
+                "cancel_action": "rename_cancel",
+                "label_size": 13,
+                "style": "sablework.field",
+                "size": 150,
+                "tab_group": "sw_top",
+                "nav_ordinal": 2
               },
               {
                 "component": "text",

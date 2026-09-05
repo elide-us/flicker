@@ -1,9 +1,21 @@
-# CI — lint, test (3 OS), and the supply-chain gate.
+# CI — lint, test (3 OS), the development-tier gates, and the supply-chain gate.
 #
 # Actions are pinned to full commit SHAs (version in the trailing comment);
 # Dependabot (.github/dependabot.yml) proposes pin bumps as reviewable PRs.
 # All cargo invocations run --locked: the committed Cargo.lock is the
 # dependency pin, and CI must never silently re-resolve it.
+#
+# TWO TIERS OF TESTS (Aaron 2026-09-05): the `test` matrix is the PRODUCTION tier —
+# behaviour, on every OS — and skips `gates::`; the `gates` job is the DEVELOPMENT tier
+# — the source-scanning gates that hard-code a refactor's handoff conditions — and runs
+# them once, on Linux (they read text; the platform is irrelevant by intent and fragile
+# in practice: CRLF checkouts, `\` paths).
+#
+# DEDUPE (Aaron 2026-09-05): a release used to run this workflow three times on one
+# tree — the macbook push, the PR to main on the same commit, the merge to main on a
+# merge commit with the same tree. The `dedupe` job looks up the commit's TREE hash and
+# skips every other job when a successful run already covered that tree. Anything with
+# real changes (a Dependabot bump, a conflict resolution) has a new tree and runs.
 
 name: ci
 
@@ -20,13 +32,47 @@ concurrency:
 
 permissions:
   contents: read
+  actions: read
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  dedupe:
+    name: dedupe (skip when this tree already passed)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      skip: ${{ steps.probe.outputs.skip }}
+    steps:
+      - name: Look for a successful run of this exact tree
+        id: probe
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # A pull_request's github.sha is the synthetic merge ref; the branch head is
+          # what the macbook push already tested.
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          repo="${GITHUB_REPOSITORY}"
+          tree=$(gh api "repos/${repo}/commits/${HEAD_SHA}" --jq .commit.tree.sha)
+          echo "tree ${tree} (commit ${HEAD_SHA})"
+          skip=false
+          for sha in $(gh api "repos/${repo}/actions/workflows/ci.yml/runs?status=success&per_page=30" \
+                         --jq '.workflow_runs[].head_sha'); do
+            t=$(gh api "repos/${repo}/commits/${sha}" --jq .commit.tree.sha 2>/dev/null || true)
+            if [ "${t}" = "${tree}" ]; then
+              echo "already green: run on ${sha} covered tree ${tree} — skipping"
+              skip=true
+              break
+            fi
+          done
+          echo "skip=${skip}" >> "${GITHUB_OUTPUT}"
+
   lint:
     name: fmt + clippy
+    needs: dedupe
+    if: needs.dedupe.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -56,6 +102,8 @@ jobs:
 
   test:
     name: test (${{ matrix.os }})
+    needs: dedupe
+    if: needs.dedupe.outputs.skip != 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -83,11 +131,39 @@ jobs:
       - name: Warm toolchain (rust-toolchain.toml drives the version)
         run: rustup show
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - name: test
-        run: cargo test --workspace --locked
+      - name: test (production tier — skips the development gates)
+        run: "cargo test --workspace --locked -- --skip gates::"
+
+  gates:
+    name: gates (development tier, one OS)
+    needs: dedupe
+    if: needs.dedupe.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Linux build deps
+        timeout-minutes: 10
+        run: |
+          # Same azure-mirror hardening as the lint job (keep the three copies identical).
+          for i in 1 2 3; do
+            sudo timeout 180 apt-get update \
+              -o Acquire::Retries=3 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 \
+              && break
+            echo "apt-get update flaked (attempt $i/3)"; sleep 10
+          done
+          sudo apt-get install -y --no-install-recommends \
+            libudev-dev pkg-config libwayland-dev libxkbcommon-dev libx11-dev
+      - name: Warm toolchain (rust-toolchain.toml drives the version)
+        run: rustup show
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: gates
+        run: "cargo test --workspace --locked -- gates::"
 
   deny:
     name: cargo-deny (advisories, bans, licenses, sources)
+    needs: dedupe
+    if: needs.dedupe.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

@@ -12,6 +12,7 @@
 
 pub mod bake;
 pub mod baseline;
+pub mod browse;
 pub mod bvh;
 pub mod conform;
 pub mod decimate;
@@ -37,6 +38,10 @@ pub use bake::{
     attach_world, bake_garment, bake_prop, bake_rig, bake_skin, fitting_base, garment_socket,
     load_rig_raw, write_garment, write_prop, write_rig, write_rig_file, Fit, MountPoint,
 };
+pub use browse::{
+    breadcrumb, display_name, files_under, list_dir, logical, parent_within_roots, tree_rows, Row,
+    SortKey, TreeRow,
+};
 pub use conform::{
     conform_to_canonical, default_reference, derive_ankle_placement, derive_hip_placement,
     derive_shoulder_placement, fit_baseline_to_mesh, infer_canonical_bones,
@@ -44,7 +49,7 @@ pub use conform::{
     splice_canonical_chain, AnkleReport, ConformMode, ConformOutput, ConformReport, HipReport,
     InferReport, ScaleReport, ShoulderReport,
 };
-pub use decimate::{decimate, decimate_levels, DecimateLevels};
+pub use decimate::decimate_to;
 pub use fbx::{
     apply_orientation, first_material_color, parse_fbx, quarter_turn, RawBone, RawModel, RawVertex,
 };

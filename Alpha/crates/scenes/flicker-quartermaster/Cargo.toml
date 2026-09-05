@@ -1,6 +1,6 @@
 [package]
 name = "flicker-quartermaster"
-version = "0.1.9"
+version = "0.1.10"
 edition.workspace = true
 license.workspace = true
 publish = false
@@ -30,5 +30,13 @@ flicker-shell.workspace = true
 # The content domain: roots/staging, package-side classification, and the
 # reversible file operations the bench's commands wrap.
 flicker-content.workspace = true
+# The `.epoch` format's one home — the Review tab stands a staged world back up
+# before it will let it be promoted.
+flicker-worldengine.workspace = true
 tracing.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
+# The Goldberg tile count a synthetic `.epoch` fixture must span — taken from
+# the grid's own formula, never a copied number.
+flicker-worldgrid.workspace = true

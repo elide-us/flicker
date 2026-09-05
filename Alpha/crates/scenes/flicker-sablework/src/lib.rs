@@ -43,7 +43,7 @@ use flicker::render::{FrameGraph, Renderer, TextureHandle};
 use flicker::scene::{Scene, SceneInput, Transition};
 use flicker::script::{HudCommand, ScriptHost, UiNode, Value, ValueMap};
 use flicker::ui::{render_hud, run_ui, SceneDef, UiInput, UiIntents, UiState, WalkerHandler};
-use flicker_input_core::{AbstractControls, GamepadConfig, InputMap, InputState, Key};
+use flicker_input_core::{AbstractControls, GamepadConfig, InputContext, InputMap, InputState};
 use flicker_input_router::{InputHandler, Router};
 use flicker_materials::{JsonTableSource, MaterialId, Tables};
 use flicker_shell::{PauseScene, Theme};
@@ -112,15 +112,19 @@ pub enum CommitState {
     Failed(String),
 }
 
-/// An open in-place material rename — Rust owns the draft (Quartermaster's Pattern B), fed by
-/// raw typed/backspace while renaming and shown by a plain `text` node.
+/// An open in-place material rename. The FIELD is the authored `text_field`
+/// (`rename_field`, bound to `rename_draft`, `select_all_on_enter`); its text-entry
+/// session is the walker's (Aaron 2026-09-03) — the scene publishes the draft, takes
+/// the bind back each frame, and acts on the field's `submit_action` / `cancel_action` names.
 struct MaterialRename {
     /// The byte id being relabelled — the STRICT key the write targets (the `u8` a voxel and
     /// the wire carry; the sim server owns the wire contract, this only edits the label).
     id: MaterialId,
-    /// The draft name. The FIRST keystroke replaces the current name (pristine), then appends.
+    /// The draft name, as the field holds it.
     draft: String,
-    pristine: bool,
+    /// The field's session has been seen open — after which a frame with no session
+    /// open or requested means the edit was abandoned (a click elsewhere).
+    armed: bool,
 }
 
 pub struct Sablework {
@@ -149,10 +153,6 @@ pub struct Sablework {
     data_dir: std::path::PathBuf,
     /// The open material rename, if any.
     rename: Option<MaterialRename>,
-    /// Enter/Esc edge state, read RAW while renaming (the ruled text-entry exception — the
-    /// intent bus carries no TextEntry map), so a hold does not re-fire commit/cancel.
-    enter_prev: bool,
-    esc_prev: bool,
 
     // ── preview ──
     /// Repeats per axis in the swatch. From the merged styles at `enter`.
@@ -380,8 +380,6 @@ impl Sablework {
             size_rung,
             data_dir,
             rename: None,
-            enter_prev: false,
-            esc_prev: false,
             tiles: DEFAULT_TILES,
             tex: Vec::new(),
             latest: None,
@@ -763,8 +761,11 @@ impl Sablework {
         self.rename = Some(MaterialRename {
             id,
             draft: name,
-            pristine: true,
+            armed: false,
         });
+        // The field's session opens through the walker on its next frame — requested,
+        // never pushed, by the scene (8187AFA9).
+        self.ui_state.open_text_entry("rename_field");
     }
 
     /// Abandon the rename, leaving the material's name alone.
@@ -772,22 +773,25 @@ impl Sablework {
         self.rename = None;
     }
 
-    /// Fold this frame's typed text into the draft. The first character REPLACES the name
-    /// (pristine); afterwards it appends. Backspace pops one char and ends pristine.
-    pub(crate) fn type_into_rename(&mut self, typed: &str, backspace: bool) {
+    /// Take the field's edited text back into the draft (the field's bind, echoed every
+    /// frame while the rename is open).
+    pub(crate) fn set_rename_draft(&mut self, text: &str) {
+        if let Some(r) = self.rename.as_mut() {
+            r.draft = text.to_string();
+        }
+    }
+
+    /// The per-frame session watch: once the field's session has been seen open, a frame
+    /// on which it is neither open nor requested means the user left the field — the
+    /// rename is abandoned, exactly like Escape.
+    fn watch_rename_session(&mut self) {
         let Some(r) = self.rename.as_mut() else {
             return;
         };
-        if !typed.is_empty() {
-            if r.pristine {
-                r.draft.clear();
-                r.pristine = false;
-            }
-            r.draft.push_str(typed);
-        }
-        if backspace {
-            r.pristine = false;
-            r.draft.pop();
+        if self.ui_state.text_entry() {
+            r.armed = true;
+        } else if r.armed && !self.ui_state.text_entry_requested() {
+            self.cancel_rename();
         }
     }
 
@@ -801,6 +805,7 @@ impl Sablework {
         };
         let name = r.draft.trim().to_string();
         if name.is_empty() {
+            self.ui_state.open_text_entry("rename_field"); // refused: the field stays open
             return;
         }
         let id = r.id;
@@ -811,7 +816,10 @@ impl Sablework {
                 }
                 self.rename = None;
             }
-            Err(e) => tracing::error!("material rename failed to write: {e}"),
+            Err(e) => {
+                tracing::error!("material rename failed to write: {e}");
+                self.ui_state.open_text_entry("rename_field");
+            }
         }
     }
 
@@ -873,6 +881,13 @@ impl Sablework {
 }
 
 impl Scene for Sablework {
+    /// The rename field owns the keyboard while its session is open.
+    fn input_context(&self) -> Option<InputContext> {
+        self.ui_state
+            .text_entry()
+            .then_some(InputContext::TextEntry)
+    }
+
     fn enter(&mut self, renderer: &mut Renderer) {
         self.white = Some(renderer.load_texture(&[0xff, 0xff, 0xff, 0xff], 1, 1));
         self.ui_theme = Some(Theme::build(renderer));
@@ -934,29 +949,16 @@ impl Scene for Sablework {
             return Transition::None;
         };
         let screen = renderer.size();
+        // The rename's session watch runs before the walk, so an abandoned edit closes on
+        // the frame after the focus left the field.
+        self.watch_rename_session();
         let model = self.model();
-        // Typed characters reach the rename ONLY while one is open, so a stray keystroke can
-        // never edit a name the user is not renaming (Quartermaster's rule). The scene owns the
-        // draft and folds the same text; request_focus keeps the field lit while editing.
-        let renaming = self.is_renaming();
-        let typed = if renaming {
-            input.typed().to_string()
-        } else {
-            String::new()
-        };
-        let backspace = renaming && input.backspace();
-        if renaming {
-            self.ui_state.request_focus("rename_field");
-            self.type_into_rename(&typed, backspace);
-        }
         let snap = UiInput {
             mouse: input.mouse_position,
             clicked: input.mouse_left_pressed,
             down: input.mouse_left,
             right_down: input.mouse_right,
             screen,
-            typed,
-            backspace,
             wheel: input.mouse_wheel_delta,
             exclusive: false,
             motion: Default::default(),
@@ -996,20 +998,12 @@ impl Scene for Sablework {
             results.set(name, true);
         }
 
-        // Enter/Esc while renaming are read RAW — the ruled text-entry exception (the intent
-        // bus carries no TextEntry map, à la Quartermaster). Edge-detected so a hold does not
-        // re-fire, and folded into results so the ONE dispatcher commits/cancels the rename.
-        let enter = input.key_down(Key::Enter);
-        let esc = input.key_down(Key::Escape);
-        if renaming {
-            if enter && !self.enter_prev {
-                results.set("rename_commit", true);
-            } else if esc && !self.esc_prev {
-                results.set("rename_cancel", true);
-            }
+        // The rename field's edited text comes back on its bind; its exits arrive as the
+        // fired `submit_action` / `cancel_action` names (`rename_commit` / `rename_cancel`) folded
+        // in above — no key is read here.
+        if let Some(t) = results.text("rename_draft") {
+            self.set_rename_draft(t);
         }
-        self.enter_prev = enter;
-        self.esc_prev = esc;
 
         // The dispatcher owns every edit AND decides whether one happened; a
         // re-bake is requested exactly when the recipe actually changed, so
@@ -1018,7 +1012,7 @@ impl Scene for Sablework {
             self.request_bake();
         }
 
-        if results.is_on("pause_open") && !renaming {
+        if results.is_on("pause_open") && !self.is_renaming() {
             if let Some(theme) = self.ui_theme {
                 // The pause overlay shows the PROFILE's map — the pump owns
                 // bindings now (input-P3), the scene holds none.

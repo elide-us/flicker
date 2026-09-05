@@ -48,6 +48,41 @@ pub const MAX_LOD: u8 = CLUSTER_DIM.trailing_zeros() as u8;
 /// distances, physics, render scale — is calibrated against.
 pub const FEET_PER_VOXEL: f32 = 0.5;
 
+/// **The planet size model** (Aaron's canon, moved here from the Populous
+/// bench 2026-08-28 when the world bake became a second consumer — the
+/// engine-config charter above: a number more than one layer is calibrated
+/// to lives here once).
+///
+/// The standard hex tile width, miles — THE canon cell size: it stays
+/// constant as a planet scales, so frequency IS planet size. It is also the
+/// VoxelFarm-lineage chain made physical: a hex spans 2048 clusters of
+/// 128 ft (`CLUSTER_DIM · FEET_PER_VOXEL`), and 2048 · 128 ft = 49.65 mi
+/// (a consistency test in flicker-worldtile pins the two statements
+/// together).
+pub const TILE_MI: f64 = 49.65;
+/// The STANDARD world's diameter, miles (Earth's mean) — what
+/// [`STANDARD_FREQ`] tiles out to at [`TILE_MI`] per cell.
+pub const EARTH_DIAMETER_MI: f64 = 7_917.5;
+/// The standard icosphere frequency — the Earth-sized planet. 92,162 tiles.
+pub const STANDARD_FREQ: u32 = 96;
+
+/// The diameter a planet of `freq` tiles out to, in miles: the tile stays
+/// the standard width, so the planet scales linearly with frequency —
+/// `EARTH_DIAMETER_MI · freq / STANDARD_FREQ`.
+pub fn diameter_mi(freq: u32) -> f64 {
+    EARTH_DIAMETER_MI * f64::from(freq) / f64::from(STANDARD_FREQ)
+}
+
+/// Metres per mile — the one conversion constant the size model needs to
+/// answer in SI, stated once.
+pub const METERS_PER_MILE: f64 = 1_609.344;
+
+/// One cluster's physical span in metres (`CLUSTER_DIM · FEET_PER_VOXEL`
+/// = 128 ft) — the atlas pixel scale of the world cluster map.
+pub fn cluster_span_m() -> f64 {
+    f64::from(CLUSTER_DIM) * f64::from(FEET_PER_VOXEL) * 0.3048
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

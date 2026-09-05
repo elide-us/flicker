@@ -6,8 +6,9 @@
 //! 4** floods the basins (hydrosphere); **Epoch 5** mineralizes ore veins along
 //! the faults; **Epoch 6** erodes the terrain into a starting landscape and
 //! assigns biomes. The chain keeps **every** layer so the stack can be
-//! visualized epoch by epoch; [`PassThrough`] stands in for any epoch whose real
-//! transform isn't written yet.
+//! visualized epoch by epoch. All six transforms are written; [`PassThrough`]
+//! remains as the stand-in an epoch under construction can be swapped for, and
+//! stands in for none of them today.
 
 use flicker_materials::Tables;
 use glam::Vec3;
@@ -50,8 +51,9 @@ pub trait EpochTransform {
     fn apply(&self, ctx: &EpochCtx, prev: &[HexState]) -> Vec<HexState>;
 }
 
-/// Placeholder transform — copies the previous layer verbatim. Stands in for an
-/// epoch whose real geology isn't written yet (Epochs 4-6 today).
+/// Placeholder transform — copies the previous layer verbatim, for an epoch
+/// whose real geology isn't written yet. Every epoch's geology has landed, so
+/// nothing uses it today; it is kept for the next epoch under construction.
 pub struct PassThrough(pub u8);
 
 impl EpochTransform for PassThrough {

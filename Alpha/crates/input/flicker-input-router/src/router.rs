@@ -2,7 +2,7 @@
 //! ([`RouteCtx`] / [`RouterRequest`]), the post-dispatch reconciliation
 //! ([`apply_context_requests`]), and the per-frame [`DispatchReport`].
 
-use flicker_input_core::{ActionSignal, ContextualBindings, InputContext};
+use flicker_input_core::{ActionSignal, ContextualBindings, InputContext, TextStream};
 
 use crate::event::{Flow, InputEvent};
 use crate::handler::InputHandler;
@@ -34,6 +34,12 @@ impl Router {
         rc: &mut RouteCtx,
     ) -> DispatchReport {
         let mut report = DispatchReport::default();
+
+        // The per-frame hook, chain order, before any event: state that moves without
+        // a signal (a pointer focus change into or out of a text field) reconciles here.
+        for handler in chain.iter_mut() {
+            handler.frame(rc);
+        }
 
         for ev in events {
             // ── Phase 1: capture (top-down, first Consumed stops the event) ──
@@ -93,11 +99,19 @@ pub enum RouterRequest {
 }
 
 /// The router's scratch state for one dispatch: the queue handlers push intents
-/// into. Carries router-owned intents only (spec §4.2 — no `flicker-scene` dep).
+/// into, and the one non-signal channel the bus carries — this frame's TEXT. Carries
+/// router-owned data only (spec §4.2 — no `flicker-scene` dep).
 #[derive(Clone, Debug, Default)]
 pub struct RouteCtx {
     /// Intents emitted this frame, in emission order.
     pub requests: Vec<RouterRequest>,
+    /// The keyboard's text this frame — filled by the PUMP, and only while the active
+    /// context is `TextEntry` (the input system reads keys in that state, Aaron
+    /// 2026-09-03); empty otherwise. Delivered to the handler that holds the text
+    /// session (the walker layer) through [`InputHandler::frame`]; no scene reads it.
+    ///
+    /// [`InputHandler::frame`]: crate::InputHandler::frame
+    pub text: TextStream,
 }
 
 impl RouteCtx {

@@ -22,6 +22,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use flicker_input_core::{
     ContextualBindings, Fired, GamepadConfig, InputContext, InputMap, InputState, Resolver,
+    TextStream,
 };
 use flicker_input_device::{DiscreteSource, GamepadSource, WindowSource};
 use flicker_input_router::{apply_context_requests, InputEvent, RouteCtx};
@@ -59,6 +60,14 @@ struct InputPump {
 }
 
 impl InputPump {
+    /// This frame's TEXT for the route: the keyboard's stream while the active context is
+    /// `TextEntry` — the one state in which the input system READS keys instead of
+    /// resolving them (Aaron 2026-09-03) — and nothing in any other context. Call after
+    /// [`resolve`](Self::resolve) so the stack is synced to the app's declaration.
+    fn text(&self, input: &InputState) -> TextStream {
+        text_for(self.bindings.active(), input)
+    }
+
     /// Resolve this frame's snapshot into signal events for `ctx` (the active surface's
     /// context, `None` = the base). The returned events borrow `input`.
     fn resolve<'a>(
@@ -104,6 +113,16 @@ impl InputPump {
     }
 }
 
+/// The pump's text rule, as a pure function: the keyboard's stream only under
+/// `TextEntry`, empty under every other context.
+fn text_for(active: InputContext, input: &InputState) -> TextStream {
+    if active == InputContext::TextEntry {
+        input.text_stream()
+    } else {
+        TextStream::default()
+    }
+}
+
 struct Runner<A: App> {
     app: A,
     window: Option<Arc<Window>>,
@@ -131,6 +150,13 @@ struct Runner<A: App> {
     /// `Confined` the ordinary `CursorMoved` path still carries it, so the device event
     /// is skipped to avoid double-counting.
     pointer_locked: bool,
+    /// Whether the window currently allows IME — held exactly while the pump's active
+    /// context is `TextEntry` (a text field owns the keyboard), flipped on the edge
+    /// only. With IME allowed the OS text path delivers composed / dead-key / any-layout
+    /// text through `Ime` events (Aaron 2026-09-03: the keyboard yields ALL input);
+    /// without it a game gets plain key events. Both channels feed the same text
+    /// stream — winit sends a key's text OR an IME commit for it, never both.
+    ime_allowed: bool,
 }
 
 impl<A: App> ApplicationHandler for Runner<A> {
@@ -218,7 +244,8 @@ impl<A: App> ApplicationHandler for Runner<A> {
             WindowEvent::CursorMoved { .. }
             | WindowEvent::MouseInput { .. }
             | WindowEvent::MouseWheel { .. }
-            | WindowEvent::KeyboardInput { .. } => {
+            | WindowEvent::KeyboardInput { .. }
+            | WindowEvent::Ime(_) => {
                 self.window_source.ingest(&event);
             }
             WindowEvent::RedrawRequested => {
@@ -263,6 +290,12 @@ impl<A: App> ApplicationHandler for Runner<A> {
                     Some(pump) => pump.resolve(&self.input, ctx),
                     None => Vec::new(),
                 };
+                // The text channel rides the route beside the events: the pump hands the
+                // keyboard's stream to the bus only while the synced context is TextEntry.
+                route.text = self
+                    .pump
+                    .as_ref()
+                    .map_or_else(TextStream::default, |p| p.text(&self.input));
                 // The continuous-query surface (input-P3): a scene consuming the pump
                 // reads analog axes / pointer-delta from the pump's active-context
                 // bindings (synced by `resolve` above), not a private resolver. `None`
@@ -272,6 +305,16 @@ impl<A: App> ApplicationHandler for Runner<A> {
                 self.app.update(dt, &self.input, &mut signals, renderer);
                 if let Some(pump) = self.pump.as_mut() {
                     pump.apply(&route);
+                }
+                // IME follows the TextEntry context (see the field): flip the window and
+                // the text source together, on the edge only.
+                let text_entry = self
+                    .pump
+                    .as_ref()
+                    .is_some_and(|p| p.bindings.active() == InputContext::TextEntry);
+                if text_entry != self.ime_allowed {
+                    window.set_ime_allowed(text_entry);
+                    self.ime_allowed = text_entry;
                 }
                 // Reconcile the OS cursor with the app's exclusive-mode request. Only the
                 // edge touches the window; while captured the cursor is grabbed (Locked
@@ -453,6 +496,7 @@ fn run_inner<A: App>(app: A, pump: Option<InputPump>) -> Result<()> {
         pump,
         pointer_captured: false,
         pointer_locked: false,
+        ime_allowed: false,
     };
 
     event_loop
@@ -460,4 +504,74 @@ fn run_inner<A: App>(app: A, pump: Option<InputPump>) -> Result<()> {
         .context("event loop exited with error")?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod text_route_tests {
+    use super::*;
+
+    /// The pump reads the keyboard ONLY in TextEntry: the same typed snapshot yields the
+    /// stream under TextEntry and nothing under World or Menu.
+    #[test]
+    fn the_pump_hands_text_to_the_route_only_under_text_entry() {
+        let mut input = InputState::new();
+        input.push_typed("8");
+        input.flag_backspace();
+        let under_text = text_for(InputContext::TextEntry, &input);
+        assert_eq!(under_text.typed, "8");
+        assert!(under_text.backspace);
+        for ctx in [InputContext::World, InputContext::Menu] {
+            assert!(text_for(ctx, &input).is_empty(), "{ctx:?} reads no text");
+        }
+    }
+
+    /// DEVELOPMENT-TIER GATES (Aaron 2026-09-05, ruling 977B4D38): the hard-coded handoff
+    /// conditions of a refactor — tests that read this crate's own source and assert a
+    /// transition holds. `cargo test -- --skip gates::` is the production tier (every OS);
+    /// `cargo test -- gates::` runs only these (one OS in CI). A gate names the transition
+    /// it enforces and is deleted when that transition closes.
+    mod gates {
+        /// GREP GATE: the keyboard's text is read by the input system alone. No scene, widget
+        /// or shell crate touches the snapshot's text channel — the route delivers it.
+        #[test]
+        fn no_crate_outside_the_input_system_reads_the_text_channel() {
+            let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+            let mut offenders = Vec::new();
+            fn walk(dir: &std::path::Path, out: &mut Vec<String>) {
+                let Ok(rd) = std::fs::read_dir(dir) else {
+                    return;
+                };
+                for e in rd.flatten() {
+                    let p = e.path();
+                    if p.is_dir() {
+                        if p.file_name().is_some_and(|n| n == "target") {
+                            continue;
+                        }
+                        walk(&p, out);
+                    } else if p.extension().is_some_and(|x| x == "rs") {
+                        // Separator-agnostic: the Windows runner walks `Alpha\crates\...`, and
+                        // a `/`-only test let the input system's own readers through as
+                        // offenders there (CI 2026-09-05, windows-latest).
+                        let s = p.to_string_lossy().replace('\\', "/");
+                        if s.contains("/crates/input/") || s.contains("/crates/platform/") {
+                            continue;
+                        }
+                        let Ok(src) = std::fs::read_to_string(&p) else {
+                            continue;
+                        };
+                        for needle in ["text_stream(", ".typed()", ".backspace()", ".preedit()"] {
+                            if src.contains(needle) {
+                                out.push(format!("{s}: {needle}"));
+                            }
+                        }
+                    }
+                }
+            }
+            walk(&crates, &mut offenders);
+            assert!(
+                offenders.is_empty(),
+                "the text channel is read outside the input system: {offenders:?}"
+            );
+        }
+    }
 }

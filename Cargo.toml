@@ -18,8 +18,10 @@ members = [
     "Alpha/crates/frontend/flicker-scene",
     "Alpha/crates/frontend/flicker-shell",
     "Alpha/crates/frontend/flicker-widgets",
+    "Alpha/crates/frontend/flicker-canvas",
     "Alpha/crates/animation/flicker-flight",
     "Alpha/crates/animation/flicker-skeletal",
+    "Alpha/crates/animation/flicker-rigview",
     "Alpha/crates/content/flicker-content",
     "Alpha/crates/content/flicker-materials",
     "Alpha/crates/content/flicker-primitive",
@@ -35,6 +37,7 @@ members = [
     "Alpha/crates/scenes/flicker-loomforge",
     "Alpha/crates/scenes/flicker-assetpipeline",
     "Alpha/crates/scenes/flicker-pocclusters",
+    "Alpha/crates/scenes/flicker-csgtest",
     "Alpha/crates/scenes/flicker-populous",
     "Alpha/crates/scenes/flicker-quartermaster",
     "Alpha/crates/scenes/flicker-sablework",
@@ -124,45 +127,49 @@ glyphon = "0.6.0"
 fastrand = "2.5.0"
 
 # Internal cross-crate deps
-clayengine = { version = "0.1.0", path = "Alpha/crates/core/clayengine" }
+clayengine = { version = "0.1.10", path = "Alpha/crates/core/clayengine" }
 flicker-materials = { version = "0.1.5", path = "Alpha/crates/content/flicker-materials" }
 flicker-worldstate = { version = "0.1.0", path = "Alpha/crates/world/flicker-worldstate" }
-flicker-worldgen = { version = "0.1.0", path = "Alpha/crates/world/flicker-worldgen" }
-flicker-worldengine = { version = "0.1.0", path = "Alpha/crates/world/flicker-worldengine" }
-flicker-worldgrid = { version = "0.1.0", path = "Alpha/crates/world/flicker-worldgrid" }
+flicker-worldgen = { version = "0.1.10", path = "Alpha/crates/world/flicker-worldgen" }
+flicker-worldengine = { version = "0.1.10", path = "Alpha/crates/world/flicker-worldengine" }
+flicker-worldgrid = { version = "0.1.10", path = "Alpha/crates/world/flicker-worldgrid" }
 flicker-poc-chemistry = { version = "0.1.0", path = "Alpha/crates/world/flicker-poc-chemistry" }
-flicker-worldtile = { version = "0.1.0", path = "Alpha/crates/world/flicker-worldtile" }
+flicker-worldtile = { version = "0.1.10", path = "Alpha/crates/world/flicker-worldtile" }
 flicker-celestial = { version = "0.1.0", path = "crates/flicker-celestial" }
 flicker-system = { version = "0.1.0", path = "crates/flicker-system" }
 flicker-primitive = { version = "0.1.9", path = "Alpha/crates/content/flicker-primitive" }
 flicker-texture = { version = "0.1.9", path = "Alpha/crates/content/flicker-texture" }
 flicker-core = { version = "0.1.0", path = "Alpha/crates/core/flicker-core" }
 # Input model + resolution leaf (spec §2). Router/device build on it.
-flicker-input-core = { version = "0.1.5", path = "Alpha/crates/input/flicker-input-core" }
+flicker-input-core = { version = "0.1.10", path = "Alpha/crates/input/flicker-input-core" }
 # Input event bus + focus + consumer API (spec §4). Depends only on flicker-input-core.
-flicker-input-router = { version = "0.1.5", path = "Alpha/crates/input/flicker-input-router" }
+flicker-input-router = { version = "0.1.10", path = "Alpha/crates/input/flicker-input-router" }
 # Platform input sources + the 120 Hz analog sampler (spec §6). The only input crate
 # with OS/hw deps; fills the core snapshot/cache. Must not depend on flicker-app.
-flicker-input-device = { version = "0.1.5", path = "Alpha/crates/input/flicker-input-device" }
-flicker-render = { version = "0.1.9", path = "Alpha/crates/render/flicker-render" }
+flicker-input-device = { version = "0.1.10", path = "Alpha/crates/input/flicker-input-device" }
+flicker-render = { version = "0.1.10", path = "Alpha/crates/render/flicker-render" }
 flicker-2d = { version = "0.1.0", path = "Alpha/crates/render/flicker-2d" }
-flicker-script = { version = "0.1.5", path = "Alpha/crates/scripting/flicker-script" }
+flicker-script = { version = "0.1.10", path = "Alpha/crates/scripting/flicker-script" }
 flicker-net = { version = "0.1.5", path = "Alpha/crates/net/flicker-net" }
-flicker-app = { version = "0.1.9", path = "Alpha/crates/platform/flicker-app" }
-flicker-scene = { version = "0.1.9", path = "Alpha/crates/frontend/flicker-scene" }
+flicker-app = { version = "0.1.10", path = "Alpha/crates/platform/flicker-app" }
+flicker-scene = { version = "0.1.10", path = "Alpha/crates/frontend/flicker-scene" }
 flicker-greed = { version = "0.1.0", path = "crates/flicker-greed" }
-flicker-shell = { version = "0.1.9", path = "Alpha/crates/frontend/flicker-shell" }
-flicker-widgets = { version = "0.1.9", path = "Alpha/crates/frontend/flicker-widgets" }
+flicker-shell = { version = "0.1.10", path = "Alpha/crates/frontend/flicker-shell" }
+flicker-widgets = { version = "0.1.10", path = "Alpha/crates/frontend/flicker-widgets" }
+# The two 2D editor surface fillers (node-graph canvas + lane timeline), extracted
+# from Loomforge so the DM tech tree and the GM event timelines share one copy.
+flicker-canvas = { version = "0.1.10", path = "Alpha/crates/frontend/flicker-canvas" }
 flicker-flight = { version = "0.1.0", path = "Alpha/crates/animation/flicker-flight" }
-flicker-voxel = { version = "0.1.9", path = "Alpha/crates/world/flicker-voxel" }
+flicker-voxel = { version = "0.1.10", path = "Alpha/crates/world/flicker-voxel" }
 flicker-worker = { version = "0.1.0", path = "Alpha/crates/core/flicker-worker" }
 # Alpha crates (promoted, non-POC).
 flicker-skeletal = { version = "0.1.5", path = "Alpha/crates/animation/flicker-skeletal" }
+flicker-rigview = { version = "0.1.10", path = "Alpha/crates/animation/flicker-rigview" }
 # mechanics cluster (collision/combat).
-flicker-mechanics = { version = "0.1.9", path = "Alpha/crates/mechanics/flicker-mechanics" }
+flicker-mechanics = { version = "0.1.10", path = "Alpha/crates/mechanics/flicker-mechanics" }
 # in-app content pipeline (folder scan → FBX parse → canonical rig → bake).
-flicker-content = { version = "0.1.9", path = "Alpha/crates/content/flicker-content" }
-flicker-assetpipeline = { version = "0.1.9", path = "Alpha/crates/scenes/flicker-assetpipeline" }
+flicker-content = { version = "0.1.10", path = "Alpha/crates/content/flicker-content" }
+flicker-assetpipeline = { version = "0.1.10", path = "Alpha/crates/scenes/flicker-assetpipeline" }
 # Native open-folder dialog for the Asset Pipeline editor's Load step.
 rfd = "0.15.4"
 # Shared GPU-free planet-layout model (the orrery) — the roster + orbits both the

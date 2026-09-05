@@ -82,7 +82,7 @@ pub use pipeline_water_mesh::{Water, WaveKind, WaveSource, MAX_WAVE_SOURCES};
 pub use quad_grid::{
     Orbit, QuadGrid, QuadStyle, QuadView, ViewportFiller, ViewportLayout, EDITOR_QUADS, ORBIT_FOV_Y,
 };
-pub use renderer::{RenderTargetHandle, Renderer, FULL_TEXTURE};
+pub use renderer::{line_quad, RenderTargetHandle, Renderer, FULL_TEXTURE};
 pub use stage::{
     depth_plan, grid_segments, grid_segments_xy, ring_segments, Attachment, AttachmentFormat,
     Attachments, BloomPass, CompositePass, DepthPass, FogSlot, GroundFogPass, PassDef, PassKind,

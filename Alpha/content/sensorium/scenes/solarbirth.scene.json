@@ -190,14 +190,7 @@
       "name_color": "$ink_sapphire",
       "name_size": 13,
       "meta_color": "$dim",
-      "meta_size": 11,
-      "cap": {
-        "fill_top": "$stone_btn_hi",
-        "fill_bot": "$stone_btn",
-        "border": "$edge4",
-        "border_w": 1,
-        "radius": 3
-      }
+      "meta_size": 11
     },
     "nav_footer": {
       "frame": {
@@ -210,14 +203,7 @@
       "rule": {
         "color": "$seam"
       },
-      "label": "$dim",
-      "cap": {
-        "fill_top": "$stone_btn_hi",
-        "fill_bot": "$stone_btn",
-        "border": "$edge4",
-        "border_w": 1,
-        "radius": 3
-      }
+      "label": "$dim"
     },
     "pad_glyphs": {
       "tex": 2,

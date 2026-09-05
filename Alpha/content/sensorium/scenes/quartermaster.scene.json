@@ -4,6 +4,17 @@
   "params": {},
   "exits": {},
   "styles": {
+    "nav_footer": {
+      "_comment": "Bench nav footer band (the shared block every bench footer wears). `frame` = the band; `rule` (top hairline), `label` (legend ink), `cap` (kbm keycap box) resolve as the component's defaults.",
+      "frame": { "fill_top": "$stone1", "fill_bot": "$stone0", "border": "$edge3", "border_w": 1, "radius": 0 },
+      "rule": { "color": "$seam" },
+      "label": "$dim"
+    },
+    "pad_glyphs": {
+      "_comment": "The controller glyph atlas the footer legend draws from — positional cell names (face_south …) beside the Xbox letters the older hints use.",
+      "tex": 2, "cols": 4, "rows": 4, "color": "$bronze", "flash": "$rune_glow_hi",
+      "cells": { "lt": 0, "rt": 1, "lb": 2, "rb": 3, "a": 4, "b": 5, "x": 6, "y": 7, "menu": 8, "view": 9, "dpad": 10, "dpad_up": 11, "dpad_down": 12, "dpad_left": 13, "dpad_right": 14, "stick": 15, "face_south": 4, "face_east": 5, "face_west": 6, "face_north": 7, "bumper_l": 2, "bumper_r": 3, "trigger_l": 0, "trigger_r": 1, "stick_l": 15, "stick_r": 15 }
+    },
     "quartermaster": {
       "top_bar": {
         "fill_top": "$stone2",
@@ -81,6 +92,18 @@
         "text": "$ink_bright",
         "caret": "$rune_glow"
       },
+      "field": {
+        "_comment": "The inline rename text_field — the same well as `rename`, with the focus ring the session lights.",
+        "top": "$well",
+        "bot": "$well",
+        "border": "$sap_border",
+        "caret": "$rune_glow",
+        "focus_border": "$rune_glow",
+        "focus_border_w": 2,
+        "label": "$ink_bright",
+        "placeholder": "$dim",
+        "radius": 2
+      },
       "rename_bad": {
         "panel_bg": "$well",
         "border": "$danger_border",
@@ -128,13 +151,8 @@
         "label": "$ink_bright",
         "radius": 2
       },
-      "scrim": {
-        "_comment": "The bench's modal dim — passed to the `conflict_dialog` proto as its `overlay_style` skin. The dialog chrome itself is the proto's (modal.panel).",
-        "panel_bg": "$scrim",
-        "radius": 0
-      },
       "card": {
-        "_comment": "One side of a collision (existing / incoming) — passed to the `conflict_dialog` proto as its `card_style` skin.",
+        "_comment": "The bench's inset card — the Review tab's fact groups wear it. (It skinned the inline collision dialog too, until that lifted to the shared `conflict` modal.)",
         "panel_bg": "$stone0",
         "border": "$edge3",
         "border_w": 1,
@@ -2222,15 +2240,6 @@
                             "grow": 1,
                             "text_size": 12,
                             "style": "quartermaster.crumb"
-                          },
-                          {
-                            "component": "button",
-                            "id": "promote",
-                            "action": "promote",
-                            "label": "$qm_review_promote",
-                            "variant": "primary",
-                            "width": 150,
-                            "size_class": "md"
                           }
                         ]
                       }
@@ -2241,47 +2250,23 @@
             ]
           },
           {
-            "component": "panel",
-            "size": 34,
-            "style": "quartermaster.status_bar",
-            "pad": [
-              14,
-              0
-            ],
+            "_comment": "NAV FOOTER (ruling 2026-09-02): the standard bench footer replaces the status bar — LEFT sub-panel = signal-bound tooltip hints, RIGHT sub-panel = the status readouts (clipboard, error) + the MENU · PROMOTE cluster. PROMOTE shows on the Review tab only and fires the same `promote` the queue's Confirm does; MENU fires the screen's `pause_open`.",
+            "component": "nav_footer",
+            "id": "qm_footer",
+            "style": "nav_footer.frame",
+            "size": 52,
+            "pad_x": 12,
+            "pad_y": 10,
+            "gap": 8,
             "children": [
-              {
-                "component": "row",
-                "gap": 10,
-                "children": [
-                  {
-                    "component": "text",
-                    "text": "$qm_holding",
-                    "text_size": 12,
-                    "visible_bind": "has_clip",
-                    "style": "quartermaster.meta"
-                  },
-                  {
-                    "component": "text",
-                    "text_bind": "clip_name",
-                    "text_size": 12,
-                    "visible_bind": "has_clip",
-                    "style": "quartermaster.crumb"
-                  },
-                  {
-                    "component": "cell",
-                    "grow": 1,
-                    "children": []
-                  },
-                  {
-                    "component": "text",
-                    "text_bind": "error",
-                    "text_size": 12,
-                    "visible_bind": "has_error",
-                    "style": "quartermaster.error"
-                  }
-                ],
-                "grow": 1
-              }
+              { "component": "option", "id": "qm_hint_open", "signal": "Confirm", "label": "$qm_ft_open", "text_size": 12 },
+              { "component": "option", "id": "qm_hint_up", "signal": "Cancel", "label": "$qm_ft_up", "text_size": 12 },
+              { "component": "option", "id": "qm_hint_tabs", "signal": "TabNext", "label": "$qm_ft_tabs", "text_size": 12 },
+              { "component": "text", "text": "$qm_holding", "text_size": 12, "visible_bind": "has_clip", "style": "quartermaster.meta", "size": 60 },
+              { "component": "text", "text_bind": "clip_name", "text_size": 12, "visible_bind": "has_clip", "style": "quartermaster.crumb", "size": 160 },
+              { "component": "text", "text_bind": "error", "text_size": 12, "visible_bind": "has_error", "style": "quartermaster.error", "size": 260 },
+              { "component": "button", "id": "qm_ft_menu", "action": "pause_open", "label": "$qm_ft_menu", "variant": "secondary", "size_class": "md", "size": 90 },
+              { "component": "button", "id": "promote", "action": "promote", "label": "$qm_review_promote", "visible_bind": "review_on", "variant": "primary", "size_class": "md", "size": 150 }
             ]
           }
         ]
@@ -2350,130 +2335,6 @@
         ]
       },
       {
-        "component": "popup_panel",
-        "id": "qm_prompt",
-        "visible_bind": "has_prompt",
-        "layer": 50,
-        "anchor": "center",
-        "title": "$qm_conflict_title",
-        "children": [
-          {
-            "component": "text",
-            "text_bind": "conflict_name",
-            "text_size": 15,
-            "size": 24,
-            "color": "quartermaster.title.color",
-            "align": "center"
-          },
-          {
-            "component": "text",
-            "text_bind": "conflict_where",
-            "text_size": 12,
-            "size": 20,
-            "align": "center",
-            "style": "quartermaster.meta"
-          },
-          {
-            "component": "row",
-            "gap": 10,
-            "size": 64,
-            "children": [
-              {
-                "component": "cell",
-                "grow": 1,
-                "style": "quartermaster.card",
-                "pad": 8,
-                "children": [
-                  {
-                    "component": "text",
-                    "text": "$qm_conflict_existing",
-                    "text_size": 11,
-                    "size": 18,
-                    "style": "quartermaster.header"
-                  },
-                  {
-                    "component": "text",
-                    "text_bind": "conflict_existing",
-                    "text_size": 11,
-                    "wrap": true,
-                    "grow": 1,
-                    "style": "quartermaster.meta"
-                  }
-                ]
-              },
-              {
-                "component": "cell",
-                "grow": 1,
-                "style": "quartermaster.card",
-                "pad": 8,
-                "children": [
-                  {
-                    "component": "text",
-                    "text": "$qm_conflict_incoming",
-                    "text_size": 11,
-                    "size": 18,
-                    "style": "quartermaster.header"
-                  },
-                  {
-                    "component": "text",
-                    "text_bind": "conflict_incoming",
-                    "text_size": 11,
-                    "wrap": true,
-                    "grow": 1,
-                    "style": "quartermaster.meta"
-                  }
-                ]
-              }
-            ]
-          },
-          {
-            "component": "checkbox",
-            "id": "conflict_apply_rest",
-            "bind": "conflict_apply_rest",
-            "visible_bind": "conflict_multi",
-            "label": "$qm_conflict_apply_rest",
-            "box": 14,
-            "size": 24,
-            "style": "quartermaster.checkbox"
-          },
-          {
-            "component": "row",
-            "gap": 10,
-            "size": 38,
-            "align": "center",
-            "children": [
-              {
-                "component": "button",
-                "id": "conflict_skip",
-                "action": "conflict_skip",
-                "label": "$qm_conflict_skip",
-                "variant": "secondary",
-                "size_class": "md",
-                "grow": 1
-              },
-              {
-                "component": "button",
-                "id": "conflict_keep_both",
-                "action": "conflict_keep_both",
-                "label": "$qm_conflict_keep_both",
-                "variant": "secondary",
-                "size_class": "md",
-                "grow": 1
-              },
-              {
-                "component": "button",
-                "id": "conflict_replace",
-                "action": "conflict_replace",
-                "label": "$qm_conflict_replace",
-                "variant": "primary",
-                "size_class": "md",
-                "grow": 1
-              }
-            ]
-          }
-        ]
-      },
-      {
         "component": "cell",
         "id": "qm_rename",
         "visible_bind": "has_rename",
@@ -2488,11 +2349,15 @@
             "gap": 6,
             "children": [
               {
-                "component": "text",
-                "text_bind": "rename_draft",
-                "text_size": 14,
-                "size": 24,
-                "color": "quartermaster.title.color"
+                "component": "text_field",
+                "id": "rename_field",
+                "bind": "rename_draft",
+                "select_all_on_enter": true,
+                "submit_action": "rename_commit",
+                "cancel_action": "rename_cancel",
+                "label_size": 14,
+                "size": 26,
+                "style": "quartermaster.field"
               },
               {
                 "component": "text",

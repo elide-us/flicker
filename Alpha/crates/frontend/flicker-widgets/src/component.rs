@@ -36,6 +36,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use flicker_input_core::{InputState, TextStream};
 use flicker_render::{Rate, Vec2};
 use flicker_script::{FontRole, HudCommand, TextAlign, UiAnchor, UiNode, Value, ValueMap};
 use serde_json::Value as Json;
@@ -55,12 +56,6 @@ pub struct UiInput {
     pub right_down: bool,
     /// Screen size (the root layout rect).
     pub screen: Vec2,
-    /// Text committed by the keyboard this frame — appended to a focused
-    /// `text_field`'s bound string. Empty on non-typing frames and for scenes with
-    /// no keyboard wiring yet.
-    pub typed: String,
-    /// Backspace *edge* this frame — pops one char from a focused `text_field`.
-    pub backspace: bool,
     /// This frame's mouse-wheel delta (positive = scroll up), consumed by the
     /// `list` region under the pointer. Scenes wire their engine snapshot's
     /// `mouse_wheel_delta` straight in; `0.0` on wheel-less frames.
@@ -78,6 +73,26 @@ pub struct UiInput {
     /// mode, where the OS cursor is locked and its absolute position is frozen. `0.0`
     /// on motion-less frames; ignored in free mode (which uses the absolute cursor move).
     pub motion: Vec2,
+}
+
+impl UiInput {
+    /// The snapshot for one ordinary frame, straight from the engine's input state —
+    /// the sanctioned POINTER fields and the wheel. Keyboard text is NOT here: the
+    /// input system delivers it to the walker layer through the route (`RouteCtx.text`,
+    /// Aaron 2026-09-03), never through a scene. A scene passes `exclusive`/`motion` on
+    /// top only when it runs a captured-cursor camera.
+    pub fn from_input(input: &InputState, screen: Vec2) -> Self {
+        Self {
+            mouse: input.mouse_position,
+            clicked: input.mouse_left_pressed,
+            down: input.mouse_left,
+            right_down: input.mouse_right,
+            screen,
+            wheel: input.mouse_wheel_delta,
+            exclusive: false,
+            motion: Vec2::ZERO,
+        }
+    }
 }
 
 // ── Draw cache ───────────────────────────────────────────────────────────────
@@ -225,9 +240,19 @@ pub struct UiStats {
     pub nodes: u32,
 }
 
-/// What a drag-source node picked up — the payload a **scene-owned** canvas resolves
-/// on release (e.g. `kind: "clip", id: "walk_forward"` dropped onto a state node).
-/// The walker only carries the payload; it never decides what a drop means.
+/// What a drag-source node picked up — the payload dropped on release (e.g.
+/// `kind: "clip", id: "walk_forward"` dropped onto a state node).
+///
+/// **Two ways a drop resolves, and the node decides which.** A node that authors
+/// `drop_accept` (one drag kind, or several separated by whitespace) is a TARGET: the
+/// walker answers a release over it — or a pad `Confirm` on it while focused — by
+/// firing its `drop_action` (default: its own `action`) through the one activation
+/// channel, publishing `drop_id` (this payload's id) and `drop_target` (the node's
+/// id), and consuming the pointer. A release over nothing that accepts this kind is
+/// the ORIGINAL contract, untouched: the walker only carries the payload
+/// (`drag_kind` / `drag_id` / `drag_active` / `drag_dropped`) and a **scene-owned**
+/// canvas resolves the drop against its own geometry. Either way the walker never
+/// decides what a drop MEANS — only whether some node claimed it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DragPayload {
     /// Category of the dragged thing, from the source node's `drag_kind` prop.
@@ -240,10 +265,33 @@ pub struct DragPayload {
 /// the mouse mid-drag (keyed by node id/bind), plus the in-flight drag payload. A
 /// slider drag keeps updating — and keeps claiming the mouse — until the button
 /// releases, even if the cursor leaves the track.
+/// One open text-entry session (see [`UiState::begin_edit`]).
+#[derive(Clone, Debug)]
+pub(crate) struct TextEdit {
+    pub id: String,
+    /// The value when the session opened — captured by the first fold, restored by
+    /// `CancelText`.
+    pub origin: Option<String>,
+    /// The caret as a CHAR index into the value; `None` = the end.
+    pub caret: Option<usize>,
+    /// The IME composition in progress, shown at the caret until committed.
+    pub preedit: Option<String>,
+    pub replace_all: bool,
+    pub guard: u8,
+}
+
 #[derive(Default)]
 pub struct UiState {
     dragging: HashSet<String>,
     drag: Option<DragPayload>,
+    /// The payload in flight was picked up by a pad `Confirm`, not by a held pointer
+    /// button — so the drag channel keeps it ALIVE across frames with the mouse up,
+    /// until the next Confirm drops it (or `Cancel` abandons it). Without this a pad
+    /// pickup would report `drag_dropped` on the very next frame.
+    pad_drag: bool,
+    /// The focused node a pad `Confirm` landed on this frame, recorded by the walker
+    /// layer ([`Self::push_drag_confirm`]) and drained by the next `run_ui` pass.
+    drag_confirm: Option<String>,
     /// A captured drag's value-in-flight — the **commit-on-release** contract
     /// (Aaron, 2026-08-06): while a slider drag holds the pointer, the live value
     /// feeds only the DRAW (the knob tracks the hand); `frame.results` keeps
@@ -302,6 +350,53 @@ pub struct UiState {
     /// controller channel every slider gets for free: d-pad on the slider's
     /// own axis steps it, no scene wiring.
     nudges: Vec<(String, i32, bool)>,
+    /// **PAD STAGING** (Aaron 2026-09-04, "Confirm = apply"): the values pad nudges set
+    /// on controls authored `apply: "confirm"`, held here until `Confirm` commits them
+    /// — `bind -> (staged value, the resting value the scene keeps seeing, the pane it
+    /// was staged in)`. The pad twin of [`Self::drag_value`] (commit-on-release,
+    /// B694F6B1): the control DRAWS the staged value (the walker seeds it into
+    /// `results` like a held drag's live value) while `results` leave the walker
+    /// carrying the resting echo, so the scene folds nothing until the commit — one
+    /// regenerate per Apply instead of one per tick. Pane-scoped so a Confirm commits
+    /// the pane it lands in; the left stick asks (Apply / Revert / keep editing)
+    /// before it leaves a pane with stages pending.
+    staged: HashMap<String, (Value, Value, Option<String>)>,
+    /// Stages the walker ordered committed — written into `results` at the top of the
+    /// next `run_ui` pass (the pad's release edge), exactly where a drag's held value
+    /// lands. `(bind, value)`.
+    pending_commit: Vec<(String, Value)>,
+    /// A button activation the walker held back behind a commit ("commit, then fire",
+    /// Aaron 2026-09-04): fired through the pointer channel in the SAME pass the
+    /// commit lands, so the scene folds the values before the action.
+    fire_after_commit: Option<String>,
+    /// The stick tried to leave a pane holding stages: the move is parked here until
+    /// the scene's Apply/Revert prompt answers ([`Self::apply_stages`] /
+    /// [`Self::revert_stages`] resume it, [`Self::keep_stages`] drops it).
+    pending_pane_move: Option<String>,
+    /// The scene has a prompt to raise — set with `pending_pane_move`, drained by
+    /// [`Self::take_stage_prompt`].
+    stage_prompt: bool,
+    /// A parked pane move released by the prompt's answer, for the walker's per-frame
+    /// hook to complete (focus the target pane and descend into it).
+    resume_pane_move: Option<String>,
+    /// The TEXT ENTRY session on a `text_field` (Aaron 2026-09-03: the ONE mode in which
+    /// the keyboard is READ, not resolved). Opened by the walker layer when the field is
+    /// entered — a click into it, a pad Confirm on it, or the `EnterText` signal — and
+    /// closed by `SubmitText` / `CancelText` / the focus leaving. A scene reports
+    /// [`text_entry`](Self::text_entry) as its `InputContext::TextEntry` declaration.
+    pub(crate) edit: Option<TextEdit>,
+    /// A `CancelText` restore for the next fold: `(node id, the value to put back)`.
+    pub(crate) revert: Option<(String, String)>,
+    /// The keyboard text the ROUTE delivered to this walker's session, waiting for the
+    /// next `run_ui` fold — the same pending channel a pad nudge or a strip step rides.
+    /// Pushed by the walker layer's per-frame hook from `RouteCtx.text`; a scene never
+    /// writes it.
+    pub(crate) pending_text: TextStream,
+    /// A text-entry session is REQUESTED on the focused `text_field` — a click landed
+    /// in it this frame (its hit verdict claimed focus), or a scene asked for one
+    /// ([`open_text_entry`](Self::open_text_entry)). The walker's per-frame hook
+    /// consumes it and opens the session (pushing the context — never the scene).
+    pub(crate) enter_pending: bool,
     /// Result NAMES the walker layer drained last frame — applied by the next
     /// `run_ui` pass, where an option strip (`tabs` / `pill_toggle`) naming one
     /// as its `next_action` / `prev_action` advances its OWN bind by ±1, CLAMPED
@@ -315,18 +410,15 @@ pub struct UiState {
     /// OBSERVED by the walker layer, never consumed, so chord verbs elsewhere
     /// keep working. A held chord scales a nudge to the coarse step.
     pub(crate) chord: bool,
-    /// Pane ENTER STACK — the nav-tier contract (MCP 1B5F6BB8, FLATTENED per plan
-    /// 1A292918). Empty while NAVIGATING the top tier, where the LEFT STICK and the
-    /// D-PAD both move focus between panel stops (walker `move_focus`, geometrically
-    /// when rects are present). Each `Confirm` on a focused container PUSHES its id and
-    /// drops focus to its lowest-ordinal interior — so entering a channel scopes the
-    /// ring to its controls. Benches are FLAT (one Confirm reaches any control — enter
-    /// depth ≤ 1), but the stack still NESTS for a scene that authors subpanels.
-    /// `Cancel` pops exactly ONE level and refocuses the popped container (B never
-    /// skips); a mouse click clears the whole stack (pointer modality). The container
-    /// whose `id` is the TOP of the stack wears the gold lock rim; scenes gate viewport
-    /// cameras on that top entry.
-    pub(crate) entered: Vec<String>,
+    /// The IMPLIED PANE — the container the focused node belongs to (Aaron 2026-09-02,
+    /// the implied-panel-context ruling that retired the entered/lock tier). There is
+    /// no enter step and no lock: the panel wearing the sapphire cursor rim IS the
+    /// context, the LEFT STICK switches it, and ABXY/d-pad route to it. Derived by the
+    /// walker from `focus` every time focus moves (`WalkerHandler::sync_pane`): the
+    /// focused node's `tab_group` when that group has a container node, or the focused
+    /// node itself when it is a container (a viewport-only pane). A scene that feeds a
+    /// camera reads [`focused_pane`](Self::focused_pane) — never a second focus system.
+    pub(crate) pane: Option<String>,
     /// The surface holding the POINTER CAPTURE — an unclaimed press began inside it and
     /// a button is still down (see [`SurfacePointer`]). The root's id for the root.
     surface_capture: Option<String>,
@@ -371,9 +463,11 @@ impl UiState {
         self.drag.as_ref()
     }
 
-    /// Abandon an in-flight drag (e.g. the scene rejected the drop).
+    /// Abandon an in-flight drag (e.g. the scene rejected the drop, or `Cancel`
+    /// backed out while the pad was carrying one).
     pub fn cancel_drag(&mut self) {
         self.drag = None;
+        self.pad_drag = false;
     }
 
     /// The id of the `text_field` that currently owns keyboard focus, if any.
@@ -381,28 +475,22 @@ impl UiState {
         self.focus.as_deref()
     }
 
-    /// Whether any pane is currently LOCKED (entered) — `true` once a `Confirm` has
-    /// entered a container. Bool shim over the enter stack.
-    pub fn entered(&self) -> bool {
-        !self.entered.is_empty()
+    /// The IMPLIED PANE (Aaron 2026-09-02): the container the focused node belongs
+    /// to, or the focused node itself when it is a container. The panel whose `id`
+    /// equals this wears the sapphire cursor rim, and a multi-pane scene hands its
+    /// viewport camera to it — merely being the focused pane IS owning the input.
+    /// `None` while nothing is focused or the focus sits in a flat (container-less)
+    /// group. Maintained by the walker; a scene only reads it.
+    pub fn focused_pane(&self) -> Option<&str> {
+        self.pane.as_deref()
     }
 
-    /// The INNERMOST entered pane (the top of the enter stack), or `None` while
-    /// navigating between panes (MCP 1B5F6BB8). The container whose `id` equals
-    /// this wears the gold lock rim; a multi-pane scene gates its viewport camera
-    /// on this (the pane id it feeds), so highlighting a pane never implies its
-    /// input. Nested entries report the DEEPEST level — the one the d-pad ring is
-    /// scoped to.
-    pub fn entered_group(&self) -> Option<&str> {
-        self.entered.last().map(String::as_str)
-    }
-
-    /// Programmatically give keyboard focus to a `text_field` by its node `id` —
-    /// the scene's hook for focus-by-keypress (e.g. pressing **T** to enter chat),
-    /// since focus is otherwise established only by a click landing in the field.
-    /// `run_ui` clears focus at the top of any *clicked* frame, so a scene that
-    /// wants a field to stay focused across clicks elsewhere re-asserts this each
-    /// frame BEFORE `run_ui`.
+    /// Programmatically give keyboard focus to a node by its `id`. Text ENTRY is not
+    /// this: a text field's session opens through the walker (`EnterText`, a click
+    /// into it, a pad Confirm on it — [`begin_edit`](Self::begin_edit)); this only
+    /// moves the cursor. `run_ui` clears focus at the top of any *clicked* frame, so a
+    /// scene that wants a field to stay focused across clicks elsewhere re-asserts
+    /// this each frame BEFORE `run_ui`.
     pub fn request_focus(&mut self, id: impl Into<String>) {
         self.focus = Some(id.into());
     }
@@ -410,6 +498,81 @@ impl UiState {
     /// Drop keyboard focus (e.g. Escape leaves the chat input).
     pub fn clear_focus(&mut self) {
         self.focus = None;
+    }
+
+    /// Is a text-entry session open — a `text_field` owns the keyboard? A scene returns
+    /// `InputContext::TextEntry` from its `input_context` while this holds, so the pump
+    /// resolves only the two exits and every other key reaches the field as text.
+    pub fn text_entry(&self) -> bool {
+        self.edit.is_some()
+    }
+
+    /// Ask the walker layer to open a text-entry session on the `text_field` `id` —
+    /// the scene's hook for an edit it starts itself (an inline rename opened by the
+    /// `Rename` verb). The walker's per-frame hook enters on its next run, exactly as
+    /// it does for a click into the field; the scene pushes no context. Call it BEFORE
+    /// `run_ui` (which clears the request on a clicked frame) or after it, either way
+    /// before the dispatch.
+    pub fn open_text_entry(&mut self, id: impl Into<String>) {
+        self.focus = Some(id.into());
+        self.enter_pending = true;
+    }
+
+    /// A session is open OR requested (see [`open_text_entry`](Self::open_text_entry)) —
+    /// what a scene reads to tell "the field is being edited" from "the edit was
+    /// abandoned" on the frame between a request and the walker honouring it.
+    pub fn text_entry_requested(&self) -> bool {
+        self.edit.is_some() || self.enter_pending
+    }
+
+    /// Queue keyboard text the route delivered (the walker layer's hook) for the next
+    /// fold. Frames merge: text appends, edges accumulate, the newest composition wins.
+    pub(crate) fn push_text(&mut self, t: TextStream) {
+        let p = &mut self.pending_text;
+        p.typed.push_str(&t.typed);
+        if t.preedit.is_some() {
+            p.preedit = t.preedit;
+        }
+        p.backspace |= t.backspace;
+        p.delete |= t.delete;
+        p.left |= t.left;
+        p.right |= t.right;
+        p.home |= t.home;
+        p.end |= t.end;
+    }
+
+    /// The id of the `text_field` whose text-entry session is open, if any.
+    pub(crate) fn edit_id(&self) -> Option<&str> {
+        self.edit.as_ref().map(|e| e.id.as_str())
+    }
+
+    /// Open a text-entry session on `id` (the walker layer's entry). `replace_all`: the
+    /// first typed character replaces the whole value (a rename's pristine-replace);
+    /// `guard`: how many folds drop committed text first — the frame(s) in which the
+    /// KEY that fired `EnterText` itself commits its character (macOS lands it a frame
+    /// late; the promoted `4B15929B` guard).
+    pub(crate) fn begin_edit(&mut self, id: &str, replace_all: bool, guard: u8) {
+        self.focus = Some(id.to_string());
+        self.edit = Some(TextEdit {
+            id: id.to_string(),
+            origin: None,
+            caret: None,
+            preedit: None,
+            replace_all,
+            guard,
+        });
+    }
+
+    /// Close the session. `restore`: put the pre-edit value back on the next fold
+    /// (`CancelText`); otherwise the value stands as typed.
+    pub(crate) fn end_edit(&mut self, restore: bool) {
+        if let Some(e) = self.edit.take() {
+            if restore {
+                if let Some(origin) = e.origin {
+                    self.revert = Some((e.id, origin));
+                }
+            }
+        }
     }
 
     /// Light the press flash for `key` (an action/result name, e.g. `page_next`)
@@ -445,6 +608,111 @@ impl UiState {
     /// stepped, clamped, written to the bind — by the next `run_ui` pass.
     pub(crate) fn push_nudge(&mut self, id: &str, dir: i32, coarse: bool) {
         self.nudges.push((id.to_string(), dir, coarse));
+    }
+
+    // ── PAD STAGING — "Confirm = apply" (Aaron 2026-09-04) ──────────────────
+
+    /// Hold `bind`'s pad-set `value` in `pane` until a Confirm commits it; `resting` is
+    /// what `results` keep reporting to the scene meanwhile.
+    pub(crate) fn stage(&mut self, bind: &str, value: Value, resting: Value, pane: Option<String>) {
+        // A stage that walks on keeps the resting value it was opened with: by the
+        // second press `results` already carry the first stage (seeded for the draw),
+        // and the scene must keep seeing the ORIGINAL value until the commit.
+        let resting = self.staged.get(bind).map_or(resting, |(_, r, _)| r.clone());
+        self.staged.insert(bind.to_string(), (value, resting, pane));
+    }
+
+    /// Whether any control holds a staged, unapplied pad value — the `ui_staged` a
+    /// scene publishes so its nav footer can show "Press {Confirm} to apply".
+    pub fn staged_any(&self) -> bool {
+        !self.staged.is_empty()
+    }
+
+    /// The value the pad has staged on `bind`, if any (the gates read it).
+    #[cfg(test)]
+    pub(crate) fn staged_value(&self, bind: &str) -> Option<&Value> {
+        self.staged.get(bind).map(|(v, _, _)| v)
+    }
+
+    /// Whether `pane` (any pane, for `None`) holds a stage.
+    pub(crate) fn stages_in(&self, pane: Option<&str>) -> bool {
+        self.staged
+            .values()
+            .any(|(_, _, p)| pane.is_none() || p.as_deref() == pane)
+    }
+
+    /// CONFIRM = APPLY: queue `pane`'s stages (every stage, for `None`) for the commit
+    /// the next `run_ui` pass writes, in bind order. Returns whether anything moved.
+    pub(crate) fn commit_stages(&mut self, pane: Option<&str>) -> bool {
+        let mut keys: Vec<String> = self
+            .staged
+            .iter()
+            .filter(|(_, (_, _, p))| pane.is_none() || p.as_deref() == pane)
+            .map(|(k, _)| k.clone())
+            .collect();
+        keys.sort();
+        let any = !keys.is_empty();
+        for k in keys {
+            if let Some((v, _, _)) = self.staged.remove(&k) {
+                self.pending_commit.push((k, v));
+            }
+        }
+        any
+    }
+
+    /// Hold a focused button's activation back until the commit queued beside it has
+    /// landed — "commit, then fire". Fired by the next `run_ui` pass through the
+    /// pointer channel, so the scene folds the values before the action.
+    pub(crate) fn defer_fire(&mut self, action: &str) {
+        self.fire_after_commit = Some(action.to_string());
+    }
+
+    /// Walker-side: the stick tried to leave a pane holding stages — park the move on
+    /// `target` and raise the scene's Apply/Revert prompt.
+    pub(crate) fn park_pane_move(&mut self, target: String) {
+        self.pending_pane_move = Some(target);
+        self.stage_prompt = true;
+    }
+
+    /// The scene's per-frame read: `true` exactly once per parked move — open the
+    /// shared Apply/Revert prompt (`flicker_shell::stage_prompt` does the whole dance).
+    pub fn take_stage_prompt(&mut self) -> bool {
+        std::mem::take(&mut self.stage_prompt)
+    }
+
+    /// The prompt's APPLY answer: commit every stage and let the parked pane move
+    /// complete on the walker's next frame.
+    pub fn apply_stages(&mut self) {
+        self.commit_stages(None);
+        self.resume_pane_move = self.pending_pane_move.take();
+    }
+
+    /// The prompt's REVERT answer: drop every stage (the controls fall back to the
+    /// model) and let the parked pane move complete.
+    pub fn revert_stages(&mut self) {
+        self.staged.clear();
+        self.resume_pane_move = self.pending_pane_move.take();
+    }
+
+    /// The prompt's KEEP-EDITING answer (and its Esc / pad-B back-out): the stages
+    /// stand, the cursor stays where it was, the parked move is forgotten.
+    pub fn keep_stages(&mut self) {
+        self.pending_pane_move = None;
+    }
+
+    /// Walker-side: a pane move the prompt released, to complete this frame.
+    pub(crate) fn take_resume_pane_move(&mut self) -> Option<String> {
+        self.resume_pane_move.take()
+    }
+
+    /// Record that a pad `Confirm` landed on the focused node `id`, for the next
+    /// `run_ui` pass to resolve against the DRAG CHANNEL (the same shape as
+    /// [`Self::push_nudge`]: the walker names the node, the node's own props decide
+    /// what happens). With nothing in flight a `drag_kind` source PICKS UP; while a
+    /// payload is carried a matching `drop_accept` target DROPS. A node that is
+    /// neither is drained and ignored, so a stale request never accumulates.
+    pub(crate) fn push_drag_confirm(&mut self, id: &str) {
+        self.drag_confirm = Some(id.to_string());
     }
 
     /// Record a result NAME the walker layer fired, for the next `run_ui` pass to
@@ -774,14 +1042,9 @@ pub fn run_ui(
     let mut hud_hit = false;
     // Click-away de-focus: a fresh click clears text_field focus up front; a click
     // that lands in a text_field re-establishes it in that field's hit arm below.
+    state.enter_pending = false;
     if input.clicked {
         state.focus = None;
-        // A click is pointer modality — it also drops the WHOLE pane enter stack
-        // (nav-tier contract 1B5F6BB8), so `PanelNext` revives and the next `Cancel`
-        // pops the scene rather than being eaten as pane exits (the click-wedge
-        // defect). Popping one level per click would strand the pad mid-hierarchy
-        // the pointer never sees.
-        state.entered.clear();
     }
     // Capture release is a GENERIC rule: everything captured (slider drags) lets go
     // the frame the button is up, before any hit runs — so the release frame already
@@ -808,6 +1071,9 @@ pub fn run_ui(
     }
     if !input.down {
         if let Some((bind, val, _)) = state.drag_value.take() {
+            // The hand's release outranks a pad stage on the same bind: a drag is a
+            // commit, so whatever the pad had staged there is spent with it.
+            state.staged.remove(&bind);
             results.set(bind, val);
         }
         state.dragging.clear();
@@ -831,6 +1097,24 @@ pub fn run_ui(
     // rule 37722F91 / pump P2). Cleared here, not in `take_fired`, so a scene that
     // runs no walker cannot accumulate stale clicks across frames.
     state.fired_pointer.clear();
+    // PAD STAGING, the commit half (Aaron 2026-09-04, "Confirm = apply"): stages a
+    // Confirm queued land in `results` here — the pad's release edge, the same seam a
+    // drag's held value commits through — and a button activation held back behind
+    // them fires in this same pass (through the pointer channel, so the walker's
+    // `take_fired` drains it): the scene folds the values before the action. Stages
+    // still in flight are seeded like `local` so the control DRAWS what the pad set;
+    // the frame tail puts the resting value back before `results` leave the walker.
+    for (bind, val) in std::mem::take(&mut state.pending_commit) {
+        results.set(bind, val);
+    }
+    if let Some(action) = state.fire_after_commit.take() {
+        state.flash(&action);
+        state.push_step(&action);
+        state.record_pointer_fire(&action);
+    }
+    for (bind, (val, _, _)) in &state.staged {
+        results.set(bind.clone(), val.clone());
+    }
     // `last_claim` = the placement index of the LAST node that claimed the pointer this
     // frame. The surface pass below reads it: a surface is hot only if it is painted over
     // every claimant under the cursor.
@@ -843,11 +1127,11 @@ pub fn run_ui(
             last_claim = Some(i);
         }
     }
-    // The generic every-frame TYPED-FOLD: this frame's keyboard input flows into the
+    // The generic every-frame TEXT-FOLD: the text the route delivered flows into the
     // FOCUSED node's bound string, in Rust, whatever the pointer is doing — see
     // [`fold_typed`]. After the hit pass (a click that just focused a field folds the
     // same frame), before the echo (an edit must never be shadowed).
-    fold_typed(&placed, model, input, state, &mut results);
+    fold_typed(&placed, model, state, &mut results);
     // Take local ownership of anything a human just committed — after every write
     // channel (hit verdicts, the release commit, typed text) and BEFORE the echo, so
     // only real edits are seen here and an echo default can never be mistaken for one.
@@ -914,7 +1198,7 @@ pub fn run_ui(
     // a behaviour reads the same `root_pointer()` it reads in free mode, and its `delta`
     // is the relative `motion` the runner accumulated under the lock. The HUD is still
     // laid out and drawn; it just cannot be clicked while the mouse IS the camera.
-    let (pointer, hud_hit) = if input.exclusive {
+    let (pointer, mut hud_hit) = if input.exclusive {
         let root = &placed[0];
         let p = SurfacePointer {
             id: root.node.id.clone(),
@@ -937,18 +1221,92 @@ pub fn run_ui(
         (pointer, hud_hit)
     };
 
-    // Drag channel: publish the in-flight payload and the release edge so a scene-owned
-    // canvas can resolve the drop against its own geometry. Deliberately does NOT force
-    // `hud_hit` — the drop usually lands on the scene (a graph node), not on the UI, so
-    // the scene must still be allowed to pick.
+    // ── DRAG CHANNEL ─────────────────────────────────────────────────────────────
+    // Publish the in-flight payload and the release edge so a scene-owned canvas can
+    // resolve the drop against its own geometry. Deliberately does NOT force `hud_hit`
+    // for an UNANSWERED release — the drop usually lands on the scene (a graph node),
+    // not on the UI, so the scene must still be allowed to pick.
+    //
+    // The pad rides this channel exactly as the pointer button does (controller is the
+    // floor, BA4487BD): the walker layer recorded the focused node's id
+    // ([`UiState::push_drag_confirm`]) and the NODE's own props decide which half of
+    // the gesture it is — resolved HERE, beside the pointer's own release, so both
+    // routes share one resolution and one set of result names (rule 37722F91).
+    let pad_confirm = state.drag_confirm.take();
+    // PICK UP — the pad's twin of pressing inside a `drag_kind` node (`hit_node`).
+    let mut picked = false;
+    if state.drag.is_none() {
+        if let Some(p) = pad_confirm
+            .as_deref()
+            .and_then(|id| placed.iter().find(|p| p.node.id == id && p.enabled))
+        {
+            if let Some(kind) = ptext(p.node, "drag_kind") {
+                let id = ptext(p.node, "drag_id")
+                    .unwrap_or(p.node.id.as_str())
+                    .to_string();
+                state.drag = Some(DragPayload {
+                    kind: kind.to_string(),
+                    id,
+                });
+                state.pad_drag = true;
+                picked = true;
+                hud_hit = true;
+            }
+        }
+    }
     if let Some(d) = state.drag.clone() {
         results.set("drag_kind", d.kind.as_str());
         results.set("drag_id", d.id.as_str());
-        if input.down {
+        // The RELEASE edge: the pointer button coming up, or — for a payload the pad is
+        // carrying — the next `Confirm`, wherever the mouse happens to be.
+        let pad_release = if picked { None } else { pad_confirm.as_deref() };
+        if (input.down || state.pad_drag) && pad_release.is_none() {
             results.set("drag_active", true);
         } else {
             results.set("drag_dropped", true);
+            // DROP TARGETS (`drop_accept`): the topmost enabled node whose accepted
+            // kinds name this payload's kind answers the release. Its `drop_action`
+            // (default: its own `action`) fires through the SAME full activation
+            // channel a click rides — results + flash + strip-step + the `sig_<name>`
+            // mirror — and the payload id and target id ride the drag channel's own
+            // result names, so a scene folds a drop exactly like any other signal.
+            // Nothing accepting under the release is NOT a drop on any node: the
+            // release stays a bare `drag_dropped` for the scene's canvas, unchanged.
+            let target = placed.iter().rev().find(|p| {
+                p.enabled
+                    && accepts_drop(p.node, &d.kind)
+                    && match pad_release {
+                        Some(id) => p.node.id == id,
+                        None => p.rect.contains(input.mouse),
+                    }
+            });
+            if let Some(p) = target {
+                results.set("drop_id", d.id.as_str());
+                results.set("drop_target", p.node.id.as_str());
+                match drop_action(p.node) {
+                    Some(name) => {
+                        let name = name.to_string();
+                        results.set(name.clone(), true);
+                        state.flash(&name);
+                        state.push_step(&name);
+                        state.record_pointer_fire(&name);
+                    }
+                    // A node that accepts a kind and names nothing to fire is authored
+                    // wrong, and says so rather than silently swallowing the payload
+                    // (the fail-loud law for authored names).
+                    None => tracing::warn!(
+                        "ui: node {:?} accepts drop kind {:?} but names no `drop_action` \
+                         (and carries no `action`) — the drop fires nothing",
+                        p.node.id,
+                        d.kind
+                    ),
+                }
+                // A drop the UI ANSWERED is consumed — the scene must not resolve the
+                // same release against its own canvas as well.
+                hud_hit = true;
+            }
             state.drag = None;
+            state.pad_drag = false;
         }
     }
 
@@ -1014,6 +1372,7 @@ pub fn run_ui(
             if p.fade < 1.0 {
                 fade_commands(&mut commands[start..], p.fade);
             }
+            focus_ring(p, state, styles, &mut commands);
             continue;
         }
         // Miss: draw for real and rebuild the entry. The read-key list is recomputed
@@ -1059,6 +1418,9 @@ pub fn run_ui(
         if p.fade < 1.0 {
             fade_commands(&mut commands[start..], p.fade);
         }
+        // The SECONDARY FOCUS ring rides OUTSIDE the cache on both paths: focus is not
+        // an entry input, so a cursor move must never invalidate or replay it.
+        focus_ring(p, state, styles, &mut commands);
     }
     // Evict what this frame did not touch, but only once the map has grown well past
     // the live tree — a screen that toggles between two panels should keep both cached,
@@ -1186,7 +1548,19 @@ pub fn run_ui(
         let Some(bind) = p.node.bind.as_deref() else {
             continue;
         };
-        match p.node.component.as_str() {
+        // CONFIRM = APPLY (Aaron 2026-09-04): a control authored `apply: "confirm"`
+        // STAGES its pad steps instead of writing them — the value is held in
+        // `UiState::staged` (the pad's commit-on-release twin), drawn live from the
+        // next pass on, and lands in `results` only when a Confirm commits its pane.
+        // Every other control keeps the immediate write: a settings row ticks on every
+        // press. A held stage is the step's starting point, so repeated presses walk
+        // on from what the pad already set.
+        let staging = ptext(p.node, "apply") == Some("confirm");
+        let staged_num = match state.staged.get(bind) {
+            Some((Value::Number(n), _, _)) => Some(*n),
+            _ => None,
+        };
+        let next = match p.node.component.as_str() {
             "slider" => {
                 let min = pnum(p.node, "min").unwrap_or(0.0);
                 let max = pnum(p.node, "max").unwrap_or(1.0);
@@ -1196,14 +1570,11 @@ pub fn run_ui(
                 } else {
                     fine
                 };
-                let cur = results
-                    .number(bind)
+                let cur = staged_num
+                    .or_else(|| results.number(bind))
                     .or_else(|| model.number(bind))
                     .unwrap_or(min);
-                results.set(
-                    bind.to_string(),
-                    (cur + f64::from(dir) * step).clamp(min, max),
-                );
+                Value::Number((cur + f64::from(dir) * step).clamp(min, max))
             }
             // A `select` / `pill_toggle` steps its 0-based INDEX by ±1, CLAMPED to its own
             // children count (no wrap — a linear picker never jumps end-to-end, Aaron
@@ -1213,32 +1584,44 @@ pub fn run_ui(
                 if len <= 0.0 {
                     continue;
                 }
-                let cur = results
-                    .number(bind)
+                let cur = staged_num
+                    .or_else(|| results.number(bind))
                     .or_else(|| model.number(bind))
                     .unwrap_or(0.0);
-                results.set(
-                    bind.to_string(),
-                    (cur + f64::from(dir)).clamp(0.0, len - 1.0),
-                );
+                Value::Number((cur + f64::from(dir)).clamp(0.0, len - 1.0))
             }
             // A `toggle`: Right sets on, Left sets off, Confirm (`dir == 0`) flips — the
             // same bool a click writes (`bool_pick`).
             "toggle" => {
-                let cur = match results.get(bind) {
-                    Some(Value::Bool(b)) => *b,
-                    _ => model.is_on(bind),
+                let cur = match state.staged.get(bind) {
+                    Some((Value::Bool(b), _, _)) => *b,
+                    _ => match results.get(bind) {
+                        Some(Value::Bool(b)) => *b,
+                        _ => model.is_on(bind),
+                    },
                 };
-                let next = if dir > 0 {
+                Value::Bool(if dir > 0 {
                     true
                 } else if dir < 0 {
                     false
                 } else {
                     !cur
-                };
-                results.set(bind.to_string(), next);
+                })
             }
-            _ => {}
+            _ => continue,
+        };
+        if staging {
+            // What the scene keeps seeing meanwhile: the echo already ran, so `results`
+            // carries the resting value for this bind (the model's, failing that).
+            let resting = results
+                .get(bind)
+                .cloned()
+                .or_else(|| model.get(bind).cloned())
+                .unwrap_or_else(|| next.clone());
+            let pane = state.pane.clone();
+            state.stage(bind, next, resting, pane);
+        } else {
+            results.set(bind.to_string(), next);
         }
     }
 
@@ -1339,6 +1722,11 @@ pub fn run_ui(
         if let Some((bind, _, min)) = state.drag_value.as_ref() {
             results.set(bind.clone(), model.number(bind).unwrap_or(*min));
         }
+    }
+    // Pad staging, the held half: a stage drew live above; the scene keeps seeing the
+    // resting value until a Confirm commits it (top of the next pass).
+    for (bind, (_, resting, _)) in &state.staged {
+        results.set(bind.clone(), resting.clone());
     }
 
     UiFrame {
@@ -1915,6 +2303,22 @@ fn measure(node: &UiNode, model: &ValueMap) -> Vec2 {
                 .unwrap_or(0.0);
             Vec2::new(w, h)
         }
+        // A binding icon is its affordance square (`size`, default 20 — a keycap widens
+        // to its key text) plus, when it carries a label, a gap and the label's
+        // measured width. Explicit width/height win.
+        "binding_icon" => {
+            let sq = node.size.unwrap_or(20.0);
+            let pad = model.text("input_device").is_some_and(|d| d != "kbm");
+            let aff = binding_face(node, model, pad).width(sq, (sq * 0.6).min(13.0));
+            let label = hint_label_text(node, model, pad);
+            let lw = if label.is_empty() {
+                0.0
+            } else {
+                let ts = pnum(node, "text_size").unwrap_or(12.0) as f32;
+                BINDING_ICON_GAP + label_width(&label, ts)
+            };
+            Vec2::new(node.width.unwrap_or(aff + lw), node.height.unwrap_or(sq))
+        }
         // The nav-footer band hugs its tallest CLUSTER child (a button's DS ladder rung
         // under the author's hand) plus the vertical pad — the bench-footer height
         // without a hand-carried number. `option` children are legend chrome and take
@@ -2466,6 +2870,26 @@ struct HitVerdict {
     fire: Option<String>,
 }
 
+/// Does `node` accept a dragged payload of `kind`? The `drop_accept` prop is one
+/// drag kind, or several separated by whitespace (`"clip"`, `"clip marker"` — the
+/// same list shape a grid's `cols` track-spec uses). Absent = not a drop target,
+/// which is every node that has not opted in.
+///
+/// Prop-driven so ANY row / tile / panel can be a target, exactly as `drag_kind`
+/// makes any node a source — no new component kind on either side of the gesture.
+fn accepts_drop(node: &UiNode, kind: &str) -> bool {
+    ptext(node, "drop_accept").is_some_and(|spec| spec.split_whitespace().any(|k| k == kind))
+}
+
+/// The result name a matched drop fires: the node's `drop_action`, else its own
+/// `action` (the common case — a drop target that already names what it does).
+/// `None` when neither is authored, which the drop path reports LOUDLY.
+fn drop_action(node: &UiNode) -> Option<&str> {
+    ptext(node, "drop_action")
+        .or(node.action.as_deref())
+        .filter(|a| !a.is_empty())
+}
+
 /// A node's retained-interaction identity — its `id`, else its `bind`, else `""`.
 /// One rule for pointer capture (`state.dragging`) and the open popup
 /// (`state.open`).
@@ -2578,7 +3002,7 @@ fn hit_node(
                 // The nav footer: claims its band, and a legend-entry click fires the
                 // option's authored action (read live off the child) — the same shape
                 // as the PTT's gutters. Cluster children answer their own clicks.
-                "nav_footer" => hit_nav_footer(input.mouse, r, node, model, click),
+                "nav_footer" => hit_nav_footer(input.mouse, r),
                 _ => hit_checkbox(input.mouse, r, &props, click),
             };
             // ONE seam: a verdict touches state/results in exactly one place, so every
@@ -2796,48 +3220,137 @@ fn apply_hit_verdict(
         _ => {}
     }
     if verdict.focus == Some(true) && !node.id.is_empty() {
+        state.enter_pending = true;
         state.focus = Some(node.id.clone());
     }
 }
 
-/// The generic every-frame **typed-fold** — the KEYBOARD twin of [`echo_binds`]:
-/// when a placed, enabled node holds keyboard focus (`state.focus`, matched by id)
-/// and carries a `bind`, this frame's committed text appends to the bound string and
-/// a backspace edge pops one char (`String::pop` — one CHARACTER, multibyte-safe),
-/// the result written into `results` for the engine to apply.
+/// Fold the text the ROUTE delivered into the FOCUSED `text_field`'s bound string.
+/// The keyboard is read by the input system alone (the pump, only under `TextEntry` —
+/// Aaron 2026-09-03); the walker layer's hook queues what the route carried on
+/// [`UiState::push_text`], and this applies it. Unicode by default: whatever the OS
+/// committed (any layout, IME composition, dead keys) is inserted at the caret as chars.
+///
+/// A session opened by the walker ([`UiState::begin_edit`]) carries the caret, the
+/// pre-edit value (captured here on the first fold, restored on `CancelText` through
+/// [`UiState::revert`]) and the pristine-replace / trigger-key guard flags. Without a
+/// session (a field focused by a test or a scene that has no walker layer) the field
+/// still edits, append-only at the end.
+///
+/// Per-node props: `kind` = `text` (default) · `digits` (0-9 only) · `number` (digits,
+/// one `.`, a leading `-`); `max_len` (chars).
 ///
 /// Keyboard is NOT pointer: this runs unconditionally every frame — a typing frame
 /// with a parked pointer is not input-active, so the hit pass skips every node, yet
 /// it must still fold; the changed value then re-fingerprints the focused field, so it
 /// (alone) redraws. Runs AFTER the hit pass, so a click that just focused the field
 /// folds the same frame, and BEFORE `echo_binds`, so the echo never shadows an edit.
-fn fold_typed(
-    placed: &[Placed],
-    model: &ValueMap,
-    input: &UiInput,
-    state: &UiState,
-    results: &mut ValueMap,
-) {
-    if input.typed.is_empty() && !input.backspace {
-        return;
+fn fold_typed(placed: &[Placed], model: &ValueMap, state: &mut UiState, results: &mut ValueMap) {
+    // A cancelled session puts its origin back first, whatever is focused now.
+    if let Some((id, origin)) = state.revert.take() {
+        if let Some(bind) = placed
+            .iter()
+            .find(|p| p.node.id == id)
+            .and_then(|p| p.node.bind.as_deref())
+        {
+            results.set(bind.to_string(), origin);
+        }
     }
+    let stream = std::mem::take(&mut state.pending_text);
     let Some(focus) = state.focus.as_deref().filter(|id| !id.is_empty()) else {
         return;
     };
-    for p in placed {
-        if p.node.id != focus || !p.enabled {
-            continue;
+    let Some(p) = placed
+        .iter()
+        .find(|p| p.node.id == focus && p.enabled && p.node.component == "text_field")
+    else {
+        return;
+    };
+    let Some(bind) = p.node.bind.as_deref() else {
+        return;
+    };
+    let current = eff_text(results, model, bind).unwrap_or("").to_string();
+    let mut edit = state.edit.as_mut().filter(|e| e.id == focus);
+    if let Some(e) = edit.as_deref_mut() {
+        if e.origin.is_none() {
+            e.origin = Some(current.clone());
         }
-        let Some(bind) = p.node.bind.as_deref() else {
-            continue;
-        };
-        let mut text = eff_text(results, model, bind).unwrap_or("").to_string();
-        text.push_str(&input.typed);
-        if input.backspace {
-            text.pop();
-        }
-        results.set(bind.to_string(), text);
+        e.preedit = stream.preedit.clone();
     }
+    if stream.is_empty() {
+        return;
+    }
+    let mut chars: Vec<char> = current.chars().collect();
+    let mut caret = edit
+        .as_deref()
+        .and_then(|e| e.caret)
+        .unwrap_or(chars.len())
+        .min(chars.len());
+    // The trigger-key guard: the key that fired `EnterText` commits its own character
+    // this frame or the next — drop committed text for that many folds.
+    let mut typed: &str = &stream.typed;
+    if let Some(e) = edit.as_deref_mut() {
+        if e.guard > 0 && !typed.is_empty() {
+            e.guard -= 1;
+            typed = "";
+        } else if e.guard > 0 && !stream.is_empty() {
+            e.guard = 0;
+        }
+    }
+    let kind = ptext(p.node, "kind").unwrap_or("text");
+    let accept = |c: char, chars: &[char]| -> bool {
+        match kind {
+            "digits" => c.is_ascii_digit(),
+            "number" => {
+                c.is_ascii_digit()
+                    || (c == '.' && !chars.contains(&'.'))
+                    || (c == '-' && chars.is_empty())
+            }
+            _ => !c.is_control(),
+        }
+    };
+    if !typed.is_empty() {
+        if let Some(e) = edit.as_deref_mut() {
+            if e.replace_all {
+                e.replace_all = false;
+                chars.clear();
+                caret = 0;
+            }
+        }
+        for c in typed.chars() {
+            if accept(c, &chars) {
+                chars.insert(caret, c);
+                caret += 1;
+            }
+        }
+    }
+    if stream.backspace && caret > 0 {
+        caret -= 1;
+        chars.remove(caret);
+    }
+    if stream.delete && caret < chars.len() {
+        chars.remove(caret);
+    }
+    if stream.left {
+        caret = caret.saturating_sub(1);
+    }
+    if stream.right {
+        caret = (caret + 1).min(chars.len());
+    }
+    if stream.home {
+        caret = 0;
+    }
+    if stream.end {
+        caret = chars.len();
+    }
+    if let Some(max) = pnum(p.node, "max_len").map(|m| m.max(0.0) as usize) {
+        chars.truncate(max);
+        caret = caret.min(chars.len());
+    }
+    if let Some(e) = edit {
+        e.caret = Some(caret);
+    }
+    results.set(bind.to_string(), chars.into_iter().collect::<String>());
 }
 
 /// Claim **local display ownership** for every bind a human just moved — the write
@@ -2857,6 +3370,11 @@ fn record_local(placed: &[Placed], model: &ValueMap, results: &ValueMap, state: 
         let Some(bind) = p.node.bind.as_deref() else {
             continue;
         };
+        // A pad STAGE is not a commitment: it rides `results` only so the control draws
+        // it, and a revert must leave nothing behind — so it never takes local ownership.
+        if state.staged.contains_key(bind) {
+            continue;
+        }
         let Some(val) = results.get(bind) else {
             continue;
         };
@@ -3147,12 +3665,11 @@ fn node_fingerprint(
     // (request_focus / clear_focus / Escape) would otherwise replay a stale
     // caret/ring instead of redrawing the field.
     h.bool(hot_matters && focused);
-    // Pane LOCK as its OWN bit (the gold entered rim, nav-tier contract 1B5F6BB8):
-    // entering a pane leaves the focused container's `focused`/`hot` bits unchanged
-    // (focus drops to an interior — the container id no longer equals `focus`), so
-    // without this the cached FOCUSED (sapphire) commands would replay and the gold rim
-    // never draw. `draw_panel` is the only reader and is a rust component (`hot_matters`).
-    h.bool(hot_matters && !node.id.is_empty() && state.entered_group() == Some(node.id.as_str()));
+    // The IMPLIED PANE as its OWN bit (the sapphire pane rim, Aaron 2026-09-02): focus
+    // sits on an INTERIOR control, so the container's `focused`/`hot` bits never change
+    // when the cursor moves between panes — without this the cached resting commands
+    // would replay and the pane rim never draw. `draw_panel` reads it (`hot_matters`).
+    h.bool(hot_matters && !node.id.is_empty() && state.focused_pane() == Some(node.id.as_str()));
     // Styled STRUCTURAL containers (the window strips, subpanel rows) wear the
     // pane states too (nested panes 2026-08-15) — fold both bits so their rims
     // draw and undraw through the cache exactly like a panel's.
@@ -3162,7 +3679,7 @@ fn node_fingerprint(
             "cell" | "row" | "stack" | "surface" | "grid"
         );
     h.bool(structural_pane && state.focused() == Some(node.id.as_str()));
-    h.bool(structural_pane && state.entered_group() == Some(node.id.as_str()));
+    h.bool(structural_pane && state.focused_pane() == Some(node.id.as_str()));
     let ident = if node.id.is_empty() {
         node.bind.as_deref()
     } else {
@@ -3383,12 +3900,15 @@ fn component_props(
                     serde_json::json!([c[0], c[1], c[2], c[3]]),
                 );
             }
-            // A live subtitle: `subtitle_bind` names the Model key whose CURRENT text
-            // the chrome draws (the display-confirm countdown). Resolved here because
-            // the draw fn has no model handle — the same reason as the colours above.
-            if let Some(bind) = ptext(node, "subtitle_bind") {
-                if let Some(t) = model.text(bind) {
-                    props.insert("subtitle_live".to_string(), serde_json::json!(t));
+            // A live title / subtitle: `<field>_bind` names the Model key whose CURRENT
+            // text the chrome draws (the display-confirm countdown; a shared modal's
+            // caller-supplied heading). Resolved here because the draw fn has no model
+            // handle — the same reason as the colours above.
+            for (field, bind) in [("title", "title_bind"), ("subtitle", "subtitle_bind")] {
+                if let Some(key) = ptext(node, bind) {
+                    if let Some(t) = model.text(key) {
+                        props.insert(format!("{field}_live"), serde_json::json!(t));
+                    }
                 }
             }
         }
@@ -3404,6 +3924,28 @@ fn component_props(
             props.insert(
                 "glyph_style".to_string(),
                 jpath(styles, ptext(node, "glyph_style").unwrap_or("pad_glyphs")).clone(),
+            );
+        }
+        // A binding icon's help label — `label_bind`/`label` with `{Signal}` placeholders
+        // substituted for the current device — and its ink, resolved here so the draw
+        // needs no model handle. The affordance itself (`aff_glyph`/`aff_key`) is
+        // resolved by the generic `signal` block above, exactly as a tooltip's is.
+        "binding_icon" => {
+            let pad = model.text("input_device").is_some_and(|d| d != "kbm");
+            props.insert(
+                "label_text".to_string(),
+                Json::String(hint_label_text(node, model, pad)),
+            );
+            let c = json_color(
+                jpath(
+                    styles,
+                    ptext(node, "label_color").unwrap_or("binding_icon.label"),
+                ),
+                DIM,
+            );
+            props.insert(
+                "label_color_rgba".to_string(),
+                serde_json::json!([c[0], c[1], c[2], c[3]]),
             );
         }
         "nav_footer" => {
@@ -3425,6 +3967,24 @@ fn component_props(
             props.insert(
                 "cap_style".to_string(),
                 jpath(styles, ptext(node, "cap_style").unwrap_or("nav_footer.cap")).clone(),
+            );
+            // The two sub-panels' optional blocks (the footer re-cut, 2026-09-02):
+            // LEFT tooltips / RIGHT buttons may each wear a backdrop of their own.
+            props.insert(
+                "hints_style".to_string(),
+                jpath(
+                    styles,
+                    ptext(node, "hints_style").unwrap_or("nav_footer.hints"),
+                )
+                .clone(),
+            );
+            props.insert(
+                "cluster_style".to_string(),
+                jpath(
+                    styles,
+                    ptext(node, "cluster_style").unwrap_or("nav_footer.cluster"),
+                )
+                .clone(),
             );
             // The legend label colour is a dotted path (a colour cannot ride as a
             // scalar prop) — resolved to rgba here, like the popup chrome colours.
@@ -3487,23 +4047,36 @@ fn component_props(
     // (this node's id owns `state.focus` — a text_field's ring + caret); a
     // `focus_group` member (a slider row) instead reads the shared group key
     // currently holding this node's `bind`, exactly as before.
+    // "focused": the cursor is ON this node, OR this node is the IMPLIED PANE — the
+    // container the focused interior control belongs to (Aaron 2026-09-02). Keyed on
+    // the container id matching the focused GROUP as well as on focus itself, so a
+    // pane's sapphire rim stays lit while the cursor walks its interior (id ==
+    // tab_group is the container convention).
     props.insert(
         "focused".to_string(),
-        Json::Bool(!node.id.is_empty() && state.focused() == Some(node.id.as_str())),
-    );
-    // "entered": this pane is the LOCKED one (nav-tier contract 1B5F6BB8) — the panel
-    // draws its distinct gold entered rim, the scene feeds its camera. Keyed on the
-    // container id matching the locked GROUP (not on focus), so the rim stays while the
-    // cursor is on an interior child (id == tab_group is the container convention).
-    props.insert(
-        "entered".to_string(),
-        Json::Bool(!node.id.is_empty() && state.entered_group() == Some(node.id.as_str())),
+        Json::Bool(
+            !node.id.is_empty()
+                && (state.focused() == Some(node.id.as_str())
+                    || state.focused_pane() == Some(node.id.as_str())),
+        ),
     );
     if let (Some(fg), Some(bind)) = (ptext(node, "focus_group"), node.bind.as_deref()) {
         props.insert(
             "focused".to_string(),
             Json::Bool(eff_text(results, model, fg) == Some(bind)),
         );
+    }
+    // A text_field's OPEN SESSION: its caret (a char index; absent = the end) and the
+    // IME composition in progress, so the draw can place the bar and show the preedit.
+    if node.component == "text_field" {
+        if let Some(e) = state.edit.as_ref().filter(|e| e.id == node.id) {
+            if let Some(c) = e.caret {
+                props.insert("caret".to_string(), Json::from(c as f64));
+            }
+            if let Some(pre) = e.preedit.as_deref() {
+                props.insert("preedit".to_string(), Json::String(pre.to_string()));
+            }
+        }
     }
     // A tooltip's rune/name/meta content: the Model text under `<field>_bind` (this
     // frame's edit, else the model), else the literal `<field>` prop; absent when empty.
@@ -3669,6 +4242,7 @@ fn draw_node(
                 "popup_panel" => draw_popup_panel(r, node, &props, out),
                 "paged_menu" => draw_paged_menu(r, node, model, &props, out),
                 "nav_footer" => draw_nav_footer(r, node, model, &props, out),
+                "binding_icon" => draw_binding_icon(r, node, &props, out),
                 _ => draw_button(r, &props, out),
             }
             // CORNER RUNES are a DECORATION FLAG on any component, not a kind of
@@ -3690,15 +4264,13 @@ fn draw_node(
                 // A styled structural box that IS a pane wears the same states a
                 // `panel` does (nested panes 2026-08-15) — the window strips and
                 // subpanel rows are rows/stacks, and pane focus must be VISIBLE
-                // on them: the entered top-of-stack wears the gold lock rim, the
-                // focused container its style's `focused` sub-block, everything
-                // else `resting` (or the block itself).
+                // on them: the focused container OR the implied pane (the
+                // container the focused interior belongs to, Aaron 2026-09-02)
+                // wears its style's `focused` sub-block, everything else `resting`
+                // (or the block itself).
                 let id_is =
                     |cur: Option<&str>| !node.id.is_empty() && cur == Some(node.id.as_str());
-                if id_is(state.entered_group()) {
-                    let base = st.get("resting").unwrap_or(st);
-                    draw_panel_bg_rimmed(r, base, Some((GOLD_RING, ENTERED_RIM_W)), out);
-                } else if id_is(state.focused()) {
+                if id_is(state.focused()) || id_is(state.focused_pane()) {
                     let block = st
                         .get("focused")
                         .or_else(|| st.get("resting"))
@@ -3788,7 +4360,8 @@ fn fade_commands(cmds: &mut [HudCommand], f: f32) {
             HudCommand::Rect { color, .. }
             | HudCommand::Sprite { color, .. }
             | HudCommand::Text { color, .. }
-            | HudCommand::TextCaret { color, .. } => color[3] *= f,
+            | HudCommand::TextCaret { color, .. }
+            | HudCommand::Line { color, .. } => color[3] *= f,
             HudCommand::Panel {
                 color,
                 color2,
@@ -3812,7 +4385,8 @@ fn offset_layer(c: &mut HudCommand, dl: f32) {
         | HudCommand::Sprite { layer, .. }
         | HudCommand::Text { layer, .. }
         | HudCommand::TextCaret { layer, .. }
-        | HudCommand::Panel { layer, .. } => *layer += dl,
+        | HudCommand::Panel { layer, .. }
+        | HudCommand::Line { layer, .. } => *layer += dl,
         // A clip toggle carries no layer — it rides submission order, not the sort.
         HudCommand::Clip { .. } => {}
     }
@@ -3821,19 +4395,6 @@ fn offset_layer(c: &mut HudCommand, dl: f32) {
 // ── Templates ────────────────────────────────────────────────────────────────
 
 fn draw_panel_bg(r: Rect, st: &Json, out: &mut Vec<HudCommand>) {
-    draw_panel_bg_rimmed(r, st, None, out);
-}
-
-/// [`draw_panel_bg`] with an optional RIM OVERRIDE `(color, width)`. `None` = the block's
-/// own `border`/`border_w`; `Some` paints a STATE rim (the gold lock) over a base block
-/// that carries no rim of its own, so an entered pane reuses its focused/resting fill
-/// while wearing the compiled lock border.
-fn draw_panel_bg_rimmed(
-    r: Rect,
-    st: &Json,
-    rim: Option<([f32; 4], f32)>,
-    out: &mut Vec<HudCommand>,
-) {
     // Key-aliasing (same spirit as the button variants): a styled container reads
     // its fill from whichever of these its block carries — `fill_top/bot` (panels),
     // `bg_top/bot` (the menu's gradient backdrop), `overlay` (the pause/confirm dim),
@@ -3852,17 +4413,11 @@ fn draw_panel_bg_rimmed(
         ],
         top,
     );
-    let block_border = first_color(st, &["panel_border", "border"], [0.0; 4]);
-    let (border_color, border) = match rim {
-        Some((color, w)) => (color, w),
-        None => (
-            block_border,
-            if block_border[3] > 0.0 {
-                jnum(st, "border_w", 1.0)
-            } else {
-                0.0
-            },
-        ),
+    let border_color = first_color(st, &["panel_border", "border"], [0.0; 4]);
+    let border = if border_color[3] > 0.0 {
+        jnum(st, "border_w", 1.0)
+    } else {
+        0.0
     };
     out.push(HudCommand::Panel {
         x: r.x,
@@ -3938,9 +4493,10 @@ fn rust_hit_shape(kind: &str) -> Option<HitShape> {
         // the BEHAVIOUR's own layer beneath the walker (orbit, gizmo picks — the
         // world-below-walker chain), so a click must PASS THROUGH to it. Its nav stop is
         // the enclosing pane's (Look/Zoom route to it while that pane is entered).
-        "tooltip" | "gauge" | "resource_gauge" | "stat_dot" | "medallion" | "surface" => {
-            Some(HitShape::None)
-        }
+        // A `binding_icon` is the tooltip affordance as its own kind (Aaron 2026-09-02:
+        // "the tooltip buttons should not be interactive") — read-only chrome.
+        "tooltip" | "gauge" | "resource_gauge" | "stat_dot" | "medallion" | "surface"
+        | "binding_icon" => Some(HitShape::None),
         _ => None,
     }
 }
@@ -4013,25 +4569,12 @@ fn draw_panel(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
         .get("focused")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-    let entered = props
-        .get("entered")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    // `{ resting, focused, entered }` sub-blocks, each an ordinary container block. A
-    // style that carries the container keys DIRECTLY (no split) is used as-is; each state
-    // falls down the chain (→ focused → resting → the block), so a plain panel still draws.
-    if entered {
-        // LOCKED (nav-tier contract 1B5F6BB8) — the pane wears a rim distinct from FOCUSED
-        // (merely navigated-to) so the pad player SEES the lock. A scene MAY author an
-        // `entered` block (style-block-first); otherwise the compiled GOLD house default
-        // paints over the focused/resting fill — the "defaults ARE the house look" pattern.
-        if let Some(block) = s.get("entered") {
-            draw_panel_bg(r, block, out);
-        } else {
-            let base = s.get("focused").or_else(|| s.get("resting")).unwrap_or(s);
-            draw_panel_bg_rimmed(r, base, Some((GOLD_RING, ENTERED_RIM_W)), out);
-        }
-    } else if focused {
+    // `{ resting, focused }` sub-blocks, each an ordinary container block. A style that
+    // carries the container keys DIRECTLY (no split) is used as-is; the focused state
+    // falls down the chain (→ resting → the block), so a plain panel still draws. There
+    // is ONE focus state: the sapphire cursor rim marks the focused pane, which IS the
+    // context (Aaron 2026-09-02 — no entered/lock tier, no gold rim).
+    if focused {
         let block = s.get("focused").or_else(|| s.get("resting")).unwrap_or(s);
         draw_panel_bg(r, block, out);
     } else {
@@ -4250,7 +4793,6 @@ fn draw_tooltip(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
     // Otherwise an optional static element rune.
     let mut indent = 0.0;
     if let Some(key) = props.get("aff_key").and_then(|v| v.as_str()) {
-        let color = first_color(s, &["name_color"], INK);
         let cap = Rect {
             x: inner.x,
             y: inner.y,
@@ -4261,7 +4803,6 @@ fn draw_tooltip(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
             cap,
             key,
             props.get("cap_style").unwrap_or(&Json::Null),
-            color,
             0.0,
             out,
         );
@@ -6555,8 +7096,10 @@ fn hit_stepper(m: Vec2, r: Rect, props: &Json, click: bool) -> HitVerdict {
 /// placeholder — display copy — arrives already resolved.
 ///
 /// **props**: `bind_value` (the bound string; a non-string bind reads as empty) ·
-/// `placeholder` · `focused` · `mx` / `my` (the pointer, for the hover edge) ·
-/// `text_pad` (8) · `caret_w` (2) · `label_size` (14, when the style names none).
+/// `placeholder` · `focused` · `caret` (char index of the bar; absent = after the last
+/// glyph) · `preedit` (the IME composition, shown at the caret until committed) ·
+/// `mx` / `my` (the pointer, for the hover edge) · `text_pad` (8) · `caret_w` (2) ·
+/// `label_size` (14, when the style names none).
 /// **style**: `top` / `fill_top` / `bg` · `bot` / `fill_bot` / `bg` (well fill stops) ·
 /// `radius` (3) · `border` (resting edge) + `border_w` (1) · `hover_border` ·
 /// `caret` / `focus_border` (the ring, and the caret's own colour) + `focus_border_w`
@@ -6601,20 +7144,37 @@ fn draw_text_field(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
     let lsz = jnum(props, "label_size", jnum(s, "label_size", 14.0));
     let pad = jnum(props, "text_pad", 8.0);
     let value = jstr(props, "bind_value");
-    let (shown, color) = if value.is_empty() {
+    // The bar sits after `caret` chars (the end when absent); an IME composition in
+    // progress is shown inline at the caret, and the bar lands after it.
+    let chars: Vec<char> = value.chars().collect();
+    let caret = props
+        .get("caret")
+        .and_then(|v| v.as_f64())
+        .map_or(chars.len(), |c| (c.max(0.0) as usize).min(chars.len()));
+    let preedit = jstr(props, "preedit");
+    let mut before: String = chars[..caret].iter().collect();
+    before.push_str(preedit);
+    let composed: String = if preedit.is_empty() {
+        value.to_string()
+    } else {
+        let mut t = before.clone();
+        t.extend(chars[caret..].iter());
+        t
+    };
+    let (shown, color) = if composed.is_empty() {
         (
-            jstr(props, "placeholder"),
+            jstr(props, "placeholder").to_string(),
             first_color(s, &["placeholder"], DIM),
         )
     } else {
-        (value, first_color(s, &["label", "color"], INK))
+        (composed, first_color(s, &["label", "color"], INK))
     };
     let (tx, ty) = (r.x + pad, r.y + (r.h - lsz) * 0.5);
     push_text(
         out,
         tx,
         ty,
-        shown,
+        &shown,
         lsz,
         color,
         TextAlign::Left,
@@ -6632,9 +7192,10 @@ fn draw_text_field(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
             y: ty,
             w: cw,
             h: lsz,
-            // The WHOLE buffer is the prefix — the bridge measures it and offsets the
-            // bar by the result, which is the entire reason this is its own command.
-            prefix: value.to_string(),
+            // Everything BEFORE the caret is the prefix — the bridge measures it and
+            // offsets the bar by the result, which is the entire reason this is its own
+            // command.
+            prefix: before,
             size: lsz,
             color: first_color(s, &["caret"], RUNE),
             layer: 0.0,
@@ -7897,6 +8458,53 @@ fn popup_chrome(node: &UiNode, rect: Rect) -> PopupChrome {
     }
 }
 
+/// **THE DISMISSABLE TOGGLE** (Aaron 2026-09-04) — whether the screen's modal slab
+/// currently allows a Cancel (Esc / pad-B) to leave.
+///
+/// It is a BEHAVIOUR TOGGLE ON THE COMPONENT, not a host policy: `popup_panel` carries
+/// `dismissable` (bool, **default true** — a modal is never a trap by default) and
+/// `dismissable_bind` (a Model key a pair script publishes per frame), exactly the shape
+/// `faded` / `faded_bind` and `runes` already have. The walker consults this at its ONE
+/// Cancel routing ([`WalkerHandler`](crate::WalkerHandler)) and SWALLOWS the signal while
+/// it reads false, so the screen's declared `on_cancel` does not fire.
+///
+/// Reads the TOPMOST visible `popup_panel` — the last one in draw order, i.e. the slab
+/// the player is actually looking at. A screen with no visible slab is dismissable, so
+/// this changes nothing for every screen that is not a modal.
+///
+/// **Precedence** (the `_bind` rule every other bound prop obeys): the bound value wins
+/// WHERE IT IS PUBLISHED; otherwise the authored flag; otherwise `true`. A
+/// `dismissable_bind` naming a key nobody publishes therefore reads as DISMISSABLE —
+/// a mis-typed bind can lose you the toggle, never the way out.
+#[must_use]
+pub fn popup_dismissable(tree: &UiNode, model: &ValueMap) -> bool {
+    topmost_popup(tree, model).is_none_or(|slab| slab_dismissable(slab, model))
+}
+
+/// The last VISIBLE `popup_panel` in draw order (children after their parent, later
+/// siblings over earlier ones) — the slab on top. Hidden subtrees contribute nothing,
+/// so a slab gated off by `visible_bind` never holds Cancel.
+fn topmost_popup<'a>(node: &'a UiNode, model: &ValueMap) -> Option<&'a UiNode> {
+    if !visible(node, model) {
+        return None;
+    }
+    let mut top = (node.component == "popup_panel").then_some(node);
+    for child in &node.children {
+        if let Some(deeper) = topmost_popup(child, model) {
+            top = Some(deeper);
+        }
+    }
+    top
+}
+
+/// One slab's current answer — see [`popup_dismissable`] for the precedence.
+fn slab_dismissable(node: &UiNode, model: &ValueMap) -> bool {
+    match ptext(node, "dismissable_bind") {
+        Some(key) if model.get(key).is_some() => model.is_on(key),
+        _ => popt_bool(node, "dismissable").unwrap_or(true),
+    }
+}
+
 /// The **popup panel** — the carved modal slab the pause / confirm / menu popups build
 /// on. It DRAWS its chrome — the styled backdrop, an always-present centred title, an
 /// optional subtitle, an optional 1px divider and an optional footer — while its ITEMS
@@ -7910,7 +8518,13 @@ fn draw_popup_panel(r: Rect, node: &UiNode, props: &Json, out: &mut Vec<HudComma
     let c = popup_chrome(node, r);
     let cx = c.inner_x + c.inner_w * 0.5;
     // Title — always drawn (empty copy centres nothing, faithful to the proto's `@title=`).
-    let title = crate::strings::resolve(ptext(node, "title").unwrap_or_default());
+    // A bound title's LIVE text (injected by `component_props`, exactly as the subtitle's
+    // is) wins over an authored one: the shared param-driven modals get their heading
+    // from the caller through the Model, so the tree carries no copy of its own.
+    let title = match jopt(props, "title_live").and_then(|v| v.as_str()) {
+        Some(t) => t.into(),
+        None => crate::strings::resolve(ptext(node, "title").unwrap_or_default()),
+    };
     push_text(
         out,
         cx,
@@ -8365,17 +8979,22 @@ fn hit_paged_menu(m: Vec2, r: Rect, node: &UiNode, model: &ValueMap, click: bool
 /// CLUSTER child's placement rect (real nodes, keyed likewise).
 struct FooterLayout {
     rule: Rect,
+    /// The LEFT sub-panel — the tooltip legend's box (left-justified flow).
+    hints_rect: Rect,
+    /// The RIGHT sub-panel — the button cluster's box (right-justified flow).
+    cluster_rect: Rect,
     hints: Vec<(usize, Rect, Rect)>,
     cluster: Vec<(usize, Rect)>,
 }
 
-/// The **nav footer**'s one-band split: `option` children are the LEGEND — controller
-/// glyph + help-label pairs flowed from the LEFT — and every other child is the BUTTON
-/// CLUSTER, right-aligned in tree order (`[ MENU ] [ BACK ] [ NEXT ]`). A cluster child
-/// takes its measured width (its `size`, or a glyph face's square) and its measured
-/// height (its DS ladder rung, else the band), vertically centred. A legend entry is a
-/// `hint_glyph` square + `hint_gap` + the option's authored `size` label width; entries
-/// stop before they would run under the cluster — truncated visibly, never overlapped.
+/// The **nav footer** = a panel of TWO SUB-PANELS (Aaron 2026-09-02, the footer re-cut):
+/// LEFT, the tooltip legend — `option` children as affordance + help-label pairs,
+/// left-justified; RIGHT, the button cluster — every other child, right-justified in
+/// tree order (`[ MENU ] [ BACK ] [ NEXT ]`). The cluster is sized first from its
+/// children (each at its `size` or a glyph face's square, its DS ladder rung tall,
+/// vertically centred); the legend takes what is left and TRUNCATES before it would
+/// run into the cluster — visibly, never overlapped. A legend label's width is its
+/// authored `size`, else measured from its resolved text — no hand-carried number.
 fn footer_layout(node: &UiNode, outer: Rect, model: &ValueMap) -> FooterLayout {
     let inner = outer.inset_xy(pad_x(node), pad_y(node));
     let rule = Rect {
@@ -8384,7 +9003,7 @@ fn footer_layout(node: &UiNode, outer: Rect, model: &ValueMap) -> FooterLayout {
         w: outer.w,
         h: 1.0,
     };
-    // The cluster first: the legend needs to know where it must stop.
+    // The RIGHT sub-panel first: the legend needs to know where it must stop.
     let kids: Vec<(usize, &UiNode)> = node
         .children
         .iter()
@@ -8395,9 +9014,15 @@ fn footer_layout(node: &UiNode, outer: Rect, model: &ValueMap) -> FooterLayout {
         .iter()
         .map(|(_, c)| child_main(c, model, true))
         .collect();
-    let total = widths.iter().sum::<f32>() + node.gap * kids.len().saturating_sub(1) as f32;
-    let mut x = inner.x + inner.w - total;
-    let cluster_left = x;
+    let total =
+        (widths.iter().sum::<f32>() + node.gap * kids.len().saturating_sub(1) as f32).min(inner.w);
+    let cluster_rect = Rect {
+        x: inner.x + inner.w - total,
+        y: inner.y,
+        w: total,
+        h: inner.h,
+    };
+    let mut x = cluster_rect.x;
     let mut cluster = Vec::new();
     for ((i, c), w) in kids.into_iter().zip(widths) {
         let ch = child_cross(c, model, true);
@@ -8413,24 +9038,39 @@ fn footer_layout(node: &UiNode, outer: Rect, model: &ValueMap) -> FooterLayout {
         ));
         x += w + node.gap;
     }
-    // The legend: affordance + label pairs from the left, clipped at the cluster. Each
-    // affordance is DEVICE-ADAPTIVE (a square controller glyph on a pad, a text-width
-    // keycap on kbm), so its width varies per hint — layout and draw share
-    // `hint_aff_kind`/`hint_aff_width` on the SAME `input_device` read.
+    // The LEFT sub-panel: whatever the cluster leaves, minus one gap between the two.
+    let hints_w = if total > 0.0 {
+        (cluster_rect.x - node.gap - inner.x).max(0.0)
+    } else {
+        inner.w
+    };
+    let hints_rect = Rect {
+        x: inner.x,
+        y: inner.y,
+        w: hints_w,
+        h: inner.h,
+    };
+    // The legend: affordance + label pairs from the left, clipped at the sub-panel's
+    // edge. Each affordance is DEVICE-ADAPTIVE (a square controller glyph on a pad, a
+    // text-width keycap on kbm), so its width varies per hint — layout and draw share
+    // `binding_face` on the SAME `input_device` read.
     let g = pnum(node, "hint_glyph").unwrap_or(20.0) as f32;
     let hgap = pnum(node, "hint_gap").unwrap_or(8.0) as f32;
     let cap_size = pnum(node, "cap_size").unwrap_or(13.0) as f32;
     let pad = model.text("input_device").is_some_and(|d| d != "kbm");
-    let mut hx = inner.x;
+    let mut hx = hints_rect.x;
     let mut hints = Vec::new();
     for (i, c) in node.children.iter().enumerate() {
         if c.component != "option" || !visible(c, model) {
             continue;
         }
-        let aw = hint_aff_width(&hint_aff_kind(c, pad), c, model, g, cap_size);
+        let aw = binding_face(c, model, pad).width(g, cap_size);
         let aff = if aw > 0.0 { aw + hgap } else { 0.0 };
-        let lw = c.size.unwrap_or(80.0);
-        if hx + aff + lw > cluster_left - node.gap {
+        let lw = c.size.unwrap_or_else(|| {
+            let ts = pnum(c, "text_size").unwrap_or(12.0) as f32;
+            label_width(&hint_label_text(c, model, pad), ts)
+        });
+        if hx + aff + lw > hints_rect.x + hints_rect.w {
             break;
         }
         hints.push((
@@ -8452,62 +9092,99 @@ fn footer_layout(node: &UiNode, outer: Rect, model: &ValueMap) -> FooterLayout {
     }
     FooterLayout {
         rule,
+        hints_rect,
+        cluster_rect,
         hints,
         cluster,
     }
 }
 
-/// One legend entry's whole span — glyph box through label box — the press-highlight
-/// and hit target, so pointing anywhere on the pair reads as the entry.
-fn footer_span(glyph: &Rect, label: &Rect) -> Rect {
-    Rect {
-        x: glyph.x,
-        y: label.y,
-        w: label.x + label.w - glyph.x,
-        h: label.h,
+/// A legend label's measured width from its resolved text — the same crude per-glyph
+/// advance the keycap uses (there are no font metrics at layout time), so an authored
+/// `size` is never required.
+fn label_width(text: &str, size: f32) -> f32 {
+    (text.chars().count() as f32 * size * 0.55 + 4.0).max(size)
+}
+
+/// A legend hint's help text: `label_bind` (live Model text) else the `$token`
+/// literal, with every `{Signal}` PLACEHOLDER substituted by the CURRENT DEVICE's face
+/// of that signal's binding — so a sentence like `Press {Interact} to Consume` reads
+/// the actual key on kbm and the control's cap on a pad (ruling Q9, 2026-09-02). Both
+/// faces ride the scene-published `bind_<sig>` / `glyph_<sig>` channel. An UNBOUND
+/// signal keeps its literal `{Signal}` in the text — visibly wrong, never silent
+/// (rule 4BB12A75).
+fn hint_label_text(c: &UiNode, model: &ValueMap, pad: bool) -> String {
+    let raw = match ptext(c, "label_bind").and_then(|k| model.text(k)) {
+        Some(t) => t.to_string(),
+        None => crate::strings::resolve(ptext(c, "label").unwrap_or_default()).into_owned(),
+    };
+    if !raw.contains('{') {
+        return raw;
     }
-}
-
-/// A legend hint's affordance — the face that precedes its help label. A `signal` hint
-/// is DEVICE-ADAPTIVE: a controller [`Glyph`](AffKind::Glyph) when the player is on a
-/// pad, a [`Keycap`](AffKind::Keycap) of the bound key on kbm. A plain hint with a
-/// static `glyph` is always a glyph; a bare label hint has [`None`](AffKind::None).
-enum AffKind {
-    None,
-    Glyph,
-    Keycap,
-}
-
-/// Which affordance a hint shows, given whether the player is on a pad — the ONE
-/// decision `footer_layout` (sizing) and `draw_nav_footer` (drawing) both read, so the
-/// reserved slot and the drawn face can never disagree.
-fn hint_aff_kind(c: &UiNode, pad: bool) -> AffKind {
-    if ptext(c, "signal").is_some() {
-        if pad {
-            AffKind::Glyph
-        } else {
-            AffKind::Keycap
+    let mut out = String::with_capacity(raw.len());
+    let mut rest = raw.as_str();
+    while let Some(open) = rest.find('{') {
+        out.push_str(&rest[..open]);
+        let after = &rest[open + 1..];
+        match after.find('}') {
+            Some(close) => {
+                let sig = &after[..close];
+                let face = if pad {
+                    model
+                        .text(&format!("glyph_{sig}"))
+                        .filter(|g| !g.is_empty())
+                        .map(glyph_cap)
+                } else {
+                    model
+                        .text(&format!("bind_{sig}"))
+                        .filter(|k| !k.is_empty())
+                        .map(str::to_string)
+                };
+                match face {
+                    Some(f) => out.push_str(&f),
+                    None => {
+                        out.push('{');
+                        out.push_str(sig);
+                        out.push('}');
+                    }
+                }
+                rest = &after[close + 1..];
+            }
+            None => {
+                out.push_str(&rest[open..]);
+                rest = "";
+            }
         }
-    } else if ptext(c, "glyph").is_some() {
-        AffKind::Glyph
-    } else {
-        AffKind::None
     }
+    out.push_str(rest);
+    out
 }
 
-/// The width to reserve for a hint's affordance: a square `g` for a glyph, a
-/// text-measured cap for a keycap (never below a square), nothing for a bare label.
-fn hint_aff_width(kind: &AffKind, c: &UiNode, model: &ValueMap, g: f32, cap_size: f32) -> f32 {
-    match kind {
-        AffKind::None => 0.0,
-        AffKind::Glyph => g,
-        AffKind::Keycap => {
-            let key = ptext(c, "signal")
-                .and_then(|s| model.text(&format!("bind_{s}")))
-                .unwrap_or("");
-            keycap_width(key, cap_size, g)
-        }
+/// The short CAP a pad control reads as inside running text, from its positional
+/// glyph name (the shell's vendor-neutral `glyph_<sig>` vocabulary). Text cannot host
+/// an atlas sprite, so an inline placeholder shows the control's cap; the drawn glyph
+/// affordance beside the label stays the picture. Unknown names pass through as-is.
+fn glyph_cap(name: &str) -> String {
+    match name {
+        "face_south" => "A",
+        "face_east" => "B",
+        "face_west" => "X",
+        "face_north" => "Y",
+        "bumper_l" => "LB",
+        "bumper_r" => "RB",
+        "trigger_l" => "LT",
+        "trigger_r" => "RT",
+        "stick_l" => "LS",
+        "stick_r" => "RS",
+        "dpad_up" => "D-Up",
+        "dpad_down" => "D-Down",
+        "dpad_left" => "D-Left",
+        "dpad_right" => "D-Right",
+        "menu" => "Menu",
+        "view" => "View",
+        other => other,
     }
+    .to_string()
 }
 
 /// A keycap's width from its key text — a crude per-glyph advance (there are no font
@@ -8525,33 +9202,30 @@ fn keycap_width(key: &str, size: f32, min: f32) -> f32 {
 /// [`draw_panel_bg`]); an absent block falls back to neutral chrome. The key rides the
 /// legend colour, tinting toward the glyph flash under a press so a cap and a glyph
 /// acknowledge a click alike.
-fn draw_keycap(
-    r: Rect,
-    key: &str,
-    cap_style: &Json,
-    text_color: [f32; 4],
-    flash: f32,
-    out: &mut Vec<HudCommand>,
-) {
+fn draw_keycap(r: Rect, key: &str, cap_style: &Json, flash: f32, out: &mut Vec<HudCommand>) {
+    // THE HOUSE KEYCAP (Aaron 2026-09-02): easy to read — a SOLID light cap with BOLD
+    // sans-serif BLACK ink, the kbm twin of the SVG controller glyph. The colours live
+    // in this primitive (790872EE); a scene may still author a `cap` block to override
+    // the cap face, never the ink.
     if cap_style.is_null() {
         out.push(HudCommand::Panel {
             x: r.x,
             y: r.y,
             w: r.w,
             h: r.h,
-            color: PANEL,
-            color2: PANEL,
+            color: KEYCAP_FACE,
+            color2: KEYCAP_FACE,
             grad: 0.0,
             radius: 3.0,
             border: 1.0,
-            border_color: INK,
+            border_color: KEYCAP_EDGE,
             feather: 0.0,
             layer: 0.0,
         });
     } else {
         draw_panel_bg(r, cap_style, out);
     }
-    let mut color = text_color;
+    let mut color = KEYCAP_INK;
     if flash > 0.0 {
         color = lerp_color(color, FLASH_LIT, flash);
     }
@@ -8567,7 +9241,7 @@ fn draw_keycap(
         TextAlign::Center,
         FontRole::Label,
         false,
-        false,
+        true,
         0.0,
         None,
     );
@@ -8596,6 +9270,14 @@ fn draw_nav_footer(
     if let Some(rs) = jopt(props, "rule_style") {
         draw_panel_bg(lay.rule, rs, out);
     }
+    // The two sub-panels may wear their own blocks (`hints_style` / `cluster_style`,
+    // resolved from `nav_footer.hints` / `nav_footer.cluster`); absent = structure only.
+    if let Some(hs) = jopt(props, "hints_style") {
+        draw_panel_bg(lay.hints_rect, hs, out);
+    }
+    if let Some(cs) = jopt(props, "cluster_style") {
+        draw_panel_bg(lay.cluster_rect, cs, out);
+    }
     let glyph_style = props.get("glyph_style").unwrap_or(&Json::Null);
     let cap_style = props.get("cap_style").unwrap_or(&Json::Null);
     let label_color = first_color(props, &["label_color_rgba"], DIM);
@@ -8603,42 +9285,16 @@ fn draw_nav_footer(
     // a pad, a keycap of the bound key on kbm (1A292918 T5). The glyph NAME / key TEXT
     // come from the scene-published `glyph_<sig>` / `bind_<sig>` for the hint's `signal`.
     let pad = model.text("input_device").is_some_and(|d| d != "kbm");
-    // A pressed pointer lights the entry under it — the same press-only highlight the
-    // PTT's hint gutters carry (clears on release, so nothing lingers).
-    let pressed = jbool(props, "pressed");
-    let mouse = pointer(props);
+    // The legend is READ-ONLY chrome (Aaron 2026-09-02): tooltip icons are never
+    // interactive, so no press highlight and no hit — the affordance is the picture of
+    // the binding, nothing more.
     for (i, gr, lr) in &lay.hints {
         let c = &node.children[*i];
-        let flash = if pressed && footer_span(gr, lr).contains(mouse) {
-            1.0
-        } else {
-            0.0
-        };
-        match hint_aff_kind(c, pad) {
-            AffKind::None => {}
-            AffKind::Glyph => {
-                // A signal hint takes its glyph NAME from the published `glyph_<sig>`
-                // (the bound pad control); a plain hint keeps its static `glyph`.
-                let name = match ptext(c, "signal") {
-                    Some(s) => model.text(&format!("glyph_{s}")).unwrap_or_default(),
-                    None => ptext(c, "glyph").unwrap_or_default(),
-                };
-                draw_paged_hint(Some(*gr), name, gr.h, glyph_style, flash, out);
-            }
-            AffKind::Keycap => {
-                if let Some(key) = ptext(c, "signal")
-                    .and_then(|s| model.text(&format!("bind_{s}")))
-                    .filter(|k| !k.is_empty())
-                {
-                    draw_keycap(*gr, key, cap_style, label_color, flash, out);
-                }
-            }
-        }
-        // The help label: `label_bind` (live Model text) else the `$token` literal.
-        let text = match ptext(c, "label_bind").and_then(|k| model.text(k)) {
-            Some(t) => t.to_string(),
-            None => crate::strings::resolve(ptext(c, "label").unwrap_or_default()).into_owned(),
-        };
+        // The affordance is the ONE binding-face draw the `binding_icon` kind owns.
+        binding_face(c, model, pad).draw(*gr, glyph_style, cap_style, out);
+        // The help label: `label_bind` (live Model text) else the `$token` literal,
+        // with `{Signal}` placeholders substituted for the current device.
+        let text = hint_label_text(c, model, pad);
         let ts = pnum(c, "text_size").unwrap_or(12.0) as f32;
         let ty = lr.y + (lr.h - text_line_h(ts)) * 0.5;
         push_text(
@@ -8658,27 +9314,145 @@ fn draw_nav_footer(
     }
 }
 
-/// The nav footer's hit: the band CLAIMS (a bench's footer must not pick through to
-/// the content behind it), and a click on a LEGEND entry fires that option's authored
-/// `action` down the full activation channel ([`HitVerdict::fire`] — flash, strip-step
-/// and the `sig_` mirror included), the same name a pad signal or a cluster button
-/// carries. The cluster children are real placed nodes and answer their own clicks.
-fn hit_nav_footer(m: Vec2, r: Rect, node: &UiNode, model: &ValueMap, click: bool) -> HitVerdict {
-    let mut v = HitVerdict {
-        hit: r.contains(m),
-        ..HitVerdict::default()
-    };
-    if !click {
-        return v;
-    }
-    let lay = footer_layout(node, r, model);
-    for (i, gr, lr) in &lay.hints {
-        if footer_span(gr, lr).contains(m) {
-            v.fire = node.children[*i].action.clone().filter(|a| !a.is_empty());
-            break;
+/// The gap between a binding icon's affordance and its help label.
+const BINDING_ICON_GAP: f32 = 6.0;
+
+/// A control's BINDING FACE — what a hint shows for a signal on the current device.
+/// Resolved from a node's `signal` (+ the scene-published `bind_<sig>` / `glyph_<sig>`
+/// channel, 52432399) or its static `glyph`; the ONE draw the nav_footer legend, the
+/// `binding_icon` kind and the tooltip affordance share. An unbound signal is
+/// [`Unbound`](Self::Unbound) — drawn as the literal signal name in a cap, visibly
+/// wrong rather than blank (4BB12A75).
+enum BindingFace {
+    None,
+    /// An atlas glyph by cell name (a pad control, or a static `glyph`).
+    Glyph(String),
+    /// The house keycap of a bound key (kbm).
+    Keycap(String),
+    /// A `signal` no shipped binding reaches on this device — the name itself.
+    Unbound(String),
+}
+
+impl BindingFace {
+    /// The width this face reserves: a square `sq` for a glyph, a key-text-measured cap
+    /// (never narrower than a square) for a keycap, nothing when there is no face.
+    fn width(&self, sq: f32, cap_size: f32) -> f32 {
+        match self {
+            BindingFace::None => 0.0,
+            BindingFace::Glyph(_) => sq,
+            BindingFace::Keycap(k) | BindingFace::Unbound(k) => keycap_width(k, cap_size, sq),
         }
     }
-    v
+
+    /// Draw the face into `r` — a glyph from `glyph_style`'s atlas, a keycap over
+    /// `cap_style` (an absent block = the house cap).
+    fn draw(&self, r: Rect, glyph_style: &Json, cap_style: &Json, out: &mut Vec<HudCommand>) {
+        match self {
+            BindingFace::None => {}
+            BindingFace::Glyph(name) => draw_paged_hint(Some(r), name, r.h, glyph_style, 0.0, out),
+            BindingFace::Keycap(key) | BindingFace::Unbound(key) => {
+                draw_keycap(r, key, cap_style, 0.0, out);
+            }
+        }
+    }
+}
+
+/// Resolve a node's binding face for the current device: a `signal` node reads the
+/// published pad glyph (`glyph_<sig>`) on a pad and the bound key (`bind_<sig>`) on kbm;
+/// a node with a static `glyph` always shows it; a `signal` whose family is unbound on
+/// this device is [`BindingFace::Unbound`].
+fn binding_face(node: &UiNode, model: &ValueMap, pad: bool) -> BindingFace {
+    if let Some(sig) = ptext(node, "signal") {
+        let face = if pad {
+            model
+                .text(&format!("glyph_{sig}"))
+                .filter(|g| !g.is_empty())
+                .map(|g| BindingFace::Glyph(g.to_string()))
+        } else {
+            model
+                .text(&format!("bind_{sig}"))
+                .filter(|k| !k.is_empty())
+                .map(|k| BindingFace::Keycap(k.to_string()))
+        };
+        return face.unwrap_or_else(|| BindingFace::Unbound(sig.to_string()));
+    }
+    match ptext(node, "glyph") {
+        Some(g) if !g.is_empty() => BindingFace::Glyph(g.to_string()),
+        _ => BindingFace::None,
+    }
+}
+
+/// The **binding icon**: the affordance at the LEFT of its rect (a square of the rect's
+/// height, or a keycap measured to its key), then the resolved help label
+/// (`label_text`, placeholders already substituted) after [`BINDING_ICON_GAP`].
+/// Read-only chrome — no bind, no action, no hit.
+fn draw_binding_icon(r: Rect, node: &UiNode, props: &Json, out: &mut Vec<HudCommand>) {
+    let glyph_style = props.get("glyph_style").unwrap_or(&Json::Null);
+    let cap_style = props.get("cap_style").unwrap_or(&Json::Null);
+    let face = match (
+        props.get("aff_glyph").and_then(|v| v.as_str()),
+        props.get("aff_key").and_then(|v| v.as_str()),
+        ptext(node, "signal"),
+        ptext(node, "glyph"),
+    ) {
+        (Some(g), _, _, _) => BindingFace::Glyph(g.to_string()),
+        (_, Some(k), _, _) => BindingFace::Keycap(k.to_string()),
+        (_, _, Some(sig), _) => BindingFace::Unbound(sig.to_string()),
+        (_, _, None, Some(g)) if !g.is_empty() => BindingFace::Glyph(g.to_string()),
+        _ => BindingFace::None,
+    };
+    let sq = r.h;
+    let aw = face.width(sq, (sq * 0.6).min(13.0));
+    face.draw(
+        Rect {
+            x: r.x,
+            y: r.y,
+            w: aw,
+            h: sq,
+        },
+        glyph_style,
+        cap_style,
+        out,
+    );
+    let label = props
+        .get("label_text")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    if label.is_empty() {
+        return;
+    }
+    let ts = pnum(node, "text_size").unwrap_or(12.0) as f32;
+    let x = if aw > 0.0 {
+        r.x + aw + BINDING_ICON_GAP
+    } else {
+        r.x
+    };
+    let ty = r.y + (r.h - text_line_h(ts)) * 0.5;
+    push_text(
+        out,
+        x,
+        ty,
+        label,
+        ts,
+        first_color(props, &["label_color_rgba"], DIM),
+        TextAlign::Left,
+        FontRole::Label,
+        false,
+        false,
+        -1.0,
+        None,
+    );
+}
+
+/// The nav footer's hit: the band CLAIMS (a bench's footer must not pick through to
+/// the content behind it) and fires NOTHING itself — the LEGEND is read-only chrome
+/// (Aaron 2026-09-02: tooltip icons are never interactive; an option's `action` is
+/// ignored). The cluster children are real placed nodes and answer their own clicks.
+fn hit_nav_footer(m: Vec2, r: Rect) -> HitVerdict {
+    HitVerdict {
+        hit: r.contains(m),
+        ..HitVerdict::default()
+    }
 }
 
 // ── Geometry helpers ─────────────────────────────────────────────────────────
@@ -8698,6 +9472,66 @@ fn slider_range(node: &UiNode) -> (f32, f32) {
 
 fn focus_group(node: &UiNode) -> Option<&str> {
     ptext(node, "focus_group")
+}
+
+/// **SECONDARY FOCUS** (Aaron 2026-09-04): the one control inside the focused pane the
+/// pad cursor stands on wears a uniform cursor ring — a rune-glow outline over a soft
+/// glow, drawn by the walker AFTER the control's own commands, whatever the kind. The
+/// pane's sapphire rim is the PRIMARY tier (implied panel context, 302DDEC7); this is
+/// the second, so "which panel" and "which control" are both visible without relying
+/// on a per-kind recolour (the Populous dials' focus track equalled their resting one).
+///
+/// Nav modality only — the pointer takeover hides it exactly as it hides `hot`, and the
+/// next d-pad press relights it. LEAF controls only: a container is the pane tier's.
+///
+/// Colour: the `rune_glow_hi` theme token (the press-flash cue, 4DD224AA), read from the
+/// resolved styles so a retuned palette moves it; weights from the one truly-global
+/// effect block `focus_ring` in `ui_style.json` (`w` 2 · `pad` 3 · `radius` 4 · `glow_pad`
+/// 4 · `feather` 6 · `glow_alpha` 0.35), each falling back to the compiled house value.
+fn focus_ring(p: &Placed, state: &UiState, styles: &Json, out: &mut Vec<HudCommand>) {
+    let node = p.node;
+    if !state.nav_mode() || node.id.is_empty() || state.focused() != Some(node.id.as_str()) {
+        return;
+    }
+    if !crate::is_rust_component(&node.component)
+        || matches!(
+            node.component.as_str(),
+            "panel" | "popup_panel" | "paged_menu" | "nav_footer" | "list"
+        )
+    {
+        return;
+    }
+    let fr = jpath(styles, "focus_ring");
+    let color = json_color(jpath(styles, "theme.tokens.rune_glow_hi"), FLASH_LIT);
+    let pad = jnum(fr, "pad", 3.0);
+    let radius = jnum(fr, "radius", 4.0);
+    let ring = p.rect.inset(-pad);
+    let start = out.len();
+    let gpad = jnum(fr, "glow_pad", 4.0);
+    let glow = [color[0], color[1], color[2], jnum(fr, "glow_alpha", 0.35)];
+    out.push(HudCommand::Panel {
+        x: ring.x - gpad,
+        y: ring.y - gpad,
+        w: ring.w + gpad * 2.0,
+        h: ring.h + gpad * 2.0,
+        color: glow,
+        color2: glow,
+        grad: 0.0,
+        radius: radius + gpad,
+        border: 0.0,
+        border_color: CLEAR,
+        feather: jnum(fr, "feather", 6.0),
+        layer: 0.0,
+    });
+    push_panel(out, ring, CLEAR, None, radius, color, jnum(fr, "w", 2.0));
+    if p.layer != 0.0 {
+        for c in &mut out[start..] {
+            offset_layer(c, p.layer);
+        }
+    }
+    if p.fade < 1.0 {
+        fade_commands(&mut out[start..], p.fade);
+    }
 }
 
 // ── Value / style / command helpers ──────────────────────────────────────────
@@ -8895,6 +9729,12 @@ fn pbool(node: &UiNode, key: &str) -> bool {
     crate::config::flag(&node.props, key)
 }
 
+/// A flag whose ABSENCE is distinguishable from `false` — for the props that default
+/// TRUE (`popup_panel`'s `dismissable`). See [`crate::config::opt_flag`].
+fn popt_bool(node: &UiNode, key: &str) -> Option<bool> {
+    crate::config::opt_flag(&node.props, key)
+}
+
 /// Read a colour that IS a 4-array `Value` (a token-resolved rgba), else `dflt`.
 /// Used for a text node's dotted `color` path (`"paperdoll.stats.color"`).
 fn json_color(v: &Json, dflt: [f32; 4]) -> [f32; 4] {
@@ -9029,13 +9869,15 @@ const PANEL: [f32; 4] = [0.078, 0.09, 0.122, 1.0];
 const RUNE: [f32; 4] = [0.435, 0.592, 1.0, 1.0];
 const SAP: [f32; 4] = [0.141, 0.247, 0.471, 1.0];
 const CLEAR: [f32; 4] = [0.0, 0.0, 0.0, 0.0];
-/// The GOLD lock rim — the compiled house default a pane wears when ENTERED (nav-tier
-/// contract 1B5F6BB8). Mirrors `$gold_ring`; a scene that authors its own `entered` style
-/// block overrides it. Drift-gated by `panel_entered_default_matches_theme_gold_ring`.
-const GOLD_RING: [f32; 4] = [0.851, 0.643, 0.255, 1.0];
-/// The entered rim's border width — thicker than the sapphire focus rim (w2, the
-/// merely-navigated-to pane) so the LOCK reads at a glance.
-const ENTERED_RIM_W: f32 = 3.0;
+/// The house KEYCAP face — a solid light cap (mirrors `$ink`), the kbm twin of a
+/// controller glyph. Aaron 2026-09-02: "easy to read (sans serif), bold, black on a
+/// solid color background".
+const KEYCAP_FACE: [f32; 4] = [0.871, 0.847, 0.788, 1.0];
+/// The keycap's edge — mirrors `$dim`.
+const KEYCAP_EDGE: [f32; 4] = [0.561, 0.541, 0.49, 1.0];
+/// The keycap's ink — black, always (a cap is read against its own face, never the
+/// scene's label colour). Mirrors `$stage_black`.
+const KEYCAP_INK: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
 /// Glyph-face resting tint — mirrors `$bronze`. The authored source is
 /// `pad_glyphs.color` in `ui_theme.json`; this is only the missing-key floor.
 const BRONZE: [f32; 4] = [0.722, 0.592, 0.353, 1.0];
@@ -9466,8 +10308,6 @@ mod tests {
             down: clicked,
             right_down: false,
             screen: Vec2::new(800.0, 600.0),
-            typed: String::new(),
-            backspace: false,
             wheel: 0.0,
             exclusive: false,
             motion: Default::default(),
@@ -9585,8 +10425,6 @@ mod tests {
             down: true,
             right_down: false,
             screen: Vec2::new(800.0, 600.0),
-            typed: String::new(),
-            backspace: false,
             wheel: 0.0,
             exclusive: true,
             motion: Vec2::new(7.0, -3.0),
@@ -9991,26 +10829,67 @@ mod tests {
         assert!(!f.results.is_on("b1"), "…and it writes nothing");
     }
 
-    /// A mouse click drops any pane LOCK (nav-tier contract 1B5F6BB8): `run_ui` clears
-    /// `entered_group` on a clicked frame, the same place it clears keyboard focus.
-    /// Without it a click while a pane is entered wedges the pad — `PanelNext` stays gated
-    /// and the next `Cancel` is eaten as a pane exit instead of popping the scene.
+    /// **CONFIRM = APPLY** (Aaron 2026-09-04): a control authored `apply: "confirm"`
+    /// STAGES its pad steps — `results` keep reporting the resting value to the scene
+    /// while the stage walks on with every press — until a commit lands it in ONE
+    /// write; a revert drops it and the control reads the model again. The immediate
+    /// write of every other control is untouched (the sibling test below).
     #[test]
-    fn a_click_releases_the_pane_lock() {
-        let page = node("cell");
+    fn a_staged_pad_nudge_holds_until_confirm_commits_it() {
+        let mut dial = node("slider");
+        dial.id = "dial".into();
+        dial.bind = Some("dial".into());
+        dial = prop(dial, "min", Value::Number(0.0));
+        dial = prop(dial, "max", Value::Number(10.0));
+        dial = prop(dial, "apply", Value::Text("confirm".into()));
+        let mut page = node("surface");
+        page.children = vec![dial];
+        let styles = serde_json::json!({});
+        let model = ValueMap::new().with("dial", 4.0);
+        let idle = input_at(-9.0, -9.0, false);
+
         let mut state = UiState::new();
-        state.entered = vec!["pane_a".into()];
-        run_ui(
-            &page,
-            &ValueMap::new(),
-            &serde_json::json!({}),
-            &input_at(5.0, 5.0, true),
-            &mut state,
+        state.push_nudge("dial", 1, false);
+        let f = run_ui(&page, &model, &styles, &idle, &mut state);
+        assert_eq!(
+            f.results.number("dial"),
+            Some(4.0),
+            "a staged step is not a write — the scene keeps seeing the resting value"
         );
-        assert!(
-            state.entered.is_empty(),
-            "a click released the whole pane stack"
+        assert!(state.staged_any(), "…but the stage is held");
+        state.push_nudge("dial", 1, false);
+        let f = run_ui(&page, &model, &styles, &idle, &mut state);
+        assert_eq!(
+            f.results.number("dial"),
+            Some(4.0),
+            "still resting for the scene"
         );
+        assert_eq!(
+            state.staged_value("dial"),
+            Some(&Value::Number(6.0)),
+            "the second press walks on from the stage, not from the model"
+        );
+        // The commit: queued by a Confirm, written by the next pass, spent after.
+        assert!(state.commit_stages(None), "there was something to commit");
+        let f = run_ui(&page, &model, &styles, &idle, &mut state);
+        assert_eq!(f.results.number("dial"), Some(6.0), "the commit lands once");
+        assert!(!state.staged_any(), "the stage is spent");
+
+        // Revert: the stage is dropped and the control reads the model again — and a
+        // stage that has been DRAWN (seeded into results for a frame) leaves nothing
+        // behind: it never took local ownership.
+        let mut fresh = UiState::new();
+        fresh.push_nudge("dial", -1, false);
+        run_ui(&page, &model, &styles, &idle, &mut fresh);
+        assert_eq!(fresh.staged_value("dial"), Some(&Value::Number(3.0)));
+        let f = run_ui(&page, &model, &styles, &idle, &mut fresh);
+        assert_eq!(f.results.number("dial"), Some(4.0), "drawn, still resting");
+        fresh.revert_stages();
+        let f = run_ui(&page, &model, &styles, &idle, &mut fresh);
+        assert!(!fresh.staged_any());
+        assert_eq!(f.results.number("dial"), Some(4.0), "reverted to the model");
+        let f = run_ui(&page, &model, &styles, &idle, &mut fresh);
+        assert_eq!(f.results.number("dial"), Some(4.0), "…and it stays there");
     }
 
     /// **The pad operates value controls** (nav-tier contract 1B5F6BB8): a `select` steps
@@ -11421,8 +12300,6 @@ mod tests {
             down: false,
             right_down: false,
             screen: Vec2::new(800.0, 600.0),
-            typed: String::new(),
-            backspace: false,
             wheel: 0.0,
             exclusive: false,
             motion: Default::default(),
@@ -12287,6 +13164,177 @@ mod tests {
         );
     }
 
+    /// The fold reads the TEXT STREAM through the open session: `kind: digits` admits
+    /// only digits, `max_len` caps the value, the caret moves with the editing keys
+    /// and inserts where it stands, and a cancelled session restores its origin.
+    #[test]
+    fn a_text_field_session_edits_at_the_caret_and_honours_kind_and_max_len() {
+        let mut f = node("text_field");
+        f.id = "n".into();
+        f.bind = Some("n".into());
+        f.width = Some(200.0);
+        f.height = Some(24.0);
+        f.anchor = Some(UiAnchor::TopLeft);
+        f = prop(f, "kind", Value::Text("digits".into()));
+        f = prop(f, "max_len", Value::Number(4.0));
+        let mut screen = node("surface");
+        screen.children = vec![f];
+        let model = ValueMap::new().with("n", Value::Text("12".into()));
+        let mut ui = UiState::new();
+        ui.begin_edit("n", false, 0);
+
+        let typing = input_at(0.0, 0.0, false);
+        ui.push_text(TextStream {
+            typed: "a3".into(),
+            ..Default::default()
+        });
+        let frame = run_ui(&screen, &model, &Json::Null, &typing, &mut ui);
+        assert_eq!(
+            frame.results.text("n"),
+            Some("123"),
+            "digits only, at the end"
+        );
+        assert_eq!(ui.edit.as_ref().unwrap().origin.as_deref(), Some("12"));
+
+        // Home, then type: inserts at the caret.
+        let model = ValueMap::new().with("n", Value::Text("123".into()));
+        let home = input_at(0.0, 0.0, false);
+        ui.push_text(TextStream {
+            home: true,
+            ..Default::default()
+        });
+        run_ui(&screen, &model, &Json::Null, &home, &mut ui);
+        let ins = input_at(0.0, 0.0, false);
+        ui.push_text(TextStream {
+            typed: "9".into(),
+            ..Default::default()
+        });
+        let frame = run_ui(&screen, &model, &Json::Null, &ins, &mut ui);
+        assert_eq!(frame.results.text("n"), Some("9123"));
+        assert_eq!(ui.edit.as_ref().unwrap().caret, Some(1));
+
+        // Delete removes after the caret; max_len caps further typing.
+        let model = ValueMap::new().with("n", Value::Text("9123".into()));
+        let del = input_at(0.0, 0.0, false);
+        ui.push_text(TextStream {
+            delete: true,
+            ..Default::default()
+        });
+        let frame = run_ui(&screen, &model, &Json::Null, &del, &mut ui);
+        assert_eq!(frame.results.text("n"), Some("923"));
+        let model = ValueMap::new().with("n", Value::Text("9123".into()));
+        let more = input_at(0.0, 0.0, false);
+        ui.push_text(TextStream {
+            typed: "77".into(),
+            ..Default::default()
+        });
+        let frame = run_ui(&screen, &model, &Json::Null, &more, &mut ui);
+        assert_eq!(frame.results.text("n").map(|t| t.chars().count()), Some(4));
+
+        // Cancel: the next fold puts the origin back.
+        ui.end_edit(true);
+        let model = ValueMap::new().with("n", Value::Text("9123".into()));
+        let frame = run_ui(
+            &screen,
+            &model,
+            &Json::Null,
+            &input_at(0.0, 0.0, false),
+            &mut ui,
+        );
+        assert_eq!(
+            frame.results.text("n"),
+            Some("12"),
+            "the pre-edit value is restored"
+        );
+        assert!(!ui.text_entry());
+    }
+
+    /// A session opened with `select_all` replaces the whole value on the first typed
+    /// character (a rename's preselected basename) — and backspace edits instead.
+    #[test]
+    fn a_select_all_session_replaces_the_value_on_the_first_character() {
+        let mut f = node("text_field");
+        f.id = "r".into();
+        f.bind = Some("r".into());
+        f.width = Some(200.0);
+        f.height = Some(24.0);
+        f.anchor = Some(UiAnchor::TopLeft);
+        let mut screen = node("surface");
+        screen.children = vec![f];
+        let model = ValueMap::new().with("r", Value::Text("Alpha.json".into()));
+        let mut ui = UiState::new();
+        ui.begin_edit("r", true, 0);
+        let k = input_at(0.0, 0.0, false);
+        ui.push_text(TextStream {
+            typed: "K".into(),
+            ..Default::default()
+        });
+        assert_eq!(
+            run_ui(&screen, &model, &Json::Null, &k, &mut ui)
+                .results
+                .text("r"),
+            Some("K")
+        );
+        let model = ValueMap::new().with("r", Value::Text("K".into()));
+        let more = input_at(0.0, 0.0, false);
+        ui.push_text(TextStream {
+            typed: "atana".into(),
+            ..Default::default()
+        });
+        assert_eq!(
+            run_ui(&screen, &model, &Json::Null, &more, &mut ui)
+                .results
+                .text("r"),
+            Some("Katana")
+        );
+        // Backspace first means "edit this name": no replace.
+        let mut ui = UiState::new();
+        ui.begin_edit("r", true, 0);
+        let model = ValueMap::new().with("r", Value::Text("Alpha.json".into()));
+        let bs = input_at(0.0, 0.0, false);
+        ui.push_text(TextStream {
+            backspace: true,
+            ..Default::default()
+        });
+        assert_eq!(
+            run_ui(&screen, &model, &Json::Null, &bs, &mut ui)
+                .results
+                .text("r"),
+            Some("Alpha.jso")
+        );
+    }
+
+    /// The entry guard drops the trigger key's own committed character (the frame it
+    /// lands, and the next — macOS commits key text a frame late), then types normally.
+    #[test]
+    fn the_entry_guard_drops_the_trigger_keys_character() {
+        let mut f = node("text_field");
+        f.id = "c".into();
+        f.bind = Some("c".into());
+        f.width = Some(200.0);
+        f.height = Some(24.0);
+        f.anchor = Some(UiAnchor::TopLeft);
+        let mut screen = node("surface");
+        screen.children = vec![f];
+        let model = ValueMap::new().with("c", Value::Text("".into()));
+        let mut ui = UiState::new();
+        ui.begin_edit("c", false, 2);
+        let t = input_at(0.0, 0.0, false);
+        // The route delivers the trigger key's own character on each of the next frames.
+        for expect in ["", "", "t"] {
+            ui.push_text(TextStream {
+                typed: "t".into(),
+                ..Default::default()
+            });
+            assert_eq!(
+                run_ui(&screen, &model, &Json::Null, &t, &mut ui)
+                    .results
+                    .text("c"),
+                Some(expect)
+            );
+        }
+    }
+
     #[test]
     fn text_field_focus_type_backspace_and_click_away() {
         // A single text_field (bind "name") anchored at (10,10), 200×40.
@@ -12334,8 +13382,11 @@ mod tests {
         // Type two chars on a non-click frame → appended to the bound string. Feed
         // the prior frame's result back as the model, as the engine would.
         let model = ValueMap::new().with("name", f.results.text("name").unwrap_or("").to_string());
-        let mut typing = input_at(100.0, 30.0, false);
-        typing.typed = "Hi".into();
+        let typing = input_at(100.0, 30.0, false);
+        state.push_text(TextStream {
+            typed: "Hi".into(),
+            ..Default::default()
+        });
         let f = run_ui(&page, &model, &styles, &typing, &mut state);
         assert_eq!(
             f.results.text("name"),
@@ -12345,8 +13396,11 @@ mod tests {
 
         // Backspace → pops the last char.
         let model = ValueMap::new().with("name", f.results.text("name").unwrap().to_string());
-        let mut bs = input_at(100.0, 30.0, false);
-        bs.backspace = true;
+        let bs = input_at(100.0, 30.0, false);
+        state.push_text(TextStream {
+            backspace: true,
+            ..Default::default()
+        });
         let f = run_ui(&page, &model, &styles, &bs, &mut state);
         assert_eq!(
             f.results.text("name"),
@@ -12404,8 +13458,11 @@ mod tests {
 
         // A keystroke while unfocused is ignored.
         let model = ValueMap::new().with("name", "H");
-        let mut typing = input_at(400.0, 300.0, false);
-        typing.typed = "X".into();
+        let typing = input_at(400.0, 300.0, false);
+        state.push_text(TextStream {
+            typed: "X".into(),
+            ..Default::default()
+        });
         let f = run_ui(&page, &model, &styles, &typing, &mut state);
         assert_eq!(
             f.results.text("name"),
@@ -12747,8 +13804,7 @@ mod tests {
         let styles = serde_json::json!({
             "panel": {
                 "resting": { "border_w": 1.0, "border": [0.3, 0.3, 0.32, 1.0] },
-                "focused": { "border_w": 2.0, "border": [0.25, 0.45, 0.85, 1.0] },
-                "entered": { "border_w": 2.0, "border": [0.55, 0.45, 0.85, 1.0] }
+                "focused": { "border_w": 2.0, "border": [0.25, 0.45, 0.85, 1.0] }
             }
         });
         let resting = styles["panel"]["resting"]["border_w"]
@@ -12814,30 +13870,17 @@ mod tests {
             "the focused pane draws its own rim"
         );
 
-        // ENTERED with an authored `entered` block → that block WINS (finally asserting the
-        // fixture's purple entered rim). Keyed on the LOCK, not focus — no focus needed.
-        let mut entered = UiState::new();
-        entered.entered = vec!["pop_left".into()];
+        // The IMPLIED PANE (Aaron 2026-09-02): the cursor sits on an INTERIOR control,
+        // the pane is the container it belongs to — and that pane wears the SAME
+        // sapphire focused rim, keyed on the walker-derived pane, not on focus.
+        let mut implied = UiState::new();
+        implied.request_focus("some_interior_control");
+        implied.pane = Some("pop_left".into());
         assert_eq!(
-            rim_of(&styles, &mut entered).1,
-            [0.55, 0.45, 0.85, 1.0],
-            "the authored entered block wins when present",
+            rim_of(&styles, &mut implied).0,
+            focus_w,
+            "the implied pane draws the focused rim while its interior holds the cursor"
         );
-
-        // ENTERED with NO authored `entered` block → the compiled GOLD house default paints
-        // the lock rim over the focused/resting fill (the "defaults ARE the house look").
-        let bare = serde_json::json!({
-            "panel": { "resting": { "border_w": 1.0, "border": [0.3, 0.3, 0.32, 1.0] } }
-        });
-        let mut locked = UiState::new();
-        locked.entered = vec!["pop_left".into()];
-        let (w, c) = rim_of(&bare, &mut locked);
-        assert_eq!(
-            w,
-            f64::from(ENTERED_RIM_W),
-            "the compiled gold default is thicker (w3)"
-        );
-        assert_eq!(c, GOLD_RING, "…and gold");
     }
 
     /// **A rail step advances the strip by one, and CLAMPS at the ends** — over the REAL
@@ -13563,9 +14606,12 @@ mod tests {
         assert!(rule, "the 1px top rule drew across the band");
     }
 
+    /// The LEGEND is read-only chrome (Aaron 2026-09-02): a click on an entry — even one
+    /// that (wrongly) authors an `action` — fires NOTHING; the band still claims so
+    /// nothing picks through; the cluster's real buttons answer their own clicks.
     #[test]
-    fn nav_footer_legend_click_fires_the_entrys_action_and_the_band_claims() {
-        // Entry 1 (`b` → ft_back) spans x 106..194: a click on it fires the authored name.
+    fn nav_footer_legend_is_never_interactive_and_the_band_claims() {
+        // Entry 1 (`b`, authored ft_back) spans x 106..194: a click on it fires nothing.
         let f = run_ui(
             &nav_footer_tree(),
             &ValueMap::new(),
@@ -13575,11 +14621,11 @@ mod tests {
         );
         assert!(f.results.is_on("hud_hit"), "the band claims the click");
         assert!(
-            f.results.is_on("ft_back"),
-            "the legend entry fired its action"
+            !f.results.is_on("ft_back"),
+            "a legend entry is a tooltip, never a control"
         );
-        // Entry 0 carries NO action, and the open band between legend and cluster is
-        // inert: both claim (nothing picks through) and fire nothing.
+        // Entry 0 and the open band between legend and cluster are inert too: both
+        // claim (nothing picks through) and fire nothing.
         for x in [30.0, 400.0] {
             let f = run_ui(
                 &nav_footer_tree(),
@@ -13643,6 +14689,235 @@ mod tests {
         assert!(f.rect("next").is_none(), "hidden NEXT is not placed");
         let b = f.rect("back").expect("back placed");
         assert_eq!(b.pos.x, 700.0, "the cluster re-right-aligns without NEXT");
+    }
+
+    /// **The footer is TWO SUB-PANELS** (the re-cut, Aaron 2026-09-02): the legend flows
+    /// left-justified in the LEFT box, the cluster right-justified in the RIGHT box, the
+    /// two never overlap (the legend truncates at its box), each box may wear its own
+    /// style block, an un-sized label measures itself, and a `{Signal}` placeholder in a
+    /// label reads the bound key on kbm / the control's cap on a pad — an unbound one
+    /// stays visibly literal.
+    #[test]
+    fn nav_footer_is_two_subpanels_and_substitutes_placeholders() {
+        let styles = serde_json::json!({
+            "nav_footer": {
+                "hints": { "color": [0.1, 0.2, 0.3, 1.0] },
+                "cluster": { "color": [0.3, 0.2, 0.1, 1.0] },
+                "label": [0.5, 0.5, 0.5, 1.0]
+            },
+            "pad_glyphs": { "tex": 7, "cols": 4, "rows": 4, "cells": { "face_south": 4 } },
+        });
+        let footer = || {
+            let mut hint = node("option");
+            hint = prop(hint, "signal", Value::Text("Interact".into()));
+            hint = prop(
+                hint,
+                "label",
+                Value::Text("Press {Interact} to Consume".into()),
+            );
+            let mut dead = node("option");
+            dead = prop(dead, "label", Value::Text("Hold {Grapple} to Climb".into()));
+            let mut btn = node("button");
+            btn.id = "menu".into();
+            btn.action = Some("menu_open".into());
+            btn.size = Some(90.0);
+            let mut ft = node("nav_footer");
+            ft.id = "ft".into();
+            ft.anchor = Some(UiAnchor::TopLeft);
+            ft.width = Some(800.0);
+            ft.height = Some(52.0);
+            ft.pad = 10.0;
+            ft.gap = 8.0;
+            ft.children = vec![hint, dead, btn];
+            let mut screen = node("surface");
+            screen.children = vec![ft];
+            screen
+        };
+        // kbm: the placeholder reads the bound KEY; the unbound one stays literal.
+        let kbm = ValueMap::new()
+            .with("input_device", "kbm")
+            .with("bind_Interact", "E");
+        let f = run_ui(
+            &footer(),
+            &kbm,
+            &styles,
+            &input_at(-9.0, -9.0, false),
+            &mut UiState::new(),
+        );
+        let texts: Vec<&str> = f
+            .commands
+            .iter()
+            .filter_map(|c| match c {
+                HudCommand::Text { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            texts.contains(&"Press E to Consume"),
+            "kbm substitutes the bound key inline: {texts:?}"
+        );
+        assert!(
+            texts.contains(&"Hold {Grapple} to Climb"),
+            "an unbound placeholder stays visibly literal: {texts:?}"
+        );
+        // The two sub-panels: the cluster box is exactly the button's width at the right
+        // edge; the hints box runs from the left to one gap before it; both drew their
+        // own style block.
+        let inner_right = 800.0 - 10.0;
+        let cluster_x = inner_right - 90.0;
+        let boxes: Vec<(f32, f32, [f32; 4])> = f
+            .commands
+            .iter()
+            .filter_map(|c| match c {
+                HudCommand::Panel { x, w, color, .. } => Some((*x, *w, *color)),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            boxes.iter().any(|(x, w, c)| (*x - cluster_x).abs() < 0.01
+                && (*w - 90.0).abs() < 0.01
+                && *c == [0.3, 0.2, 0.1, 1.0]),
+            "the RIGHT sub-panel is the cluster's box: {boxes:?}"
+        );
+        assert!(
+            boxes.iter().any(|(x, w, c)| (*x - 10.0).abs() < 0.01
+                && (*w - (cluster_x - 8.0 - 10.0)).abs() < 0.01
+                && *c == [0.1, 0.2, 0.3, 1.0]),
+            "the LEFT sub-panel fills up to one gap before the cluster: {boxes:?}"
+        );
+        assert_eq!(f.rect("menu").expect("menu placed").pos.x, cluster_x);
+
+        // pad: the placeholder reads the control's CAP from the positional glyph name.
+        let pad = ValueMap::new()
+            .with("input_device", "xbox")
+            .with("glyph_Interact", "face_south");
+        let f = run_ui(
+            &footer(),
+            &pad,
+            &styles,
+            &input_at(-9.0, -9.0, false),
+            &mut UiState::new(),
+        );
+        assert!(
+            f.commands.iter().any(
+                |c| matches!(c, HudCommand::Text { text, .. } if text == "Press A to Consume")
+            ),
+            "pad substitutes the control's cap inline"
+        );
+    }
+
+    /// **The `binding_icon` kind** (Aaron 2026-09-02): given a signal it shows the bound
+    /// KEY as the house keycap on kbm and the atlas GLYPH on a pad, followed by its help
+    /// label with `{Signal}` substituted; an unbound signal shows the signal NAME in a
+    /// cap (visibly wrong, never blank); it measures itself; and it never claims a click.
+    #[test]
+    fn binding_icon_shows_the_bound_face_per_device_never_claims_and_fails_loud() {
+        let styles = serde_json::json!({
+            "pad_glyphs": { "tex": 7, "cols": 4, "rows": 4, "cells": { "face_south": 4 } },
+        });
+        let page = |sig: &str| {
+            let mut icon = node("binding_icon");
+            icon.id = "bi".into();
+            icon.anchor = Some(UiAnchor::TopLeft);
+            icon = prop(icon, "signal", Value::Text(sig.into()));
+            icon = prop(
+                icon,
+                "label",
+                Value::Text(format!("Press {{{sig}}} to Consume")),
+            );
+            let mut screen = node("surface");
+            screen.children = vec![icon];
+            screen
+        };
+        // kbm: keycap "E" (bold black on the house cap) + the substituted label.
+        let kbm = ValueMap::new()
+            .with("input_device", "kbm")
+            .with("bind_Interact", "E");
+        let f = run_ui(
+            &page("Interact"),
+            &kbm,
+            &styles,
+            &input_at(5.0, 5.0, true),
+            &mut UiState::new(),
+        );
+        let texts: Vec<&str> = f
+            .commands
+            .iter()
+            .filter_map(|c| match c {
+                HudCommand::Text { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            texts.contains(&"E"),
+            "kbm draws the key as a keycap: {texts:?}"
+        );
+        assert!(
+            texts.contains(&"Press E to Consume"),
+            "the label substitutes the bound key: {texts:?}"
+        );
+        assert!(
+            f.commands
+                .iter()
+                .any(|c| matches!(c, HudCommand::Text { color, bold, .. } if *color == KEYCAP_INK && *bold)),
+            "the keycap ink is bold black"
+        );
+        assert!(
+            !f.results.is_on("hud_hit"),
+            "a binding icon never claims a click"
+        );
+        let r = f.rect("bi").expect("placed");
+        assert_eq!(r.size.y, 20.0, "a square affordance of the default size");
+        assert!(r.size.x > 20.0, "…plus the measured label");
+
+        // pad: the atlas glyph, and the label reads the control's cap.
+        let pad = ValueMap::new()
+            .with("input_device", "xbox")
+            .with("glyph_Interact", "face_south");
+        let f = run_ui(
+            &page("Interact"),
+            &pad,
+            &styles,
+            &input_at(-9.0, -9.0, false),
+            &mut UiState::new(),
+        );
+        assert!(
+            f.commands
+                .iter()
+                .any(|c| matches!(c, HudCommand::Sprite { tex: 7, .. })),
+            "pad draws the atlas glyph"
+        );
+        assert!(
+            f.commands.iter().any(
+                |c| matches!(c, HudCommand::Text { text, .. } if text == "Press A to Consume")
+            ),
+            "the label substitutes the control's cap"
+        );
+
+        // unbound: the signal NAME rides the cap and the placeholder stays literal.
+        let f = run_ui(
+            &page("Grapple"),
+            &kbm,
+            &styles,
+            &input_at(-9.0, -9.0, false),
+            &mut UiState::new(),
+        );
+        let texts: Vec<&str> = f
+            .commands
+            .iter()
+            .filter_map(|c| match c {
+                HudCommand::Text { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            texts.contains(&"Grapple"),
+            "an unbound signal names itself: {texts:?}"
+        );
+        assert!(
+            texts.contains(&"Press {Grapple} to Consume"),
+            "…and its placeholder stays visibly literal: {texts:?}"
+        );
     }
 
     /// **A strip selection is reported as a NUMBER.** The every-frame echo is the
@@ -13941,8 +15216,11 @@ mod tests {
         let model = ValueMap::new().with("name", f.results.text("name").unwrap_or("").to_string());
 
         // Typing frame: pointer/buttons identical to the previous frame.
-        let mut typing = input_at(100.0, 30.0, false);
-        typing.typed = "Q".into();
+        let typing = input_at(100.0, 30.0, false);
+        state.push_text(TextStream {
+            typed: "Q".into(),
+            ..Default::default()
+        });
         let f = run_ui(&page, &model, &styles, &typing, &mut state);
         assert_eq!(
             f.results.text("name"),
@@ -13974,8 +15252,11 @@ mod tests {
             &input_at(100.0, 30.0, true),
             &mut state,
         );
-        let mut typing = input_at(100.0, 30.0, false);
-        typing.typed = "é⬥".into();
+        let typing = input_at(100.0, 30.0, false);
+        state.push_text(TextStream {
+            typed: "é⬥".into(),
+            ..Default::default()
+        });
         let f = run_ui(
             &page,
             &ValueMap::new().with("name", ""),
@@ -13986,8 +15267,11 @@ mod tests {
         assert_eq!(f.results.text("name"), Some("é⬥"));
 
         let model = ValueMap::new().with("name", f.results.text("name").unwrap().to_string());
-        let mut bs = input_at(100.0, 30.0, false);
-        bs.backspace = true;
+        let bs = input_at(100.0, 30.0, false);
+        state.push_text(TextStream {
+            backspace: true,
+            ..Default::default()
+        });
         let f = run_ui(&page, &model, &styles, &bs, &mut state);
         assert_eq!(f.results.text("name"), Some("é"), "the whole ⬥ popped");
     }
@@ -14772,8 +16056,6 @@ mod tests {
             down: true,
             right_down: false,
             screen,
-            typed: String::new(),
-            backspace: false,
             wheel: 0.0,
             exclusive: false,
             motion: Default::default(),
@@ -14795,8 +16077,6 @@ mod tests {
             down: true,
             right_down: false,
             screen,
-            typed: String::new(),
-            backspace: false,
             wheel: 0.0,
             exclusive: false,
             motion: Default::default(),
@@ -14812,8 +16092,6 @@ mod tests {
             down: false,
             right_down: false,
             screen,
-            typed: String::new(),
-            backspace: false,
             wheel: 0.0,
             exclusive: false,
             motion: Default::default(),
@@ -14832,6 +16110,243 @@ mod tests {
         let f = run_ui(&node("cell"), &model, &styles(), &press, &mut plain);
         assert!(f.results.text("drag_kind").is_none());
         assert!(plain.drag().is_none());
+    }
+
+    /// A source beside a target, both plain `cell`s — the drag gesture is entirely
+    /// prop-driven on both ends (`drag_kind` / `drop_accept`), no new component kind.
+    /// The two boxes are anchored so a release lands unambiguously on one of them.
+    fn drag_pair(accept: &str, action: Option<&str>) -> UiNode {
+        let mut src = node("cell");
+        src.id = "src".into();
+        src.anchor = Some(UiAnchor::TopLeft);
+        src.width = Some(60.0);
+        src.height = Some(40.0);
+        src = prop(src, "drag_kind", Value::Text("clip".into()));
+        src = prop(src, "drag_id", Value::Text("walk_forward".into()));
+
+        let mut bin = node("cell");
+        bin.id = "bin".into();
+        bin.anchor = Some(UiAnchor::TopLeft);
+        bin.offset = [100.0, 0.0];
+        bin.width = Some(60.0);
+        bin.height = Some(40.0);
+        bin.action = action.map(str::to_string);
+        bin = prop(bin, "drop_accept", Value::Text(accept.into()));
+
+        let mut root = node("screen");
+        root.children = vec![src, bin];
+        root
+    }
+
+    fn at(x: f32, y: f32, clicked: bool, down: bool) -> UiInput {
+        UiInput {
+            mouse: Vec2::new(x, y),
+            clicked,
+            down,
+            right_down: false,
+            screen: Vec2::new(200.0, 100.0),
+            wheel: 0.0,
+            exclusive: false,
+            motion: Default::default(),
+        }
+    }
+
+    /// **`drop_accept` — a release over an accepting node FIRES its result.** The
+    /// target's `drop_action` (defaulting to its `action`) rides the same activation
+    /// channel a click rides, and the drag channel publishes WHAT landed (`drop_id`)
+    /// and WHERE (`drop_target`). A drop the UI answered also consumes the pointer,
+    /// so the scene does not resolve the same release against its own canvas twice.
+    #[test]
+    fn a_release_over_an_accepting_node_fires_its_drop_action() {
+        let tree = drag_pair("clip", Some("bind_clip"));
+        let model = ValueMap::new();
+        let mut state = UiState::new();
+
+        // Press inside the source → the payload is in flight.
+        let f = run_ui(
+            &tree,
+            &model,
+            &styles(),
+            &at(20.0, 20.0, true, true),
+            &mut state,
+        );
+        assert!(f.results.is_on("drag_active"));
+
+        // Release over the TARGET → its action fires, carrying the payload.
+        let f = run_ui(
+            &tree,
+            &model,
+            &styles(),
+            &at(130.0, 20.0, false, false),
+            &mut state,
+        );
+        assert!(f.results.is_on("bind_clip"), "the target's action fires");
+        assert_eq!(f.results.text("drop_id"), Some("walk_forward"));
+        assert_eq!(f.results.text("drop_target"), Some("bin"));
+        assert!(f.results.is_on("drag_dropped"), "still the release edge");
+        assert!(f.results.is_on("hud_hit"), "an ANSWERED drop is consumed");
+        assert!(state.drag().is_none(), "the drag clears after the drop");
+        // …and it reached the ONE activation channel, exactly like a click.
+        assert_eq!(state.take_pointer_fired(), vec!["bind_clip".to_string()]);
+    }
+
+    /// An explicit `drop_action` overrides the target's own `action` — a node that
+    /// already does something when clicked can accept a drop that means something else.
+    #[test]
+    fn drop_action_overrides_the_targets_own_action() {
+        let mut tree = drag_pair("clip", Some("open_bin"));
+        tree.children[1] = prop(
+            tree.children[1].clone(),
+            "drop_action",
+            Value::Text("bind_clip".into()),
+        );
+        let model = ValueMap::new();
+        let mut state = UiState::new();
+        run_ui(
+            &tree,
+            &model,
+            &styles(),
+            &at(20.0, 20.0, true, true),
+            &mut state,
+        );
+        let f = run_ui(
+            &tree,
+            &model,
+            &styles(),
+            &at(130.0, 20.0, false, false),
+            &mut state,
+        );
+        assert!(f.results.is_on("bind_clip"), "the drop fires `drop_action`");
+        assert!(!f.results.is_on("open_bin"), "…not the node's click action");
+    }
+
+    /// **A non-matching kind is not a drop on that node at all.** The release keeps
+    /// today's behaviour — a bare `drag_dropped` for the scene's own canvas to
+    /// resolve — and nothing fires, nothing is published, the pointer is not consumed.
+    #[test]
+    fn a_drop_of_the_wrong_kind_is_not_a_drop_on_that_node() {
+        let tree = drag_pair("node", Some("bind_clip")); // accepts "node", not "clip"
+        let model = ValueMap::new();
+        let mut state = UiState::new();
+
+        run_ui(
+            &tree,
+            &model,
+            &styles(),
+            &at(20.0, 20.0, true, true),
+            &mut state,
+        );
+        let f = run_ui(
+            &tree,
+            &model,
+            &styles(),
+            &at(130.0, 20.0, false, false),
+            &mut state,
+        );
+        assert!(
+            !f.results.is_on("bind_clip"),
+            "the wrong kind fires nothing"
+        );
+        assert!(f.results.text("drop_id").is_none());
+        assert!(f.results.text("drop_target").is_none());
+        assert!(
+            f.results.is_on("drag_dropped"),
+            "the scene still sees the release, unchanged"
+        );
+        assert_eq!(f.results.text("drag_id"), Some("walk_forward"));
+
+        // The SAME target, releasing over NOTHING: also unchanged, also no fire.
+        let tree = drag_pair("clip", Some("bind_clip"));
+        let mut state = UiState::new();
+        run_ui(
+            &tree,
+            &model,
+            &styles(),
+            &at(20.0, 20.0, true, true),
+            &mut state,
+        );
+        let f = run_ui(
+            &tree,
+            &model,
+            &styles(),
+            &at(190.0, 90.0, false, false),
+            &mut state,
+        );
+        assert!(!f.results.is_on("bind_clip"));
+        assert!(f.results.text("drop_target").is_none());
+        assert!(f.results.is_on("drag_dropped"));
+    }
+
+    /// A `drop_accept` list accepts SEVERAL kinds (whitespace-separated, the same
+    /// list shape a grid's track-spec uses).
+    #[test]
+    fn drop_accept_takes_a_list_of_kinds() {
+        let tree = drag_pair("marker clip node", Some("bind_clip"));
+        let model = ValueMap::new();
+        let mut state = UiState::new();
+        run_ui(
+            &tree,
+            &model,
+            &styles(),
+            &at(20.0, 20.0, true, true),
+            &mut state,
+        );
+        let f = run_ui(
+            &tree,
+            &model,
+            &styles(),
+            &at(130.0, 20.0, false, false),
+            &mut state,
+        );
+        assert!(f.results.is_on("bind_clip"), "a listed kind is accepted");
+        // A kind that merely PREFIXES a listed one is not a match.
+        assert!(accepts_drop(&tree.children[1], "clip"));
+        assert!(!accepts_drop(&tree.children[1], "cli"));
+        assert!(!accepts_drop(&tree.children[1], "clip node"));
+    }
+
+    /// **The pad drops through the SAME path** (controller is the floor): a Confirm
+    /// on the focused source picks the payload up and KEEPS it across frames with the
+    /// mouse button up; the next Confirm, on a focused accepting target, drops it.
+    /// The walker half of this (recording the focused id) is gated in `walker.rs`.
+    #[test]
+    fn a_pad_confirm_picks_up_and_drops_on_the_focused_target() {
+        let tree = drag_pair("clip", Some("bind_clip"));
+        let model = ValueMap::new();
+        let mut state = UiState::new();
+        let idle = at(-9.0, -9.0, false, false); // the pointer is nowhere near either box
+
+        // Confirm on the focused SOURCE → picked up, and still carried next frame
+        // even though no button is held.
+        state.push_drag_confirm("src");
+        let f = run_ui(&tree, &model, &styles(), &idle, &mut state);
+        assert!(f.results.is_on("drag_active"), "the pad picked it up");
+        assert_eq!(f.results.text("drag_id"), Some("walk_forward"));
+        let f = run_ui(&tree, &model, &styles(), &idle, &mut state);
+        assert!(
+            f.results.is_on("drag_active") && !f.results.is_on("drag_dropped"),
+            "a pad-carried payload survives a frame with the button up"
+        );
+
+        // Confirm on the focused TARGET → the drop, through the same path.
+        state.push_drag_confirm("bin");
+        let f = run_ui(&tree, &model, &styles(), &idle, &mut state);
+        assert!(
+            f.results.is_on("bind_clip"),
+            "the pad fires the drop action"
+        );
+        assert_eq!(f.results.text("drop_id"), Some("walk_forward"));
+        assert_eq!(f.results.text("drop_target"), Some("bin"));
+        assert!(state.drag().is_none(), "the drag clears after the pad drop");
+
+        // Confirm on a node that accepts NOTHING ends the carry without firing.
+        state.push_drag_confirm("src");
+        run_ui(&tree, &model, &styles(), &idle, &mut state);
+        state.push_drag_confirm("src"); // the source accepts no kind
+        let f = run_ui(&tree, &model, &styles(), &idle, &mut state);
+        assert!(!f.results.is_on("bind_clip"));
+        assert!(f.results.is_on("drag_dropped"));
+        assert!(state.drag().is_none());
     }
 
     /// The **commit-on-release** contract (Aaron, 2026-08-06): a captured drag
@@ -14875,8 +16390,6 @@ mod tests {
             down: true,
             right_down: false,
             screen: Vec2::new(800.0, 600.0),
-            typed: String::new(),
-            backspace: false,
             wheel: 0.0,
             exclusive: false,
             motion: Default::default(),
@@ -14903,8 +16416,6 @@ mod tests {
             down: false,
             right_down: false,
             screen: Vec2::new(800.0, 600.0),
-            typed: String::new(),
-            backspace: false,
             wheel: 0.0,
             exclusive: false,
             motion: Default::default(),
@@ -14956,8 +16467,6 @@ mod tests {
             down,
             right_down: false,
             screen: Vec2::new(800.0, 600.0),
-            typed: String::new(),
-            backspace: false,
             wheel: 0.0,
             exclusive: false,
             motion: Default::default(),
@@ -15036,8 +16545,6 @@ mod tests {
             down: true,
             right_down: false,
             screen: Vec2::new(800.0, 600.0),
-            typed: String::new(),
-            backspace: false,
             wheel: 0.0,
             exclusive: false,
             motion: Default::default(),
@@ -15089,8 +16596,6 @@ mod tests {
             down: false,
             right_down: false,
             screen: Vec2::new(800.0, 600.0),
-            typed: String::new(),
-            backspace: false,
             wheel: 0.0,
             exclusive: false,
             motion: Default::default(),
@@ -15137,8 +16642,6 @@ mod tests {
             down: false,
             right_down: false,
             screen: Vec2::new(800.0, 600.0),
-            typed: String::new(),
-            backspace: false,
             wheel: 0.0,
             exclusive: false,
             motion: Default::default(),
@@ -15187,8 +16690,6 @@ mod tests {
             down: false,
             right_down: false,
             screen: Vec2::new(800.0, 600.0),
-            typed: String::new(),
-            backspace: false,
             wheel: 0.0,
             exclusive: false,
             motion: Default::default(),

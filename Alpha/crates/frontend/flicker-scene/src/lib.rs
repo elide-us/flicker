@@ -41,6 +41,9 @@
 //!   pause): enter the new; the one below is untouched.
 //! * [`Transition::Pop`] — remove the top, revealing the one below (pause →
 //!   game): exit the popped scene; the revealed one is *not* re-entered.
+//! * [`Transition::CloseModal`] — the same pop, carrying the closing modal's RESULT to
+//!   the scene it reveals ([`Scene::modal_closed`]). This is what lets a modal be a
+//!   scene of its own rather than a subtree of its host's screen.
 //! * [`Transition::Quit`] — exit the application.
 //! * [`Transition::None`] — stay put.
 
@@ -132,6 +135,24 @@ pub trait Scene {
         false
     }
 
+    /// Receive the RESULT of a modal that was pushed over this scene, as it closes —
+    /// the pop→parent channel. Default: ignore it.
+    ///
+    /// A scene pushes an overlay ([`Transition::Push`]) and is then FROZEN: only the top
+    /// scene updates, so the modal is the only thing that knows how it ended. It carries
+    /// its answer out on [`Transition::CloseModal`], and the manager hands that to
+    /// whatever the pop reveals — here. `modal` is the modal's id (the shared tree it
+    /// opened, e.g. `"choice_dialog"`), `result` the fired action name the caller
+    /// authored into its options (`"discard_yes"`), and `payload` any value the modal
+    /// collected (a text prompt's committed text). The host folds these into the same
+    /// results path its dispatcher already consumes, so a modal answer and a button
+    /// click are one channel.
+    ///
+    /// This is deliberately NOT [`route`](Scene::route): `route` is consulted on the
+    /// scene that FIRED (the top one) to pick its successor, whereas a modal result must
+    /// reach the scene BENEATH the one that fired it.
+    fn modal_closed(&mut self, _modal: &str, _result: &str, _payload: Option<&str>) {}
+
     /// Where a fired result NAME routes this scene — consulted by the kernel when the
     /// scene returns [`Transition::Fire`]. Default `None`: the scene declares no
     /// destination for that result, and the kernel logs and stays put. A scene backed by
@@ -156,6 +177,23 @@ pub enum Transition {
     Push(Box<dyn Scene>),
     /// Remove the top scene, revealing the one below.
     Pop,
+    /// Remove the top scene AND hand its RESULT to the scene revealed beneath it —
+    /// the modal-close move.
+    ///
+    /// A plain [`Pop`](Transition::Pop) throws the answer away: the popped scene is
+    /// dropped and the revealed one is never told anything happened, which is why a
+    /// modal used to have to live INSIDE its host's tree to report back. This carries
+    /// the answer ON the pop and delivers it to [`Scene::modal_closed`], so a modal can
+    /// be a scene of its own (the shared-modal host seam) and its host still hears the
+    /// result. Popping the last scene still quits.
+    CloseModal {
+        /// The closing modal's id — the shared tree it opened, e.g. `"choice_dialog"`.
+        modal: String,
+        /// The fired action name the host authored into the modal's options.
+        result: String,
+        /// Whatever the modal collected, if anything (a text prompt's committed text).
+        payload: Option<String>,
+    },
     /// Exit the application.
     Quit,
     /// Go to the scene REGISTERED UNDER `id`, letting the manager resolve and build
@@ -342,6 +380,19 @@ impl SceneManager {
                     self.quit = true; // popped the last scene → nothing left to run
                 }
             }
+            Transition::CloseModal {
+                modal,
+                result,
+                payload,
+            } => {
+                // Same pop, then the hand-off: the modal is gone (and has freed its GPU
+                // resources) BEFORE the host hears about it, so the host may push another
+                // scene from `modal_closed` without stacking on a corpse.
+                if let Some(mut top) = self.stack.pop() {
+                    top.exit(renderer);
+                }
+                self.deliver_modal_result(&modal, &result, payload.as_deref());
+            }
         }
         // Come to rest in the phase the reshaped stack now implies (Running / Paused /
         // Stopping). A `None`/`Quit` transition re-settles harmlessly to the same phase.
@@ -399,6 +450,17 @@ impl SceneManager {
                 tracing::error!("scene id '{id}' requested but no roster is wired");
                 None
             }
+        }
+    }
+
+    /// Hand a closed modal's result to whatever the pop revealed — the delivery half of
+    /// [`Transition::CloseModal`], split out (like [`visible_start_in`]) so the hand-off
+    /// is unit-testable without a GPU [`Renderer`]. An empty stack means the modal was
+    /// the last scene: nothing can read the answer, so it ends like a bare `Pop`.
+    fn deliver_modal_result(&mut self, modal: &str, result: &str, payload: Option<&str>) {
+        match self.stack.last_mut() {
+            Some(host) => host.modal_closed(modal, result, payload),
+            None => self.quit = true,
         }
     }
 
@@ -718,5 +780,101 @@ mod tests {
             ),
             "a result the scene routes nowhere is dropped (loud no-op)"
         );
+    }
+
+    /// THE MODAL-CLOSE HAND-OFF: a modal pushed over a host carries its answer out on
+    /// [`Transition::CloseModal`], and the manager delivers it to the scene the pop
+    /// REVEALS — [`Scene::modal_closed`] on the host, not on the modal that fired. This
+    /// is the whole pop→parent channel the shared-modal host seam rides; without it a
+    /// modal has to live inside its host's own tree to report back. GPU-free: the
+    /// delivery half is split out of `apply_pending` for exactly this.
+    #[test]
+    fn a_closing_modal_hands_its_result_to_the_scene_beneath() {
+        use super::{Scene, SceneInput, SceneManager, Transition};
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        type Log = Rc<RefCell<Vec<(String, String, Option<String>)>>>;
+
+        /// The host: records every modal result it is handed.
+        struct Host(Log);
+        impl Scene for Host {
+            fn update(
+                &mut self,
+                _: std::time::Duration,
+                _: &flicker_input_core::InputState,
+                _: &mut SceneInput,
+                _: &flicker_render::Renderer,
+            ) -> Transition {
+                Transition::None
+            }
+            fn render<'f>(
+                &'f mut self,
+                _: &mut flicker_render::Renderer,
+                _: &mut flicker_render::FrameGraph<'f>,
+            ) {
+            }
+            fn modal_closed(&mut self, modal: &str, result: &str, payload: Option<&str>) {
+                self.0.borrow_mut().push((
+                    modal.to_string(),
+                    result.to_string(),
+                    payload.map(str::to_string),
+                ));
+            }
+        }
+        /// The modal: an overlay that never answers anything itself (the DEFAULT hook is
+        /// a no-op, which is what makes this one added method and not a burden on every
+        /// scene).
+        struct Modal;
+        impl Scene for Modal {
+            fn update(
+                &mut self,
+                _: std::time::Duration,
+                _: &flicker_input_core::InputState,
+                _: &mut SceneInput,
+                _: &flicker_render::Renderer,
+            ) -> Transition {
+                Transition::None
+            }
+            fn render<'f>(
+                &'f mut self,
+                _: &mut flicker_render::Renderer,
+                _: &mut flicker_render::FrameGraph<'f>,
+            ) {
+            }
+            fn is_overlay(&self) -> bool {
+                true
+            }
+        }
+
+        let log: Log = Rc::default();
+        let mut mgr = SceneManager::new(Box::new(Host(log.clone())));
+        mgr.stack.push(Box::new(Modal));
+        assert_eq!(
+            mgr.visible_start(),
+            0,
+            "the host stays visible under a modal"
+        );
+
+        // The pop half (`apply_pending` runs `exit` here, which needs a Renderer), then
+        // the delivery half — the contract under test.
+        mgr.stack.pop();
+        mgr.deliver_modal_result("choice_dialog", "discard_yes", Some("golem.fbx"));
+        assert_eq!(
+            *log.borrow(),
+            vec![(
+                "choice_dialog".to_string(),
+                "discard_yes".to_string(),
+                Some("golem.fbx".to_string())
+            )],
+            "the host beneath hears the modal's id, its fired result and its payload"
+        );
+
+        // A modal with nothing beneath it has no reader: the stack is empty, so it ends
+        // exactly like a bare `Pop`.
+        let mut orphan = SceneManager::new(Box::new(Modal));
+        orphan.stack.pop();
+        orphan.deliver_modal_result("choice_dialog", "discard_no", None);
+        assert!(orphan.quit, "popping the last scene quits, result or not");
     }
 }

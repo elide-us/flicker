@@ -168,6 +168,14 @@
             }
           }
         ]
+      },
+      "csg_flat": {
+        "_comment": "The CSG Test Scene's flat rig (csgtest.scene.json's `csgtest_world`) — ONE directional sun + a high ambient so the wave-field mesh reads with soft relief on the crests and no deep shadows. Moon slot zeroed (one light, per Aaron), no celestial compose, no hearth. Scene-specific, same as `hearth`.",
+        "sun_dir": [0.4, 0.85, 0.4],
+        "sun": [0.95, 0.93, 0.86],
+        "moon_dir": [-0.4, 0.5, -0.3],
+        "moon": [0.0, 0.0, 0.0],
+        "ambient": [0.34, 0.36, 0.4]
       }
     }
   }

@@ -34,7 +34,16 @@ use flicker_content::{BatchFileOp, FileOp};
 
 /// The node id of the inline rename field — also its focus id.
 const RENAME_ID: &str = "rename_field";
-const APPLY_REST_ID: &str = "conflict_apply_rest";
+
+/// The three answers the SHARED `conflict` modal carries back — the bench's OWN action
+/// names, handed to the modal as its three options and returned verbatim through
+/// `Scene::modal_closed`. They read here exactly as they read when the dialog was an
+/// inline subtree; what changed is that a pad can reach them (QoL 49307EC7 #4).
+const CONFLICT_SKIP: &str = "conflict_skip";
+const CONFLICT_KEEP_BOTH: &str = "conflict_keep_both";
+const CONFLICT_REPLACE: &str = "conflict_replace";
+/// What the modal's Cancel affordance (its button, Esc and pad-B alike) returns.
+const CONFLICT_CANCEL: &str = "conflict_cancel";
 
 /// How many toast rows `quartermaster.scene.json` authors (`toast_0..`; the walker
 /// has no repeater), so this is the ONE place the capacity is stated on the Rust
@@ -92,22 +101,21 @@ struct PromotePlan {
     dsts: Vec<PathBuf>,
 }
 
-/// An open in-place rename.
+/// An open in-place rename. The FIELD is the authored `text_field` (`rename_field`,
+/// bound to `rename_draft`, `select_all_on_enter` so the basename reads as
+/// preselected); its text-entry session is the walker's (Aaron 2026-09-03), so the
+/// scene neither reads keys nor folds text — it publishes the draft, takes the
+/// field's bind back each frame, and acts on the field's `submit_action` / `cancel_action`
+/// result names.
 #[derive(Clone, Debug)]
 struct Rename {
     /// What is being renamed.
     path: PathBuf,
-    /// The edited name.
+    /// The edited name, as the field holds it.
     draft: String,
-    /// True until the first character is typed.
-    ///
-    /// The design asks for the basename to be PRESELECTED, but the text field
-    /// has no selection model — `fold_typed` only appends and backspaces. So
-    /// the first typed character clears the draft instead, which is what
-    /// select-all-then-type would have produced. Backspace does not consume the
-    /// pristine state: editing the existing name is the other thing a user
-    /// means by pressing a key here.
-    pristine: bool,
+    /// The field's session has been seen open — after which a session that is
+    /// neither open nor requested means the edit was abandoned (a click elsewhere).
+    armed: bool,
 }
 
 /// One bench mutation: a batch of file operations plus the `$token` naming it
@@ -160,10 +168,10 @@ use flicker::scene::{Scene, SceneInput, Transition};
 use flicker::script::{HudCommand, ScriptHost, UiNode, ValueMap};
 use flicker::ui::{render_hud, run_ui, SceneDef, UiInput, UiIntents, UiState, WalkerHandler};
 use flicker_input_core::{
-    AbstractControls, ActionSignal, EventKind, GamepadConfig, InputMap, InputState, Key,
+    AbstractControls, ActionSignal, EventKind, GamepadConfig, InputContext, InputMap, InputState,
 };
 use flicker_input_router::{Flow, InputEvent, InputHandler, RouteCtx, Router};
-use flicker_shell::{PauseScene, Theme};
+use flicker_shell::{ModalOption, ModalParams, PauseScene, SharedModal, Theme};
 
 use fs_model::{QueueItem, Roots, Row, SortKey, TreeRow};
 
@@ -307,11 +315,6 @@ pub struct Quartermaster {
     menu: Option<Vec2>,
     /// The pad cursor INTO the menu — an index into [`MENU_ROWS`].
     menu_sel: usize,
-    /// Raw Enter/Esc edges — the ruled exception: while `TextEntry` owns the
-    /// keyboard its binding map is empty by design, so the intent channel is
-    /// deliberately unavailable and these two are read directly.
-    enter_prev: bool,
-    esc_prev: bool,
 
     // ── mutation ──
     /// The move-only clipboard. One item at a time: the controller baseline is a
@@ -403,8 +406,6 @@ impl Quartermaster {
             ui_theme: None,
             white: None,
             rename: None,
-            enter_prev: false,
-            esc_prev: false,
             clipboard: None,
             history: CommandHistory::new(),
             batch_seq: 0,
@@ -431,7 +432,7 @@ impl Quartermaster {
             .and_then(|p| self.rows.iter().position(|r| r.path == p))
             .unwrap_or(0)
             .min(self.rows.len().saturating_sub(1));
-        self.tree = fs_model::tree_rows(&self.roots, &self.expanded);
+        self.tree = fs_model::tree_rows(&self.roots.list(), &self.expanded);
         self.tree_sel = self.tree_sel.min(self.tree.len().saturating_sub(1));
         self.refresh_queue();
     }
@@ -492,7 +493,7 @@ impl Quartermaster {
                     if row.is_dir {
                         let dir = row.path.clone();
                         self.open_dir(dir);
-                        self.tree = fs_model::tree_rows(&self.roots, &self.expanded);
+                        self.tree = fs_model::tree_rows(&self.roots.list(), &self.expanded);
                     }
                 }
             }
@@ -505,7 +506,7 @@ impl Quartermaster {
                         self.expanded.push(path.clone());
                     }
                     self.open_dir(path);
-                    self.tree = fs_model::tree_rows(&self.roots, &self.expanded);
+                    self.tree = fs_model::tree_rows(&self.roots.list(), &self.expanded);
                 }
             }
         }
@@ -518,7 +519,7 @@ impl Quartermaster {
                 if let Some(t) = self.tree.get(self.tree_sel) {
                     let path = t.path.clone();
                     self.expanded.retain(|e| *e != path);
-                    self.tree = fs_model::tree_rows(&self.roots, &self.expanded);
+                    self.tree = fs_model::tree_rows(&self.roots.list(), &self.expanded);
                     self.tree_sel = self.tree_sel.min(self.tree.len().saturating_sub(1));
                 }
             }
@@ -528,7 +529,7 @@ impl Quartermaster {
 
     /// Climb to the parent folder, never above a root.
     pub fn up(&mut self) {
-        if let Some(parent) = fs_model::parent_within_roots(&self.roots, &self.cwd) {
+        if let Some(parent) = fs_model::parent_within_roots(&self.roots.list(), &self.cwd) {
             let leaving = self.cwd.clone();
             self.open_dir(parent);
             // Land the cursor on the folder we came out of — the least
@@ -718,11 +719,42 @@ impl Quartermaster {
         self.prompt.as_ref().map_or(0, |p| p.pending.len())
     }
 
-    /// Toggle "apply to the remaining N".
-    pub fn toggle_apply_rest(&mut self) {
+    /// Set "apply to the remaining N" from the answer the modal came back with.
+    ///
+    /// The checkbox lives in the shared `conflict` tree now, so the bench does not
+    /// toggle it — it receives its state as the close PAYLOAD ("1" / "0") and folds it
+    /// in just before resolving. That is what keeps a multi-collision batch ONE undo
+    /// entry (F5E9D671): the flag reaches `resolve_conflict` with the answer it belongs to.
+    pub fn set_apply_rest(&mut self, on: bool) {
         if let Some(p) = self.prompt.as_mut() {
-            p.apply_rest = !p.apply_rest;
+            p.apply_rest = on;
         }
+    }
+
+    /// What the shared `conflict` modal should say about the collision on screen —
+    /// `None` when nothing is being asked. Only NAMES and MEASURED facts cross; every
+    /// caption on that dialog is a `$token` the shared tree authors.
+    pub fn conflict_params(&self) -> Option<flicker_shell::ModalConflict> {
+        let c = self.prompt_conflict()?;
+        Some(flicker_shell::ModalConflict {
+            name: c
+                .dst
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default(),
+            folder: c
+                .dst
+                .parent()
+                .map(|p| fs_model::breadcrumb(&self.roots.list(), p).join(" / "))
+                .unwrap_or_default(),
+            existing: facts_line(&c.existing),
+            incoming: facts_line(&c.incoming),
+            // "Apply to the remaining N" is only meaningful with more than one
+            // outstanding, so the count gates the checkbox rather than offering a
+            // choice that cannot matter.
+            remaining: self.prompt_remaining().saturating_sub(1),
+            apply_rest: self.prompt.as_ref().is_some_and(|p| p.apply_rest),
+        })
     }
 
     /// Answer the collision on screen — and, when "apply to the remaining" is
@@ -869,23 +901,32 @@ impl Quartermaster {
         if files.is_empty() {
             return;
         }
-        let target_dir = self.roots.package.join(&item.rel);
+        // The mirrored destination: the asset's folder, or the file ITSELF for a
+        // single-file asset.
+        let target = self.roots.package.join(&item.rel);
         let pairs: Vec<(PathBuf, PathBuf)> = files
             .iter()
             .map(|src| {
                 let rel = src.strip_prefix(&item.dir).expect("file under its own dir");
-                (src.clone(), target_dir.join(rel))
+                // A single-file item IS its own `dir`, so the strip yields "" —
+                // and `join("")` appends a trailing separator, which no rename
+                // resolves (ENOENT). Its destination is the mirrored path whole.
+                if rel.as_os_str().is_empty() {
+                    (src.clone(), target.clone())
+                } else {
+                    (src.clone(), target.join(rel))
+                }
             })
             .collect();
+        // Ledger rows are LOGICAL (the manifest contract): a folder rel passes
+        // through untouched, a single-file rel drops its at-rest `.gz`.
         let row = flicker_content::manifest::ManifestEntry {
             name: item.name.clone(),
             class: item.class.id().to_string(),
-            path: PathBuf::from("package")
-                .join(&item.rel)
+            path: fs_model::logical(&PathBuf::from("package").join(&item.rel))
                 .to_string_lossy()
                 .into_owned(),
-            promoted_from: PathBuf::from("staging")
-                .join(&item.rel)
+            promoted_from: fs_model::logical(&PathBuf::from("staging").join(&item.rel))
                 .to_string_lossy()
                 .into_owned(),
         };
@@ -980,9 +1021,12 @@ impl Quartermaster {
         self.rename = Some(Rename {
             path,
             draft: name,
-            pristine: true,
+            armed: false,
         });
         self.last_error = None;
+        // The field's session opens through the walker on its next frame — the scene
+        // requests it, it never pushes the context (8187AFA9).
+        self.ui_state.open_text_entry(RENAME_ID);
     }
 
     /// Abandon the rename, leaving the item alone.
@@ -991,26 +1035,30 @@ impl Quartermaster {
         self.last_error = None;
     }
 
-    /// Fold this frame's typed text into the draft. The first character
-    /// REPLACES the name (see [`Rename::pristine`]); afterwards it appends.
-    pub fn type_into_rename(&mut self, typed: &str, backspace: bool) {
+    /// Take the field's edited text back into the draft (the field's bind, echoed
+    /// every frame while the rename is open).
+    pub fn set_rename_draft(&mut self, text: &str) {
         let Some(r) = self.rename.as_mut() else {
             return;
         };
-        if !typed.is_empty() {
-            if r.pristine {
-                r.draft.clear();
-                r.pristine = false;
-            }
-            r.draft.push_str(typed);
+        if r.draft != text {
+            r.draft = text.to_string();
+            self.last_error = None;
         }
-        if backspace {
-            // Editing the existing name is a legitimate intent, so backspace
-            // does not trip the pristine replace.
-            r.pristine = false;
-            r.draft.pop();
+    }
+
+    /// The per-frame session watch: once the field's session has been seen open, a
+    /// frame on which it is neither open nor requested means the user left the field
+    /// (a click elsewhere) — the rename is abandoned, exactly like Escape.
+    fn watch_rename_session(&mut self) {
+        let Some(r) = self.rename.as_mut() else {
+            return;
+        };
+        if self.ui_state.text_entry() {
+            r.armed = true;
+        } else if r.armed && !self.ui_state.text_entry_requested() {
+            self.cancel_rename();
         }
-        self.last_error = None;
     }
 
     /// Commit the rename. A name that cannot be used blocks the commit and says
@@ -1020,12 +1068,14 @@ impl Quartermaster {
         let name = r.draft.trim();
         if name.is_empty() {
             self.last_error = Some("$qm_err_empty_name".into());
+            self.ui_state.open_text_entry(RENAME_ID); // the field stays open
             return;
         }
         // A name is a single path segment — a separator would silently relocate
         // the item, which is what the move commands are for.
         if name.contains('/') || name.contains('\\') {
             self.last_error = Some("$qm_err_bad_name".into());
+            self.ui_state.open_text_entry(RENAME_ID);
             return;
         }
         let Some(parent) = r.path.parent() else {
@@ -1038,6 +1088,7 @@ impl Quartermaster {
         }
         if flicker_content::occupied(&dst) {
             self.last_error = Some("$qm_err_name_taken".into());
+            self.ui_state.open_text_entry(RENAME_ID);
             return;
         }
         if self.run(vec![FileOp::mv(r.path, dst.clone())], "$qm_did_rename") {
@@ -1267,38 +1318,11 @@ impl Quartermaster {
                 m.set(format!("rv_warn_{i}"), *w);
             }
         }
-        // The collision prompt. Only the NAMES and the measured facts are data;
-        // every caption on the dialog is a `$token` in the tree.
+        // The collision dialog publishes NOTHING here any more: it is the SHARED
+        // `conflict` modal, a scene of its own that `update` pushes and that carries its
+        // own params (`conflict_params`). What the bench used to publish into an inline
+        // subtree it now hands the modal once, at open.
         m.set("has_menu", self.menu.is_some());
-        m.set("has_prompt", self.prompt.is_some());
-        if let Some(c) = self.prompt_conflict() {
-            m.set(
-                "conflict_name",
-                c.dst
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_default(),
-            );
-            m.set(
-                "conflict_where",
-                c.dst
-                    .parent()
-                    .map(|p| fs_model::breadcrumb(&self.roots, p).join(" / "))
-                    .unwrap_or_default(),
-            );
-            m.set("conflict_existing", facts_line(&c.existing));
-            m.set("conflict_incoming", facts_line(&c.incoming));
-            // "Apply to the remaining N" is only meaningful with more than one
-            // outstanding, so the checkbox is gated on it rather than offering a
-            // choice that cannot matter.
-            let rest = self.prompt_remaining().saturating_sub(1);
-            m.set("conflict_multi", rest > 0);
-            m.set("conflict_rest", rest.to_string());
-            m.set(
-                APPLY_REST_ID,
-                self.prompt.as_ref().is_some_and(|p| p.apply_rest),
-            );
-        }
         // The toast bank. The proto spells out TOAST_SLOTS rows and the live
         // toasts are paged into them, newest last — the sanctioned dynamic-rows
         // pattern, since the walker has no repeater.
@@ -1313,7 +1337,7 @@ impl Quartermaster {
         }
         m.set(
             "crumbs",
-            fs_model::breadcrumb(&self.roots, &self.cwd).join(" / "),
+            fs_model::breadcrumb(&self.roots.list(), &self.cwd).join(" / "),
         );
         m.set("count", self.rows.len().to_string());
         // Clipboard / error state for the status line. All display copy is a
@@ -1343,7 +1367,22 @@ impl Quartermaster {
     /// derives from it (gates and style paths). Falls back to the raw values —
     /// loudly — if the script is absent or throws.
     fn model(&self) -> ValueMap {
-        let raw = self.hud_model();
+        let mut raw = self.hud_model();
+        // The nav footer's legend shows the LIVE binding of each signal it names —
+        // the key on kbm, the controller glyph on a pad — read from the profile's
+        // World map (the bench's context), never a hardcoded string (1A292918 T5,
+        // input pipeline law 8187AFA9).
+        flicker_shell::publish_signal_bindings(
+            &mut raw,
+            &flicker_shell::current_world_map(),
+            [
+                ActionSignal::Confirm,
+                ActionSignal::Cancel,
+                ActionSignal::TabNext,
+                ActionSignal::TabPrev,
+                ActionSignal::Menu,
+            ],
+        );
         let mut m = raw.clone();
         if let Some(script) = &self.script {
             if let Err(e) = script.set_model(&raw) {
@@ -1365,26 +1404,11 @@ impl Quartermaster {
     /// Fold this frame's walker results into bench state. ONE dispatcher: a pad
     /// chord, a key and a click all arrive here as the same result name.
     pub fn apply_results(&mut self, results: &ValueMap) {
-        // A collision prompt is MODAL: it owns every intent while it is up, so a
-        // stray nav or chord cannot move the cursor out from under the question
-        // or mutate the very item being asked about. Checked before the rename
-        // guard because a prompt can only be raised from a settled state.
-        if self.is_prompting() {
-            use flicker_content::Resolution;
-            if results.is_on(APPLY_REST_ID) {
-                self.toggle_apply_rest();
-            }
-            if results.is_on("conflict_replace") {
-                self.resolve_conflict(Resolution::Replace);
-            } else if results.is_on("conflict_keep_both") {
-                self.resolve_conflict(Resolution::KeepBoth);
-            } else if results.is_on("conflict_skip") {
-                self.resolve_conflict(Resolution::Skip);
-            } else if results.is_on("cancel") {
-                self.cancel_conflict();
-            }
-            return;
-        }
+        // A collision prompt used to be swallowed here — an inline subtree that owned
+        // every intent while it was up. It is a SHARED MODAL now: a scene of its own,
+        // pushed over this one, so the KERNEL freezes the bench (only the top scene is
+        // updated) and no intent reaches this dispatcher at all while the question
+        // stands. Its answer arrives through `modal_closed`, not through this drain.
         // The context menu is modal too, but LOWER precedence than the prompt: a
         // pick that raises a collision closes the menu and opens the question.
         // A pick fires the verb's own result name, so the arms below run it — the
@@ -1569,6 +1593,35 @@ impl Quartermaster {
 }
 
 impl Scene for Quartermaster {
+    /// A shared modal closed over this bench. Today that is the `conflict` dialog: its
+    /// result is one of the bench's OWN three verbs (or its Cancel), and its payload is
+    /// the "apply to the remaining N" checkbox as `"1"` / `"0"`. Folding the flag in
+    /// BEFORE resolving is what keeps a multi-collision batch a single undo entry — the
+    /// answer and the batch flag are one decision (F5E9D671).
+    fn modal_closed(&mut self, modal: &str, result: &str, payload: Option<&str>) {
+        if modal != flicker_shell::MODAL_CONFLICT {
+            return;
+        }
+        use flicker_content::Resolution;
+        self.set_apply_rest(payload == Some("1"));
+        match result {
+            CONFLICT_REPLACE => self.resolve_conflict(Resolution::Replace),
+            CONFLICT_KEEP_BOTH => self.resolve_conflict(Resolution::KeepBoth),
+            CONFLICT_SKIP => self.resolve_conflict(Resolution::Skip),
+            // Backing out of the QUESTION is not backing out of the cut: the clipboard
+            // stays loaded, exactly as the inline dialog's Cancel behaved.
+            _ => self.cancel_conflict(),
+        }
+    }
+
+    /// The rename field owns the keyboard while its session is open: the pump then
+    /// resolves only the text exits and every other key reaches the field as text.
+    fn input_context(&self) -> Option<InputContext> {
+        self.ui_state
+            .text_entry()
+            .then_some(InputContext::TextEntry)
+    }
+
     fn enter(&mut self, renderer: &mut Renderer) {
         self.white = Some(renderer.load_texture(&[0xff, 0xff, 0xff, 0xff], 1, 1));
         self.ui_theme = Some(Theme::build(renderer));
@@ -1598,30 +1651,16 @@ impl Scene for Quartermaster {
             self.refresh_queue();
         }
 
+        // The rename's session watch (see `watch_rename_session`) runs before the
+        // walk, so an abandoned edit closes on the frame after the focus left it.
+        self.watch_rename_session();
         let model = self.model();
-        // Typed characters reach the walker ONLY while a rename is open, so a
-        // stray keystroke can never edit something the user is not naming. The
-        // scene folds the same text into its own draft below, which is what
-        // makes the pristine-replace possible.
-        let renaming = self.is_renaming();
-        let typed = if renaming {
-            input.typed().to_string()
-        } else {
-            String::new()
-        };
-        let backspace = renaming && input.backspace();
-        if renaming {
-            self.ui_state.request_focus(RENAME_ID);
-            self.type_into_rename(&typed, backspace);
-        }
         let snap = UiInput {
             mouse: input.mouse_position,
             clicked: input.mouse_left_pressed,
             down: input.mouse_left,
             right_down: input.mouse_right,
             screen,
-            typed,
-            backspace,
             wheel: 0.0,
             exclusive: false,
             motion: Default::default(),
@@ -1660,8 +1699,14 @@ impl Scene for Quartermaster {
         // declared intents, and the base converts the pass-through walker-owned
         // signals (Nav*/Confirm/Cancel/Panel*) into the bench's result names.
         self.fired_sigs.clear();
+        // Not `with_nav`: the bench routes the nav family to its own base below. The
+        // walker still owns the rename field's text-entry session, so it reads the
+        // retained tree for the field.
         let mut walker =
             WalkerHandler::hud(&mut self.ui_state, over_hud).with_intents(&self.ui_intents);
+        if let Some(tree) = self.authored.as_ref() {
+            walker = walker.with_text_fields(tree, &model);
+        }
         let mut base = QuartermasterBase::default();
         {
             let mut chain: [&mut dyn InputHandler; 2] = [&mut walker, &mut base];
@@ -1687,21 +1732,43 @@ impl Scene for Quartermaster {
             results.set("menu_dismiss", true);
         }
 
-        // Enter/Esc while renaming are read RAW — the ruled exception. The
-        // `TextEntry` map is empty by design, so the intent channel is
-        // deliberately unavailable here (see flicker-widgets' intents module).
-        let enter = input.key_down(Key::Enter);
-        let esc = input.key_down(Key::Escape);
-        if renaming {
-            if enter && !self.enter_prev {
-                results.set("rename_commit", true);
-            } else if esc && !self.esc_prev {
-                results.set("rename_cancel", true);
+        // The rename field's edited text comes back on its bind; its exits arrive as
+        // the fired `submit_action` / `cancel_action` names (`rename_commit` / `rename_cancel`)
+        // the walker drained above — no key is read here.
+        if let Some(t) = results.text("rename_draft") {
+            self.set_rename_draft(t);
+        }
+        self.apply_results(&results);
+
+        // THE COLLISION QUESTION: the SHARED `conflict` modal, opened by id with the
+        // bench's own three verbs as its options and pushed exactly the way the pause
+        // overlay is. A queue of collisions re-opens it once per answer until the queue
+        // empties, so a 40-item paste with three collisions asks three questions and
+        // still lands as ONE undo entry. Its answers come back through `modal_closed`.
+        if let Some(conflict) = self.conflict_params() {
+            if let Some(theme) = self.ui_theme {
+                return Transition::Push(Box::new(SharedModal::open(
+                    theme,
+                    flicker_shell::MODAL_CONFLICT,
+                    ModalParams::new()
+                        .title("$modal_conflict_title")
+                        .option(ModalOption::secondary(
+                            "$modal_conflict_lbl_skip",
+                            CONFLICT_SKIP,
+                        ))
+                        .option(ModalOption::secondary(
+                            "$modal_conflict_lbl_keep_both",
+                            CONFLICT_KEEP_BOTH,
+                        ))
+                        .option(ModalOption::primary(
+                            "$modal_conflict_lbl_replace",
+                            CONFLICT_REPLACE,
+                        ))
+                        .cancellable(ModalOption::secondary("$modal_lbl_cancel", CONFLICT_CANCEL))
+                        .conflict(conflict),
+                )));
             }
         }
-        self.enter_prev = enter;
-        self.esc_prev = esc;
-        self.apply_results(&results);
 
         if results.is_on("pause_open") {
             if let Some(theme) = self.ui_theme {
@@ -1782,42 +1849,57 @@ struct ReviewFacts {
 
 impl ReviewFacts {
     fn of(item: &QueueItem, roots: &Roots) -> Self {
-        let files = fs_model::files_under(&item.dir);
-        // The primary json: the asset's own file where present, else the first.
-        let primary = files
-            .iter()
-            .find(|f| {
-                let s = f.to_string_lossy();
-                s.contains(&item.name) && s.contains(".json")
-            })
-            .or_else(|| files.iter().find(|f| f.to_string_lossy().contains(".json")));
-        let mut bones = None;
-        let mut textures_missing = 0usize;
-        if let Some(p) = primary {
-            let logical = fs_model::logical(p);
-            if let Ok(text) = flicker_content::package::read_text(&logical) {
-                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
-                    bones = v["skeleton"]["bones"].as_array().map(|a| a.len());
-                    if let Some(texs) = v["source"]["textures"].as_array() {
-                        textures_missing = texs
-                            .iter()
-                            .filter_map(|t| t.as_str())
-                            .filter(|t| !item.dir.join(t).exists())
-                            .count();
+        // Warnings, worst first — each a real fact, never a placeholder.
+        let mut warnings: Vec<&'static str> = Vec::new();
+        if item.class == flicker_content::PackageClass::Epoch {
+            // A committed world is a SINGLE self-describing file: there is no
+            // rig json to probe, and the format's own loader is the honest
+            // check — it fences the version and measures every per-hex array
+            // against the recipe's tile count. A world that will not stand back
+            // up is named HERE, before it is promoted into the tree the game
+            // reads. The path is LOGICAL, as every content reader spells it;
+            // the loader resolves the at-rest `.gz` twin itself.
+            if flicker_worldengine::PlanetEpoch::load(fs_model::logical(&item.dir)).is_err() {
+                warnings.push("$qm_warn_epoch_invalid");
+            }
+        } else {
+            let files = fs_model::files_under(&item.dir);
+            // The primary json: the asset's own file where present, else the first.
+            let primary = files
+                .iter()
+                .find(|f| {
+                    let s = f.to_string_lossy();
+                    s.contains(&item.name) && s.contains(".json")
+                })
+                .or_else(|| files.iter().find(|f| f.to_string_lossy().contains(".json")));
+            let mut bones = None;
+            let mut textures_missing = 0usize;
+            if let Some(p) = primary {
+                let logical = fs_model::logical(p);
+                if let Ok(text) = flicker_content::package::read_text(&logical) {
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                        bones = v["skeleton"]["bones"].as_array().map(|a| a.len());
+                        if let Some(texs) = v["source"]["textures"].as_array() {
+                            textures_missing = texs
+                                .iter()
+                                .filter_map(|t| t.as_str())
+                                .filter(|t| !item.dir.join(t).exists())
+                                .count();
+                        }
                     }
                 }
             }
+            if bones.is_some_and(|b| b > 1 && b != flicker_content::baseline::CANON_BONES) {
+                warnings.push("$qm_warn_off_canon");
+            }
+            if textures_missing > 0 {
+                warnings.push("$qm_warn_missing_textures");
+            }
         }
-        let target_dir = roots.package.join(&item.rel);
-        // Warnings, worst first — each a real fact, never a placeholder.
-        let mut warnings: Vec<&'static str> = Vec::new();
-        if bones.is_some_and(|b| b > 1 && b != flicker_content::baseline::CANON_BONES) {
-            warnings.push("$qm_warn_off_canon");
-        }
-        if textures_missing > 0 {
-            warnings.push("$qm_warn_missing_textures");
-        }
-        if target_dir.exists() {
+        // The mirrored destination — a folder for a folder item, the file
+        // itself for a single-file one; either way, something already there is
+        // a warning before it is a surprise.
+        if roots.package.join(&item.rel).exists() {
             warnings.push("$qm_warn_target_occupied");
         }
         Self {
@@ -2035,87 +2117,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(d);
     }
 
-    /// The drift gates every shipped screen wires, walked against the AUTHORED
-    /// tree off the shipped scene file, plus the pair-scene contracts: the
-    /// declared-intent set is exactly the ratified signal contract's (C2C98408),
-    /// no walker-owned signal is declared anywhere, and the pair script loads.
-    #[test]
-    fn the_tree_passes_the_drift_gates() {
-        let def = SceneDef::parse("quartermaster", QM_SCENE).expect("scene file parses");
-        let tree = def.tree.expect("the scene file ships a tree");
-
-        let unknown = flicker::ui::unknown_kinds(&tree);
-        assert!(unknown.is_empty(), "unknown component kinds: {unknown:?}");
-
-        let raw = flicker::ui::raw_display_literals(&tree);
-        assert!(
-            raw.is_empty(),
-            "raw display literals (must be $tokens): {raw:?}"
-        );
-
-        let flags = flicker::ui::strings::raw_model_publish_literals(include_str!("lib.rs"));
-        assert!(
-            flags.is_empty(),
-            "raw display copy published into the Model: {flags:?}"
-        );
-
-        // The declared intents are the ratified contract, exactly.
-        let intents = UiIntents::of(&tree);
-        for (sig, name) in [
-            (ActionSignal::Menu, "pause_open"),
-            (ActionSignal::Undo, "undo"),
-            (ActionSignal::Redo, "redo"),
-            (ActionSignal::Cut, "cut"),
-            (ActionSignal::Paste, "paste"),
-            (ActionSignal::Rename, "rename"),
-            (ActionSignal::CreateFolder, "create_folder"),
-            (ActionSignal::ContextMenu, "menu_open"),
-            (ActionSignal::TabNext, "tab_next"),
-            (ActionSignal::TabPrev, "tab_prev"),
-        ] {
-            assert_eq!(
-                intents.result_for(sig),
-                Some(name),
-                "declared intent for {sig:?}"
-            );
-        }
-        // The inverse: no node anywhere declares a walker-owned signal.
-        fn no_walker_owned(n: &UiNode) {
-            for k in n.props.keys() {
-                assert!(
-                    !matches!(
-                        k.as_str(),
-                        "on_confirm"
-                            | "on_cancel"
-                            | "on_nav_up"
-                            | "on_nav_down"
-                            | "on_nav_left"
-                            | "on_nav_right"
-                            | "on_panel_next"
-                            | "on_panel_prev"
-                            | "on_chord_begin"
-                    ),
-                    "walker-owned signal declared on node {:?}",
-                    n.id
-                );
-            }
-            for c in &n.children {
-                no_walker_owned(c);
-            }
-        }
-        no_walker_owned(&tree);
-
-        // The pair script loads and derives.
-        let host = ScriptHost::new(QM_SCRIPT, "quartermaster.lua").expect("pair script loads");
-        host.set_model(&ValueMap::new().with("tab", "tab_files"))
-            .expect("model publishes");
-        let derived = host
-            .derive()
-            .expect("derive runs")
-            .expect("derive returns a table");
-        assert!(derived.is_on("files_on"), "the Files page gate derives on");
-    }
-
     /// The caret set is Aaron's ruling (2026-08-13): `^` collapsed · `>` expanded
     /// · `·` leaf — pinned so it cannot quietly reverse, and every glyph is one
     /// all four shipped faces carry. Indentation is REAL pixels riding the
@@ -2174,8 +2175,6 @@ mod tests {
             down: false,
             right_down: false,
             screen,
-            typed: String::new(),
-            backspace: false,
             wheel: 0.0,
             exclusive: false,
             motion: Default::default(),
@@ -2203,8 +2202,6 @@ mod tests {
                 down: true,
                 right_down: false,
                 screen,
-                typed: String::new(),
-                backspace: false,
                 wheel: 0.0,
                 exclusive: false,
                 motion: Default::default(),
@@ -2253,8 +2250,6 @@ mod tests {
             down: false,
             right_down: false,
             screen,
-            typed: String::new(),
-            backspace: false,
             wheel: 0.0,
             exclusive: false,
             motion: Default::default(),
@@ -2277,56 +2272,13 @@ mod tests {
             .collect()
     }
 
-    /// The design asks for the basename to be PRESELECTED. The text field has
-    /// no selection model, so the first typed character replaces the draft —
-    /// what select-all-then-type would have produced.
-    #[test]
-    fn the_first_typed_character_replaces_the_name() {
-        let (mut qm, d) = scratch("pristine");
-        qm.nav(1); // Alpha.json
-        qm.begin_rename();
-        assert_eq!(
-            qm.rename_draft(),
-            Some("Alpha.json"),
-            "opens on the current name"
-        );
-
-        qm.type_into_rename("K", false);
-        assert_eq!(
-            qm.rename_draft(),
-            Some("K"),
-            "the first key REPLACED the name"
-        );
-        qm.type_into_rename("atana", false);
-        assert_eq!(qm.rename_draft(), Some("Katana"), "and then appends");
-        let _ = std::fs::remove_dir_all(d);
-    }
-
-    /// Backspace means "edit this name", not "replace it" — so it must not trip
-    /// the pristine replace.
-    #[test]
-    fn backspace_edits_the_existing_name_instead_of_clearing_it() {
-        let (mut qm, d) = scratch("backspace");
-        qm.nav(1);
-        qm.begin_rename();
-        qm.type_into_rename("", true);
-        assert_eq!(
-            qm.rename_draft(),
-            Some("Alpha.jso"),
-            "one character removed"
-        );
-        qm.type_into_rename("n", false);
-        assert_eq!(qm.rename_draft(), Some("Alpha.json"), "typing now appends");
-        let _ = std::fs::remove_dir_all(d);
-    }
-
     #[test]
     fn a_rename_commits_moves_the_file_and_undoes() {
         let (mut qm, d) = scratch("rename");
         let before = qm.cwd().join("Alpha.json");
         qm.nav(1);
         qm.begin_rename();
-        qm.type_into_rename("Renamed.json", false);
+        qm.set_rename_draft("Renamed.json");
         qm.commit_rename();
         assert!(qm.last_error().is_none(), "{:?}", qm.last_error());
         assert!(!qm.is_renaming(), "the field closed");
@@ -2362,7 +2314,7 @@ mod tests {
             ("Beta.json", "$qm_err_name_taken"),
         ] {
             qm.begin_rename();
-            qm.type_into_rename(typed, false);
+            qm.set_rename_draft(typed);
             qm.commit_rename();
             assert_eq!(qm.last_error(), Some(err), "typing {typed:?}");
             assert!(
@@ -2373,11 +2325,9 @@ mod tests {
             qm.cancel_rename();
         }
 
-        // An emptied field is refused too. (Typing "" is a no-op by design, so
-        // the draft is cleared the way a user would: replace, then backspace.)
+        // An emptied field is refused too.
         qm.begin_rename();
-        qm.type_into_rename("x", false);
-        qm.type_into_rename("", true);
+        qm.set_rename_draft("");
         assert_eq!(qm.rename_draft(), Some(""));
         qm.commit_rename();
         assert_eq!(qm.last_error(), Some("$qm_err_empty_name"));
@@ -2392,7 +2342,7 @@ mod tests {
         let (mut qm, d) = scratch("renamecancel");
         qm.nav(1);
         qm.begin_rename();
-        qm.type_into_rename("Whatever", false);
+        qm.set_rename_draft("Whatever");
         qm.cancel_rename();
         assert!(!qm.is_renaming());
         assert!(
@@ -2571,7 +2521,7 @@ mod tests {
 
         qm.promote_selected();
         assert!(qm.is_prompting(), "the occupant raises the question");
-        qm.toggle_apply_rest();
+        qm.set_apply_rest(true);
         qm.resolve_conflict(flicker_content::Resolution::Replace);
         assert!(!qm.is_prompting());
         assert!(
@@ -2604,7 +2554,7 @@ mod tests {
         qm.refresh_queue();
         qm.promote_selected();
         assert!(qm.is_prompting());
-        qm.toggle_apply_rest();
+        qm.set_apply_rest(true);
         qm.resolve_conflict(flicker_content::Resolution::Skip);
         assert_eq!(qm.last_error_token(), Some("$qm_err_promote_partial"));
         assert!(
@@ -2644,6 +2594,234 @@ mod tests {
             qm.selected_queue_item().unwrap().name,
             "Beta2",
             "cursor survived"
+        );
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    // ── CM5: the epoch promote path — a world is ONE self-describing file ──
+
+    /// The smallest structurally complete planet the `.epoch` loader accepts:
+    /// freq 1 (12 hexes), every per-hex array spanning the recipe's tile count.
+    /// Cribbed from the format's own fixtures so the Review tab is exercised
+    /// against a REAL world rather than a stub that only looks like one.
+    fn tiny_planet() -> flicker_worldengine::PlanetEpoch {
+        use flicker_worldengine::{PlanetEpoch, PlanetEra, PlanetLedger, PlanetRecipe};
+        let freq = 1;
+        let tiles = flicker_worldgrid::cell_count(freq);
+        let ledger = PlanetLedger {
+            base: vec![0.3; tiles],
+            l3_h: vec![0.0; tiles],
+            l3_hard: vec![1.0; tiles],
+            l4_h: vec![0.0; tiles],
+            l4_hard: vec![1.0; tiles],
+            strike: vec![0.0; tiles],
+            l3_dip: vec![0.0; tiles],
+            l4_dip: vec![0.0; tiles],
+            graded: vec![0.0; tiles],
+            dissolved: vec![0.0; tiles],
+            rock: vec![0.05; tiles],
+            rock_hard: vec![1.0; tiles],
+            sediment: vec![0.02; tiles],
+            bed_hard: vec![1.0; tiles],
+            pressure: vec![0.0; tiles],
+            edge: vec![0.0; tiles],
+            edge_age: vec![0; tiles],
+            drift: vec![0.0; tiles],
+            suspend: vec![0.0; tiles],
+            ice: vec![0.0; tiles],
+            sst: vec![0.5; tiles],
+            discharge: vec![0.0; tiles],
+            moist: vec![0.0; tiles],
+            rain: vec![0.0; tiles],
+            veg: vec![0.0; tiles],
+            vein: vec![0; tiles],
+            vein_node_of: vec![0; tiles],
+        };
+        let era = PlanetEra {
+            ticks: 100,
+            eruptions: 0,
+            steps: 0,
+            heals: 0,
+            water_volume: 0.5,
+            ice_locked: 0.0,
+            climate_base: 0.5,
+            temp: 0.5,
+            deep_temp: 0.35,
+            greenhouse: 0.0,
+            water_target: 0.5,
+            veg_target: 0.3,
+            veg_thirst: 1.0,
+            green_share: 0.0,
+            resources_ensured: false,
+            // The 0a well ledger — a restored planet without it resumes
+            // minting; a fixture without it does not compile.
+            well: 0.0,
+            sunk: 0.0,
+            delaminations: 0,
+        };
+        PlanetEpoch::new(
+            PlanetRecipe {
+                freq,
+                seed: 9,
+                cells: 3,
+                spots: 1,
+            },
+            era,
+            ledger,
+            vec![vec![0.0; tiles]; 3],
+            Vec::new(),
+            Vec::new(),
+            "quartermaster test planet",
+        )
+    }
+
+    /// A staged world, exactly as the Populous bench's COMMIT writes it: one
+    /// gz-at-rest `.epoch` file, directly under the `worlds` tier, with no
+    /// folder around it.
+    fn stage_world(root: &std::path::Path, physical: &str) -> PathBuf {
+        let p = root.join("staging/worlds").join(physical);
+        tiny_planet().save(&p).unwrap();
+        p
+    }
+
+    /// THE CM5 CONTRACT for a SINGLE-FILE asset. A committed world promotes to
+    /// the mirrored `package/worlds/<file>` — the physical bytes, not a folder
+    /// named after them — appends its ledger row, and ONE undo returns the file
+    /// to staging AND takes the row back.
+    #[test]
+    fn promoting_a_world_moves_the_file_appends_the_manifest_and_one_undo_returns_both() {
+        let (mut qm, d) = scratch("promoteworld");
+        stage_world(&d, "planet_test.epoch.gz");
+        qm.refresh_queue();
+        let item = qm.selected_queue_item().expect("the world is in the queue");
+        assert_eq!(item.name, "planet_test.epoch");
+        assert_eq!(item.class, PackageClass::Epoch);
+        assert_eq!(item.files, 1);
+
+        qm.promote_selected();
+        assert!(!qm.is_prompting(), "a clean target asks no questions");
+        assert_eq!(qm.last_error_token(), None);
+        let target = d.join("package/worlds/planet_test.epoch.gz");
+        assert!(target.is_file(), "the physical world landed in the package");
+        assert!(
+            flicker_worldengine::PlanetEpoch::load(&target).is_ok(),
+            "and it moved byte for byte — it still loads"
+        );
+        assert!(
+            !d.join("staging/worlds/planet_test.epoch.gz").exists(),
+            "staging let it go"
+        );
+
+        let manifest = d.join("package/manifest.json");
+        let rows = flicker_content::manifest::read(&manifest).unwrap();
+        assert_eq!(rows.len(), 1, "one promote, one ledger row");
+        assert_eq!(rows[0].name, "planet_test.epoch");
+        assert_eq!(rows[0].class, "epoch");
+        // The ledger speaks LOGICAL names — the at-rest `.gz` never enters it.
+        assert_eq!(rows[0].path, "package/worlds/planet_test.epoch");
+        assert_eq!(rows[0].promoted_from, "staging/worlds/planet_test.epoch");
+        qm.refresh_queue();
+        assert!(qm.selected_queue_item().is_none(), "staging emptied");
+
+        // ONE undo: the file home again, ledger row gone.
+        qm.undo();
+        assert!(
+            d.join("staging/worlds/planet_test.epoch.gz").is_file(),
+            "undo returned the world to staging"
+        );
+        assert!(!target.exists());
+        assert!(
+            flicker_content::manifest::read(&manifest)
+                .unwrap()
+                .is_empty(),
+            "row removed"
+        );
+        qm.refresh_queue();
+        assert_eq!(
+            qm.selected_queue_item().map(|q| q.name.as_str()),
+            Some("planet_test.epoch")
+        );
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    /// THE STRIP-PREFIX-OF-SELF TRAP, pinned. A single-file item IS its own
+    /// `dir`, so the promote's `src.strip_prefix(&item.dir)` yields `""` — and
+    /// `Path::join("")` appends a trailing separator, a destination no rename
+    /// resolves. This fails the moment that guard is folded back into the
+    /// generic join.
+    #[test]
+    fn a_single_file_promote_lands_on_the_mirrored_file_not_a_trailing_slash() {
+        // The trap itself, so the guard's reason survives a doubting reader.
+        let p = PathBuf::from("/worlds/planet_pair.epoch.gz");
+        let empty = p.strip_prefix(&p).unwrap();
+        assert!(empty.as_os_str().is_empty(), "a path strips itself to \"\"");
+        assert!(
+            p.join(empty)
+                .to_string_lossy()
+                .ends_with(std::path::MAIN_SEPARATOR),
+            "and join(\"\") appends a separator"
+        );
+
+        let (mut qm, d) = scratch("worldpair");
+        stage_world(&d, "planet_pair.epoch.gz");
+        qm.refresh_queue();
+        qm.promote_selected();
+        assert_eq!(qm.last_error_token(), None);
+        let target = d.join("package/worlds/planet_pair.epoch.gz");
+        assert!(target.is_file(), "the destination is the mirrored FILE");
+        assert!(
+            !target.join("planet_pair.epoch.gz").exists(),
+            "not the file nested in a folder of its own name"
+        );
+
+        // The occupied-target warning reads a FILE target the same way.
+        stage_world(&d, "planet_pair.epoch.gz");
+        qm.refresh_queue();
+        assert!(
+            qm.facts_warning_tokens()
+                .contains(&"$qm_warn_target_occupied"),
+            "{:?}",
+            qm.facts_warning_tokens()
+        );
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    /// The Review tab's honesty about a WORLD. There is no rig json to probe,
+    /// so the `.epoch` loader IS the check: a world that will not stand back up
+    /// says so before anyone promotes it, and a real one reviews clean.
+    #[test]
+    fn an_unloadable_world_warns_and_a_valid_one_reviews_clean() {
+        let (mut qm, d) = scratch("worldfacts");
+        // Garbage under a world's name. It classifies Epoch on the extension
+        // alone, so only the loader can tell the truth about it.
+        let broken = d.join("staging/worlds/planet_broken.epoch.gz");
+        std::fs::create_dir_all(broken.parent().unwrap()).unwrap();
+        std::fs::write(&broken, b"not a planet").unwrap();
+        stage_world(&d, "planet_good.epoch.gz");
+        qm.refresh_queue();
+        assert_eq!(
+            qm.queue.len(),
+            2,
+            "two single-file items in the worlds tier"
+        );
+
+        assert_eq!(
+            qm.selected_queue_item().unwrap().name,
+            "planet_broken.epoch"
+        );
+        assert!(
+            qm.facts_warning_tokens()
+                .contains(&"$qm_warn_epoch_invalid"),
+            "{:?}",
+            qm.facts_warning_tokens()
+        );
+
+        qm.review_nav(1); // → planet_good
+        assert_eq!(qm.selected_queue_item().unwrap().name, "planet_good.epoch");
+        assert!(
+            qm.facts_warning_tokens().is_empty(),
+            "a structurally complete world has nothing to warn about: {:?}",
+            qm.facts_warning_tokens()
         );
         let _ = std::fs::remove_dir_all(d);
     }
@@ -2807,7 +2985,7 @@ mod tests {
         let (src, dst) = staged_collision(&mut qm);
         assert!(qm.is_prompting());
 
-        qm.apply_results(&on("conflict_replace"));
+        answer(&mut qm, "conflict_replace");
         assert!(!qm.is_prompting(), "answering closes the prompt");
         assert!(!flicker_content::occupied(&src), "the source moved");
         assert_eq!(
@@ -2834,7 +3012,7 @@ mod tests {
         let (mut qm, d) = scratch("keepboth");
         let (src, dst) = staged_collision(&mut qm);
 
-        qm.apply_results(&on("conflict_keep_both"));
+        answer(&mut qm, "conflict_keep_both");
         assert!(!qm.is_prompting());
         assert_eq!(
             flicker_content::package::read_text(&dst).unwrap(),
@@ -2858,7 +3036,7 @@ mod tests {
         let (mut qm, d) = scratch("skip");
         let (src, dst) = staged_collision(&mut qm);
 
-        qm.apply_results(&on("conflict_skip"));
+        answer(&mut qm, "conflict_skip");
         assert!(!qm.is_prompting(), "the prompt closes");
         assert_eq!(
             flicker_content::package::read_text(&dst).unwrap(),
@@ -2878,7 +3056,7 @@ mod tests {
         let (mut qm, d) = scratch("promptcancel");
         let (src, _) = staged_collision(&mut qm);
 
-        qm.apply_results(&on("cancel"));
+        answer(&mut qm, CONFLICT_CANCEL);
         assert!(!qm.is_prompting());
         assert!(flicker_content::occupied(&src), "nothing moved");
         assert!(!qm.can_undo());
@@ -2886,41 +3064,48 @@ mod tests {
         let _ = std::fs::remove_dir_all(d);
     }
 
-    /// The prompt is MODAL: while it is up nothing else may act, or a stray nav
-    /// or chord would move the cursor out from under the question — or mutate
-    /// the very item being asked about.
+    /// THE COLLISION QUESTION IS THE SHARED MODAL — and its answer arrives on ONE
+    /// channel. The dialog is a scene of its own now (`scenes/shared/conflict`), pushed
+    /// over the bench, so the KERNEL freezes this scene while the question stands and
+    /// the old "swallow every intent" branch in the dispatcher is gone with the inline
+    /// subtree it protected. What must hold is the reverse: the three verbs mean nothing
+    /// in the ordinary results drain, and only `modal_closed` resolves the collision.
     #[test]
-    fn the_prompt_swallows_every_other_intent() {
+    fn the_collision_is_answered_only_through_the_modal_hook() {
         let (mut qm, d) = scratch("promptmodal");
         let (src, _) = staged_collision(&mut qm);
-        let before = qm.selected().map(|r| r.path.clone());
+        assert!(qm.is_prompting(), "the collision is outstanding");
 
-        for verb in [
-            "nav_down",
-            "nav_up",
-            "cut",
-            "paste",
-            "create_folder",
-            "undo",
-            "redo",
-            "rename",
-        ] {
+        // The bench ARMS the modal from its params rather than drawing a dialog: what
+        // `update` pushes is derived here, so the question always says something.
+        let params = qm.conflict_params().expect("the modal's params");
+        assert!(!params.name.is_empty(), "the colliding NAME is data");
+        assert!(!params.existing.is_empty() && !params.incoming.is_empty());
+        assert_eq!(
+            params.remaining, 0,
+            "one collision — no batch answer offered"
+        );
+
+        // Firing the verbs through the ordinary drain resolves NOTHING: they are the
+        // modal's options, returned by the kernel, not intents this bench listens for.
+        for verb in [CONFLICT_REPLACE, CONFLICT_KEEP_BOTH, CONFLICT_SKIP] {
             qm.apply_results(&on(verb));
         }
         assert!(
             qm.is_prompting(),
-            "still prompting after every other intent"
-        );
-        assert!(!qm.is_renaming(), "rename never opened");
-        assert_eq!(
-            qm.selected().map(|r| r.path.clone()),
-            before,
-            "the cursor did not move"
+            "the collision is still outstanding — the answer channel is `modal_closed`"
         );
         assert!(!qm.can_undo(), "nothing mutated");
         assert!(
             flicker_content::occupied(&src),
             "the item in question is untouched"
+        );
+
+        // …and a modal that is not the conflict dialog is not an answer either.
+        qm.modal_closed("choice_dialog", CONFLICT_REPLACE, Some("1"));
+        assert!(
+            qm.is_prompting(),
+            "another modal's result is not this answer"
         );
         let _ = std::fs::remove_dir_all(d);
     }
@@ -3140,5 +3325,145 @@ mod tests {
         let mut m = ValueMap::new();
         m.set(name, true);
         m
+    }
+
+    /// Answer the open collision the way the kernel does: the SHARED `conflict` modal
+    /// closes and its result reaches the bench through `Scene::modal_closed`, with the
+    /// "apply to the remaining N" checkbox as the payload. This is the ONLY channel the
+    /// answer travels now — the dispatcher's swallow branch is gone with the inline
+    /// dialog, because the modal is a scene and the kernel freezes the bench under it.
+    fn answer(qm: &mut Quartermaster, verb: &str) {
+        qm.modal_closed(flicker_shell::MODAL_CONFLICT, verb, Some("0"));
+    }
+
+    /// DEVELOPMENT-TIER GATES (Aaron 2026-09-05, ruling 977B4D38): the hard-coded handoff
+    /// conditions of a refactor — tests that read this crate's own source and assert a
+    /// transition holds. `cargo test -- --skip gates::` is the production tier (every OS);
+    /// `cargo test -- gates::` runs only these (one OS in CI). A gate names the transition
+    /// it enforces and is deleted when that transition closes.
+    mod gates {
+        use super::*;
+
+        /// The drift gates every shipped screen wires, walked against the AUTHORED
+        /// tree off the shipped scene file, plus the pair-scene contracts: the
+        /// declared-intent set is exactly the ratified signal contract's (C2C98408),
+        /// no walker-owned signal is declared anywhere, and the pair script loads.
+        #[test]
+        fn the_tree_passes_the_drift_gates() {
+            let def = SceneDef::parse("quartermaster", QM_SCENE).expect("scene file parses");
+            let tree = def.tree.expect("the scene file ships a tree");
+
+            let unknown = flicker::ui::unknown_kinds(&tree);
+            assert!(unknown.is_empty(), "unknown component kinds: {unknown:?}");
+
+            let raw = flicker::ui::raw_display_literals(&tree);
+            assert!(
+                raw.is_empty(),
+                "raw display literals (must be $tokens): {raw:?}"
+            );
+
+            let flags = flicker::ui::strings::raw_model_publish_literals(include_str!("lib.rs"));
+            assert!(
+                flags.is_empty(),
+                "raw display copy published into the Model: {flags:?}"
+            );
+
+            // The declared intents are the ratified contract, exactly.
+            let intents = UiIntents::of(&tree);
+            for (sig, name) in [
+                (ActionSignal::Menu, "pause_open"),
+                (ActionSignal::Undo, "undo"),
+                (ActionSignal::Redo, "redo"),
+                (ActionSignal::Cut, "cut"),
+                (ActionSignal::Paste, "paste"),
+                (ActionSignal::Rename, "rename"),
+                (ActionSignal::CreateFolder, "create_folder"),
+                (ActionSignal::ContextMenu, "menu_open"),
+                (ActionSignal::TabNext, "tab_next"),
+                (ActionSignal::TabPrev, "tab_prev"),
+            ] {
+                assert_eq!(
+                    intents.result_for(sig),
+                    Some(name),
+                    "declared intent for {sig:?}"
+                );
+            }
+            // The inverse: no node anywhere declares a walker-owned signal.
+            fn no_walker_owned(n: &UiNode) {
+                for k in n.props.keys() {
+                    assert!(
+                        !matches!(
+                            k.as_str(),
+                            "on_confirm"
+                                | "on_cancel"
+                                | "on_nav_up"
+                                | "on_nav_down"
+                                | "on_nav_left"
+                                | "on_nav_right"
+                                | "on_panel_next"
+                                | "on_panel_prev"
+                                | "on_chord_begin"
+                        ),
+                        "walker-owned signal declared on node {:?}",
+                        n.id
+                    );
+                }
+                for c in &n.children {
+                    no_walker_owned(c);
+                }
+            }
+            no_walker_owned(&tree);
+
+            // The pair script loads and derives.
+            let host = ScriptHost::new(QM_SCRIPT, "quartermaster.lua").expect("pair script loads");
+            host.set_model(&ValueMap::new().with("tab", "tab_files"))
+                .expect("model publishes");
+            let derived = host
+                .derive()
+                .expect("derive runs")
+                .expect("derive returns a table");
+            assert!(derived.is_on("files_on"), "the Files page gate derives on");
+        }
+
+        /// THE INLINE DIALOG IS GONE: no `qm_prompt` subtree, no `conflict_*` binds and no
+        /// `scrim` block survive in the shipped pair. A migration that left the old copy
+        /// behind would still publish into it — dark, mouse-only and unreachable — forever
+        /// (rule 98232A50: no caller left on an old path).
+        #[test]
+        fn no_inline_conflict_dialog_is_left_in_the_scene_pair() {
+            // Every needle is ASSEMBLED from stems rather than written out: a gate that
+            // spells the thing it forbids trips over its own source below.
+            let scene =
+                include_str!("../../../../content/sensorium/scenes/quartermaster.scene.json");
+            for stem in [
+                "qm_promp",
+                "has_promp",
+                "conflict_apply_res",
+                "qm_conflict",
+                "quartermaster.scri",
+            ] {
+                let needle = [stem, "t"].concat();
+                assert!(
+                    !scene.contains(&needle),
+                    "quartermaster.scene.json still carries `{needle}` — the collision \
+                     dialog lifted to the shared modal tree"
+                );
+            }
+            // The bench's own source must not publish the retired binds either. The needles
+            // are ASSEMBLED, not written: a gate that names the thing it forbids trips over
+            // its own text.
+            let src = include_str!("lib.rs");
+            for (stem, tail) in [
+                ("has_promp", "t"),
+                ("conflict_mult", "i"),
+                ("conflict_res", "t"),
+            ] {
+                let needle = ["\"", stem, tail, "\""].concat();
+                assert!(
+                    !src.contains(&needle),
+                    "lib.rs still publishes `{needle}` into a subtree that no longer exists"
+                );
+            }
+        }
     }
 }

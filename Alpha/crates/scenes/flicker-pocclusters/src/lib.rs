@@ -49,7 +49,6 @@
 //! standalone binary.
 
 use std::cell::Cell;
-use std::collections::HashMap;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -63,8 +62,8 @@ use flicker::render::{
 use flicker::scene::{Scene, SceneInput, Transition};
 use flicker::script::{HudCommand, ScriptHost, UiNode, ValueMap};
 use flicker::ui::{
-    chat_panel, render_hud, run_ui, strings, ChatLineKind, ChatLineView, ChatView, RosterEntry,
-    SceneDef, Section, Sections, UiInput, UiIntents, UiState, WalkerHandler,
+    render_hud, run_ui, strings, ChatModal, SceneDef, Section, Sections, UiInput, UiIntents,
+    UiState, WalkerHandler,
 };
 use flicker_input_core::ActionSignal;
 use flicker_input_core::{AbstractControls, GamepadConfig, InputContext, InputState};
@@ -198,23 +197,9 @@ enum GamePhase {
     Active,
 }
 
-/// An in-flight drag of the floating chat window (scene-owned, since the walker
-/// has no window move/resize — its geometry is static). `Move` remembers the
-/// grab offset from the window's top-left so the window tracks the cursor.
-#[derive(Copy, Clone, PartialEq)]
-enum ChatDrag {
-    None,
-    Move { grab: Vec2 },
-    Resize,
-}
-
-// Chat-window hit regions + minimum size (device px). The grip is the top strip
-// that drags the window; the corner box resizes it. These are hit rects, so they
-// only need to roughly cover the drawn title bar / `◢` handle.
-const CHAT_GRIP_H: f32 = 34.0;
-const CHAT_CORNER: f32 = 22.0;
-const CHAT_MIN_W: f32 = 420.0;
-const CHAT_MIN_H: f32 = 180.0;
+// (The chat window's drag/resize machine, hit constants and default placement
+// moved into the shared [`ChatModal`] component — flicker-widgets owns the
+// window now.)
 
 struct GameScene {
     /// LOD-0 source-of-truth cluster data (see `docs/architecture.md`):
@@ -314,7 +299,6 @@ struct GameScene {
     /// Chat owns the keyboard — the scene-owned context truth the runner reads
     /// through [`Scene::input_context`] (TextEntry while set, World otherwise).
     /// Set by the command handler's one-way hand-off, cleared on submit/cancel.
-    chat_focused: bool,
 
     /// The in-scene HUD as a DECLARATIVE component tree, parsed ONCE from
     /// `hud_pocclusters.lua`'s `tree()` at construction (the walker redraws this
@@ -417,32 +401,14 @@ struct GameScene {
     /// — the private resolver/tick rig deleted with the migration (P6).
     command: CommandHandler,
 
-    // ── In-world chat (clay-chat client; DesignSync ChatPanel over clay-chat v0.1) ──
+    // ── In-world chat (clay-chat client; the shared ChatModal over clay-chat v0.1) ──
     /// The clay-chat client (background socket thread). `None` until `enter` connects;
     /// dropped in `exit` to disconnect. Inbound events drained each frame like `build_rx`.
     chat: Option<ChatClient>,
-    /// Retained walker state for the chat pass (keyboard focus), separate from the HUD's.
-    chat_ui_state: UiState,
-    /// This frame's chat draw commands — a SECOND `run_ui` pass over the floating
-    /// panel, blitted after the HUD in `render` (so it layers on top).
-    chat_commands: Vec<HudCommand>,
-    /// The floating window's rect `(x, y, w, h)` in device px — scene-owned so it can
-    /// move/resize (walker geometry is static). Seeded bottom-centre in `enter`.
-    chat_rect: (f32, f32, f32, f32),
-    /// In-flight title-drag (move) / corner-drag (resize), or `None`.
-    chat_drag: ChatDrag,
-    /// The local nick (updated from the server's `NickAck` / `Renamed`).
-    chat_nick: String,
-    /// Joined channels (wire form, e.g. `"#general"`) — one tab each.
-    chat_active: String,
-    chat_channels: Vec<String>,
-    /// Per-channel scrollback + roster, built from decoded events.
-    chat_logs: HashMap<String, Vec<ChatLineView>>,
-    chat_rosters: HashMap<String, Vec<RosterEntry>>,
-    /// The input field's current text (mirrors the walker `chat_input` bind).
-    chat_input: String,
-    /// The active log's scroll offset (`f32::MAX` = follow newest).
-    chat_scroll: f32,
+    /// The SHARED chat window (flicker-widgets `ChatModal`): owns the rect,
+    /// move/resize drags, tabs, scrollback, rosters, input line and its own
+    /// walker pass — the scene keeps only the socket and the keyboard hand-off.
+    chat_modal: ChatModal,
     /// Gothic UI theme: drawn as the loading widget while `Booting`, and handed
     /// to each `PauseScene` we push (so pausing never re-uploads). `None` until
     /// `enter`.
@@ -486,7 +452,6 @@ impl Default for GameScene {
             controls: AbstractControls::default(),
             gamepad_config: GamepadConfig::default(),
             script: None,
-            chat_focused: false,
             ui_tree: None,
             ui_intents: UiIntents::default(),
             fired_sigs: Vec::new(),
@@ -531,17 +496,7 @@ impl Default for GameScene {
             walk_needs_snap: true,
             command: CommandHandler::default(),
             chat: None,
-            chat_ui_state: UiState::new(),
-            chat_commands: Vec::new(),
-            chat_rect: (0.0, 0.0, 0.0, 0.0),
-            chat_drag: ChatDrag::None,
-            chat_nick: String::new(),
-            chat_active: String::new(),
-            chat_channels: Vec::new(),
-            chat_logs: HashMap::new(),
-            chat_rosters: HashMap::new(),
-            chat_input: String::new(),
-            chat_scroll: f32::MAX,
+            chat_modal: ChatModal::new("pocclusters.chat"),
             ui_theme: None,
             phase: GamePhase::Booting,
             nav_ready_target: 0,
@@ -1157,25 +1112,23 @@ fn build_cluster(
     };
 
     let (self_c, self_lod) = derive(x, z);
-    let neg_x = if x > 0 { Some(derive(x - 1, z)) } else { None };
-    let pos_x = if x + 1 < FIELD_DIM {
-        Some(derive(x + 1, z))
-    } else {
-        None
-    };
-    let neg_z = if z > 0 { Some(derive(x, z - 1)) } else { None };
-    let pos_z = if z + 1 < FIELD_DIM {
-        Some(derive(x, z + 1))
-    } else {
-        None
-    };
-    let neighbors = NeighborContext {
-        neg_x: neg_x.as_ref().map(|(c, l)| (c, *l)),
-        pos_x: pos_x.as_ref().map(|(c, l)| (c, *l)),
-        neg_z: neg_z.as_ref().map(|(c, l)| (c, *l)),
-        pos_z: pos_z.as_ref().map(|(c, l)| (c, *l)),
-        ..NeighborContext::none()
-    };
+    // The FULL in-plane neighborhood — the four faces AND the four
+    // diagonals, so the seam quads at a 4-cluster corner junction
+    // resolve instead of dropping (the old corner holes). The derived
+    // neighbors are owned here; the context borrows them.
+    let ring: Vec<(i32, i32, (Cluster, Lod))> = (-1i32..=1)
+        .flat_map(|dx| (-1i32..=1).map(move |dz| (dx, dz)))
+        .filter(|&(dx, dz)| dx != 0 || dz != 0)
+        .filter_map(|(dx, dz)| {
+            let (nx, nz) = (x as i32 + dx, z as i32 + dz);
+            ((0..FIELD_DIM as i32).contains(&nx) && (0..FIELD_DIM as i32).contains(&nz))
+                .then(|| (dx, dz, derive(nx as u16, nz as u16)))
+        })
+        .collect();
+    let mut neighbors = NeighborContext::none();
+    for (dx, dz, (c, l)) in &ring {
+        neighbors.set(*dx, 0, *dz, c, *l);
+    }
 
     let id = ClusterId::new(self_lod.level(), x, 0, z);
     let off = id.world_offset();
@@ -1539,10 +1492,11 @@ impl GameScene {
     /// round-trips as a plain message and renders as an emote by the `/me ` convention —
     /// is a `MSG` to the active channel. Clears the input.
     fn send_chat_input(&mut self) {
-        let text = std::mem::take(&mut self.chat_input).trim().to_string();
+        let text = self.chat_modal.take_input().trim().to_string();
         if text.is_empty() {
             return;
         }
+        let active = self.chat_modal.active().to_string();
         let Some(client) = self.chat.as_ref() else {
             return;
         };
@@ -1557,11 +1511,7 @@ impl GameScene {
                     }
                 }
                 "part" | "leave" => {
-                    let channel = if arg.is_empty() {
-                        self.chat_active.clone()
-                    } else {
-                        arg
-                    };
+                    let channel = if arg.is_empty() { active } else { arg };
                     client.send(ChatCommand::Part(channel));
                 }
                 "nick" => {
@@ -1569,178 +1519,46 @@ impl GameScene {
                         client.send(ChatCommand::Nick(arg));
                     }
                 }
-                "names" => client.send(ChatCommand::Names(self.chat_active.clone())),
+                "names" => client.send(ChatCommand::Names(active)),
                 _ => client.send(ChatCommand::Msg {
-                    channel: self.chat_active.clone(),
+                    channel: active,
                     text,
                 }),
             }
         } else {
             client.send(ChatCommand::Msg {
-                channel: self.chat_active.clone(),
+                channel: active,
                 text,
             });
         }
     }
 
-    /// Append a line to a channel's scrollback (ring-capped), auto-following the
-    /// active channel to newest.
-    fn push_chat_line(&mut self, channel: &str, kind: ChatLineKind, text: String) {
-        const CAP: usize = 300;
-        let log = self.chat_logs.entry(channel.to_string()).or_default();
-        log.push(ChatLineView { kind, text });
-        if log.len() > CAP {
-            let drop = log.len() - CAP;
-            log.drain(0..drop);
-        }
-        if channel == self.chat_active {
-            self.chat_scroll = f32::MAX;
-        }
-    }
-
-    fn roster_add(&mut self, channel: &str, nick: &str, my_nick: &str) {
-        let roster = self.chat_rosters.entry(channel.to_string()).or_default();
-        if !roster.iter().any(|m| m.label == nick) {
-            roster.push(RosterEntry {
-                label: nick.to_string(),
-                op: false,
-                you: nick == my_nick,
-            });
-        }
-    }
-
-    fn roster_remove(&mut self, channel: &str, nick: &str) {
-        if let Some(roster) = self.chat_rosters.get_mut(channel) {
-            roster.retain(|m| m.label != nick);
-        }
-    }
-
-    /// Fold one decoded [`ChatEvent`] into the per-channel logs + rosters (+ our own
-    /// nick / active channel on the events that change them).
-    fn apply_event(&mut self, ev: ChatEvent, my_nick: &str) {
+    /// Fold one decoded [`ChatEvent`] into the shared modal — a pure
+    /// forwarding match, so the component never learns the socket's types.
+    /// The one wire side effect: OUR OWN join of a channel the tab strip did
+    /// not know yet asks the server for NAMES (the modal reports it).
+    fn apply_event(&mut self, ev: ChatEvent) {
         match ev {
-            ChatEvent::Connected => {
-                let active = self.chat_active.clone();
-                self.push_chat_line(
-                    &active,
-                    ChatLineKind::Joined,
-                    format!("· {}", strings::resolve("$pc_chat_connected")),
-                );
-            }
-            ChatEvent::Disconnected(reason) => {
-                let active = self.chat_active.clone();
-                let msg = match reason {
-                    Some(r) => format!("· {} — {r}", strings::resolve("$pc_chat_disconnected")),
-                    None => format!("· {}", strings::resolve("$pc_chat_disconnected")),
-                };
-                self.push_chat_line(&active, ChatLineKind::Left, msg);
-            }
+            ChatEvent::Connected => self.chat_modal.connected(),
+            ChatEvent::Disconnected(reason) => self.chat_modal.disconnected(reason.as_deref()),
             ChatEvent::Chat {
                 channel,
                 from,
                 text,
-            } => {
-                let (kind, line) = if let Some(rest) = text.strip_prefix("/me ") {
-                    (ChatLineKind::Emote, format!("✦ {from} {rest}"))
-                } else if from == my_nick {
-                    (ChatLineKind::You, format!("{from}   {text}"))
-                } else {
-                    (ChatLineKind::Say, format!("{from}   {text}"))
-                };
-                self.push_chat_line(&channel, kind, line);
-            }
+            } => self.chat_modal.message(&channel, &from, &text),
             ChatEvent::Joined { nick, channel } => {
-                self.roster_add(&channel, &nick, my_nick);
-                self.push_chat_line(
-                    &channel,
-                    ChatLineKind::Joined,
-                    format!("◈ {nick} {}", strings::resolve("$pc_chat_joined")),
-                );
-                if nick == my_nick {
-                    // Our own JOIN success: ensure the tab exists (+ seed the roster for
-                    // a channel we joined mid-session) and switch to it.
-                    if !self.chat_channels.iter().any(|c| c == &channel) {
-                        self.chat_channels.push(channel.clone());
-                        if let Some(c) = self.chat.as_ref() {
-                            c.send(ChatCommand::Names(channel.clone()));
-                        }
-                    }
-                    self.chat_active = channel;
-                    self.chat_scroll = f32::MAX;
-                }
-            }
-            ChatEvent::Parted { nick, channel } => {
-                self.roster_remove(&channel, &nick);
-                self.push_chat_line(
-                    &channel,
-                    ChatLineKind::Left,
-                    format!("◌ {nick} {}", strings::resolve("$pc_chat_left")),
-                );
-                if nick == my_nick {
-                    self.chat_channels.retain(|c| c != &channel);
-                    self.chat_logs.remove(&channel);
-                    self.chat_rosters.remove(&channel);
-                    if self.chat_active == channel {
-                        self.chat_active = self.chat_channels.first().cloned().unwrap_or_default();
-                        self.chat_scroll = f32::MAX;
+                if self.chat_modal.joined(&nick, &channel) {
+                    if let Some(c) = self.chat.as_ref() {
+                        c.send(ChatCommand::Names(channel));
                     }
                 }
             }
-            ChatEvent::Renamed { old, new } => {
-                if old == self.chat_nick {
-                    self.chat_nick = new.clone();
-                }
-                let you = new == self.chat_nick;
-                let mut touched: Vec<String> = Vec::new();
-                for (channel, roster) in self.chat_rosters.iter_mut() {
-                    let mut hit = false;
-                    for member in roster.iter_mut() {
-                        if member.label == old {
-                            member.label = new.clone();
-                            member.you = you;
-                            hit = true;
-                        }
-                    }
-                    if hit {
-                        touched.push(channel.clone());
-                    }
-                }
-                for channel in touched {
-                    self.push_chat_line(
-                        &channel,
-                        ChatLineKind::Renamed,
-                        format!("ᛥ {old} {} {new}", strings::resolve("$pc_chat_is_now")),
-                    );
-                }
-            }
-            ChatEvent::Names { channel, names } => {
-                let roster = names
-                    .into_iter()
-                    .map(|label| RosterEntry {
-                        you: label == my_nick,
-                        op: false,
-                        label,
-                    })
-                    .collect();
-                self.chat_rosters.insert(channel, roster);
-            }
-            ChatEvent::NickAck(nick) => {
-                self.chat_nick = nick.clone();
-                let active = self.chat_active.clone();
-                self.push_chat_line(
-                    &active,
-                    ChatLineKind::Joined,
-                    format!("· {} '{nick}'", strings::resolve("$pc_chat_you_are_now")),
-                );
-            }
-            ChatEvent::Notice(text) => {
-                let active = self.chat_active.clone();
-                self.push_chat_line(&active, ChatLineKind::Left, format!("· {text}"));
-            }
-            ChatEvent::Error(text) => {
-                let active = self.chat_active.clone();
-                self.push_chat_line(&active, ChatLineKind::Op, format!("⚠ {text}"));
-            }
+            ChatEvent::Parted { nick, channel } => self.chat_modal.parted(&nick, &channel),
+            ChatEvent::Renamed { old, new } => self.chat_modal.renamed(&old, &new),
+            ChatEvent::Names { channel, names } => self.chat_modal.names(&channel, names),
+            ChatEvent::NickAck(nick) => self.chat_modal.nick_ack(&nick),
+            ChatEvent::Notice(text) => self.chat_modal.notice(&text),
+            ChatEvent::Error(text) => self.chat_modal.error(&text),
             ChatEvent::Channels(_) | ChatEvent::Pong(_) => {}
         }
     }
@@ -2104,21 +1922,13 @@ impl Scene for GameScene {
         // #general until the server's own join echo confirms it, and seed the roster
         // with a NAMES. If the server is down the client just reports Disconnected.
         let nick = default_chat_nick();
-        self.chat_nick = nick.clone();
-        self.chat_active = "#general".to_string();
-        self.chat_channels = vec!["#general".to_string()];
+        self.chat_modal.open_session(&nick, "#general");
         let client = ChatClient::connect(nick);
         client.send(ChatCommand::Join("#general".to_string()));
         client.send(ChatCommand::Names("#general".to_string()));
         self.chat = Some(client);
-
-        // Float the window bottom-centre, ~3/5 of the screen wide (wide, not docked).
-        let screen = renderer.size();
-        let w = (screen.x * 0.6).clamp(CHAT_MIN_W, (screen.x - 40.0).max(CHAT_MIN_W));
-        let h = (screen.y * 0.42).clamp(CHAT_MIN_H, (screen.y - 40.0).max(CHAT_MIN_H));
-        let x = ((screen.x - w) * 0.5).max(0.0);
-        let y = (screen.y - h - 24.0).max(0.0);
-        self.chat_rect = (x, y, w, h);
+        // The window places itself (bottom-centre, wide) — component-owned.
+        self.chat_modal.place_default(renderer.size());
     }
 
     fn update(
@@ -2169,65 +1979,19 @@ impl Scene for GameScene {
         // movement/look/pick suppress automatically (its map is empty). That is what the
         // deleted `chat_focus` bool used to track.
         let screen = renderer.size();
-        let focused = self.chat_focused;
+        // The chat line's session IS the "chat owns the keyboard" truth: opened by the
+        // walker on a click into the field / a pad Confirm on it / the bound `EnterText`
+        // key, closed by `SubmitText` / `CancelText` / the focus leaving. `input_context`
+        // reports it, so the pump resolves only the text exits while it holds.
+        let focused = self.chat_modal.text_entry();
 
-        // Chat window move/resize (scene-owned window management, NOT input arbitration):
-        // update the rect and report whether a left-press landed in the panel this frame
-        // (a click-to-enter). The focus/context change itself is the command handler's
-        // job, just below.
-        let mut click_focus = false;
-        {
-            let (mut cx, mut cy, mut cw, mut ch) = self.chat_rect;
-            let m = input.mouse_position;
-            if input.mouse_left_pressed {
-                if in_rect(
-                    m,
-                    cx + cw - CHAT_CORNER,
-                    cy + ch - CHAT_CORNER,
-                    CHAT_CORNER,
-                    CHAT_CORNER,
-                ) {
-                    self.chat_drag = ChatDrag::Resize;
-                    click_focus = true;
-                } else if in_rect(m, cx, cy, cw, CHAT_GRIP_H) {
-                    self.chat_drag = ChatDrag::Move {
-                        grab: Vec2::new(m.x - cx, m.y - cy),
-                    };
-                    click_focus = true;
-                } else if in_rect(m, cx, cy, cw, ch) {
-                    click_focus = true;
-                }
-            }
-            if input.mouse_left {
-                match self.chat_drag {
-                    ChatDrag::Move { grab } => {
-                        cx = (m.x - grab.x).clamp(0.0, (screen.x - cw).max(0.0));
-                        cy = (m.y - grab.y).clamp(0.0, (screen.y - ch).max(0.0));
-                    }
-                    ChatDrag::Resize => {
-                        cw = (m.x - cx).clamp(CHAT_MIN_W, (screen.x - cx).max(CHAT_MIN_W));
-                        ch = (m.y - cy).clamp(CHAT_MIN_H, (screen.y - cy).max(CHAT_MIN_H));
-                    }
-                    ChatDrag::None => {}
-                }
-            } else {
-                self.chat_drag = ChatDrag::None;
-            }
-            self.chat_rect = (cx, cy, cw, ch);
-        }
+        // Chat window move/resize: the shared modal owns its own window management; a
+        // click INTO the field enters through the walker's frame hook.
+        let _ = self.chat_modal.update_pointer(input, screen);
 
-        // Exclusive TextEntry keyboard owner: the T hand-off / Esc-cancel / Enter-submit
-        // state machine + the trigger-key guard (4B15929B), promoted out of the scene into
-        // `CommandHandler`. Runs before the chat pass so `guard` gates this frame's
-        // typed(); its TextEntry-context + focus intents go into the reused RouteCtx and
-        // are reconciled after dispatch.
-        let text = self
-            .command
-            .drive(input, focused, click_focus, signals.route);
-        if text.entered {
-            self.chat_focused = true;
-        }
-        let guard = self.command.guard();
+        // Exclusive TextEntry keyboard owner: mirrors the session for the chain so
+        // nothing but the text exits routes below it while chat owns the keyboard.
+        self.command.drive(focused);
 
         // The in-scene HUD is a DECLARATIVE component tree walked by the Rust
         // component walker (`run_ui`): build the Model, walk the cached tree → this
@@ -2251,8 +2015,6 @@ impl Scene for GameScene {
                 down: input.mouse_left,
                 right_down: input.mouse_right,
                 screen,
-                typed: String::new(),
-                backspace: false,
                 wheel: input.mouse_wheel_delta,
                 exclusive: false,
                 motion: Default::default(),
@@ -2346,122 +2108,21 @@ impl Scene for GameScene {
             }
         }
 
-        // ── Chat panel: drain the socket into the per-channel logs/rosters, then
-        // build + run the floating window as a SECOND walker pass (its own UiState)
-        // so it can move/resize each frame; its commands layer over the HUD in
-        // `render`. Reports `chat_hit` (pointer over the panel → the walker consumes
-        // the click) and this frame's send/join/part button edges (acted on after
-        // dispatch). ──
+        // ── The shared chat window: drain the socket into the modal, then run
+        // its pass (its own UiState + commands, layered over the HUD in
+        // `render`). `guard` keeps the T hand-off keystroke out of the field
+        // (4B15929B); the surfaces publish rides in so the `chat` visible_bind
+        // gate stays S9 data. ──
         let (chat_hit, chat_send, chat_join, chat_part) = {
-            let my_nick = self.chat_nick.clone();
             while let Some(ev) = self.chat.as_ref().and_then(|c| c.try_recv()) {
-                self.apply_event(ev, &my_nick);
+                self.apply_event(ev);
             }
-
-            // Re-assert the chat field's focus each frame (run_ui clears focus on any
-            // clicked frame) from the context-derived truth (replaces `chat_focus`).
-            if focused {
-                self.chat_ui_state.request_focus("chat_input");
-            } else {
-                self.chat_ui_state.clear_focus();
-            }
-
-            let (cx, cy, cw, ch) = self.chat_rect;
-            let empty_lines: Vec<ChatLineView> = Vec::new();
-            let empty_roster: Vec<RosterEntry> = Vec::new();
-            let lines = self
-                .chat_logs
-                .get(&self.chat_active)
-                .unwrap_or(&empty_lines);
-            let roster = self
-                .chat_rosters
-                .get(&self.chat_active)
-                .unwrap_or(&empty_roster);
-            let mut tree = chat_panel(
-                cx,
-                cy,
-                cw,
-                ch,
-                &ChatView {
-                    style: "pocclusters.chat",
-                    active: &self.chat_active,
-                    channels: &self.chat_channels,
-                    lines,
-                    roster,
-                    nick: &self.chat_nick,
-                    you_label: &strings::resolve("$pc_chat_you"),
-                },
-            );
-            // The floating window is a DECLARED surface of this screen: its root
-            // rides the `chat` gate (always on today), so hiding it is a helper
-            // call — not a bespoke code path — once something wants to (S9).
-            tree.visible_bind = Some("chat".into());
-
-            let mut cmodel = ValueMap::new();
-            self.surfaces.publish(&mut cmodel);
-            // The tab strip selects by INDEX (an index is a number, everywhere), so the
-            // scene publishes the active channel's position in `chat_channels`.
-            let active_idx = self
-                .chat_channels
-                .iter()
-                .position(|c| c == &self.chat_active)
-                .unwrap_or(0);
-            cmodel.set("chat_tab", active_idx as f64);
-            cmodel.set("chat_scroll", self.chat_scroll as f64);
-            cmodel.set("chat_input", self.chat_input.as_str());
-
-            let cin = UiInput {
-                mouse: input.mouse_position,
-                // Suppress the walker click while a title/corner drag is in flight, so
-                // a drag never also toggles a tab or button under the cursor.
-                clicked: input.mouse_left_pressed && matches!(self.chat_drag, ChatDrag::None),
-                down: input.mouse_left,
-                right_down: input.mouse_right,
-                screen,
-                // Route typed text / backspace to the field only while it owns the
-                // keyboard (TextEntry) and the trigger-key guard is clear (4B15929B) —
-                // the promoted `chat_focus && !chat_key_guard`.
-                typed: if focused && !guard {
-                    input.typed().to_string()
-                } else {
-                    String::new()
-                },
-                backspace: focused && !guard && input.backspace(),
-                wheel: input.mouse_wheel_delta,
-                exclusive: false,
-                motion: Default::default(),
-            };
-            let cframe = run_ui(
-                &tree,
-                &cmodel,
-                &self.ui_styles,
-                &cin,
-                &mut self.chat_ui_state,
-            );
-            let chat_hit = cframe.results.is_on("hud_hit");
-            self.chat_commands = cframe.commands;
-
-            if let Some(t) = cframe.results.text("chat_input") {
-                self.chat_input = t.to_string();
-            }
-            if let Some(s) = cframe.results.number("chat_scroll") {
-                self.chat_scroll = s as f32;
-            }
-            if let Some(sel) = cframe.results.number("chat_tab") {
-                if let Some(channel) = self.chat_channels.get(sel as usize) {
-                    if channel != &self.chat_active {
-                        self.chat_active = channel.clone();
-                        self.chat_scroll = f32::MAX;
-                    }
-                }
-            }
-
-            (
-                chat_hit,
-                cframe.results.is_on("chat_send"),
-                cframe.results.is_on("chat_join"),
-                cframe.results.is_on("chat_part"),
-            )
+            let mut sections = ValueMap::new();
+            self.surfaces.publish(&mut sections);
+            let frame = self
+                .chat_modal
+                .run(input, screen, focused, &self.ui_styles, &sections);
+            (frame.hit, frame.send, frame.join, frame.part)
         };
 
         // ── Dispatch the PUMP's resolved events through the 4-handler chain
@@ -2475,50 +2136,49 @@ impl Scene for GameScene {
         // `chat_hit` (the old two-gate fall-through, folded into the one walker
         // layer) + the screen's DECLARED intents (S9: `on_menu = "pause_open"`).
         self.fired_sigs.clear(); // last frame's mirror rode the HUD walk above — done
-        let mut walker = WalkerHandler::hud(&mut self.chat_ui_state, hud_hit || chat_hit)
-            .with_intents(&self.ui_intents);
+                                 // The walker layer over the chat window's state AND tree, so the chat line is
+                                 // the text field `EnterText` opens and its session closes through the walker.
+        let (chat_ui, chat_nav) = self.chat_modal.walker_parts();
+        let mut walker =
+            WalkerHandler::hud(chat_ui, hud_hit || chat_hit).with_intents(&self.ui_intents);
+        if let Some((tree, model)) = chat_nav {
+            walker = walker.with_nav(tree, model);
+        }
         {
             let mut chain: [&mut dyn InputHandler; 4] =
                 [&mut root, &mut self.command, &mut walker, &mut gameplay];
             Router::dispatch(signals.events, &mut chain, signals.route);
         }
 
-        // Any exit leaves TextEntry (Enter/send = submit, Esc = cancel): pop the context +
-        // clear focus through the router queue. The panel's send button folds into submit.
-        let submit = text.submit || chat_send;
-        if submit || text.cancel {
-            signals.route.pop_context();
-            signals.route.clear_focus();
-            self.chat_focused = false;
-        }
-
         // Surface context wiring (S9): any declared-surface flip since last frame
         // becomes Push/PopContext on the same queue (no pocclusters surface
         // carries a context today — the seam is standard, the call a live no-op).
         // The RUNNER applies the queued requests to the pump after `update`; the
-        // chat field's walker focus is re-asserted per-frame from `chat_focused`.
+        // chat field's walker focus is re-asserted per-frame from its session.
         self.surfaces.apply_section_contexts(signals.route);
         // The screen's fired intents (S9), drained once per frame: acted on below
         // and queued for the one-frame `sig_<name>` Model mirror.
         self.fired_sigs = walker.take_fired();
 
-        // Chat side effects (post the line / join / leave) — identical to the old inline
-        // handling, now driven by the command handler's submit + the panel buttons.
+        // Chat side effects (post the line / join / leave): the field's `submit_action`
+        // (`SubmitText` closed the session) or the panel's send button posts the line;
+        // `cancel_action` keeps the draft and needs nothing here.
+        let submit = chat_send || self.fired_sigs.iter().any(|n| n == "chat_submit");
         if submit {
             self.send_chat_input();
         }
         if chat_join {
-            let channel = self.chat_input.trim().to_string();
+            let channel = self.chat_modal.input_text().trim().to_string();
             if !channel.is_empty() {
                 if let Some(c) = self.chat.as_ref() {
                     c.send(ChatCommand::Join(channel));
                 }
-                self.chat_input.clear();
+                self.chat_modal.take_input();
             }
         }
         if chat_part {
             if let Some(c) = self.chat.as_ref() {
-                c.send(ChatCommand::Part(self.chat_active.clone()));
+                c.send(ChatCommand::Part(self.chat_modal.active().to_string()));
             }
         }
 
@@ -2564,7 +2224,7 @@ impl Scene for GameScene {
         // into ONE 0..1 path per direction signal. While chat owns the keyboard
         // the TextEntry map binds nothing, so every query reads zero — the gate
         // below is belt-and-braces.
-        if !self.chat_focused {
+        if !focused {
             // Mouse look: per-frame pixel deltas, frame-absolute (no dt).
             let mouse = Vec2::new(
                 signals.pointer_delta(ActionSignal::LookRight, input)
@@ -2618,10 +2278,12 @@ impl Scene for GameScene {
     }
 
     fn input_context(&self) -> Option<InputContext> {
-        // Chat owns the keyboard → the runner resolves the pump over the (empty)
-        // TextEntry map, so no gameplay signal fires and every continuous query
-        // reads zero. World otherwise (the default base).
-        self.chat_focused.then_some(InputContext::TextEntry)
+        // Chat owns the keyboard → the runner resolves the pump over the TextEntry
+        // map (the two text exits only), so no gameplay signal fires and every
+        // continuous query reads zero. World otherwise (the default base).
+        self.chat_modal
+            .text_entry()
+            .then_some(InputContext::TextEntry)
     }
 
     fn render<'f>(&'f mut self, renderer: &mut Renderer, fg: &mut FrameGraph<'f>) {
@@ -2705,7 +2367,7 @@ impl Scene for GameScene {
         // textures), so `white` — the 1×1 fill pixel — is the entire texture table.
         if let Some(white) = me.white {
             let hud_commands = &me.hud_commands;
-            let chat_commands = &me.chat_commands;
+            let chat_commands = me.chat_modal.commands();
             fg.overlay(move |r| {
                 render_hud(r, hud_commands, white, &[]);
                 render_hud(r, chat_commands, white, &[]);
@@ -2917,11 +2579,6 @@ fn shadow_knobs(world: &StageDef, producer: &StageDef) -> Option<(u32, f32, f32)
 // `render_hud` now lives in `flicker-widgets` (the reusable UI surface) and is
 // imported above; the call sites below are unchanged.
 
-/// Point-in-rect test in device px (top-left origin).
-fn in_rect(p: Vec2, x: f32, y: f32, w: f32, h: f32) -> bool {
-    p.x >= x && p.x < x + w && p.y >= y && p.y < y + h
-}
-
 /// The chat nick for this client — the OS user name (the client codec sanitizes it),
 /// else a default. There is no auth/registration at this stage; the web side owns
 /// identity later, so this is just a friendly label for the raw-protocol test.
@@ -3120,98 +2777,105 @@ mod script_smoke {
         );
     }
 
-    /// Walk the REAL tree with the REAL derived model (+ a pick fixture so the
-    /// gated inspector panel draws too) and gate the authored data: known kinds
-    /// only, no raw display literals in the tree, no raw display copy published
-    /// from Rust into the Model.
-    #[test]
-    fn hud_tree_walks_with_model() {
-        load_strings();
-        let def = scene_def();
-        let tree = def.tree.clone().expect("scene defines a tree");
-        let styles = flicker::ui::load_shared_styles(def.styles.as_ref());
+    /// DEVELOPMENT-TIER GATES (Aaron 2026-09-05, ruling 977B4D38): the hard-coded handoff
+    /// conditions of a refactor — tests that read this crate's own source and assert a
+    /// transition holds. `cargo test -- --skip gates::` is the production tier (every OS);
+    /// `cargo test -- gates::` runs only these (one OS in CI). A gate names the transition
+    /// it enforces and is deleted when that transition closes.
+    mod gates {
+        use super::*;
 
-        // Vocabulary gate: an unknown kind renders NOTHING, so a name left
-        // behind by a rename would be invisible until someone opened the window.
-        assert!(
-            flicker::ui::unknown_kinds(&tree).is_empty(),
-            "pocclusters.scene.json names unknown kinds: {:?}",
-            flicker::ui::unknown_kinds(&tree)
-        );
-        // The strings gate (S10): every display literal is a `$token`.
-        assert!(
-            flicker::ui::raw_display_literals(&tree).is_empty(),
-            "pocclusters.scene.json ships raw display literals: {:?}",
-            flicker::ui::raw_display_literals(&tree)
-        );
-        // The MODEL-CHANNEL strings gate (S10's blind side): every `.set`/`.with`
-        // display value in this crate is a resolved `$token`, a data shape, or
-        // carries an explicit `strings-gate-exempt` reason.
-        let flags = strings::raw_model_publish_literals(include_str!("lib.rs"));
-        assert!(
-            flags.is_empty(),
-            "raw display copy published into the Model: {flags:?}"
-        );
+        /// Walk the REAL tree with the REAL derived model (+ a pick fixture so the
+        /// gated inspector panel draws too) and gate the authored data: known kinds
+        /// only, no raw display literals in the tree, no raw display copy published
+        /// from Rust into the Model.
+        #[test]
+        fn hud_tree_walks_with_model() {
+            load_strings();
+            let def = scene_def();
+            let tree = def.tree.clone().expect("scene defines a tree");
+            let styles = flicker::ui::load_shared_styles(def.styles.as_ref());
 
-        // The real derived model, plus a pick fixture so the `has_pick`-gated
-        // inspector panel draws (a real pick needs a meshed world; the fixture
-        // exercises the authored panel with the same key shapes derive() emits).
-        let scene = GameScene::new(&def);
-        let mut m = scene.hud_model();
-        m.set("has_pick", true);
-        m.set("no_pick", false);
-        let r = |t: &str| strings::resolve(t).into_owned();
-        m.set("insp_title", format!("{} (10, 20, 30)", r("$pc_cell")));
-        m.set(
-            "insp_sub",
-            format!(
-                "{} (1, 0, 2) {} 0 · 8 {}",
-                r("$pc_cluster"),
-                r("$pc_lod"),
-                r("$pc_corners")
-            ),
-        );
-        for i in 0..8 {
-            m.set(format!("insp_c{i}_name"), format!("c{i} +--"));
-            for ax in ["lx", "ly", "lz", "wx", "wy", "wz"] {
-                m.set(format!("insp_c{i}_{ax}"), "0.50");
+            // Vocabulary gate: an unknown kind renders NOTHING, so a name left
+            // behind by a rename would be invisible until someone opened the window.
+            assert!(
+                flicker::ui::unknown_kinds(&tree).is_empty(),
+                "pocclusters.scene.json names unknown kinds: {:?}",
+                flicker::ui::unknown_kinds(&tree)
+            );
+            // The strings gate (S10): every display literal is a `$token`.
+            assert!(
+                flicker::ui::raw_display_literals(&tree).is_empty(),
+                "pocclusters.scene.json ships raw display literals: {:?}",
+                flicker::ui::raw_display_literals(&tree)
+            );
+            // The MODEL-CHANNEL strings gate (S10's blind side): every `.set`/`.with`
+            // display value in this crate is a resolved `$token`, a data shape, or
+            // carries an explicit `strings-gate-exempt` reason.
+            let flags = strings::raw_model_publish_literals(include_str!("lib.rs"));
+            assert!(
+                flags.is_empty(),
+                "raw display copy published into the Model: {flags:?}"
+            );
+
+            // The real derived model, plus a pick fixture so the `has_pick`-gated
+            // inspector panel draws (a real pick needs a meshed world; the fixture
+            // exercises the authored panel with the same key shapes derive() emits).
+            let scene = GameScene::new(&def);
+            let mut m = scene.hud_model();
+            m.set("has_pick", true);
+            m.set("no_pick", false);
+            let r = |t: &str| strings::resolve(t).into_owned();
+            m.set("insp_title", format!("{} (10, 20, 30)", r("$pc_cell")));
+            m.set(
+                "insp_sub",
+                format!(
+                    "{} (1, 0, 2) {} 0 · 8 {}",
+                    r("$pc_cluster"),
+                    r("$pc_lod"),
+                    r("$pc_corners")
+                ),
+            );
+            for i in 0..8 {
+                m.set(format!("insp_c{i}_name"), format!("c{i} +--"));
+                for ax in ["lx", "ly", "lz", "wx", "wy", "wz"] {
+                    m.set(format!("insp_c{i}_{ax}"), "0.50");
+                }
             }
-        }
 
-        let snap = UiInput {
-            mouse: Vec2::new(-1.0, -1.0),
-            clicked: false,
-            down: false,
-            right_down: false,
-            screen: Vec2::new(1920.0, 1080.0),
-            typed: String::new(),
-            backspace: false,
-            wheel: 0.0,
-            exclusive: false,
-            motion: Default::default(),
-        };
-        let frame = run_ui(&tree, &m, &styles, &snap, &mut UiState::new());
-        assert!(
-            !frame.commands.is_empty(),
-            "the HUD draws its panels + controls"
-        );
-        let has_text = |needle: &str| {
-            frame
-                .commands
-                .iter()
-                .any(|c| matches!(c, HudCommand::Text { text, .. } if text.contains(needle)))
-        };
-        assert!(has_text("Cluster field"), "the title line renders");
-        assert!(
-            has_text("Wireframe overlay"),
-            "the authored checkbox labels render"
-        );
-        assert!(has_text("Celestial Cycle"), "the celestial panel renders");
-        assert!(has_text("Corner"), "the inspector table header renders");
-        assert!(
-            has_text("Cell (10, 20, 30)"),
-            "the inspector panel renders while has_pick is set"
-        );
+            let snap = UiInput {
+                mouse: Vec2::new(-1.0, -1.0),
+                clicked: false,
+                down: false,
+                right_down: false,
+                screen: Vec2::new(1920.0, 1080.0),
+                wheel: 0.0,
+                exclusive: false,
+                motion: Default::default(),
+            };
+            let frame = run_ui(&tree, &m, &styles, &snap, &mut UiState::new());
+            assert!(
+                !frame.commands.is_empty(),
+                "the HUD draws its panels + controls"
+            );
+            let has_text = |needle: &str| {
+                frame
+                    .commands
+                    .iter()
+                    .any(|c| matches!(c, HudCommand::Text { text, .. } if text.contains(needle)))
+            };
+            assert!(has_text("Cluster field"), "the title line renders");
+            assert!(
+                has_text("Wireframe overlay"),
+                "the authored checkbox labels render"
+            );
+            assert!(has_text("Celestial Cycle"), "the celestial panel renders");
+            assert!(has_text("Corner"), "the inspector table header renders");
+            assert!(
+                has_text("Cell (10, 20, 30)"),
+                "the inspector panel renders while has_pick is set"
+            );
+        }
     }
 }
 

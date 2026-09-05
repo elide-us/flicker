@@ -10,9 +10,3 @@ entries. "Where's the spec / doc / rule for X?" resolves to an MCP entry, never 
 a parallel implementation.
 **Store durable knowledge only in MCP** (`memory_store` + `memory_link_add` — linked
 entries, not prose). Never write `docs/*.md` or any local `.md` design/memory file.
-
-**Human-facing usage/API docs are the one sanctioned local `.md`:** a `README.md` beside the
-thing it documents (a crate's folder = API doc; a content/tool folder = authoring guide),
-written and refreshed by the `human-docs` agent (`.claude/agents/human-docs.md`, rule
-4E3B9077). A README documents how to USE a thing — never its design, decisions, or
-history; those stay in MCP. No `docs/` directory, ever.

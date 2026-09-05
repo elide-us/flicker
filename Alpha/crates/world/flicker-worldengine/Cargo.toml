@@ -1,15 +1,17 @@
 [package]
 name = "flicker-worldengine"
-version.workspace = true
+version = "0.1.10"
 edition.workspace = true
 license.workspace = true
 
-# The forward-regenerative world-generation ENGINE — the GPU-free facade over the
-# flicker-worldgen physics kernels (the flicker-system analogue for planet gen).
-# Owns the per-world levers, the immutable per-epoch snapshot cache, the
-# forward-regenerative replay, and the `.epoch` capture format. A viewer (or a
-# caller growing the "seven Home worlds") drives it; it knows nothing about GPUs
-# or windows. See docs/flicker-world-epoch-redesign.md.
+# THE PLANET'S HOME — the GPU-free crate a planet is simulated and stored in.
+# Live: `Evolution`, the ten-phase tick driver that grows a world on a `HexMap`
+# (seams → crust → plates → era), and `PlanetEpoch`, the `.epoch` v2 format it
+# captures into and restores from. Frozen alongside them is the v1 toolbox
+# (`WorldEngine`'s nine-epoch batch over the flicker-worldgen kernels,
+# `Simulation`, and their v1 `EpochFile`) — kept engine inventory, no live
+# consumers. Any scene reaches the planet sim by depending on this crate; it
+# knows nothing about GPUs or windows.
 [dependencies]
 flicker-materials.workspace = true
 flicker-worldstate.workspace = true
@@ -22,3 +24,9 @@ thiserror.workspace = true
 # THE shared compression routine (gzip + the gz-at-rest file seam) — `.epoch`
 # load/save converged onto it (was a duplicate direct flate2 usage).
 flicker-core.workspace = true
+# The seam field's roll — the one random source, seeded so a world is
+# reproducible from its seed.
+fastrand.workspace = true
+# The world-defining constants — the planet size model (TILE_MI, diameter) and
+# the standard frequency the map opens at.
+clayengine.workspace = true

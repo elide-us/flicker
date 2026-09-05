@@ -44,6 +44,15 @@ fn roster() -> Vec<SceneEntry> {
                 "A hex map of a world — every tile its own index, and a dial from 23k to 144k tiles. Nothing else, yet.",
                 "Clay 0.1 · Bench · hex map",
             )),
+        SceneEntry::new("csgtest", "CSG Test Scene", "primary", flicker_csgtest::scene)
+            .with_realm(REALM_GAMEMASTER)
+            .with_info(SceneInfo::new(
+                "CSG Test Scene",
+                "Sandbox",
+                "World / Voxels",
+                "The baked wave-field cluster set under a flat one-light stage — fly the 3×3 field and toggle the quad / corner-vector / navmesh debug overlays. The QEF mesher + vector-stretch test bed.",
+                "Clay 0.1 · Test · voxel field",
+            )),
         SceneEntry::new("assetpipeline", "Clayworks Bench", "primary", flicker_assetpipeline::scene)
             .with_realm(REALM_DEVELOPER)
             .with_info(SceneInfo::new(
@@ -141,8 +150,9 @@ fn roster() -> Vec<SceneEntry> {
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "prism_alpha=info,flicker_app=info,flicker_render=warn".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                "prism_alpha=info,flicker_app=info,flicker_render=warn,text_entry=info".into()
+            }),
         )
         .init();
 
@@ -198,9 +208,9 @@ mod tests {
         };
         assert_eq!(
             realm_ids(REALM_GAMEMASTER),
-            ["populous"],
-            "the Populous Bench is the Game Master bench — the realm where the world \
-             itself is authored (God Mode and the Epoch Simulation are retired)"
+            ["populous", "csgtest"],
+            "Populous authors the world; the CSG Test Scene is the voxel mesher / \
+             vector-stretch test bed (God Mode and the Epoch Simulation are retired)"
         );
         assert_eq!(
             realm_ids(REALM_DEVELOPER),

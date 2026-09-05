@@ -69,6 +69,14 @@ impl Sphere {
     }
 }
 
+/// The Goldberg cell count a grid of subdivision `freq` has: `10·freq² + 2`.
+/// The ONE statement of the formula — validation that checks a per-cell array
+/// against a frequency (e.g. a `.epoch` planet file) asks here rather than
+/// repeating the arithmetic.
+pub fn cell_count(freq: u32) -> usize {
+    (10 * freq * freq + 2) as usize
+}
+
 /// Build the global icosahedral hex grid at the given subdivision `freq`
 /// (clamped to ≥ 1). `freq` sets the cell size: `10·freq² + 2` cells, always
 /// exactly 12 of them pentagons.
@@ -194,11 +202,7 @@ mod tests {
     fn cell_count_matches_goldberg_formula() {
         for freq in [1, 3, 6, 10] {
             let s = icosphere(freq);
-            assert_eq!(
-                s.len(),
-                (10 * freq * freq + 2) as usize,
-                "freq {freq} cell count"
-            );
+            assert_eq!(s.len(), cell_count(freq), "freq {freq} cell count");
         }
     }
 

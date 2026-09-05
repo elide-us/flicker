@@ -1,14 +1,48 @@
-//! flicker-worldengine — the **forward-regenerative world-generation engine**.
+//! flicker-worldengine — **the planet's home**: where a world is simulated, and
+//! the format it is stored in.
 //!
-//! The GPU-free facade over the [`flicker_worldgen`] physics kernels: it turns a
-//! bulk-composition recipe + a seed + per-epoch levers into a nine-epoch planet,
-//! evolving it forward one immutable [`EpochSnapshot`] at a time and caching each
-//! so the timeline can scrub and "play god" edits regenerate only forward. It is
-//! the planet-generation analogue of `flicker-system` (the star-system sim);
-//! a viewer drives it and renders the snapshots, and a caller growing the "seven
-//! Home worlds" is just seven [`WorldEngine`]s with different recipes.
+//! # The live planet: [`Evolution`] + [`PlanetEpoch`]
 //!
-//! See `docs/flicker-world-epoch-redesign.md` for the full design.
+//! [`Evolution`] is the ONE live planet driver — the ten-[`Phase`] tick that
+//! grows a world forward on a [`HexMap`]: volcanism injects material, hot rock
+//! spreads, plate boundaries uplift and subduct, plates carry their rock, water
+//! and ice and flora settle over it. It moved here from the Populous Bench
+//! (2026-08-28) so the sim lives in an engine crate any scene can reach; the
+//! bench now only hosts it. Its static context is rolled once and handed in:
+//! [`SeamField`] (the convection cells and plumes), [`CrustField`] (the vents
+//! and upwell zones derived from them) and [`PlateField`].
+//!
+//! [`PlanetEpoch`] is that world's file — `.epoch` v2, the format [`Evolution`]
+//! captures into and restores from. It stores the RECIPE that regenerates the
+//! static context (freq, seed, cells, spots) plus the era's path-dependent
+//! per-hex ledger; everything derivable is re-derived on restore. Tick and
+//! capture are one driver's two halves, not two unbridged ones.
+//!
+//! ```no_run
+//! use flicker_worldengine::{CrustField, Evolution, HexMap, SeamField};
+//! use flicker_worldengine::{DEFAULT_CELLS, DEFAULT_SPOTS};
+//! let map = HexMap::new(96);                       // the standard world
+//! let seams = SeamField::new(&map, DEFAULT_CELLS, DEFAULT_SPOTS, 0xC0FFEE);
+//! let crust = CrustField::derive(&map, &seams);
+//! let mut era = Evolution::new(&map, &seams);
+//! let sea = era.resolve_sea();
+//! era.tick(&map, &seams, &crust, sea);             // one tick of the ten phases
+//! let planet = era.capture(&map, &seams, "my world");  // a .epoch v2, ready to save
+//! # let _ = planet;
+//! ```
+//!
+//! # LEGACY — the frozen v1 toolbox
+//!
+//! [`engine`] ([`WorldEngine`]: the nine-epoch batch over the
+//! [`flicker_worldgen`] chemistry kernels, with the immutable [`EpochSnapshot`]
+//! cache, the forward-regenerative replay and the v1 [`EpochFile`] capture),
+//! [`sim`] ([`Simulation`]: an independent E1/E2 tick over the same kernels),
+//! [`habitability`], [`config`], [`levers`], [`nodes`], [`snapshot`], and the v1
+//! [`EpochFile`] half of [`epochfile`] are FROZEN. They have zero live
+//! consumers — the scenes that drove them (God Mode, the epoch viewer) were
+//! retired in favour of the Populous Bench — and they are kept deliberately as
+//! engine inventory under the standing ruling that merely-unused engine features
+//! are not dead code. Removing them is the owner's later call, not a cleanup.
 //!
 //! ```no_run
 //! use flicker_worldengine::WorldEngine;
@@ -17,25 +51,55 @@
 //! let hydrosphere = engine.snapshot(4);                // computes epochs 1..=4
 //! println!("cells: {}", hydrosphere.len());
 //! engine.set_lever("e3_mountain_uplift", 1.2);         // invalidates epochs 3..=9
-//! let world = engine.capture("my world");              // a .epoch, ready to save
+//! let world = engine.capture("my world");              // a v1 .epoch, ready to save
 //! # let _ = world;
 //! ```
 
+// ── THE LIVE PLANET ────────────────────────────────────────────────────────
+pub mod crust;
+pub mod epochfile;
+pub mod evolve;
+pub mod map;
+pub mod plates;
+pub mod seams;
+
+// ── THE FROZEN v1 TOOLBOX ──────────────────────────────────────────────────
 pub mod config;
 pub mod engine;
-pub mod epochfile;
 pub mod habitability;
 pub mod levers;
 pub mod nodes;
 pub mod sim;
 pub mod snapshot;
 
+// The live driver's surface: the map a planet stands on, the three static
+// fields rolled onto it, and the era that evolves them.
+pub use crust::{CrustField, UPWELL_HEAT};
+pub use evolve::{
+    vein_index_of, vein_kinds, Evolution, Phase, VeinKind, VeinNode, AIR_LAYERS, BOOTSTRAP_TICKS,
+    CHANNEL_LIVE, DECK_ALT, GREEN_COVER, ICE_SOLID, MARINE_HARD_CAP, META_HARD_CAP, PHASES,
+};
+pub use map::{diameter_mi, HexMap, TileId, DEFAULT_FREQ, MAX_FREQ, MIN_FREQ, TILE_MI};
+pub use plates::{PlateField, DEFAULT_PLATES, MAX_PLATES, MIN_PLATES};
+pub use seams::{
+    SeamField, DEFAULT_CELLS, DEFAULT_SPOTS, MAX_CELLS, MAX_SPOTS, MIN_CELLS, MIN_SPOTS,
+};
+
+// The `.epoch` format — v2 (`PlanetEpoch`, what `Evolution` captures into) and
+// the frozen v1 half (`EpochFile`, what `WorldEngine` captured into).
+pub use epochfile::{
+    EpochFile, EpochFileError, PlanetEpoch, PlanetEra, PlanetLedger, PlanetRecipe, VeinBody,
+    EPOCH_FORMAT, EPOCH_VERSION, LEGACY_EPOCH_VERSION,
+};
+
+// LEGACY (v1 toolbox). The freq constants the v1 batch runs at stay at
+// `config::{MIN_FREQ, MAX_FREQ, DEFAULT_FREQ}` — the crate root's are the live
+// map's dial.
 pub use config::{
-    build_epoch1, build_transforms, mutate_epoch, next_seed, seed_chain, WorldConfig, DEFAULT_FREQ,
-    DEFAULT_SEED, MAX_FREQ, MIN_FREQ, WORLD_EPOCHS,
+    build_epoch1, build_transforms, mutate_epoch, next_seed, seed_chain, WorldConfig, DEFAULT_SEED,
+    WORLD_EPOCHS,
 };
 pub use engine::WorldEngine;
-pub use epochfile::{EpochFile, EpochFileError, EPOCH_FORMAT, EPOCH_VERSION};
 pub use habitability::{observe, Axis, Habitability};
 pub use levers::{
     repo_content_dir, AbundanceDef, GeneratorError, GeneratorParams, GeneratorParamsSource,
@@ -44,9 +108,11 @@ pub use levers::{
 pub use sim::{Simulation, World, MY_PER_TICK};
 pub use snapshot::{masses_agree, EpochSnapshot, Provenance};
 
-// Re-export the per-cell state the public API exposes (`World.cells`, `EpochSnapshot.cells`)
-// so viewers can name it without depending on `flicker-worldgen` directly.
-pub use flicker_worldgen::{classify, HexState, Layer, LayerClass, LayerKind, LayerLedger, Phase};
+// LEGACY. Re-export the per-cell state the v1 API exposes (`World.cells`,
+// `EpochSnapshot.cells`) so viewers can name it without depending on
+// `flicker-worldgen` directly. Its `Phase` (the v1 matter phase) stays at
+// `flicker_worldgen::Phase` — the crate root's `Phase` is the live era's.
+pub use flicker_worldgen::{classify, HexState, Layer, LayerClass, LayerKind, LayerLedger};
 // Re-export the material vocabulary type the viewer needs to name for classification reads.
 pub use flicker_materials::Tables;
 // Re-export the thermal helpers (Kelvin ↔ normalized) the viewer reads for the heat view.

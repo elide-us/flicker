@@ -20,9 +20,13 @@
 pub mod camera;
 pub mod view;
 pub mod world;
+pub mod worldmap;
 pub use camera::OrbitCam;
 pub use view::{Arrows, GlobeView, GLOBE_LAYERS, NO_ARROWS};
 pub use world::{GlobeWorld, ShellSpec, DEFAULT_SET};
+pub use worldmap::{
+    HexSphereMap, MapBake, MapContent, MapExtent, MapFrame, MapLook, MapMode, WorldMap,
+};
 
 use flicker::render::{MeshVertex, Vec3};
 
@@ -55,6 +59,13 @@ fn direct(rgb: [f32; 3]) -> u32 {
         0
     };
     0x8000_0000 | emissive | q(rgb[0]) | (q(rgb[1]) << 8) | (q(rgb[2]) << 16)
+}
+
+/// [`direct`] with the emissive bit FORCED: the cell draws full-bright, unlit, at exactly
+/// the stored colour. The flat [`WorldMap`] paints with this — a data map's ink must read
+/// as the data's own value, not as that value under whatever rig the stage authors.
+pub(crate) fn direct_emissive(rgb: [f32; 3]) -> u32 {
+    direct(rgb) | 0x4000_0000
 }
 
 /// Linear blend of two RGB triples — the primitive every data-colour ramp on a

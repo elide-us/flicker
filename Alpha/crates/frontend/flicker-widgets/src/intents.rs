@@ -15,9 +15,9 @@
 //! sits in the ordinary chain (capture ▸ target ▸ bubble). A layer above the
 //! walker (the exclusive `TextEntry` keyboard owner, a modal) that consumes a
 //! signal therefore still starves the intent, structurally — e.g. pocclusters'
-//! chat keeps swallowing `Menu` while it owns the keyboard, and TextEntry's
-//! one-way hand-off stays deliberately OUTSIDE the intent map (its binding map
-//! is empty by design; the `CommandHandler` keeps its capture role).
+//! chat keeps swallowing `Menu` while it owns the keyboard. Text entry itself is
+//! walker-owned (`EnterText` / `SubmitText` / `CancelText`, Aaron 2026-09-03), so
+//! a screen names those only to override the walker's default meaning.
 //!
 //! # The prop convention
 //!

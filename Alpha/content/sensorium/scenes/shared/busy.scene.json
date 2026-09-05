@@ -1,0 +1,63 @@
+{
+  "_comment": "SHARED busy / progress modal (scenes/shared/ — Aaron 2026-08-14 ruling 2A3592D0): the overlay a long operation (a bake, a scan, an import) puts up while it runs. The confirm.scene.json shape with a `resource_gauge` as the bar, exactly as Loading.scene.json draws its load bar. THE PROGRESS IS NOT PUBLISHED BY THE HOST SCENE: only the TOP scene updates, so a host frozen under this overlay could not feed it per frame — the fraction rides a SHARED handle (`ModalProgress`) the host hands over in its `ModalParams` and whatever is doing the work writes, and `SharedModal` reads it into `modal_progress` (0..1) every frame it is up. The same handle's done flag closes the modal. Cancel is the ONLY control and it is gated on `modal_cancellable`: an operation with nothing to abort shows a bar and no way to lie about stopping it. Esc / pad-B fold to `modal_cancel` via the root `on_cancel`, which the HOST always injects — whether that exit may be TAKEN is the popup_panel's own `dismissable` toggle, driven from `scripts/shared/busy.lua` (ruling DA0E1B57). NO `behaviour` key (the manifest skips scenes/shared/); this is the one param-driven tree WITH a pair script, because it is the one with a runtime behaviour of its own; chrome styles ride Main.scene.json's carrier through `main_scene_styles()`.",
+  "tree": {
+    "component": "surface",
+    "anchor": "top_left",
+    "width_frac": 1.0,
+    "height_frac": 1.0,
+    "on_cancel": "modal_cancel",
+    "children": [
+      {
+        "component": "cell",
+        "anchor": "top_left",
+        "style": "screens.confirm",
+        "width_frac": 1.0,
+        "height_frac": 1.0,
+        "layer": 0
+      },
+      {
+        "_comment": "THE DISMISSABLE TOGGLE (ruling DA0E1B57): `dismissable_bind` names the Model key `scripts/shared/busy.lua`'s arrange() publishes — `modal_cancellable or modal_done`. While it reads false the walker SWALLOWS Esc / pad-B for this screen, so a running operation with nothing to abort cannot be walked away from; it goes true the moment the caller offered a cancel or the work finished. NEVER author `dismissable: false` statically here (the registry gate forbids it): a static false is a trap the moment the Lua stops running, and the default is TRUE for exactly that reason.",
+        "component": "popup_panel",
+        "id": "popup",
+        "anchor": "center",
+        "layer": 1,
+        "divider": true,
+        "dismissable_bind": "modal_dismissable",
+        "title_bind": "modal_title",
+        "title_size": 38,
+        "children": [
+          {
+            "component": "text",
+            "id": "body",
+            "text_bind": "modal_body",
+            "size": 32,
+            "align": "center",
+            "wrap": true,
+            "text_size": 12,
+            "font": "label",
+            "color": "$dim"
+          },
+          {
+            "component": "resource_gauge",
+            "id": "modal_progress",
+            "bind": "modal_progress",
+            "tone": "mana",
+            "size": 10
+          },
+          {
+            "component": "button",
+            "id": "modal_cancel",
+            "action": "modal_cancel",
+            "visible_bind": "modal_cancellable",
+            "label_bind": "modal_cancel_label",
+            "label_size": 15,
+            "size": 48,
+            "variant": "danger",
+            "tab_group": "modal",
+            "nav_ordinal": 0
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,16 +1,18 @@
 [package]
 name = "flicker-assetpipeline"
-version = "0.1.9"
+version = "0.1.10"
 edition.workspace = true
 license.workspace = true
 publish = false
 
-# The Asset Pipeline editor — the interactive HOST for `flicker-content`'s stages
+# The Clayworks bench — the interactive HOST for `flicker-content`'s stages
 # (scan → analyze → classify → conform → attach → bake). A library-only PACKAGE: the
 # `Scene` is hosted by the unified `prism-alpha` launcher, no standalone binary.
-# Exposes `scene()`. Design of record: DesignSync "Asset Processing Pipeline UI"
-# (project 2fc44682-9c08-41a6-bb9f-c415471b15e9, "Asset Pipeline.dc.html");
-# spec node A3A3259C.
+# Exposes `scene()`. Built in the canonical scene shape (Populous is the reference):
+# the tree is `assetpipeline.scene.json`, composed ONLY of the standard components as
+# authored in the shared modal scenes + the Component Catalog; `assetpipeline.lua`
+# lights the selected step. Spec node A3A3259C. (The older "Asset Processing Pipeline
+# UI" DesignSync predates the standardised UI system and is not a reference.)
 [lib]
 name = "flicker_assetpipeline"
 path = "src/lib.rs"
@@ -26,6 +28,10 @@ flicker-content.workspace = true
 flicker-skeletal.workspace = true
 # Rig-view overlay geometry (joint segments / bone axes) + ray-vs-segment picking.
 flicker-mechanics.workspace = true
+# The rig view: the shared surface filler each of the four view panels seats.
+flicker-rigview.workspace = true
+# `Arrows` — the line-batch currency the rig view draws (shared with the globe).
+flicker-globe = { version = "0.1.10", path = "../../frontend/flicker-globe" }
 # The shared input event bus + core resolver (spec section 9): this scene dispatches
 # Esc->pause and the HUD pointer-consume through the router. Reused read-only — the
 # bus is built and proven elsewhere; this crate only consumes it.
