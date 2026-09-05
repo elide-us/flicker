@@ -851,8 +851,6 @@ mod tests {
     /// `cargo test -- gates::` runs only these (one OS in CI). A gate names the transition
     /// it enforces and is deleted when that transition closes.
     mod gates {
-        use super::*;
-
         /// THE ABSORBED CODE IS GONE: the private press table, the pick tolerance, the arrow length
         /// and the handle composer moved into `flicker_rigview::Gadget` (7811D68B), and a copy left
         /// behind here would be a second source of truth for what a press means and how big a handle

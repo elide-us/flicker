@@ -3206,8 +3206,6 @@ mod tests {
     /// `cargo test -- gates::` runs only these (one OS in CI). A gate names the transition
     /// it enforces and is deleted when that transition closes.
     mod gates {
-        use super::*;
-
         /// **The extraction gate.** The canvas and the timeline MOVED into
         /// `flicker-canvas`; they were not copied. If a geometry function, a card
         /// constant or a hand-rolled line quad reappears in this crate, the two copies

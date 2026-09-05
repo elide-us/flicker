@@ -210,8 +210,6 @@ mod tests {
     /// `cargo test -- gates::` runs only these (one OS in CI). A gate names the transition
     /// it enforces and is deleted when that transition closes.
     mod gates {
-        use super::*;
-
         /// THE NO-DUPLICATE GATE: the browsing model lives in the ENGINE crate now
         /// ([`flicker_content::browse`]) and this bench re-exports it. A private copy
         /// growing back here is the drift rule `DDD070C7` exists to stop, so the

@@ -531,8 +531,6 @@ mod text_route_tests {
     /// `cargo test -- gates::` runs only these (one OS in CI). A gate names the transition
     /// it enforces and is deleted when that transition closes.
     mod gates {
-        use super::*;
-
         /// GREP GATE: the keyboard's text is read by the input system alone. No scene, widget
         /// or shell crate touches the snapshot's text channel — the route delivers it.
         #[test]

@@ -1241,8 +1241,6 @@ mod tests {
     /// `cargo test -- gates::` runs only these (one OS in CI). A gate names the transition
     /// it enforces and is deleted when that transition closes.
     mod gates {
-        use super::*;
-
         /// THE OS DIALOG IS THE PICKER, and it is reached through ONE seam. `rfd` may be
         /// named only by `Document::pick_folder` in `services.rs` (and by the manifest that
         /// pulls it in): a second `FileDialog` anywhere in the bench would be a second door
