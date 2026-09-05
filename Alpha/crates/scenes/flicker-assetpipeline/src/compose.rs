@@ -1,8 +1,9 @@
 //! **What the rig panels draw** — composed from the document each frame.
 //!
 //! Line batches are pure data → data: the ground grid and the collision volumes
-//! (depth-tested), the skeleton, the selected joint's ball and the gizmo handles
-//! (overlay, drawn over the body), the attach-point markers. Draw items come from the
+//! (depth-tested), the skeleton, the selected joint's ball and the attach-point markers
+//! (overlay, drawn over the body). The gizmo's HANDLES are not here: they depend on the
+//! panel's projection, so the scene draws them per panel from the gadget. Draw items come from the
 //! bench's mesh caches ([`ViewMeshes`]) as handles the bench owns. The
 //! [`flicker_rigview::RigView`] panels draw exactly these, and the behaviour decides
 //! what a click on them means (`gizmo`).
@@ -10,8 +11,8 @@
 use flicker::render::{grid_segments_xy, Mat4, MeshDrawOptions, Renderer, Vec3};
 use flicker_content::AssetClass;
 use flicker_globe::Arrows;
-use flicker_mechanics::{debug, gizmo_segments, GizmoMode, Shape};
-use flicker_rigview::Draw;
+use flicker_mechanics::{debug, Shape};
+use flicker_rigview::{Draw, GadgetStyle};
 use flicker_skeletal::pose::{global_transforms, sample_local_poses};
 
 use crate::meshes::{BakePreview, BasePreview, ViewMeshes};
@@ -38,8 +39,6 @@ pub(crate) const SUBJECT_TINT: [f32; 4] = [0.80, 0.79, 0.77, 1.0];
 /// The mounted piece: warm, so it reads against the body.
 pub(crate) const PIECE_TINT: [f32; 4] = [1.0, 0.74, 0.40, 1.0];
 
-/// Gizmo arrow length as a fraction of the subject's radius.
-pub(crate) const GIZMO_ARROW_FRAC: f32 = 0.18;
 /// Joint-ball sizing: a fraction of the bone's length, clamped to a fraction of the
 /// subject's radius.
 const BALL_LEN_FRAC: f32 = 0.14;
@@ -129,6 +128,57 @@ impl Composed {
     }
 }
 
+/// The GADGET's colours, every one a `theme.tokens` entry out of the loaded styles — the gadget
+/// deliberately has no `Default`, so this is where the bench names each of them (rule 790872EE:
+/// colours come from the ONE palette, never an rgba literal in scene code).
+///
+/// Idle keeps the axes readable at rest as the three signal colours (X red, Y green, Z blue — the
+/// convention the mechanics geometry itself tags with); the Aim → Locked → Modify walk runs through
+/// the sapphire family the whole UI uses for "the thing under your pointer" and out to the editor's
+/// selection amber while deltas flow; a refused axis wears the danger tone, drawn dead.
+pub(crate) const GADGET_TOKENS: [&str; 7] = [
+    "sig_red",
+    "sig_green",
+    "sig_blue",
+    "rune_glow",
+    "sapphire",
+    "stam_hi",
+    "danger_base",
+];
+
+/// The shipped palette, for the gates and the tests that assert against real colours.
+#[cfg(test)]
+pub(crate) fn theme() -> serde_json::Value {
+    serde_json::from_str(include_str!(
+        "../../../../content/sensorium/resources/ui_theme.json"
+    ))
+    .expect("the shipped theme parses")
+}
+
+pub(crate) fn gadget_style(styles: &serde_json::Value) -> GadgetStyle {
+    let c = GADGET_TOKENS.map(|name| token(styles, name));
+    GadgetStyle {
+        idle: [c[0], c[1], c[2]],
+        aimed: c[3],
+        locked: c[4],
+        modifying: c[5],
+        refused: c[6],
+    }
+}
+
+/// One `theme.tokens` colour out of the loaded styles. A name that is not in the palette falls back
+/// to full white — a colour nothing else in the bench draws, so a typo is loud on screen rather
+/// than invisible; `every_gadget_colour_is_a_theme_token` is the gate that keeps it from ever shipping.
+fn token(styles: &serde_json::Value, name: &str) -> [f32; 4] {
+    let mut out = [1.0; 4];
+    if let Some(a) = styles["theme"]["tokens"][name].as_array() {
+        for (i, c) in a.iter().take(4).enumerate() {
+            out[i] = c.as_f64().unwrap_or(1.0) as f32;
+        }
+    }
+    out
+}
+
 /// The floor grid under `f`, centred on the subject.
 fn ground(f: &Framing) -> ([f32; 4], Vec<(Vec3, Vec3)>) {
     let mut segs = grid_segments_xy(f.radius * 0.25, f.radius * 2.5, f.floor);
@@ -142,16 +192,11 @@ fn ground(f: &Framing) -> ([f32; 4], Vec<(Vec3, Vec3)>) {
 }
 
 /// The skeleton's overlay batches in world space: bone diamonds, joint balls, and the
-/// selected joint's larger amber ball (its centre and radius returned for the handles).
-fn skeleton(
-    out: &mut Arrows,
-    parents: &[i32],
-    globals: &[Mat4],
-    radius: f32,
-    sel: Option<usize>,
-) -> Option<Vec3> {
+/// selected joint's larger amber ball. (The gizmo's HANDLES are no longer composed here —
+/// they are per-panel now, drawn straight from `Gadget::handle_lines`.)
+fn skeleton(out: &mut Arrows, parents: &[i32], globals: &[Mat4], radius: f32, sel: Option<usize>) {
     if globals.is_empty() {
-        return None;
+        return;
     }
     let min_r = (radius * BALL_MIN_FRAC).max(0.2);
     let max_r = (radius * BALL_MAX_FRAC).max(min_r);
@@ -171,26 +216,14 @@ fn skeleton(
         }));
     }
     out.push((JOINT, balls));
-    let (s, g) = sel.and_then(|s| globals.get(s).map(|g| (s, g)))?;
-    let c = g.w_axis.truncate();
-    out.push((
-        GIZMO_SEL,
-        debug::wireframe(&Shape::Sphere {
-            center: c,
-            radius: radii.get(s).copied().unwrap_or(0.5) * 1.4,
-        }),
-    ));
-    Some(c)
-}
-
-/// The gizmo's handles about `centre`, one batch per axis colour.
-fn handles(out: &mut Arrows, centre: Vec3, mode: GizmoMode, radius: f32) {
-    let size = (radius * GIZMO_ARROW_FRAC).max(1.0);
-    for (a, b, c) in gizmo_segments(centre, glam::Mat3::IDENTITY, mode, size, None) {
-        match out.iter_mut().find(|(k, _)| *k == c) {
-            Some((_, v)) => v.push((a, b)),
-            None => out.push((c, vec![(a, b)])),
-        }
+    if let Some((s, g)) = sel.and_then(|s| globals.get(s).map(|g| (s, g))) {
+        out.push((
+            GIZMO_SEL,
+            debug::wireframe(&Shape::Sphere {
+                center: g.w_axis.truncate(),
+                radius: radii.get(s).copied().unwrap_or(0.5) * 1.4,
+            }),
+        ));
     }
 }
 
@@ -232,13 +265,12 @@ fn is_prop(doc: &Document) -> bool {
 
 /// The four rig panels' line batches for `step`. A prop on the Mount step is framed on the
 /// fitting body (`base`) with the body's skeleton drawn; everything else is framed on the
-/// parsed subject with its skeleton, the gizmo on the Rig step, the markers on Attach and
-/// Review.
+/// parsed subject with its skeleton and the markers on Attach and Review. (The gizmo's
+/// handles are added per PANEL by the scene — they depend on the projection.)
 pub(crate) fn rig_lines(
     doc: &Document,
     show: Show,
     step: Step,
-    gizmo: GizmoMode,
     base: Option<&BasePreview>,
 ) -> Composed {
     if let (true, Some(b)) = (is_prop(doc), base) {
@@ -267,9 +299,7 @@ pub(crate) fn rig_lines(
     }
     if show.skeleton {
         let sel = (step == Step::Rig).then(|| doc.bone_sel()).flatten();
-        if let Some(c) = skeleton(&mut out.overlay, &p.parents, &p.globals, p.radius, sel) {
-            handles(&mut out.overlay, c, gizmo, p.radius);
-        }
+        skeleton(&mut out.overlay, &p.parents, &p.globals, p.radius, sel);
     }
     if matches!(step, Step::Attach | Step::Review) {
         markers(&mut out.overlay, doc, p.radius);
@@ -367,4 +397,40 @@ pub(crate) fn clip_lines(cp: &ClipPreview, tick: f32) -> [Composed; 2] {
         panel(&cp.rm, cp.rm_center, cp.rm_radius),
         panel(&cp.ip, cp.ip_center, cp.radius),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// EVERY GADGET COLOUR IS A PALETTE TOKEN (rule 790872EE). `GadgetStyle` has no `Default`
+    /// precisely so the consumer must name each one; this is the gate that the seven names it
+    /// gives are real `theme.tokens` entries and actually resolve — a typo would otherwise ship
+    /// as a white handle nobody notices until the bench is open.
+    #[test]
+    fn every_gadget_colour_is_a_theme_token() {
+        let theme = theme();
+        for name in GADGET_TOKENS {
+            assert!(
+                theme["theme"]["tokens"][name].is_array(),
+                "the gadget names `{name}`, which is not in theme.tokens"
+            );
+        }
+        // And the resolver reaches them: nothing falls back to the loud white.
+        let style = gadget_style(&theme);
+        for c in style.idle.iter().chain([
+            &style.aimed,
+            &style.locked,
+            &style.modifying,
+            &style.refused,
+        ]) {
+            assert_ne!(
+                *c, [1.0; 4],
+                "a gadget colour fell back instead of resolving"
+            );
+        }
+        // The three axes stay distinguishable at rest — that is the whole point of three arrows.
+        assert_ne!(style.idle[0], style.idle[1]);
+        assert_ne!(style.idle[1], style.idle[2]);
+    }
 }

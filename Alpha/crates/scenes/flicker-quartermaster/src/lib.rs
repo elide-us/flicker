@@ -34,7 +34,16 @@ use flicker_content::{BatchFileOp, FileOp};
 
 /// The node id of the inline rename field — also its focus id.
 const RENAME_ID: &str = "rename_field";
-const APPLY_REST_ID: &str = "conflict_apply_rest";
+
+/// The three answers the SHARED `conflict` modal carries back — the bench's OWN action
+/// names, handed to the modal as its three options and returned verbatim through
+/// `Scene::modal_closed`. They read here exactly as they read when the dialog was an
+/// inline subtree; what changed is that a pad can reach them (QoL 49307EC7 #4).
+const CONFLICT_SKIP: &str = "conflict_skip";
+const CONFLICT_KEEP_BOTH: &str = "conflict_keep_both";
+const CONFLICT_REPLACE: &str = "conflict_replace";
+/// What the modal's Cancel affordance (its button, Esc and pad-B alike) returns.
+const CONFLICT_CANCEL: &str = "conflict_cancel";
 
 /// How many toast rows `quartermaster.scene.json` authors (`toast_0..`; the walker
 /// has no repeater), so this is the ONE place the capacity is stated on the Rust
@@ -162,7 +171,7 @@ use flicker_input_core::{
     AbstractControls, ActionSignal, EventKind, GamepadConfig, InputContext, InputMap, InputState,
 };
 use flicker_input_router::{Flow, InputEvent, InputHandler, RouteCtx, Router};
-use flicker_shell::{PauseScene, Theme};
+use flicker_shell::{ModalOption, ModalParams, PauseScene, SharedModal, Theme};
 
 use fs_model::{QueueItem, Roots, Row, SortKey, TreeRow};
 
@@ -423,7 +432,7 @@ impl Quartermaster {
             .and_then(|p| self.rows.iter().position(|r| r.path == p))
             .unwrap_or(0)
             .min(self.rows.len().saturating_sub(1));
-        self.tree = fs_model::tree_rows(&self.roots, &self.expanded);
+        self.tree = fs_model::tree_rows(&self.roots.list(), &self.expanded);
         self.tree_sel = self.tree_sel.min(self.tree.len().saturating_sub(1));
         self.refresh_queue();
     }
@@ -484,7 +493,7 @@ impl Quartermaster {
                     if row.is_dir {
                         let dir = row.path.clone();
                         self.open_dir(dir);
-                        self.tree = fs_model::tree_rows(&self.roots, &self.expanded);
+                        self.tree = fs_model::tree_rows(&self.roots.list(), &self.expanded);
                     }
                 }
             }
@@ -497,7 +506,7 @@ impl Quartermaster {
                         self.expanded.push(path.clone());
                     }
                     self.open_dir(path);
-                    self.tree = fs_model::tree_rows(&self.roots, &self.expanded);
+                    self.tree = fs_model::tree_rows(&self.roots.list(), &self.expanded);
                 }
             }
         }
@@ -510,7 +519,7 @@ impl Quartermaster {
                 if let Some(t) = self.tree.get(self.tree_sel) {
                     let path = t.path.clone();
                     self.expanded.retain(|e| *e != path);
-                    self.tree = fs_model::tree_rows(&self.roots, &self.expanded);
+                    self.tree = fs_model::tree_rows(&self.roots.list(), &self.expanded);
                     self.tree_sel = self.tree_sel.min(self.tree.len().saturating_sub(1));
                 }
             }
@@ -520,7 +529,7 @@ impl Quartermaster {
 
     /// Climb to the parent folder, never above a root.
     pub fn up(&mut self) {
-        if let Some(parent) = fs_model::parent_within_roots(&self.roots, &self.cwd) {
+        if let Some(parent) = fs_model::parent_within_roots(&self.roots.list(), &self.cwd) {
             let leaving = self.cwd.clone();
             self.open_dir(parent);
             // Land the cursor on the folder we came out of — the least
@@ -710,11 +719,42 @@ impl Quartermaster {
         self.prompt.as_ref().map_or(0, |p| p.pending.len())
     }
 
-    /// Toggle "apply to the remaining N".
-    pub fn toggle_apply_rest(&mut self) {
+    /// Set "apply to the remaining N" from the answer the modal came back with.
+    ///
+    /// The checkbox lives in the shared `conflict` tree now, so the bench does not
+    /// toggle it — it receives its state as the close PAYLOAD ("1" / "0") and folds it
+    /// in just before resolving. That is what keeps a multi-collision batch ONE undo
+    /// entry (F5E9D671): the flag reaches `resolve_conflict` with the answer it belongs to.
+    pub fn set_apply_rest(&mut self, on: bool) {
         if let Some(p) = self.prompt.as_mut() {
-            p.apply_rest = !p.apply_rest;
+            p.apply_rest = on;
         }
+    }
+
+    /// What the shared `conflict` modal should say about the collision on screen —
+    /// `None` when nothing is being asked. Only NAMES and MEASURED facts cross; every
+    /// caption on that dialog is a `$token` the shared tree authors.
+    pub fn conflict_params(&self) -> Option<flicker_shell::ModalConflict> {
+        let c = self.prompt_conflict()?;
+        Some(flicker_shell::ModalConflict {
+            name: c
+                .dst
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default(),
+            folder: c
+                .dst
+                .parent()
+                .map(|p| fs_model::breadcrumb(&self.roots.list(), p).join(" / "))
+                .unwrap_or_default(),
+            existing: facts_line(&c.existing),
+            incoming: facts_line(&c.incoming),
+            // "Apply to the remaining N" is only meaningful with more than one
+            // outstanding, so the count gates the checkbox rather than offering a
+            // choice that cannot matter.
+            remaining: self.prompt_remaining().saturating_sub(1),
+            apply_rest: self.prompt.as_ref().is_some_and(|p| p.apply_rest),
+        })
     }
 
     /// Answer the collision on screen — and, when "apply to the remaining" is
@@ -1278,38 +1318,11 @@ impl Quartermaster {
                 m.set(format!("rv_warn_{i}"), *w);
             }
         }
-        // The collision prompt. Only the NAMES and the measured facts are data;
-        // every caption on the dialog is a `$token` in the tree.
+        // The collision dialog publishes NOTHING here any more: it is the SHARED
+        // `conflict` modal, a scene of its own that `update` pushes and that carries its
+        // own params (`conflict_params`). What the bench used to publish into an inline
+        // subtree it now hands the modal once, at open.
         m.set("has_menu", self.menu.is_some());
-        m.set("has_prompt", self.prompt.is_some());
-        if let Some(c) = self.prompt_conflict() {
-            m.set(
-                "conflict_name",
-                c.dst
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_default(),
-            );
-            m.set(
-                "conflict_where",
-                c.dst
-                    .parent()
-                    .map(|p| fs_model::breadcrumb(&self.roots, p).join(" / "))
-                    .unwrap_or_default(),
-            );
-            m.set("conflict_existing", facts_line(&c.existing));
-            m.set("conflict_incoming", facts_line(&c.incoming));
-            // "Apply to the remaining N" is only meaningful with more than one
-            // outstanding, so the checkbox is gated on it rather than offering a
-            // choice that cannot matter.
-            let rest = self.prompt_remaining().saturating_sub(1);
-            m.set("conflict_multi", rest > 0);
-            m.set("conflict_rest", rest.to_string());
-            m.set(
-                APPLY_REST_ID,
-                self.prompt.as_ref().is_some_and(|p| p.apply_rest),
-            );
-        }
         // The toast bank. The proto spells out TOAST_SLOTS rows and the live
         // toasts are paged into them, newest last — the sanctioned dynamic-rows
         // pattern, since the walker has no repeater.
@@ -1324,7 +1337,7 @@ impl Quartermaster {
         }
         m.set(
             "crumbs",
-            fs_model::breadcrumb(&self.roots, &self.cwd).join(" / "),
+            fs_model::breadcrumb(&self.roots.list(), &self.cwd).join(" / "),
         );
         m.set("count", self.rows.len().to_string());
         // Clipboard / error state for the status line. All display copy is a
@@ -1391,26 +1404,11 @@ impl Quartermaster {
     /// Fold this frame's walker results into bench state. ONE dispatcher: a pad
     /// chord, a key and a click all arrive here as the same result name.
     pub fn apply_results(&mut self, results: &ValueMap) {
-        // A collision prompt is MODAL: it owns every intent while it is up, so a
-        // stray nav or chord cannot move the cursor out from under the question
-        // or mutate the very item being asked about. Checked before the rename
-        // guard because a prompt can only be raised from a settled state.
-        if self.is_prompting() {
-            use flicker_content::Resolution;
-            if results.is_on(APPLY_REST_ID) {
-                self.toggle_apply_rest();
-            }
-            if results.is_on("conflict_replace") {
-                self.resolve_conflict(Resolution::Replace);
-            } else if results.is_on("conflict_keep_both") {
-                self.resolve_conflict(Resolution::KeepBoth);
-            } else if results.is_on("conflict_skip") {
-                self.resolve_conflict(Resolution::Skip);
-            } else if results.is_on("cancel") {
-                self.cancel_conflict();
-            }
-            return;
-        }
+        // A collision prompt used to be swallowed here — an inline subtree that owned
+        // every intent while it was up. It is a SHARED MODAL now: a scene of its own,
+        // pushed over this one, so the KERNEL freezes the bench (only the top scene is
+        // updated) and no intent reaches this dispatcher at all while the question
+        // stands. Its answer arrives through `modal_closed`, not through this drain.
         // The context menu is modal too, but LOWER precedence than the prompt: a
         // pick that raises a collision closes the menu and opens the question.
         // A pick fires the verb's own result name, so the arms below run it — the
@@ -1595,6 +1593,27 @@ impl Quartermaster {
 }
 
 impl Scene for Quartermaster {
+    /// A shared modal closed over this bench. Today that is the `conflict` dialog: its
+    /// result is one of the bench's OWN three verbs (or its Cancel), and its payload is
+    /// the "apply to the remaining N" checkbox as `"1"` / `"0"`. Folding the flag in
+    /// BEFORE resolving is what keeps a multi-collision batch a single undo entry — the
+    /// answer and the batch flag are one decision (F5E9D671).
+    fn modal_closed(&mut self, modal: &str, result: &str, payload: Option<&str>) {
+        if modal != flicker_shell::MODAL_CONFLICT {
+            return;
+        }
+        use flicker_content::Resolution;
+        self.set_apply_rest(payload == Some("1"));
+        match result {
+            CONFLICT_REPLACE => self.resolve_conflict(Resolution::Replace),
+            CONFLICT_KEEP_BOTH => self.resolve_conflict(Resolution::KeepBoth),
+            CONFLICT_SKIP => self.resolve_conflict(Resolution::Skip),
+            // Backing out of the QUESTION is not backing out of the cut: the clipboard
+            // stays loaded, exactly as the inline dialog's Cancel behaved.
+            _ => self.cancel_conflict(),
+        }
+    }
+
     /// The rename field owns the keyboard while its session is open: the pump then
     /// resolves only the text exits and every other key reaches the field as text.
     fn input_context(&self) -> Option<InputContext> {
@@ -1683,7 +1702,8 @@ impl Scene for Quartermaster {
         // Not `with_nav`: the bench routes the nav family to its own base below. The
         // walker still owns the rename field's text-entry session, so it reads the
         // retained tree for the field.
-        let mut walker = WalkerHandler::hud(&mut self.ui_state, over_hud).with_intents(&self.ui_intents);
+        let mut walker =
+            WalkerHandler::hud(&mut self.ui_state, over_hud).with_intents(&self.ui_intents);
         if let Some(tree) = self.authored.as_ref() {
             walker = walker.with_text_fields(tree, &model);
         }
@@ -1719,6 +1739,36 @@ impl Scene for Quartermaster {
             self.set_rename_draft(t);
         }
         self.apply_results(&results);
+
+        // THE COLLISION QUESTION: the SHARED `conflict` modal, opened by id with the
+        // bench's own three verbs as its options and pushed exactly the way the pause
+        // overlay is. A queue of collisions re-opens it once per answer until the queue
+        // empties, so a 40-item paste with three collisions asks three questions and
+        // still lands as ONE undo entry. Its answers come back through `modal_closed`.
+        if let Some(conflict) = self.conflict_params() {
+            if let Some(theme) = self.ui_theme {
+                return Transition::Push(Box::new(SharedModal::open(
+                    theme,
+                    flicker_shell::MODAL_CONFLICT,
+                    ModalParams::new()
+                        .title("$modal_conflict_title")
+                        .option(ModalOption::secondary(
+                            "$modal_conflict_lbl_skip",
+                            CONFLICT_SKIP,
+                        ))
+                        .option(ModalOption::secondary(
+                            "$modal_conflict_lbl_keep_both",
+                            CONFLICT_KEEP_BOTH,
+                        ))
+                        .option(ModalOption::primary(
+                            "$modal_conflict_lbl_replace",
+                            CONFLICT_REPLACE,
+                        ))
+                        .cancellable(ModalOption::secondary("$modal_lbl_cancel", CONFLICT_CANCEL))
+                        .conflict(conflict),
+                )));
+            }
+        }
 
         if results.is_on("pause_open") {
             if let Some(theme) = self.ui_theme {
@@ -2552,7 +2602,7 @@ mod tests {
 
         qm.promote_selected();
         assert!(qm.is_prompting(), "the occupant raises the question");
-        qm.toggle_apply_rest();
+        qm.set_apply_rest(true);
         qm.resolve_conflict(flicker_content::Resolution::Replace);
         assert!(!qm.is_prompting());
         assert!(
@@ -2585,7 +2635,7 @@ mod tests {
         qm.refresh_queue();
         qm.promote_selected();
         assert!(qm.is_prompting());
-        qm.toggle_apply_rest();
+        qm.set_apply_rest(true);
         qm.resolve_conflict(flicker_content::Resolution::Skip);
         assert_eq!(qm.last_error_token(), Some("$qm_err_promote_partial"));
         assert!(
@@ -2830,9 +2880,16 @@ mod tests {
         std::fs::write(&broken, b"not a planet").unwrap();
         stage_world(&d, "planet_good.epoch.gz");
         qm.refresh_queue();
-        assert_eq!(qm.queue.len(), 2, "two single-file items in the worlds tier");
+        assert_eq!(
+            qm.queue.len(),
+            2,
+            "two single-file items in the worlds tier"
+        );
 
-        assert_eq!(qm.selected_queue_item().unwrap().name, "planet_broken.epoch");
+        assert_eq!(
+            qm.selected_queue_item().unwrap().name,
+            "planet_broken.epoch"
+        );
         assert!(
             qm.facts_warning_tokens()
                 .contains(&"$qm_warn_epoch_invalid"),
@@ -3009,7 +3066,7 @@ mod tests {
         let (src, dst) = staged_collision(&mut qm);
         assert!(qm.is_prompting());
 
-        qm.apply_results(&on("conflict_replace"));
+        answer(&mut qm, "conflict_replace");
         assert!(!qm.is_prompting(), "answering closes the prompt");
         assert!(!flicker_content::occupied(&src), "the source moved");
         assert_eq!(
@@ -3036,7 +3093,7 @@ mod tests {
         let (mut qm, d) = scratch("keepboth");
         let (src, dst) = staged_collision(&mut qm);
 
-        qm.apply_results(&on("conflict_keep_both"));
+        answer(&mut qm, "conflict_keep_both");
         assert!(!qm.is_prompting());
         assert_eq!(
             flicker_content::package::read_text(&dst).unwrap(),
@@ -3060,7 +3117,7 @@ mod tests {
         let (mut qm, d) = scratch("skip");
         let (src, dst) = staged_collision(&mut qm);
 
-        qm.apply_results(&on("conflict_skip"));
+        answer(&mut qm, "conflict_skip");
         assert!(!qm.is_prompting(), "the prompt closes");
         assert_eq!(
             flicker_content::package::read_text(&dst).unwrap(),
@@ -3080,7 +3137,7 @@ mod tests {
         let (mut qm, d) = scratch("promptcancel");
         let (src, _) = staged_collision(&mut qm);
 
-        qm.apply_results(&on("cancel"));
+        answer(&mut qm, CONFLICT_CANCEL);
         assert!(!qm.is_prompting());
         assert!(flicker_content::occupied(&src), "nothing moved");
         assert!(!qm.can_undo());
@@ -3088,43 +3145,90 @@ mod tests {
         let _ = std::fs::remove_dir_all(d);
     }
 
-    /// The prompt is MODAL: while it is up nothing else may act, or a stray nav
-    /// or chord would move the cursor out from under the question — or mutate
-    /// the very item being asked about.
+    /// THE COLLISION QUESTION IS THE SHARED MODAL — and its answer arrives on ONE
+    /// channel. The dialog is a scene of its own now (`scenes/shared/conflict`), pushed
+    /// over the bench, so the KERNEL freezes this scene while the question stands and
+    /// the old "swallow every intent" branch in the dispatcher is gone with the inline
+    /// subtree it protected. What must hold is the reverse: the three verbs mean nothing
+    /// in the ordinary results drain, and only `modal_closed` resolves the collision.
     #[test]
-    fn the_prompt_swallows_every_other_intent() {
+    fn the_collision_is_answered_only_through_the_modal_hook() {
         let (mut qm, d) = scratch("promptmodal");
         let (src, _) = staged_collision(&mut qm);
-        let before = qm.selected().map(|r| r.path.clone());
+        assert!(qm.is_prompting(), "the collision is outstanding");
 
-        for verb in [
-            "nav_down",
-            "nav_up",
-            "cut",
-            "paste",
-            "create_folder",
-            "undo",
-            "redo",
-            "rename",
-        ] {
+        // The bench ARMS the modal from its params rather than drawing a dialog: what
+        // `update` pushes is derived here, so the question always says something.
+        let params = qm.conflict_params().expect("the modal's params");
+        assert!(!params.name.is_empty(), "the colliding NAME is data");
+        assert!(!params.existing.is_empty() && !params.incoming.is_empty());
+        assert_eq!(
+            params.remaining, 0,
+            "one collision — no batch answer offered"
+        );
+
+        // Firing the verbs through the ordinary drain resolves NOTHING: they are the
+        // modal's options, returned by the kernel, not intents this bench listens for.
+        for verb in [CONFLICT_REPLACE, CONFLICT_KEEP_BOTH, CONFLICT_SKIP] {
             qm.apply_results(&on(verb));
         }
         assert!(
             qm.is_prompting(),
-            "still prompting after every other intent"
-        );
-        assert!(!qm.is_renaming(), "rename never opened");
-        assert_eq!(
-            qm.selected().map(|r| r.path.clone()),
-            before,
-            "the cursor did not move"
+            "the collision is still outstanding — the answer channel is `modal_closed`"
         );
         assert!(!qm.can_undo(), "nothing mutated");
         assert!(
             flicker_content::occupied(&src),
             "the item in question is untouched"
         );
+
+        // …and a modal that is not the conflict dialog is not an answer either.
+        qm.modal_closed("choice_dialog", CONFLICT_REPLACE, Some("1"));
+        assert!(
+            qm.is_prompting(),
+            "another modal's result is not this answer"
+        );
         let _ = std::fs::remove_dir_all(d);
+    }
+
+    /// THE INLINE DIALOG IS GONE: no `qm_prompt` subtree, no `conflict_*` binds and no
+    /// `scrim` block survive in the shipped pair. A migration that left the old copy
+    /// behind would still publish into it — dark, mouse-only and unreachable — forever
+    /// (rule 98232A50: no caller left on an old path).
+    #[test]
+    fn no_inline_conflict_dialog_is_left_in_the_scene_pair() {
+        // Every needle is ASSEMBLED from stems rather than written out: a gate that
+        // spells the thing it forbids trips over its own source below.
+        let scene = include_str!("../../../../content/sensorium/scenes/quartermaster.scene.json");
+        for stem in [
+            "qm_promp",
+            "has_promp",
+            "conflict_apply_res",
+            "qm_conflict",
+            "quartermaster.scri",
+        ] {
+            let needle = [stem, "t"].concat();
+            assert!(
+                !scene.contains(&needle),
+                "quartermaster.scene.json still carries `{needle}` — the collision \
+                 dialog lifted to the shared modal tree"
+            );
+        }
+        // The bench's own source must not publish the retired binds either. The needles
+        // are ASSEMBLED, not written: a gate that names the thing it forbids trips over
+        // its own text.
+        let src = include_str!("lib.rs");
+        for (stem, tail) in [
+            ("has_promp", "t"),
+            ("conflict_mult", "i"),
+            ("conflict_res", "t"),
+        ] {
+            let needle = ["\"", stem, tail, "\""].concat();
+            assert!(
+                !src.contains(&needle),
+                "lib.rs still publishes `{needle}` into a subtree that no longer exists"
+            );
+        }
     }
 
     /// Rename must act on the item the user is LOOKING at. `confirm`, `cancel`
@@ -3342,5 +3446,14 @@ mod tests {
         let mut m = ValueMap::new();
         m.set(name, true);
         m
+    }
+
+    /// Answer the open collision the way the kernel does: the SHARED `conflict` modal
+    /// closes and its result reaches the bench through `Scene::modal_closed`, with the
+    /// "apply to the remaining N" checkbox as the payload. This is the ONLY channel the
+    /// answer travels now — the dispatcher's swallow branch is gone with the inline
+    /// dialog, because the modal is a scene and the kernel freezes the bench under it.
+    fn answer(qm: &mut Quartermaster, verb: &str) {
+        qm.modal_closed(flicker_shell::MODAL_CONFLICT, verb, Some("0"));
     }
 }

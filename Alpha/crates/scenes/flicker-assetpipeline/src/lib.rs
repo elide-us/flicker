@@ -10,7 +10,8 @@
 //! split as `services` (the document + its pipeline services, UI-free), `ui` (the
 //! roster the tree / Model / dispatcher share), `compose` (what the rig panels draw,
 //! from the document), `meshes` (the GPU caches the panels' draw items come from),
-//! `gizmo` (the pointer's picks and drags on the joints) and `scene` (the thin behaviour).
+//! `gizmo` (the bench's half of the shared 3D gadget: which joint is selected and what a
+//! `GadgetDelta` means to the document) and `scene` (the thin behaviour).
 
 mod compose;
 mod gizmo;

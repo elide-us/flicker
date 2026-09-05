@@ -1,0 +1,76 @@
+{
+  "_comment": "SHARED text-prompt modal (scenes/shared/ — Aaron 2026-08-14 ruling 2A3592D0): rename / new-folder / name-this. The confirm.scene.json shape with ONE `text_field` between the body copy and the OK / Cancel pair. Text entry is the walker-owned SESSION (E559B955): the field declares `submit_action` / `cancel_action`, so Enter and Esc leave the session through the SAME fired names the two buttons fire — the modal never reads a raw key. Its edited text rides its `bind` (`modal_text`) and comes back on the results, which `SharedModal` carries out as the close PAYLOAD. The host supplies the seed text through the Model and the field's `kind` / `max_len` as component-prop overrides (the `arrange()` prop channel), both from the typed `ModalParams`. NO `behaviour` key (the manifest skips scenes/shared/); NO pair script (the params ARE the arrangement); chrome styles ride Main.scene.json's carrier through `main_scene_styles()`.",
+  "tree": {
+    "component": "surface",
+    "anchor": "top_left",
+    "width_frac": 1.0,
+    "height_frac": 1.0,
+    "on_cancel": "modal_cancel",
+    "children": [
+      {
+        "component": "cell",
+        "anchor": "top_left",
+        "style": "screens.confirm",
+        "width_frac": 1.0,
+        "height_frac": 1.0,
+        "layer": 0
+      },
+      {
+        "component": "popup_panel",
+        "id": "popup",
+        "anchor": "center",
+        "layer": 1,
+        "divider": true,
+        "title_bind": "modal_title",
+        "title_size": 38,
+        "children": [
+          {
+            "component": "text",
+            "id": "body",
+            "text_bind": "modal_body",
+            "size": 32,
+            "align": "center",
+            "wrap": true,
+            "text_size": 12,
+            "font": "label",
+            "color": "$dim"
+          },
+          {
+            "component": "text_field",
+            "id": "modal_text",
+            "bind": "modal_text",
+            "select_all_on_enter": true,
+            "submit_action": "modal_submit",
+            "cancel_action": "modal_cancel",
+            "label_size": 13,
+            "size": 34,
+            "tab_group": "modal",
+            "nav_ordinal": 0
+          },
+          {
+            "component": "button",
+            "id": "modal_submit",
+            "action": "modal_submit",
+            "label_bind": "opt0_label",
+            "label_size": 15,
+            "size": 48,
+            "variant": "primary",
+            "tab_group": "modal",
+            "nav_ordinal": 1
+          },
+          {
+            "component": "button",
+            "id": "modal_cancel",
+            "action": "modal_cancel",
+            "label_bind": "modal_cancel_label",
+            "label_size": 15,
+            "size": 48,
+            "variant": "secondary",
+            "tab_group": "modal",
+            "nav_ordinal": 2
+          }
+        ]
+      }
+    ]
+  }
+}

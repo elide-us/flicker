@@ -1,5 +1,5 @@
 {
-  "_comment": "Clayworks Bench \u2014 the content workbench (FBX/BVH \u2192 staging). Rebuilt 2026-09-03 in the Populous shape: one paged_menu (page rail hidden) whose tab rail is the WORKFLOW's steps; a three-panel body (facts \u00b7 view \u00b7 controls) whose slices assetpipeline.lua's arrange() lights by (workflow, step); the standard nav_footer; a shared-confirm-shaped discard modal. Every control is a catalog component with its standard props; the only styles are the shared blocks; the view surfaces are authored stages.",
+  "_comment": "Clayworks Bench \u2014 the content workbench (FBX/BVH \u2192 staging). Rebuilt 2026-09-03 in the Populous shape: one paged_menu (page rail hidden) whose tab rail is the WORKFLOW's steps; a three-panel body (facts \u00b7 view \u00b7 controls) whose slices assetpipeline.lua's arrange() lights by (workflow, step); the standard nav_footer. The unsaved-work prompt is the SHARED choice_dialog modal the shell hosts (scenes/shared/), pushed over this scene \u2014 not an inline subtree. Every control is a catalog component with its standard props; the only styles are the shared blocks; the view surfaces are authored stages.",
   "behaviour": "assetpipeline",
   "params": {},
   "tree": {
@@ -812,8 +812,30 @@
                                         "grow": 1.0,
                                         "tab_group": "ap_controls",
                                         "nav_ordinal": 8
+                                      },
+                                      {
+                                        "component": "radio",
+                                        "id": "mode_flip",
+                                        "value": "flip",
+                                        "bind": "gizmo_mode",
+                                        "label": "$ap_gizmo_flip",
+                                        "size": 24,
+                                        "box": 15,
+                                        "grow": 1.0,
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 9
                                       }
                                     ]
+                                  },
+                                  {
+                                    "component": "checkbox",
+                                    "id": "gizmo_snap",
+                                    "bind": "gizmo_snap",
+                                    "style": "checkbox",
+                                    "size": 22,
+                                    "label": "$ap_gizmo_snap",
+                                    "tab_group": "ap_controls",
+                                    "nav_ordinal": 10
                                   },
                                   {
                                     "component": "checkbox",
@@ -823,7 +845,7 @@
                                     "size": 22,
                                     "label": "$ap_mirror_joints",
                                     "tab_group": "ap_controls",
-                                    "nav_ordinal": 9
+                                    "nav_ordinal": 11
                                   },
                                   {
                                     "component": "row",
@@ -838,7 +860,7 @@
                                         "variant": "secondary",
                                         "size_class": "md",
                                         "tab_group": "ap_controls",
-                                        "nav_ordinal": 10,
+                                        "nav_ordinal": 12,
                                         "grow": 1.0
                                       },
                                       {
@@ -849,7 +871,7 @@
                                         "variant": "secondary",
                                         "size_class": "md",
                                         "tab_group": "ap_controls",
-                                        "nav_ordinal": 11,
+                                        "nav_ordinal": 13,
                                         "grow": 1.0
                                       }
                                     ],
@@ -870,7 +892,7 @@
                                     "size": 22,
                                     "label": "$ap_skeleton",
                                     "tab_group": "ap_controls",
-                                    "nav_ordinal": 12
+                                    "nav_ordinal": 14
                                   },
                                   {
                                     "component": "checkbox",
@@ -880,7 +902,7 @@
                                     "size": 22,
                                     "label": "$ap_reference_body",
                                     "tab_group": "ap_controls",
-                                    "nav_ordinal": 13
+                                    "nav_ordinal": 15
                                   },
                                   {
                                     "component": "checkbox",
@@ -890,7 +912,7 @@
                                     "size": 22,
                                     "label": "$ap_collision",
                                     "tab_group": "ap_controls",
-                                    "nav_ordinal": 14
+                                    "nav_ordinal": 16
                                   },
                                   {
                                     "component": "checkbox",
@@ -900,7 +922,7 @@
                                     "size": 22,
                                     "label": "$ap_wireframe",
                                     "tab_group": "ap_controls",
-                                    "nav_ordinal": 15
+                                    "nav_ordinal": 17
                                   }
                                 ]
                               },
@@ -1452,57 +1474,6 @@
         "runes": true,
         "width_frac": 1.0,
         "height_frac": 1.0
-      },
-      {
-        "component": "cell",
-        "id": "ap_discard",
-        "style": "screens.confirm",
-        "anchor": "top_left",
-        "visible_bind": "shown_discard",
-        "layer": 4,
-        "children": [
-          {
-            "component": "popup_panel",
-            "id": "ap_discard_popup",
-            "anchor": "center",
-            "children": [
-              {
-                "component": "text",
-                "text": "$wf_discard_msg",
-                "size": 44,
-                "align": "center",
-                "wrap": true,
-                "text_size": 11,
-                "font": "label",
-                "color": "panel.stat_label"
-              },
-              {
-                "component": "button",
-                "id": "discard_no",
-                "action": "discard_no",
-                "label": "$wf_discard_cancel",
-                "variant": "primary",
-                "size_class": "md",
-                "tab_group": "ap_discard",
-                "nav_ordinal": 1,
-                "size": 48
-              },
-              {
-                "component": "button",
-                "id": "discard_yes",
-                "action": "discard_yes",
-                "label": "$wf_discard_confirm",
-                "variant": "danger",
-                "size_class": "md",
-                "tab_group": "ap_discard",
-                "nav_ordinal": 2,
-                "size": 48
-              }
-            ]
-          }
-        ],
-        "width_frac": 1.0,
-        "height_frac": 1.0
       }
     ]
   },
@@ -1900,14 +1871,6 @@
           "label_size": 15,
           "caret": "$rune_glow"
         }
-      }
-    },
-    "screens": {
-      "confirm": {
-        "layout": "center",
-        "overlay": "$scrim_dim",
-        "title": "$confirm_display_title",
-        "title_size": 38
       }
     }
   }

@@ -1,5 +1,8 @@
 //! **Data-driven rows** — a `list` authored with `rows_from: "<source>"` carries ONE
-//! prototype child, and the scene expands it into one clone per row it publishes.
+//! prototype child, and the scene expands it into one clone per row it publishes. A
+//! `row` may repeat the same way (the shared file browser's breadcrumb: the path's
+//! segments, one button each) — a repeater is a FLOW container, and the two differ only
+//! in the axis they flow along.
 //!
 //! The authored tree stays STATIC (the scene never builds structure in Rust — the
 //! five-line split, 491BD9BB). The expansion is a per-frame VALUE derived from data the
@@ -55,7 +58,11 @@ pub fn instantiate_rows(
             Value::Text(s) if !s.is_empty() => Some(s.as_str()),
             _ => None,
         })
-        .filter(|_| tree.component == "list");
+        // A repeater is a FLOW container: a `list` repeats down its scrolling column and
+        // a `row` repeats across — the breadcrumb in the shared file browser is exactly
+        // "the path's segments, one button each", the same data-driven rows turned
+        // sideways. Any other kind naming `rows_from` is authoring noise and is ignored.
+        .filter(|_| matches!(tree.component.as_str(), "list" | "row"));
     match from {
         Some(name) => {
             let Some(proto) = tree.children.first() else {

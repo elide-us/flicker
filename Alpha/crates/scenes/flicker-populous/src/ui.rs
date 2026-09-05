@@ -100,6 +100,12 @@ pub const TICKS_BIND: &str = "pop_ticks";
 /// The evolve tab's PROCEDURE label — which pipeline phase the next engine
 /// step runs; the tick counts once per completed cycle of them.
 pub const PHASE_BIND: &str = "pop_phase";
+/// **THE CLIMATE HISTORY** — the readouts panel's `surface` node, under the
+/// climate gauge: the walker reserves its rect and the scene seats the shared
+/// [`Plot`](flicker::ui::Plot) filler on it (a sparkline of the era's
+/// temperature). Reserved only while the EVOLVE slice is lit, so an unseated
+/// plot on every other tab costs nothing.
+pub const TEMP_PLOT_SLOT: &str = "pop_temp_plot";
 /// The evolve tab's water-coverage dial — percent of the surface flooded.
 /// The LIVE water-coverage READOUT (Aaron 2026-08-27: the godmode-style
 /// gauge, right panel, never interactive): a 0..1 fraction the

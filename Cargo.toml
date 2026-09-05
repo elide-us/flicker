@@ -18,6 +18,7 @@ members = [
     "Alpha/crates/frontend/flicker-scene",
     "Alpha/crates/frontend/flicker-shell",
     "Alpha/crates/frontend/flicker-widgets",
+    "Alpha/crates/frontend/flicker-canvas",
     "Alpha/crates/animation/flicker-flight",
     "Alpha/crates/animation/flicker-skeletal",
     "Alpha/crates/animation/flicker-rigview",
@@ -155,6 +156,9 @@ flicker-scene = { version = "0.1.9", path = "Alpha/crates/frontend/flicker-scene
 flicker-greed = { version = "0.1.0", path = "crates/flicker-greed" }
 flicker-shell = { version = "0.1.9", path = "Alpha/crates/frontend/flicker-shell" }
 flicker-widgets = { version = "0.1.9", path = "Alpha/crates/frontend/flicker-widgets" }
+# The two 2D editor surface fillers (node-graph canvas + lane timeline), extracted
+# from Loomforge so the DM tech tree and the GM event timelines share one copy.
+flicker-canvas = { version = "0.1.0", path = "Alpha/crates/frontend/flicker-canvas" }
 flicker-flight = { version = "0.1.0", path = "Alpha/crates/animation/flicker-flight" }
 flicker-voxel = { version = "0.1.9", path = "Alpha/crates/world/flicker-voxel" }
 flicker-worker = { version = "0.1.0", path = "Alpha/crates/core/flicker-worker" }

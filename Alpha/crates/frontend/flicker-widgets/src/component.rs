@@ -240,9 +240,19 @@ pub struct UiStats {
     pub nodes: u32,
 }
 
-/// What a drag-source node picked up — the payload a **scene-owned** canvas resolves
-/// on release (e.g. `kind: "clip", id: "walk_forward"` dropped onto a state node).
-/// The walker only carries the payload; it never decides what a drop means.
+/// What a drag-source node picked up — the payload dropped on release (e.g.
+/// `kind: "clip", id: "walk_forward"` dropped onto a state node).
+///
+/// **Two ways a drop resolves, and the node decides which.** A node that authors
+/// `drop_accept` (one drag kind, or several separated by whitespace) is a TARGET: the
+/// walker answers a release over it — or a pad `Confirm` on it while focused — by
+/// firing its `drop_action` (default: its own `action`) through the one activation
+/// channel, publishing `drop_id` (this payload's id) and `drop_target` (the node's
+/// id), and consuming the pointer. A release over nothing that accepts this kind is
+/// the ORIGINAL contract, untouched: the walker only carries the payload
+/// (`drag_kind` / `drag_id` / `drag_active` / `drag_dropped`) and a **scene-owned**
+/// canvas resolves the drop against its own geometry. Either way the walker never
+/// decides what a drop MEANS — only whether some node claimed it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DragPayload {
     /// Category of the dragged thing, from the source node's `drag_kind` prop.
@@ -274,6 +284,14 @@ pub(crate) struct TextEdit {
 pub struct UiState {
     dragging: HashSet<String>,
     drag: Option<DragPayload>,
+    /// The payload in flight was picked up by a pad `Confirm`, not by a held pointer
+    /// button — so the drag channel keeps it ALIVE across frames with the mouse up,
+    /// until the next Confirm drops it (or `Cancel` abandons it). Without this a pad
+    /// pickup would report `drag_dropped` on the very next frame.
+    pad_drag: bool,
+    /// The focused node a pad `Confirm` landed on this frame, recorded by the walker
+    /// layer ([`Self::push_drag_confirm`]) and drained by the next `run_ui` pass.
+    drag_confirm: Option<String>,
     /// A captured drag's value-in-flight — the **commit-on-release** contract
     /// (Aaron, 2026-08-06): while a slider drag holds the pointer, the live value
     /// feeds only the DRAW (the knob tracks the hand); `frame.results` keeps
@@ -332,6 +350,35 @@ pub struct UiState {
     /// controller channel every slider gets for free: d-pad on the slider's
     /// own axis steps it, no scene wiring.
     nudges: Vec<(String, i32, bool)>,
+    /// **PAD STAGING** (Aaron 2026-09-04, "Confirm = apply"): the values pad nudges set
+    /// on controls authored `apply: "confirm"`, held here until `Confirm` commits them
+    /// — `bind -> (staged value, the resting value the scene keeps seeing, the pane it
+    /// was staged in)`. The pad twin of [`Self::drag_value`] (commit-on-release,
+    /// B694F6B1): the control DRAWS the staged value (the walker seeds it into
+    /// `results` like a held drag's live value) while `results` leave the walker
+    /// carrying the resting echo, so the scene folds nothing until the commit — one
+    /// regenerate per Apply instead of one per tick. Pane-scoped so a Confirm commits
+    /// the pane it lands in; the left stick asks (Apply / Revert / keep editing)
+    /// before it leaves a pane with stages pending.
+    staged: HashMap<String, (Value, Value, Option<String>)>,
+    /// Stages the walker ordered committed — written into `results` at the top of the
+    /// next `run_ui` pass (the pad's release edge), exactly where a drag's held value
+    /// lands. `(bind, value)`.
+    pending_commit: Vec<(String, Value)>,
+    /// A button activation the walker held back behind a commit ("commit, then fire",
+    /// Aaron 2026-09-04): fired through the pointer channel in the SAME pass the
+    /// commit lands, so the scene folds the values before the action.
+    fire_after_commit: Option<String>,
+    /// The stick tried to leave a pane holding stages: the move is parked here until
+    /// the scene's Apply/Revert prompt answers ([`Self::apply_stages`] /
+    /// [`Self::revert_stages`] resume it, [`Self::keep_stages`] drops it).
+    pending_pane_move: Option<String>,
+    /// The scene has a prompt to raise — set with `pending_pane_move`, drained by
+    /// [`Self::take_stage_prompt`].
+    stage_prompt: bool,
+    /// A parked pane move released by the prompt's answer, for the walker's per-frame
+    /// hook to complete (focus the target pane and descend into it).
+    resume_pane_move: Option<String>,
     /// The TEXT ENTRY session on a `text_field` (Aaron 2026-09-03: the ONE mode in which
     /// the keyboard is READ, not resolved). Opened by the walker layer when the field is
     /// entered — a click into it, a pad Confirm on it, or the `EnterText` signal — and
@@ -416,9 +463,11 @@ impl UiState {
         self.drag.as_ref()
     }
 
-    /// Abandon an in-flight drag (e.g. the scene rejected the drop).
+    /// Abandon an in-flight drag (e.g. the scene rejected the drop, or `Cancel`
+    /// backed out while the pad was carrying one).
     pub fn cancel_drag(&mut self) {
         self.drag = None;
+        self.pad_drag = false;
     }
 
     /// The id of the `text_field` that currently owns keyboard focus, if any.
@@ -559,6 +608,114 @@ impl UiState {
     /// stepped, clamped, written to the bind — by the next `run_ui` pass.
     pub(crate) fn push_nudge(&mut self, id: &str, dir: i32, coarse: bool) {
         self.nudges.push((id.to_string(), dir, coarse));
+    }
+
+    // ── PAD STAGING — "Confirm = apply" (Aaron 2026-09-04) ──────────────────
+
+    /// Hold `bind`'s pad-set `value` in `pane` until a Confirm commits it; `resting` is
+    /// what `results` keep reporting to the scene meanwhile.
+    pub(crate) fn stage(&mut self, bind: &str, value: Value, resting: Value, pane: Option<String>) {
+        // A stage that walks on keeps the resting value it was opened with: by the
+        // second press `results` already carry the first stage (seeded for the draw),
+        // and the scene must keep seeing the ORIGINAL value until the commit.
+        let resting = self
+            .staged
+            .get(bind)
+            .map_or(resting, |(_, r, _)| r.clone());
+        self.staged.insert(bind.to_string(), (value, resting, pane));
+    }
+
+    /// Whether any control holds a staged, unapplied pad value — the `ui_staged` a
+    /// scene publishes so its nav footer can show "Press {Confirm} to apply".
+    pub fn staged_any(&self) -> bool {
+        !self.staged.is_empty()
+    }
+
+    /// The value the pad has staged on `bind`, if any (the gates read it).
+    #[cfg(test)]
+    pub(crate) fn staged_value(&self, bind: &str) -> Option<&Value> {
+        self.staged.get(bind).map(|(v, _, _)| v)
+    }
+
+    /// Whether `pane` (any pane, for `None`) holds a stage.
+    pub(crate) fn stages_in(&self, pane: Option<&str>) -> bool {
+        self.staged
+            .values()
+            .any(|(_, _, p)| pane.is_none() || p.as_deref() == pane)
+    }
+
+    /// CONFIRM = APPLY: queue `pane`'s stages (every stage, for `None`) for the commit
+    /// the next `run_ui` pass writes, in bind order. Returns whether anything moved.
+    pub(crate) fn commit_stages(&mut self, pane: Option<&str>) -> bool {
+        let mut keys: Vec<String> = self
+            .staged
+            .iter()
+            .filter(|(_, (_, _, p))| pane.is_none() || p.as_deref() == pane)
+            .map(|(k, _)| k.clone())
+            .collect();
+        keys.sort();
+        let any = !keys.is_empty();
+        for k in keys {
+            if let Some((v, _, _)) = self.staged.remove(&k) {
+                self.pending_commit.push((k, v));
+            }
+        }
+        any
+    }
+
+    /// Hold a focused button's activation back until the commit queued beside it has
+    /// landed — "commit, then fire". Fired by the next `run_ui` pass through the
+    /// pointer channel, so the scene folds the values before the action.
+    pub(crate) fn defer_fire(&mut self, action: &str) {
+        self.fire_after_commit = Some(action.to_string());
+    }
+
+    /// Walker-side: the stick tried to leave a pane holding stages — park the move on
+    /// `target` and raise the scene's Apply/Revert prompt.
+    pub(crate) fn park_pane_move(&mut self, target: String) {
+        self.pending_pane_move = Some(target);
+        self.stage_prompt = true;
+    }
+
+    /// The scene's per-frame read: `true` exactly once per parked move — open the
+    /// shared Apply/Revert prompt (`flicker_shell::stage_prompt` does the whole dance).
+    pub fn take_stage_prompt(&mut self) -> bool {
+        std::mem::take(&mut self.stage_prompt)
+    }
+
+    /// The prompt's APPLY answer: commit every stage and let the parked pane move
+    /// complete on the walker's next frame.
+    pub fn apply_stages(&mut self) {
+        self.commit_stages(None);
+        self.resume_pane_move = self.pending_pane_move.take();
+    }
+
+    /// The prompt's REVERT answer: drop every stage (the controls fall back to the
+    /// model) and let the parked pane move complete.
+    pub fn revert_stages(&mut self) {
+        self.staged.clear();
+        self.resume_pane_move = self.pending_pane_move.take();
+    }
+
+    /// The prompt's KEEP-EDITING answer (and its Esc / pad-B back-out): the stages
+    /// stand, the cursor stays where it was, the parked move is forgotten.
+    pub fn keep_stages(&mut self) {
+        self.pending_pane_move = None;
+    }
+
+    /// Walker-side: a pane move the prompt released, to complete this frame.
+    pub(crate) fn take_resume_pane_move(&mut self) -> Option<String> {
+        self.resume_pane_move.take()
+    }
+
+    /// Record that a pad `Confirm` landed on the focused node `id`, for the next
+    /// `run_ui` pass to resolve against the DRAG CHANNEL (the same shape as
+    /// [`Self::push_nudge`]: the walker names the node, the node's own props decide
+    /// what happens). With nothing in flight a `drag_kind` source PICKS UP; while a
+    /// payload is carried a matching `drop_accept` target DROPS. A node that is
+    /// neither is drained and ignored, so a stale request never accumulates.
+    pub(crate) fn push_drag_confirm(&mut self, id: &str) {
+        self.drag_confirm = Some(id.to_string());
     }
 
     /// Record a result NAME the walker layer fired, for the next `run_ui` pass to
@@ -917,6 +1074,9 @@ pub fn run_ui(
     }
     if !input.down {
         if let Some((bind, val, _)) = state.drag_value.take() {
+            // The hand's release outranks a pad stage on the same bind: a drag is a
+            // commit, so whatever the pad had staged there is spent with it.
+            state.staged.remove(&bind);
             results.set(bind, val);
         }
         state.dragging.clear();
@@ -940,6 +1100,24 @@ pub fn run_ui(
     // rule 37722F91 / pump P2). Cleared here, not in `take_fired`, so a scene that
     // runs no walker cannot accumulate stale clicks across frames.
     state.fired_pointer.clear();
+    // PAD STAGING, the commit half (Aaron 2026-09-04, "Confirm = apply"): stages a
+    // Confirm queued land in `results` here — the pad's release edge, the same seam a
+    // drag's held value commits through — and a button activation held back behind
+    // them fires in this same pass (through the pointer channel, so the walker's
+    // `take_fired` drains it): the scene folds the values before the action. Stages
+    // still in flight are seeded like `local` so the control DRAWS what the pad set;
+    // the frame tail puts the resting value back before `results` leave the walker.
+    for (bind, val) in std::mem::take(&mut state.pending_commit) {
+        results.set(bind, val);
+    }
+    if let Some(action) = state.fire_after_commit.take() {
+        state.flash(&action);
+        state.push_step(&action);
+        state.record_pointer_fire(&action);
+    }
+    for (bind, (val, _, _)) in &state.staged {
+        results.set(bind.clone(), val.clone());
+    }
     // `last_claim` = the placement index of the LAST node that claimed the pointer this
     // frame. The surface pass below reads it: a surface is hot only if it is painted over
     // every claimant under the cursor.
@@ -1023,7 +1201,7 @@ pub fn run_ui(
     // a behaviour reads the same `root_pointer()` it reads in free mode, and its `delta`
     // is the relative `motion` the runner accumulated under the lock. The HUD is still
     // laid out and drawn; it just cannot be clicked while the mouse IS the camera.
-    let (pointer, hud_hit) = if input.exclusive {
+    let (pointer, mut hud_hit) = if input.exclusive {
         let root = &placed[0];
         let p = SurfacePointer {
             id: root.node.id.clone(),
@@ -1046,18 +1224,92 @@ pub fn run_ui(
         (pointer, hud_hit)
     };
 
-    // Drag channel: publish the in-flight payload and the release edge so a scene-owned
-    // canvas can resolve the drop against its own geometry. Deliberately does NOT force
-    // `hud_hit` — the drop usually lands on the scene (a graph node), not on the UI, so
-    // the scene must still be allowed to pick.
+    // ── DRAG CHANNEL ─────────────────────────────────────────────────────────────
+    // Publish the in-flight payload and the release edge so a scene-owned canvas can
+    // resolve the drop against its own geometry. Deliberately does NOT force `hud_hit`
+    // for an UNANSWERED release — the drop usually lands on the scene (a graph node),
+    // not on the UI, so the scene must still be allowed to pick.
+    //
+    // The pad rides this channel exactly as the pointer button does (controller is the
+    // floor, BA4487BD): the walker layer recorded the focused node's id
+    // ([`UiState::push_drag_confirm`]) and the NODE's own props decide which half of
+    // the gesture it is — resolved HERE, beside the pointer's own release, so both
+    // routes share one resolution and one set of result names (rule 37722F91).
+    let pad_confirm = state.drag_confirm.take();
+    // PICK UP — the pad's twin of pressing inside a `drag_kind` node (`hit_node`).
+    let mut picked = false;
+    if state.drag.is_none() {
+        if let Some(p) = pad_confirm
+            .as_deref()
+            .and_then(|id| placed.iter().find(|p| p.node.id == id && p.enabled))
+        {
+            if let Some(kind) = ptext(p.node, "drag_kind") {
+                let id = ptext(p.node, "drag_id")
+                    .unwrap_or(p.node.id.as_str())
+                    .to_string();
+                state.drag = Some(DragPayload {
+                    kind: kind.to_string(),
+                    id,
+                });
+                state.pad_drag = true;
+                picked = true;
+                hud_hit = true;
+            }
+        }
+    }
     if let Some(d) = state.drag.clone() {
         results.set("drag_kind", d.kind.as_str());
         results.set("drag_id", d.id.as_str());
-        if input.down {
+        // The RELEASE edge: the pointer button coming up, or — for a payload the pad is
+        // carrying — the next `Confirm`, wherever the mouse happens to be.
+        let pad_release = if picked { None } else { pad_confirm.as_deref() };
+        if (input.down || state.pad_drag) && pad_release.is_none() {
             results.set("drag_active", true);
         } else {
             results.set("drag_dropped", true);
+            // DROP TARGETS (`drop_accept`): the topmost enabled node whose accepted
+            // kinds name this payload's kind answers the release. Its `drop_action`
+            // (default: its own `action`) fires through the SAME full activation
+            // channel a click rides — results + flash + strip-step + the `sig_<name>`
+            // mirror — and the payload id and target id ride the drag channel's own
+            // result names, so a scene folds a drop exactly like any other signal.
+            // Nothing accepting under the release is NOT a drop on any node: the
+            // release stays a bare `drag_dropped` for the scene's canvas, unchanged.
+            let target = placed.iter().rev().find(|p| {
+                p.enabled
+                    && accepts_drop(p.node, &d.kind)
+                    && match pad_release {
+                        Some(id) => p.node.id == id,
+                        None => p.rect.contains(input.mouse),
+                    }
+            });
+            if let Some(p) = target {
+                results.set("drop_id", d.id.as_str());
+                results.set("drop_target", p.node.id.as_str());
+                match drop_action(p.node) {
+                    Some(name) => {
+                        let name = name.to_string();
+                        results.set(name.clone(), true);
+                        state.flash(&name);
+                        state.push_step(&name);
+                        state.record_pointer_fire(&name);
+                    }
+                    // A node that accepts a kind and names nothing to fire is authored
+                    // wrong, and says so rather than silently swallowing the payload
+                    // (the fail-loud law for authored names).
+                    None => tracing::warn!(
+                        "ui: node {:?} accepts drop kind {:?} but names no `drop_action` \
+                         (and carries no `action`) — the drop fires nothing",
+                        p.node.id,
+                        d.kind
+                    ),
+                }
+                // A drop the UI ANSWERED is consumed — the scene must not resolve the
+                // same release against its own canvas as well.
+                hud_hit = true;
+            }
             state.drag = None;
+            state.pad_drag = false;
         }
     }
 
@@ -1123,6 +1375,7 @@ pub fn run_ui(
             if p.fade < 1.0 {
                 fade_commands(&mut commands[start..], p.fade);
             }
+            focus_ring(p, state, styles, &mut commands);
             continue;
         }
         // Miss: draw for real and rebuild the entry. The read-key list is recomputed
@@ -1168,6 +1421,9 @@ pub fn run_ui(
         if p.fade < 1.0 {
             fade_commands(&mut commands[start..], p.fade);
         }
+        // The SECONDARY FOCUS ring rides OUTSIDE the cache on both paths: focus is not
+        // an entry input, so a cursor move must never invalidate or replay it.
+        focus_ring(p, state, styles, &mut commands);
     }
     // Evict what this frame did not touch, but only once the map has grown well past
     // the live tree — a screen that toggles between two panels should keep both cached,
@@ -1295,7 +1551,19 @@ pub fn run_ui(
         let Some(bind) = p.node.bind.as_deref() else {
             continue;
         };
-        match p.node.component.as_str() {
+        // CONFIRM = APPLY (Aaron 2026-09-04): a control authored `apply: "confirm"`
+        // STAGES its pad steps instead of writing them — the value is held in
+        // `UiState::staged` (the pad's commit-on-release twin), drawn live from the
+        // next pass on, and lands in `results` only when a Confirm commits its pane.
+        // Every other control keeps the immediate write: a settings row ticks on every
+        // press. A held stage is the step's starting point, so repeated presses walk
+        // on from what the pad already set.
+        let staging = ptext(p.node, "apply") == Some("confirm");
+        let staged_num = match state.staged.get(bind) {
+            Some((Value::Number(n), _, _)) => Some(*n),
+            _ => None,
+        };
+        let next = match p.node.component.as_str() {
             "slider" => {
                 let min = pnum(p.node, "min").unwrap_or(0.0);
                 let max = pnum(p.node, "max").unwrap_or(1.0);
@@ -1305,14 +1573,11 @@ pub fn run_ui(
                 } else {
                     fine
                 };
-                let cur = results
-                    .number(bind)
+                let cur = staged_num
+                    .or_else(|| results.number(bind))
                     .or_else(|| model.number(bind))
                     .unwrap_or(min);
-                results.set(
-                    bind.to_string(),
-                    (cur + f64::from(dir) * step).clamp(min, max),
-                );
+                Value::Number((cur + f64::from(dir) * step).clamp(min, max))
             }
             // A `select` / `pill_toggle` steps its 0-based INDEX by ±1, CLAMPED to its own
             // children count (no wrap — a linear picker never jumps end-to-end, Aaron
@@ -1322,32 +1587,44 @@ pub fn run_ui(
                 if len <= 0.0 {
                     continue;
                 }
-                let cur = results
-                    .number(bind)
+                let cur = staged_num
+                    .or_else(|| results.number(bind))
                     .or_else(|| model.number(bind))
                     .unwrap_or(0.0);
-                results.set(
-                    bind.to_string(),
-                    (cur + f64::from(dir)).clamp(0.0, len - 1.0),
-                );
+                Value::Number((cur + f64::from(dir)).clamp(0.0, len - 1.0))
             }
             // A `toggle`: Right sets on, Left sets off, Confirm (`dir == 0`) flips — the
             // same bool a click writes (`bool_pick`).
             "toggle" => {
-                let cur = match results.get(bind) {
-                    Some(Value::Bool(b)) => *b,
-                    _ => model.is_on(bind),
+                let cur = match state.staged.get(bind) {
+                    Some((Value::Bool(b), _, _)) => *b,
+                    _ => match results.get(bind) {
+                        Some(Value::Bool(b)) => *b,
+                        _ => model.is_on(bind),
+                    },
                 };
-                let next = if dir > 0 {
+                Value::Bool(if dir > 0 {
                     true
                 } else if dir < 0 {
                     false
                 } else {
                     !cur
-                };
-                results.set(bind.to_string(), next);
+                })
             }
-            _ => {}
+            _ => continue,
+        };
+        if staging {
+            // What the scene keeps seeing meanwhile: the echo already ran, so `results`
+            // carries the resting value for this bind (the model's, failing that).
+            let resting = results
+                .get(bind)
+                .cloned()
+                .or_else(|| model.get(bind).cloned())
+                .unwrap_or_else(|| next.clone());
+            let pane = state.pane.clone();
+            state.stage(bind, next, resting, pane);
+        } else {
+            results.set(bind.to_string(), next);
         }
     }
 
@@ -1448,6 +1725,11 @@ pub fn run_ui(
         if let Some((bind, _, min)) = state.drag_value.as_ref() {
             results.set(bind.clone(), model.number(bind).unwrap_or(*min));
         }
+    }
+    // Pad staging, the held half: a stage drew live above; the scene keeps seeing the
+    // resting value until a Confirm commits it (top of the next pass).
+    for (bind, (_, resting, _)) in &state.staged {
+        results.set(bind.clone(), resting.clone());
     }
 
     UiFrame {
@@ -2594,6 +2876,26 @@ struct HitVerdict {
     fire: Option<String>,
 }
 
+/// Does `node` accept a dragged payload of `kind`? The `drop_accept` prop is one
+/// drag kind, or several separated by whitespace (`"clip"`, `"clip marker"` — the
+/// same list shape a grid's `cols` track-spec uses). Absent = not a drop target,
+/// which is every node that has not opted in.
+///
+/// Prop-driven so ANY row / tile / panel can be a target, exactly as `drag_kind`
+/// makes any node a source — no new component kind on either side of the gesture.
+fn accepts_drop(node: &UiNode, kind: &str) -> bool {
+    ptext(node, "drop_accept").is_some_and(|spec| spec.split_whitespace().any(|k| k == kind))
+}
+
+/// The result name a matched drop fires: the node's `drop_action`, else its own
+/// `action` (the common case — a drop target that already names what it does).
+/// `None` when neither is authored, which the drop path reports LOUDLY.
+fn drop_action(node: &UiNode) -> Option<&str> {
+    ptext(node, "drop_action")
+        .or(node.action.as_deref())
+        .filter(|a| !a.is_empty())
+}
+
 /// A node's retained-interaction identity — its `id`, else its `bind`, else `""`.
 /// One rule for pointer capture (`state.dragging`) and the open popup
 /// (`state.open`).
@@ -3074,6 +3376,11 @@ fn record_local(placed: &[Placed], model: &ValueMap, results: &ValueMap, state: 
         let Some(bind) = p.node.bind.as_deref() else {
             continue;
         };
+        // A pad STAGE is not a commitment: it rides `results` only so the control draws
+        // it, and a revert must leave nothing behind — so it never takes local ownership.
+        if state.staged.contains_key(bind) {
+            continue;
+        }
         let Some(val) = results.get(bind) else {
             continue;
         };
@@ -3599,12 +3906,15 @@ fn component_props(
                     serde_json::json!([c[0], c[1], c[2], c[3]]),
                 );
             }
-            // A live subtitle: `subtitle_bind` names the Model key whose CURRENT text
-            // the chrome draws (the display-confirm countdown). Resolved here because
-            // the draw fn has no model handle — the same reason as the colours above.
-            if let Some(bind) = ptext(node, "subtitle_bind") {
-                if let Some(t) = model.text(bind) {
-                    props.insert("subtitle_live".to_string(), serde_json::json!(t));
+            // A live title / subtitle: `<field>_bind` names the Model key whose CURRENT
+            // text the chrome draws (the display-confirm countdown; a shared modal's
+            // caller-supplied heading). Resolved here because the draw fn has no model
+            // handle — the same reason as the colours above.
+            for (field, bind) in [("title", "title_bind"), ("subtitle", "subtitle_bind")] {
+                if let Some(key) = ptext(node, bind) {
+                    if let Some(t) = model.text(key) {
+                        props.insert(format!("{field}_live"), serde_json::json!(t));
+                    }
                 }
             }
         }
@@ -4056,7 +4366,8 @@ fn fade_commands(cmds: &mut [HudCommand], f: f32) {
             HudCommand::Rect { color, .. }
             | HudCommand::Sprite { color, .. }
             | HudCommand::Text { color, .. }
-            | HudCommand::TextCaret { color, .. } => color[3] *= f,
+            | HudCommand::TextCaret { color, .. }
+            | HudCommand::Line { color, .. } => color[3] *= f,
             HudCommand::Panel {
                 color,
                 color2,
@@ -4080,7 +4391,8 @@ fn offset_layer(c: &mut HudCommand, dl: f32) {
         | HudCommand::Sprite { layer, .. }
         | HudCommand::Text { layer, .. }
         | HudCommand::TextCaret { layer, .. }
-        | HudCommand::Panel { layer, .. } => *layer += dl,
+        | HudCommand::Panel { layer, .. }
+        | HudCommand::Line { layer, .. } => *layer += dl,
         // A clip toggle carries no layer — it rides submission order, not the sort.
         HudCommand::Clip { .. } => {}
     }
@@ -8152,6 +8464,53 @@ fn popup_chrome(node: &UiNode, rect: Rect) -> PopupChrome {
     }
 }
 
+/// **THE DISMISSABLE TOGGLE** (Aaron 2026-09-04) — whether the screen's modal slab
+/// currently allows a Cancel (Esc / pad-B) to leave.
+///
+/// It is a BEHAVIOUR TOGGLE ON THE COMPONENT, not a host policy: `popup_panel` carries
+/// `dismissable` (bool, **default true** — a modal is never a trap by default) and
+/// `dismissable_bind` (a Model key a pair script publishes per frame), exactly the shape
+/// `faded` / `faded_bind` and `runes` already have. The walker consults this at its ONE
+/// Cancel routing ([`WalkerHandler`](crate::WalkerHandler)) and SWALLOWS the signal while
+/// it reads false, so the screen's declared `on_cancel` does not fire.
+///
+/// Reads the TOPMOST visible `popup_panel` — the last one in draw order, i.e. the slab
+/// the player is actually looking at. A screen with no visible slab is dismissable, so
+/// this changes nothing for every screen that is not a modal.
+///
+/// **Precedence** (the `_bind` rule every other bound prop obeys): the bound value wins
+/// WHERE IT IS PUBLISHED; otherwise the authored flag; otherwise `true`. A
+/// `dismissable_bind` naming a key nobody publishes therefore reads as DISMISSABLE —
+/// a mis-typed bind can lose you the toggle, never the way out.
+#[must_use]
+pub fn popup_dismissable(tree: &UiNode, model: &ValueMap) -> bool {
+    topmost_popup(tree, model).is_none_or(|slab| slab_dismissable(slab, model))
+}
+
+/// The last VISIBLE `popup_panel` in draw order (children after their parent, later
+/// siblings over earlier ones) — the slab on top. Hidden subtrees contribute nothing,
+/// so a slab gated off by `visible_bind` never holds Cancel.
+fn topmost_popup<'a>(node: &'a UiNode, model: &ValueMap) -> Option<&'a UiNode> {
+    if !visible(node, model) {
+        return None;
+    }
+    let mut top = (node.component == "popup_panel").then_some(node);
+    for child in &node.children {
+        if let Some(deeper) = topmost_popup(child, model) {
+            top = Some(deeper);
+        }
+    }
+    top
+}
+
+/// One slab's current answer — see [`popup_dismissable`] for the precedence.
+fn slab_dismissable(node: &UiNode, model: &ValueMap) -> bool {
+    match ptext(node, "dismissable_bind") {
+        Some(key) if model.get(key).is_some() => model.is_on(key),
+        _ => popt_bool(node, "dismissable").unwrap_or(true),
+    }
+}
+
 /// The **popup panel** — the carved modal slab the pause / confirm / menu popups build
 /// on. It DRAWS its chrome — the styled backdrop, an always-present centred title, an
 /// optional subtitle, an optional 1px divider and an optional footer — while its ITEMS
@@ -8165,7 +8524,13 @@ fn draw_popup_panel(r: Rect, node: &UiNode, props: &Json, out: &mut Vec<HudComma
     let c = popup_chrome(node, r);
     let cx = c.inner_x + c.inner_w * 0.5;
     // Title — always drawn (empty copy centres nothing, faithful to the proto's `@title=`).
-    let title = crate::strings::resolve(ptext(node, "title").unwrap_or_default());
+    // A bound title's LIVE text (injected by `component_props`, exactly as the subtitle's
+    // is) wins over an authored one: the shared param-driven modals get their heading
+    // from the caller through the Model, so the tree carries no copy of its own.
+    let title = match jopt(props, "title_live").and_then(|v| v.as_str()) {
+        Some(t) => t.into(),
+        None => crate::strings::resolve(ptext(node, "title").unwrap_or_default()),
+    };
     push_text(
         out,
         cx,
@@ -9111,6 +9476,66 @@ fn focus_group(node: &UiNode) -> Option<&str> {
     ptext(node, "focus_group")
 }
 
+/// **SECONDARY FOCUS** (Aaron 2026-09-04): the one control inside the focused pane the
+/// pad cursor stands on wears a uniform cursor ring — a rune-glow outline over a soft
+/// glow, drawn by the walker AFTER the control's own commands, whatever the kind. The
+/// pane's sapphire rim is the PRIMARY tier (implied panel context, 302DDEC7); this is
+/// the second, so "which panel" and "which control" are both visible without relying
+/// on a per-kind recolour (the Populous dials' focus track equalled their resting one).
+///
+/// Nav modality only — the pointer takeover hides it exactly as it hides `hot`, and the
+/// next d-pad press relights it. LEAF controls only: a container is the pane tier's.
+///
+/// Colour: the `rune_glow_hi` theme token (the press-flash cue, 4DD224AA), read from the
+/// resolved styles so a retuned palette moves it; weights from the one truly-global
+/// effect block `focus_ring` in `ui_style.json` (`w` 2 · `pad` 3 · `radius` 4 · `glow_pad`
+/// 4 · `feather` 6 · `glow_alpha` 0.35), each falling back to the compiled house value.
+fn focus_ring(p: &Placed, state: &UiState, styles: &Json, out: &mut Vec<HudCommand>) {
+    let node = p.node;
+    if !state.nav_mode() || node.id.is_empty() || state.focused() != Some(node.id.as_str()) {
+        return;
+    }
+    if !crate::is_rust_component(&node.component)
+        || matches!(
+            node.component.as_str(),
+            "panel" | "popup_panel" | "paged_menu" | "nav_footer" | "list"
+        )
+    {
+        return;
+    }
+    let fr = jpath(styles, "focus_ring");
+    let color = json_color(jpath(styles, "theme.tokens.rune_glow_hi"), FLASH_LIT);
+    let pad = jnum(fr, "pad", 3.0);
+    let radius = jnum(fr, "radius", 4.0);
+    let ring = p.rect.inset(-pad);
+    let start = out.len();
+    let gpad = jnum(fr, "glow_pad", 4.0);
+    let glow = [color[0], color[1], color[2], jnum(fr, "glow_alpha", 0.35)];
+    out.push(HudCommand::Panel {
+        x: ring.x - gpad,
+        y: ring.y - gpad,
+        w: ring.w + gpad * 2.0,
+        h: ring.h + gpad * 2.0,
+        color: glow,
+        color2: glow,
+        grad: 0.0,
+        radius: radius + gpad,
+        border: 0.0,
+        border_color: CLEAR,
+        feather: jnum(fr, "feather", 6.0),
+        layer: 0.0,
+    });
+    push_panel(out, ring, CLEAR, None, radius, color, jnum(fr, "w", 2.0));
+    if p.layer != 0.0 {
+        for c in &mut out[start..] {
+            offset_layer(c, p.layer);
+        }
+    }
+    if p.fade < 1.0 {
+        fade_commands(&mut out[start..], p.fade);
+    }
+}
+
 // ── Value / style / command helpers ──────────────────────────────────────────
 
 fn node_text(node: &UiNode, model: &ValueMap, results: &ValueMap) -> String {
@@ -9304,6 +9729,12 @@ fn pnum(node: &UiNode, key: &str) -> Option<f64> {
 
 fn pbool(node: &UiNode, key: &str) -> bool {
     crate::config::flag(&node.props, key)
+}
+
+/// A flag whose ABSENCE is distinguishable from `false` — for the props that default
+/// TRUE (`popup_panel`'s `dismissable`). See [`crate::config::opt_flag`].
+fn popt_bool(node: &UiNode, key: &str) -> Option<bool> {
+    crate::config::opt_flag(&node.props, key)
 }
 
 /// Read a colour that IS a 4-array `Value` (a token-resolved rgba), else `dflt`.
@@ -10398,6 +10829,65 @@ mod tests {
             "the caption row is not a target"
         );
         assert!(!f.results.is_on("b1"), "…and it writes nothing");
+    }
+
+    /// **CONFIRM = APPLY** (Aaron 2026-09-04): a control authored `apply: "confirm"`
+    /// STAGES its pad steps — `results` keep reporting the resting value to the scene
+    /// while the stage walks on with every press — until a commit lands it in ONE
+    /// write; a revert drops it and the control reads the model again. The immediate
+    /// write of every other control is untouched (the sibling test below).
+    #[test]
+    fn a_staged_pad_nudge_holds_until_confirm_commits_it() {
+        let mut dial = node("slider");
+        dial.id = "dial".into();
+        dial.bind = Some("dial".into());
+        dial = prop(dial, "min", Value::Number(0.0));
+        dial = prop(dial, "max", Value::Number(10.0));
+        dial = prop(dial, "apply", Value::Text("confirm".into()));
+        let mut page = node("surface");
+        page.children = vec![dial];
+        let styles = serde_json::json!({});
+        let model = ValueMap::new().with("dial", 4.0);
+        let idle = input_at(-9.0, -9.0, false);
+
+        let mut state = UiState::new();
+        state.push_nudge("dial", 1, false);
+        let f = run_ui(&page, &model, &styles, &idle, &mut state);
+        assert_eq!(
+            f.results.number("dial"),
+            Some(4.0),
+            "a staged step is not a write — the scene keeps seeing the resting value"
+        );
+        assert!(state.staged_any(), "…but the stage is held");
+        state.push_nudge("dial", 1, false);
+        let f = run_ui(&page, &model, &styles, &idle, &mut state);
+        assert_eq!(f.results.number("dial"), Some(4.0), "still resting for the scene");
+        assert_eq!(
+            state.staged_value("dial"),
+            Some(&Value::Number(6.0)),
+            "the second press walks on from the stage, not from the model"
+        );
+        // The commit: queued by a Confirm, written by the next pass, spent after.
+        assert!(state.commit_stages(None), "there was something to commit");
+        let f = run_ui(&page, &model, &styles, &idle, &mut state);
+        assert_eq!(f.results.number("dial"), Some(6.0), "the commit lands once");
+        assert!(!state.staged_any(), "the stage is spent");
+
+        // Revert: the stage is dropped and the control reads the model again — and a
+        // stage that has been DRAWN (seeded into results for a frame) leaves nothing
+        // behind: it never took local ownership.
+        let mut fresh = UiState::new();
+        fresh.push_nudge("dial", -1, false);
+        run_ui(&page, &model, &styles, &idle, &mut fresh);
+        assert_eq!(fresh.staged_value("dial"), Some(&Value::Number(3.0)));
+        let f = run_ui(&page, &model, &styles, &idle, &mut fresh);
+        assert_eq!(f.results.number("dial"), Some(4.0), "drawn, still resting");
+        fresh.revert_stages();
+        let f = run_ui(&page, &model, &styles, &idle, &mut fresh);
+        assert!(!fresh.staged_any());
+        assert_eq!(f.results.number("dial"), Some(4.0), "reverted to the model");
+        let f = run_ui(&page, &model, &styles, &idle, &mut fresh);
+        assert_eq!(f.results.number("dial"), Some(4.0), "…and it stays there");
     }
 
     /// **The pad operates value controls** (nav-tier contract 1B5F6BB8): a `select` steps
@@ -15525,6 +16015,210 @@ mod tests {
         let f = run_ui(&node("cell"), &model, &styles(), &press, &mut plain);
         assert!(f.results.text("drag_kind").is_none());
         assert!(plain.drag().is_none());
+    }
+
+    /// A source beside a target, both plain `cell`s — the drag gesture is entirely
+    /// prop-driven on both ends (`drag_kind` / `drop_accept`), no new component kind.
+    /// The two boxes are anchored so a release lands unambiguously on one of them.
+    fn drag_pair(accept: &str, action: Option<&str>) -> UiNode {
+        let mut src = node("cell");
+        src.id = "src".into();
+        src.anchor = Some(UiAnchor::TopLeft);
+        src.width = Some(60.0);
+        src.height = Some(40.0);
+        src = prop(src, "drag_kind", Value::Text("clip".into()));
+        src = prop(src, "drag_id", Value::Text("walk_forward".into()));
+
+        let mut bin = node("cell");
+        bin.id = "bin".into();
+        bin.anchor = Some(UiAnchor::TopLeft);
+        bin.offset = [100.0, 0.0];
+        bin.width = Some(60.0);
+        bin.height = Some(40.0);
+        bin.action = action.map(str::to_string);
+        bin = prop(bin, "drop_accept", Value::Text(accept.into()));
+
+        let mut root = node("screen");
+        root.children = vec![src, bin];
+        root
+    }
+
+    fn at(x: f32, y: f32, clicked: bool, down: bool) -> UiInput {
+        UiInput {
+            mouse: Vec2::new(x, y),
+            clicked,
+            down,
+            right_down: false,
+            screen: Vec2::new(200.0, 100.0),
+            wheel: 0.0,
+            exclusive: false,
+            motion: Default::default(),
+        }
+    }
+
+    /// **`drop_accept` — a release over an accepting node FIRES its result.** The
+    /// target's `drop_action` (defaulting to its `action`) rides the same activation
+    /// channel a click rides, and the drag channel publishes WHAT landed (`drop_id`)
+    /// and WHERE (`drop_target`). A drop the UI answered also consumes the pointer,
+    /// so the scene does not resolve the same release against its own canvas twice.
+    #[test]
+    fn a_release_over_an_accepting_node_fires_its_drop_action() {
+        let tree = drag_pair("clip", Some("bind_clip"));
+        let model = ValueMap::new();
+        let mut state = UiState::new();
+
+        // Press inside the source → the payload is in flight.
+        let f = run_ui(&tree, &model, &styles(), &at(20.0, 20.0, true, true), &mut state);
+        assert!(f.results.is_on("drag_active"));
+
+        // Release over the TARGET → its action fires, carrying the payload.
+        let f = run_ui(
+            &tree,
+            &model,
+            &styles(),
+            &at(130.0, 20.0, false, false),
+            &mut state,
+        );
+        assert!(f.results.is_on("bind_clip"), "the target's action fires");
+        assert_eq!(f.results.text("drop_id"), Some("walk_forward"));
+        assert_eq!(f.results.text("drop_target"), Some("bin"));
+        assert!(f.results.is_on("drag_dropped"), "still the release edge");
+        assert!(f.results.is_on("hud_hit"), "an ANSWERED drop is consumed");
+        assert!(state.drag().is_none(), "the drag clears after the drop");
+        // …and it reached the ONE activation channel, exactly like a click.
+        assert_eq!(state.take_pointer_fired(), vec!["bind_clip".to_string()]);
+    }
+
+    /// An explicit `drop_action` overrides the target's own `action` — a node that
+    /// already does something when clicked can accept a drop that means something else.
+    #[test]
+    fn drop_action_overrides_the_targets_own_action() {
+        let mut tree = drag_pair("clip", Some("open_bin"));
+        tree.children[1] = prop(
+            tree.children[1].clone(),
+            "drop_action",
+            Value::Text("bind_clip".into()),
+        );
+        let model = ValueMap::new();
+        let mut state = UiState::new();
+        run_ui(&tree, &model, &styles(), &at(20.0, 20.0, true, true), &mut state);
+        let f = run_ui(
+            &tree,
+            &model,
+            &styles(),
+            &at(130.0, 20.0, false, false),
+            &mut state,
+        );
+        assert!(f.results.is_on("bind_clip"), "the drop fires `drop_action`");
+        assert!(
+            !f.results.is_on("open_bin"),
+            "…not the node's click action"
+        );
+    }
+
+    /// **A non-matching kind is not a drop on that node at all.** The release keeps
+    /// today's behaviour — a bare `drag_dropped` for the scene's own canvas to
+    /// resolve — and nothing fires, nothing is published, the pointer is not consumed.
+    #[test]
+    fn a_drop_of_the_wrong_kind_is_not_a_drop_on_that_node() {
+        let tree = drag_pair("node", Some("bind_clip")); // accepts "node", not "clip"
+        let model = ValueMap::new();
+        let mut state = UiState::new();
+
+        run_ui(&tree, &model, &styles(), &at(20.0, 20.0, true, true), &mut state);
+        let f = run_ui(
+            &tree,
+            &model,
+            &styles(),
+            &at(130.0, 20.0, false, false),
+            &mut state,
+        );
+        assert!(!f.results.is_on("bind_clip"), "the wrong kind fires nothing");
+        assert!(f.results.text("drop_id").is_none());
+        assert!(f.results.text("drop_target").is_none());
+        assert!(
+            f.results.is_on("drag_dropped"),
+            "the scene still sees the release, unchanged"
+        );
+        assert_eq!(f.results.text("drag_id"), Some("walk_forward"));
+
+        // The SAME target, releasing over NOTHING: also unchanged, also no fire.
+        let tree = drag_pair("clip", Some("bind_clip"));
+        let mut state = UiState::new();
+        run_ui(&tree, &model, &styles(), &at(20.0, 20.0, true, true), &mut state);
+        let f = run_ui(
+            &tree,
+            &model,
+            &styles(),
+            &at(190.0, 90.0, false, false),
+            &mut state,
+        );
+        assert!(!f.results.is_on("bind_clip"));
+        assert!(f.results.text("drop_target").is_none());
+        assert!(f.results.is_on("drag_dropped"));
+    }
+
+    /// A `drop_accept` list accepts SEVERAL kinds (whitespace-separated, the same
+    /// list shape a grid's track-spec uses).
+    #[test]
+    fn drop_accept_takes_a_list_of_kinds() {
+        let tree = drag_pair("marker clip node", Some("bind_clip"));
+        let model = ValueMap::new();
+        let mut state = UiState::new();
+        run_ui(&tree, &model, &styles(), &at(20.0, 20.0, true, true), &mut state);
+        let f = run_ui(
+            &tree,
+            &model,
+            &styles(),
+            &at(130.0, 20.0, false, false),
+            &mut state,
+        );
+        assert!(f.results.is_on("bind_clip"), "a listed kind is accepted");
+        // A kind that merely PREFIXES a listed one is not a match.
+        assert!(accepts_drop(&tree.children[1], "clip"));
+        assert!(!accepts_drop(&tree.children[1], "cli"));
+        assert!(!accepts_drop(&tree.children[1], "clip node"));
+    }
+
+    /// **The pad drops through the SAME path** (controller is the floor): a Confirm
+    /// on the focused source picks the payload up and KEEPS it across frames with the
+    /// mouse button up; the next Confirm, on a focused accepting target, drops it.
+    /// The walker half of this (recording the focused id) is gated in `walker.rs`.
+    #[test]
+    fn a_pad_confirm_picks_up_and_drops_on_the_focused_target() {
+        let tree = drag_pair("clip", Some("bind_clip"));
+        let model = ValueMap::new();
+        let mut state = UiState::new();
+        let idle = at(-9.0, -9.0, false, false); // the pointer is nowhere near either box
+
+        // Confirm on the focused SOURCE → picked up, and still carried next frame
+        // even though no button is held.
+        state.push_drag_confirm("src");
+        let f = run_ui(&tree, &model, &styles(), &idle, &mut state);
+        assert!(f.results.is_on("drag_active"), "the pad picked it up");
+        assert_eq!(f.results.text("drag_id"), Some("walk_forward"));
+        let f = run_ui(&tree, &model, &styles(), &idle, &mut state);
+        assert!(
+            f.results.is_on("drag_active") && !f.results.is_on("drag_dropped"),
+            "a pad-carried payload survives a frame with the button up"
+        );
+
+        // Confirm on the focused TARGET → the drop, through the same path.
+        state.push_drag_confirm("bin");
+        let f = run_ui(&tree, &model, &styles(), &idle, &mut state);
+        assert!(f.results.is_on("bind_clip"), "the pad fires the drop action");
+        assert_eq!(f.results.text("drop_id"), Some("walk_forward"));
+        assert_eq!(f.results.text("drop_target"), Some("bin"));
+        assert!(state.drag().is_none(), "the drag clears after the pad drop");
+
+        // Confirm on a node that accepts NOTHING ends the carry without firing.
+        state.push_drag_confirm("src");
+        run_ui(&tree, &model, &styles(), &idle, &mut state);
+        state.push_drag_confirm("src"); // the source accepts no kind
+        let f = run_ui(&tree, &model, &styles(), &idle, &mut state);
+        assert!(!f.results.is_on("bind_clip"));
+        assert!(f.results.is_on("drag_dropped"));
+        assert!(state.drag().is_none());
     }
 
     /// The **commit-on-release** contract (Aaron, 2026-08-06): a captured drag

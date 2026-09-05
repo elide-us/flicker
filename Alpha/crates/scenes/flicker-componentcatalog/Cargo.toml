@@ -19,6 +19,16 @@ flicker = { version = "0.1.0", path = "../../core/flicker" }
 # through (input-P3: no owned resolver — it dispatches the pump's `signals.events`).
 flicker-input-core.workspace = true
 flicker-input-router.workspace = true
+# The shell: PauseScene/Theme, and the SHARED-MODAL host seam the Modals page
+# exercises (`SharedModal::open` by id + `Scene::modal_closed`).
 flicker-shell.workspace = true
+# The SURFACE FILLERS the Fillers page seats live, each on a plain `surface`:
+# GraphCanvas + Timeline from flicker-canvas, Gadget (over RigView) + Doll from
+# flicker-rigview. `Plot` needs nothing new — it ships inside flicker-widgets,
+# which the `flicker` umbrella already re-exports as `flicker::ui`.
+flicker-canvas.workspace = true
+flicker-rigview.workspace = true
+# The gadget's feature BASIS is a `Mat3`, which `flicker::render` does not re-export.
+glam.workspace = true
 serde_json.workspace = true
 tracing.workspace = true

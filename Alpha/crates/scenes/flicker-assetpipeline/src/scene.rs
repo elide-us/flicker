@@ -21,34 +21,18 @@ use flicker::ui::{
 use flicker_content::{AssetClass, PropKind};
 use flicker_input_core::{AbstractControls, GamepadConfig, InputContext, InputMap, InputState};
 use flicker_input_router::{InputHandler, Router};
-use flicker_mechanics::GizmoMode;
-use flicker_rigview::{Projection, RigView};
-use flicker_shell::{PauseScene, Theme};
+use flicker_rigview::gadget::modes_from_names;
+use flicker_rigview::{GadgetStyle, Projection, RigView};
+use flicker_shell::{ModalParams, PauseScene, SharedModal, Theme};
 use glam::{Mat4, Vec3};
 
 use crate::compose::{self, Show};
-use crate::gizmo::Gizmo;
+use crate::gizmo::{Gizmo, GizmoUi};
 use crate::meshes::ViewMeshes;
-use crate::services::{class_label, BoneOffset, Document, MapState, WF_ANIMATION, WF_CHARACTER, WF_PROP};
+use crate::services::{
+    class_label, BoneOffset, Document, MapState, WF_ANIMATION, WF_CHARACTER, WF_PROP,
+};
 use crate::ui::{self, Step, Workflow};
-
-/// The gizmo radios' value for a mode, and back.
-fn gizmo_value(mode: GizmoMode) -> &'static str {
-    match mode {
-        GizmoMode::Translate => ui::GIZMO_VALUES[0],
-        GizmoMode::Rotate => ui::GIZMO_VALUES[1],
-        GizmoMode::Scale => ui::GIZMO_VALUES[2],
-    }
-}
-
-fn gizmo_parse(s: &str) -> Option<GizmoMode> {
-    match s {
-        v if v == ui::GIZMO_VALUES[0] => Some(GizmoMode::Translate),
-        v if v == ui::GIZMO_VALUES[1] => Some(GizmoMode::Rotate),
-        v if v == ui::GIZMO_VALUES[2] => Some(GizmoMode::Scale),
-        _ => None,
-    }
-}
 
 /// The Clayworks bench.
 pub struct Clayworks {
@@ -66,13 +50,17 @@ pub struct Clayworks {
     /// The selection `arrange()` reads: the open workflow and the rail's step index.
     wf: Workflow,
     tab: usize,
-    /// The discard dialog's runtime flag (Back off a dirty step).
-    discard_open: bool,
+    /// The unsaved-work prompt, armed for THIS frame's `update` to push as the shared
+    /// `choice_dialog` modal. The dispatcher cannot push a scene itself (it returns
+    /// nothing), so it arms and `update` — which owns the `Transition` — opens it, the
+    /// same hand-off `pause_open` already uses.
+    ask_discard: bool,
     /// Each data-driven list's scroll offset, echoed by its bind.
     scrolls: HashMap<&'static str, f64>,
     /// View settings the rig view reads (skeleton / base / collision / wireframe).
     show: [bool; 4],
-    gizmo: GizmoMode,
+    /// The gadget's handle colours, resolved from the theme once (they never change).
+    gadget_style: GadgetStyle,
     /// The four view panels (perspective, top, left, front), each seated from its own
     /// `surface` node and lit by its own stage.
     rig: Vec<RigView>,
@@ -120,6 +108,7 @@ impl Clayworks {
             extra,
             framed: vec![(Vec3::ZERO, 0.0); ui::RIG_SLOTS.len() + 1 + ui::CLIP_SLOTS.len()],
             meshes: ViewMeshes::new(),
+            gadget_style: compose::gadget_style(&ui_styles),
             gizmo_state: Gizmo::default(),
             clip_tick: 0.0,
             bake_tick: 0.0,
@@ -135,10 +124,9 @@ impl Clayworks {
             textures: Vec::new(),
             wf: Workflow::Character,
             tab: 0,
-            discard_open: false,
+            ask_discard: false,
             scrolls: HashMap::new(),
             show: [true, true, false, false],
-            gizmo: GizmoMode::default(),
         }
     }
 
@@ -195,7 +183,6 @@ impl Clayworks {
         m.set(ui::WF_BIND, self.wf.name());
         m.set(ui::TAB_BIND, self.tab as f64);
         m.set(ui::TABS_SHOWN, true);
-        m.set(ui::DISCARD_BIND, self.discard_open);
         m.set(ui::STEP_TITLE, step.title());
         m.set(ui::STEP_HINT, step.hint());
 
@@ -239,12 +226,18 @@ impl Clayworks {
         m.set(ui::AS_PROVIDED, self.doc.as_provided);
         let picks = self.doc.candidate_rows();
         m.set(ui::HAS_PICKS, !picks.is_empty());
-        m.set(ui::PICK_SEL, self.doc.selected_candidate().unwrap_or_default());
+        m.set(
+            ui::PICK_SEL,
+            self.doc.selected_candidate().unwrap_or_default(),
+        );
 
         // Prep.
         m.set(ui::STATURE, f64::from(self.doc.stature_cm));
         m.set(ui::DECIMATE, self.doc.decimate_target.clone());
-        m.set(ui::PREP_HEIGHT, Document::height_readout(self.doc.stature_cm));
+        m.set(
+            ui::PREP_HEIGHT,
+            Document::height_readout(self.doc.stature_cm),
+        );
         m.set(ui::PREP_STATUS, self.doc.prep_status());
 
         // Rig.
@@ -262,7 +255,8 @@ impl Clayworks {
             m.set(*k, f64::from(v));
         }
         m.set(ui::OFF_ROLL, f64::from(off.roll));
-        m.set(ui::GIZMO_MODE, gizmo_value(self.gizmo));
+        m.set(ui::GIZMO_MODE, self.gizmo_state.ui_mode().value());
+        m.set(ui::GIZMO_SNAP, self.gizmo_state.snapping());
         m.set(ui::MIRROR, self.doc.mirror_joints);
         for (k, v) in ui::SHOW.iter().zip(self.show) {
             m.set(*k, v);
@@ -282,7 +276,10 @@ impl Clayworks {
         let fit = self.doc.fit().cloned().unwrap_or_default();
         m.set(
             ui::SOCK_SEL,
-            sockets.get(fit.socket).map(|(id, _)| id.clone()).unwrap_or_default(),
+            sockets
+                .get(fit.socket)
+                .map(|(id, _)| id.clone())
+                .unwrap_or_default(),
         );
         for (k, v) in ui::FIT_OFFSET.iter().zip(fit.offset) {
             m.set(*k, f64::from(v));
@@ -360,8 +357,11 @@ impl Clayworks {
 
     // ── Dispatch ────────────────────────────────────────────────────────────
 
-    /// Open a folder into `workflow` — the Source step's four import buttons. A folder
-    /// that opened raises the `loaded` signal for the script, which decides the next stop.
+    /// Open a folder into `workflow` — the Source step's four import buttons. The
+    /// folder comes from the OPERATING SYSTEM's dialog through [`Document::pick_folder`]
+    /// (Aaron's 2026-09-04 ruling AAD0DC4B: file selection is the OS dialog via the
+    /// public `rfd` crate). A folder that opened raises the `loaded` signal for the
+    /// script, which decides the next stop.
     fn import(&mut self, workflow: Workflow, class: Option<AssetClass>, prop: Option<PropKind>) {
         let Some(dir) = Document::pick_folder() else {
             return; // cancelled — stay put
@@ -376,7 +376,7 @@ impl Clayworks {
         self.doc.open(dir);
         self.wf = workflow;
         self.tab = 0;
-        self.discard_open = false;
+        self.ask_discard = false;
         self.scrolls.clear();
         if self.doc.source.is_some() {
             let mut sig = ValueMap::new();
@@ -423,16 +423,17 @@ impl Clayworks {
 
     /// THE ONE DISPATCHER: click results and fired intents, one map.
     fn apply_results(&mut self, r: &ValueMap) {
-        // The discard modal owns the results while it is up.
-        if self.discard_open {
-            if r.is_on(ui::DISCARD_YES) {
-                self.doc = Document::new();
-                self.discard_open = false;
-                self.tab = 0;
-                self.scrolls.clear();
-            } else if r.is_on(ui::DISCARD_NO) {
-                self.discard_open = false;
-            }
+        // The unsaved-work answers: they arrive here from the SHARED modal through
+        // `modal_closed`, folded into this ONE dispatcher exactly like a click — the
+        // modal is a scene of its own now, so nothing has to gate the rest of the bench
+        // on "a dialog is up".
+        if r.is_on(ui::DISCARD_YES) {
+            self.doc = Document::new();
+            self.tab = 0;
+            self.scrolls.clear();
+            return;
+        }
+        if r.is_on(ui::DISCARD_NO) {
             return;
         }
 
@@ -440,9 +441,17 @@ impl Clayworks {
         if r.is_on(ui::IMPORT_CHARACTER) {
             self.import(Workflow::Character, Some(AssetClass::Skin), None);
         } else if r.is_on(ui::IMPORT_ACCESSORY) {
-            self.import(Workflow::Prop, Some(AssetClass::Prop), Some(PropKind::Clothing));
+            self.import(
+                Workflow::Prop,
+                Some(AssetClass::Prop),
+                Some(PropKind::Clothing),
+            );
         } else if r.is_on(ui::IMPORT_PROP) {
-            self.import(Workflow::Prop, Some(AssetClass::Prop), Some(PropKind::Environment));
+            self.import(
+                Workflow::Prop,
+                Some(AssetClass::Prop),
+                Some(PropKind::Environment),
+            );
         } else if r.is_on(ui::IMPORT_ANIMATION) {
             self.import(Workflow::Animation, Some(AssetClass::Animation), None);
         }
@@ -457,7 +466,7 @@ impl Clayworks {
             }
         }
         if r.is_on(ui::STEP_PREV) && self.tab == 0 && self.dirty() {
-            self.discard_open = true;
+            self.ask_discard = true;
         }
 
         // Source settings and the candidate pick.
@@ -511,6 +520,8 @@ impl Clayworks {
                     r.number(ui::OFF[2]).map_or(cur.t[2], |v| v as f32),
                 ],
                 roll: r.number(ui::OFF_ROLL).map_or(cur.roll, |v| v as f32),
+                // The gadget's Scale writes this; no dial does, so it carries through.
+                scale: cur.scale,
             };
             if off != cur {
                 // The service mirrors the edit onto the twin bone when `mirror_joints` is
@@ -518,8 +529,11 @@ impl Clayworks {
                 self.doc.set_selected_offset(off);
             }
         }
-        if let Some(mode) = r.text(ui::GIZMO_MODE).and_then(gizmo_parse) {
-            self.gizmo = mode;
+        if let Some(mode) = r.text(ui::GIZMO_MODE).and_then(GizmoUi::parse) {
+            self.gizmo_state.set_ui_mode(mode);
+        }
+        if let Some(v) = r.get(ui::GIZMO_SNAP).and_then(as_bool) {
+            self.gizmo_state.set_snap(v);
         }
         if let Some(v) = r.get(ui::MIRROR).and_then(as_bool) {
             self.doc.mirror_joints = v;
@@ -629,6 +643,16 @@ fn as_bool(v: &flicker::script::Value) -> Option<bool> {
 }
 
 impl Scene for Clayworks {
+    /// A shared modal closed over this bench: fold its answer into the ONE dispatcher,
+    /// as a fired result name — the same channel a click arrives on, so `discard_yes` /
+    /// `discard_no` mean here exactly what they meant when the dialog was an inline
+    /// subtree. The payload is unused: a choice dialog collects nothing.
+    fn modal_closed(&mut self, _modal: &str, result: &str, _payload: Option<&str>) {
+        let mut r = ValueMap::new();
+        r.set(result, true);
+        self.apply_results(&r);
+    }
+
     /// The decimate-target field owns the keyboard while its session is open.
     fn input_context(&self) -> Option<InputContext> {
         self.ui_state
@@ -660,6 +684,16 @@ impl Scene for Clayworks {
 
         let screen = renderer.size();
         let (tree, model) = self.publish();
+        // The gadget's allowed modes are AUTHORED: `arrange()` publishes one gate per mode for
+        // the open step, and the ONE mode vocabulary turns those names into the gate. Applied
+        // before this frame's results, so the radio a human just pressed is judged against the
+        // step it was pressed on.
+        self.gizmo_state.set_modes(modes_from_names(
+            ui::GADGET_MODE_GATES
+                .iter()
+                .filter(|(gate, _)| model.is_on(gate))
+                .map(|(_, name)| *name),
+        ));
         let snap = UiInput {
             mouse: input.mouse_position,
             clicked: input.mouse_left_pressed,
@@ -699,11 +733,7 @@ impl Scene for Clayworks {
         for name in walker.take_fired() {
             results.set(name, true);
         }
-        let cancelled = walker.cancelled();
         drop(walker);
-        if cancelled && self.discard_open {
-            self.discard_open = false;
-        }
         self.apply_results(&results);
 
         // The clocks: the clip step's active clip and the preview's idle, in their own ticks.
@@ -726,8 +756,7 @@ impl Scene for Clayworks {
             collision: self.show[2],
             wireframe: self.show[3],
         };
-        let rig_composed =
-            compose::rig_lines(&self.doc, show, step, self.gizmo, self.meshes.base());
+        let rig_composed = compose::rig_lines(&self.doc, show, step, self.meshes.base());
         let gizmo_active = step == Step::Rig && self.doc.bone_sel().is_some();
         let gizmo_owned = self.gizmo_state.interact(
             &mut self.doc,
@@ -738,7 +767,7 @@ impl Scene for Clayworks {
         );
         // Re-compose after a drag moved a joint, so the overlay follows the pointer.
         let rig_composed = if gizmo_owned.is_some() {
-            compose::rig_lines(&self.doc, show, step, self.gizmo, self.meshes.base())
+            compose::rig_lines(&self.doc, show, step, self.meshes.base())
         } else {
             rig_composed
         };
@@ -762,11 +791,20 @@ impl Scene for Clayworks {
         let rig_len = self.rig.len();
         for (i, v) in self.rig.iter_mut().chain(&mut self.extra).enumerate() {
             let composed = if i < rig_len {
-                if v.projection() == Projection::Perspective {
+                let mut c = if v.projection() == Projection::Perspective {
                     rig_composed.clone()
                 } else {
                     rig_composed.without_ground()
+                };
+                // The handles are PER PANEL — an orthographic view hides the axis it looks
+                // along, and each handle wears its own Aim → Locked → Modify colour.
+                if gizmo_active {
+                    c.overlay.extend(
+                        self.gizmo_state
+                            .handle_lines(v.projection(), &self.gadget_style),
+                    );
                 }
+                c
             } else if i == rig_len {
                 match bake_composed.as_ref() {
                     Some((c, _)) => c.clone(),
@@ -802,6 +840,24 @@ impl Scene for Clayworks {
                 pointers[i].as_ref()
             };
             v.update(dtf, pointer, pad, focused.as_deref());
+        }
+
+        // The unsaved-work prompt: the SHARED `choice_dialog` modal, opened by id with
+        // the bench's own action names as its options and pushed exactly the way the
+        // pause overlay is. Its answer comes back through `modal_closed`, below.
+        if self.ask_discard {
+            self.ask_discard = false;
+            if let Some(theme) = self.theme {
+                return Transition::Push(Box::new(SharedModal::open(
+                    theme,
+                    "choice_dialog",
+                    // Keep-editing is also the cancel affordance, so Esc / pad-B backs
+                    // out the SAFE way — a stray Escape never discards the work.
+                    ModalParams::unsaved_changes(ui::DISCARD_YES, ui::DISCARD_NO)
+                        .title("$wf_discard_title")
+                        .body("$wf_discard_msg"),
+                )));
+            }
         }
 
         if results.is_on(ui::PAUSE_OPEN) {
@@ -914,18 +970,71 @@ mod tests {
         );
     }
 
-    /// A CANCELLED folder pick stays put — the headless build's dialog always cancels, so
-    /// the Source step's cancel path is the one it can prove: nothing opens, nothing moves.
+    /// THE IMPORT ARM CALLS THE PICK SEAM, and what the seam returns is what opens.
+    ///
+    /// File selection is the OS dialog through `rfd` (Aaron's ruling AAD0DC4B); the
+    /// dialog call is factored behind [`Document::pick_folder`], whose `#[cfg(test)]`
+    /// arm answers from an armed stub, so this gate drives the REAL Source-step path —
+    /// button → `import()` → `pick_folder()` → `Document::open` — without any test
+    /// ever opening a native dialog.
     #[test]
-    fn a_cancelled_pick_stays_put() {
-        assert!(Document::pick_folder().is_none(), "no dialog in a headless build");
+    fn the_import_calls_the_pick_seam_and_opens_what_it_returns() {
+        let fixture = crate::tests::synth_source_dir("os_pick");
         let mut b = bench();
         let mut r = ValueMap::new();
-        r.set(ui::IMPORT_PROP, true);
+        r.set(ui::IMPORT_CHARACTER, true);
+
+        // 1 — a CANCELLED pick (the stub is unarmed) stays put: nothing opens, nothing
+        // dispatches, the bench does not move off the Source step.
         b.apply_results(&r);
-        assert!(b.doc.source.is_none(), "nothing opened");
+        assert!(b.doc.source.is_none(), "a cancelled pick opens nothing");
         assert_eq!(b.wf, Workflow::Character, "nothing dispatched");
         assert_eq!(b.tab, 0);
+
+        // 2 — an ANSWERED pick opens the folder the seam returned, into the workflow the
+        // button carried. The stub is consumed once, which is the proof the arm CALLED it.
+        crate::services::stub_pick(fixture.clone());
+        b.apply_results(&r);
+        let source = b.doc.source.as_ref().expect("the picked folder opened");
+        assert_eq!(source.dir, fixture, "on the folder the dialog returned");
+        assert_eq!(
+            b.wf,
+            Workflow::Character,
+            "into the workflow the button named"
+        );
+        assert!(
+            Document::pick_folder().is_none(),
+            "the arm consumed the seam's answer — one press, one dialog"
+        );
+        let _ = std::fs::remove_dir_all(&fixture);
+    }
+
+    /// THE OS DIALOG IS THE PICKER, and it is reached through ONE seam. `rfd` may be
+    /// named only by `Document::pick_folder` in `services.rs` (and by the manifest that
+    /// pulls it in): a second `FileDialog` anywhere in the bench would be a second door
+    /// with its own start directory and its own title (rule 98232A50 — one path, no
+    /// caller left on another). The needle is assembled rather than written, so this
+    /// gate does not trip over its own text.
+    #[test]
+    fn the_os_dialog_is_reached_through_the_one_pick_seam() {
+        let needle = ["r", "fd", "::"].concat();
+        assert_eq!(
+            include_str!("services.rs").matches(&needle).count(),
+            1,
+            "`services.rs` names the native-dialog crate exactly once — inside \
+             `Document::pick_folder`, the bench's ONE dialog seam"
+        );
+        for (what, src) in [
+            ("scene.rs", include_str!("scene.rs")),
+            ("compose.rs", include_str!("compose.rs")),
+            ("ui.rs", include_str!("ui.rs")),
+        ] {
+            assert!(
+                !src.contains(&needle),
+                "{what} reaches for the native dialog directly — it goes through \
+                 `Document::pick_folder` or it is a second door"
+            );
+        }
     }
 
     /// The Source step shows the four import cards with real extent; the Prep step shows
@@ -943,9 +1052,15 @@ mod tests {
         ] {
             extent(&frame, id);
         }
-        assert!(frame.rect(ui::DECIMATE).is_none(), "prep controls are dark on Source");
+        assert!(
+            frame.rect(ui::DECIMATE).is_none(),
+            "prep controls are dark on Source"
+        );
         for (slot, _) in ui::RIG_SLOTS {
-            assert!(frame.surface(slot).is_none(), "{slot} is unreserved on Source");
+            assert!(
+                frame.surface(slot).is_none(),
+                "{slot} is unreserved on Source"
+            );
         }
 
         // The step rail itself: the paged menu places it only while the bench publishes
@@ -959,8 +1074,15 @@ mod tests {
         extent(&frame, ui::DECIMATE_RESET);
         extent(&frame, ui::DECIMATE_APPLY);
         for (slot, _) in ui::RIG_SLOTS {
-            let s = frame.surface(slot).unwrap_or_else(|| panic!("{slot} reserved on Prep"));
-            assert!(s.w > 100.0 && s.h > 100.0, "{slot} has extent: {}x{}", s.w, s.h);
+            let s = frame
+                .surface(slot)
+                .unwrap_or_else(|| panic!("{slot} reserved on Prep"));
+            assert!(
+                s.w > 100.0 && s.h > 100.0,
+                "{slot} has extent: {}x{}",
+                s.w,
+                s.h
+            );
         }
 
         b.tab = 2; // rig
@@ -968,10 +1090,46 @@ mod tests {
         for (slot, _) in ui::RIG_SLOTS {
             assert!(frame.surface(slot).is_some(), "{slot} reserved on Rig");
         }
-        for id in [ui::BAKE_SKIN, ui::BONE_RESET, "mode_translate", ui::OFF_ROLL] {
+        for id in [
+            ui::BAKE_SKIN,
+            ui::BONE_RESET,
+            "mode_translate",
+            "mode_flip",
+            ui::GIZMO_SNAP,
+            ui::OFF_ROLL,
+        ] {
             extent(&frame, id);
         }
-        assert!(frame.rect(ui::DECIMATE).is_none(), "prep controls are dark on Rig");
+        assert!(
+            frame.rect(ui::DECIMATE).is_none(),
+            "prep controls are dark on Rig"
+        );
+    }
+
+    /// THE GADGET'S MODES ARE AUTHORED: `arrange()` publishes one gate per mode for the open
+    /// step, and only the Rig step — whose `BoneOffset` carries a translation, a roll, a scale
+    /// and a mirrorable twin — allows any. Every other step publishes none, which is an inert
+    /// gadget rather than a control that silently does nothing.
+    #[test]
+    fn the_script_publishes_the_gadget_modes_of_the_open_step() {
+        let mut b = bench();
+        b.tab = 2; // rig
+        let (_, model) = b.publish();
+        for (gate, name) in ui::GADGET_MODE_GATES {
+            assert!(model.is_on(gate), "the Rig step allows {name}");
+        }
+        for tab in [0, 1, 3, 4, 5] {
+            b.tab = tab;
+            let step = b.step();
+            let (_, model) = b.publish();
+            for (gate, name) in ui::GADGET_MODE_GATES {
+                assert!(!model.is_on(gate), "{name} is gated off on {}", step.name());
+            }
+        }
+        // And the names the gate publishes ARE the radios' values, so the two cannot drift.
+        for ((_, gate), radio) in ui::GADGET_MODE_GATES.iter().zip(ui::GIZMO_VALUES) {
+            assert_eq!(*gate, radio);
+        }
     }
 
     /// The preview step reserves the bake view and nothing else; the animation workflow's
@@ -982,7 +1140,9 @@ mod tests {
         b.tab = 3; // preview
         let frame = walk(&mut b);
         let (bake, _) = ui::BAKE_SLOT;
-        let s = frame.surface(bake).expect("the bake view is reserved on Preview");
+        let s = frame
+            .surface(bake)
+            .expect("the bake view is reserved on Preview");
         assert!(s.w > 100.0 && s.h > 100.0);
         for (slot, _) in ui::RIG_SLOTS {
             assert!(frame.surface(slot).is_none(), "{slot} is dark on Preview");
@@ -991,10 +1151,15 @@ mod tests {
         b.tab = 1; // clip
         let frame = walk(&mut b);
         for (slot, _) in ui::CLIP_SLOTS {
-            let s = frame.surface(slot).unwrap_or_else(|| panic!("{slot} reserved on Clip"));
+            let s = frame
+                .surface(slot)
+                .unwrap_or_else(|| panic!("{slot} reserved on Clip"));
             assert!(s.w > 100.0 && s.h > 100.0, "{slot} has extent");
         }
-        assert!(frame.surface(bake).is_none(), "the bake view is dark on Clip");
+        assert!(
+            frame.surface(bake).is_none(),
+            "the bake view is dark on Clip"
+        );
     }
 
     /// The script owns the flow's "what happens after": a `loaded` signal moves the rail to
@@ -1030,7 +1195,57 @@ mod tests {
         let mut r = ValueMap::new();
         r.set(ui::STEP_PREV, true);
         b.apply_results(&r);
-        assert!(!b.discard_open);
+        assert!(!b.ask_discard);
+    }
+
+    /// THE UNSAVED-WORK PROMPT IS THE SHARED MODAL: the bench ARMS it (the dispatcher
+    /// returns no transition, so `update` pushes it, exactly as it pushes the pause
+    /// overlay) and reads its answer back through the kernel's `modal_closed` hook, into
+    /// the SAME dispatcher a click feeds. Replaces the inline `ap_discard` subtree and
+    /// the `discard_open` gate that used to swallow every other result while it was up.
+    #[test]
+    fn the_unsaved_prompt_arms_the_shared_modal_and_its_answer_comes_back() {
+        // The ARM is what `update` turns into the push. Its guard (`dirty()`) needs a
+        // loaded source — a content fixture — so its negative half is pinned in
+        // `the_rail_index_moves_the_step` and this drives the armed state directly.
+        let mut b = bench();
+        b.ask_discard = true;
+
+        // KEEP EDITING: the answer arrives through the kernel hook and changes nothing.
+        b.tab = 2;
+        b.modal_closed("choice_dialog", ui::DISCARD_NO, None);
+        assert_eq!(
+            b.tab, 2,
+            "keeping the work leaves the bench exactly as it was"
+        );
+
+        // DISCARD: the same channel, and the bench is reset to the first stop.
+        b.scrolls.insert(ui::ROWS_BONES, 12.0);
+        b.modal_closed("choice_dialog", ui::DISCARD_YES, None);
+        assert_eq!(b.tab, 0, "discarding sends the rail home");
+        assert!(!b.dirty(), "and the document is fresh");
+        assert!(
+            b.scrolls.is_empty(),
+            "and every list starts at the top again"
+        );
+    }
+
+    /// THE INLINE MODAL IS GONE: no `ap_discard` subtree, no `screens.confirm` block and
+    /// no `shown_discard` slice survive in the shipped pair — a migration that left the
+    /// old copy behind would still render it, dark and unreachable, forever.
+    #[test]
+    fn no_inline_discard_modal_is_left_in_the_scene_pair() {
+        for needle in ["ap_discard", "shown_discard", "screens.confirm"] {
+            assert!(
+                !ui::SCENE.contains(needle),
+                "assetpipeline.scene.json still carries `{needle}` from the inline modal"
+            );
+        }
+        let lua = include_str!("../../../../content/sensorium/scripts/assetpipeline.lua");
+        assert!(
+            !lua.contains("shown_discard") && !lua.contains("discard_open"),
+            "assetpipeline.lua still lights the retired inline modal's slice"
+        );
     }
 
     /// The workflow rails are exclusive: exactly one is lit, and it is the open workflow's.

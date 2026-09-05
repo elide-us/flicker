@@ -35,8 +35,10 @@ pub const RIG_SLOTS: [(&str, &str); 4] = [
 /// The preview step's single bake view.
 pub const BAKE_SLOT: (&str, &str) = ("ap_view_bake", "rig_bake");
 /// The clip step's two variant views (root motion, in place).
-pub const CLIP_SLOTS: [(&str, &str); 2] =
-    [("ap_view_root", "clip_root"), ("ap_view_place", "clip_place")];
+pub const CLIP_SLOTS: [(&str, &str); 2] = [
+    ("ap_view_root", "clip_root"),
+    ("ap_view_place", "clip_place"),
+];
 
 // ── Selection ───────────────────────────────────────────────────────────────
 
@@ -44,8 +46,6 @@ pub const CLIP_SLOTS: [(&str, &str); 2] =
 pub const WF_BIND: &str = "wf";
 /// The step rail's two-way bind: the selected step's index into the open workflow.
 pub const TAB_BIND: &str = "tab";
-/// The discard dialog's runtime flag; `arrange()` lights `shown_discard` from it.
-pub const DISCARD_BIND: &str = "discard_open";
 /// The paged menu shows its tab rail only while this Model flag is on (Populous
 /// publishes it per page); this bench's one page always has a step rail.
 pub const TABS_SHOWN: &str = "paged_tabs_shown";
@@ -73,6 +73,9 @@ pub const BAKE_SKIN: &str = "bake_skin";
 pub const BONE_RESET: &str = "bone_reset";
 pub const NEXT_PIECE: &str = "next_piece";
 pub const COMMIT: &str = "commit";
+/// The two answers the SHARED `choice_dialog` modal carries back when Back leaves a
+/// dirty first stop — the bench's own action names, handed to the modal as its options
+/// and returned verbatim through `Scene::modal_closed` into the ONE dispatcher.
 pub const DISCARD_YES: &str = "discard_yes";
 pub const DISCARD_NO: &str = "discard_no";
 
@@ -87,8 +90,14 @@ pub const BONE_SEL: &str = "bone_sel";
 pub const OFF: [&str; 3] = ["off_x", "off_y", "off_z"];
 pub const OFF_ROLL: &str = "off_roll";
 pub const GIZMO_MODE: &str = "gizmo_mode";
+pub const GIZMO_SNAP: &str = "gizmo_snap";
 pub const MIRROR: &str = "mirror";
-pub const SHOW: [&str; 4] = ["show_skeleton", "show_base", "show_collision", "show_wireframe"];
+pub const SHOW: [&str; 4] = [
+    "show_skeleton",
+    "show_base",
+    "show_collision",
+    "show_wireframe",
+];
 pub const RIG_PROGRESS: &str = "rig_progress";
 pub const SOCK_SEL: &str = "sock_sel";
 pub const FIT_OFFSET: [&str; 3] = ["fit_ox", "fit_oy", "fit_oz"];
@@ -100,8 +109,22 @@ pub const VARIANT_IP: &str = "variant_ip";
 pub const ATT_SEL: &str = "att_sel";
 pub const ATT: [&str; 3] = ["att_x", "att_y", "att_z"];
 
-/// The gizmo radios' values — the mode the rig view's handles edit in.
-pub const GIZMO_VALUES: [&str; 3] = ["translate", "rotate", "scale"];
+/// The gizmo radios' values — the mode the rig view's handles edit in. These ARE the gadget's mode
+/// NAMES (`flicker_rigview::modes_from_names` owns the spelling), so the radio a human presses and
+/// the gate `assetpipeline.lua` publishes cannot drift into two vocabularies. The order is
+/// `GizmoUi`'s discriminant order.
+pub const GIZMO_VALUES: [&str; 4] = ["translate", "rotate", "scale", "flip"];
+
+/// The per-step gadget gate `arrange()` publishes: one key per mode, ON when this step's document
+/// has a consumer for it. `arrange()` marshals scalars keyed by component id, so the LIST of mode
+/// names travels as four booleans and is re-assembled here — the same `{ on = … }` shape every
+/// other slice gate in that script uses.
+pub const GADGET_MODE_GATES: [(&str, &str); 4] = [
+    ("gadget_translate", GIZMO_VALUES[0]),
+    ("gadget_rotate", GIZMO_VALUES[1]),
+    ("gadget_scale", GIZMO_VALUES[2]),
+    ("gadget_flip", GIZMO_VALUES[3]),
+];
 
 // ── Data-driven rows ────────────────────────────────────────────────────────
 
@@ -263,10 +286,16 @@ mod tests {
     fn the_script_mirrors_the_step_roster() {
         let flat = squash(SCRIPT);
         for wf in Workflow::ALL {
-            let names: Vec<String> =
-                wf.steps().iter().map(|s| format!("\"{}\"", s.name())).collect();
+            let names: Vec<String> = wf
+                .steps()
+                .iter()
+                .map(|s| format!("\"{}\"", s.name()))
+                .collect();
             let line = squash(&format!("{} = {{ {} }}", wf.name(), names.join(", ")));
-            assert!(flat.contains(&line), "assetpipeline.lua STEPS lacks `{line}`");
+            assert!(
+                flat.contains(&line),
+                "assetpipeline.lua STEPS lacks `{line}`"
+            );
         }
     }
 
@@ -303,7 +332,10 @@ mod tests {
             );
         }
         for (name, _) in ROW_SOURCES {
-            assert!(sources.contains(&name.to_string()), "roster source `{name}` is not in the tree");
+            assert!(
+                sources.contains(&name.to_string()),
+                "roster source `{name}` is not in the tree"
+            );
         }
     }
 
@@ -318,8 +350,18 @@ mod tests {
         assert_eq!(root["on_menu"].as_str(), Some(PAUSE_OPEN));
         fn walk(n: &serde_json::Value, rails: &mut usize, groups: &mut Vec<String>) {
             if n["component"].as_str() == Some("pill_toggle") {
-                assert_eq!(n["next_action"].as_str(), Some(STEP_NEXT), "rail {}", n["id"]);
-                assert_eq!(n["prev_action"].as_str(), Some(STEP_PREV), "rail {}", n["id"]);
+                assert_eq!(
+                    n["next_action"].as_str(),
+                    Some(STEP_NEXT),
+                    "rail {}",
+                    n["id"]
+                );
+                assert_eq!(
+                    n["prev_action"].as_str(),
+                    Some(STEP_PREV),
+                    "rail {}",
+                    n["id"]
+                );
                 assert_eq!(n["bind"].as_str(), Some(TAB_BIND), "rail {}", n["id"]);
                 *rails += 1;
             }
@@ -333,7 +375,10 @@ mod tests {
         let (mut rails, mut groups) = (0, Vec::new());
         walk(root, &mut rails, &mut groups);
         assert_eq!(rails, Workflow::ALL.len(), "one step rail per workflow");
-        for g in groups.iter().filter(|g| !g.starts_with("ap_discard") && *g != "ap_footer") {
+        // The unsaved-work prompt is the SHARED `choice_dialog` modal now (pushed over
+        // this scene, not authored into it), so every group left in this tree is a pane
+        // or the footer — no modal exemption remains.
+        for g in groups.iter().filter(|g| *g != "ap_footer") {
             assert!(PANES.contains(&g.as_str()), "control in unknown pane `{g}`");
         }
     }

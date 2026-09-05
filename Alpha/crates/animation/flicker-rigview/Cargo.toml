@@ -21,6 +21,9 @@ path = "src/lib.rs"
 flicker = { version = "0.1.0", path = "../../core/flicker" }
 flicker-globe = { version = "0.1.9", path = "../../frontend/flicker-globe" }
 flicker-mechanics.workspace = true
+# The GPU-free skeletal runtime the `Doll` poses from: the ONE rig a screenful of small
+# previews shares (Model/Bone/ResolvedClip + pose/skin). Same animation cluster.
+flicker-skeletal.workspace = true
 flicker-input-core.workspace = true
 flicker-input-router.workspace = true
 glam.workspace = true

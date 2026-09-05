@@ -30,3 +30,15 @@ pub(crate) fn num(props: &HashMap<String, Value>, key: &str) -> Option<f64> {
 pub(crate) fn flag(props: &HashMap<String, Value>, key: &str) -> bool {
     matches!(props.get(key), Some(Value::Bool(true)))
 }
+
+/// A boolean flag whose ABSENCE is distinguishable from a literal `false` — for the
+/// toggles that DEFAULT TRUE (`popup_panel`'s `dismissable`), where [`flag`] would
+/// read "not authored" as "off" and turn every unadorned slab into a trap. A non-bool
+/// value is still `None` (the vocabulary gate: a typo falls back to the default rather
+/// than silently meaning something).
+pub(crate) fn opt_flag(props: &HashMap<String, Value>, key: &str) -> Option<bool> {
+    match props.get(key) {
+        Some(Value::Bool(b)) => Some(*b),
+        _ => None,
+    }
+}

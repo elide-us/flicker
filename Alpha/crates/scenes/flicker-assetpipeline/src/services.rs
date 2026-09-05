@@ -136,17 +136,35 @@ impl Parsed {
 }
 
 /// One bone's authored correction, applied on top of the conform result. This is the
-/// AUTHORED data; the posed skeleton is derived from it, so "Reset bone" is just zeroing it.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+/// AUTHORED data; the posed skeleton is derived from it, so "Reset bone" is just resetting it.
+///
+/// The three fields are the three things the gadget can do to a joint: `t` is Translate,
+/// `roll` is Rotate (the bone's own X axis is the only rotation axis a limb chain wants),
+/// and `scale` is Scale — the multiplier folded onto `RawBone::scale`, which is why the
+/// identity is ONE and not zero and why `Default` is written out rather than derived.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct BoneOffset {
     /// Translation in source units (cm), parent-relative — the same space as `RawBone::translation`.
     pub(crate) t: [f32; 3],
     /// Roll about the bone's own X axis, in degrees.
     pub(crate) roll: f32,
+    /// Per-axis multiplier on the bone's own local scale — identity is `[1.0; 3]`.
+    pub(crate) scale: [f32; 3],
+}
+
+impl Default for BoneOffset {
+    fn default() -> Self {
+        Self {
+            t: [0.0; 3],
+            roll: 0.0,
+            scale: [1.0; 3],
+        }
+    }
 }
 
 impl BoneOffset {
-    fn is_zero(&self) -> bool {
+    /// Does this offset change nothing? (The "Reset bone" target, and the fold's skip.)
+    fn is_identity(&self) -> bool {
         *self == Self::default()
     }
 }
@@ -551,6 +569,11 @@ impl Document {
     }
 
     /// The native open-folder dialog — the Load step's ONE dialog seam. `None` = cancelled.
+    ///
+    /// File selection is the OPERATING SYSTEM's dialog through the public `rfd` crate
+    /// (Aaron, ruling of 2026-09-04, AAD0DC4B): NSOpenPanel on macOS, IFileDialog on
+    /// Windows, GTK3 / the XDG desktop portal on Linux. The in-engine `file_browser`
+    /// modal that briefly replaced it is reverted — it was not needed and did not work.
     #[cfg(not(test))]
     pub(crate) fn pick_folder() -> Option<PathBuf> {
         rfd::FileDialog::new()
@@ -558,12 +581,15 @@ impl Document {
             .pick_folder()
     }
 
-    /// The headless test build has no OS dialog to block on: every pick is CANCELLED, so
-    /// what a test exercises is the cancel path (`load_folder` stays put); the folder itself
-    /// is handed to [`Self::open`] directly.
+    /// The headless test build has no OS dialog to block on — this is the INJECTION
+    /// SEAM that keeps the Source step gateable: a test arms [`stub_pick`] with the
+    /// folder the dialog would have returned (or leaves it empty for the cancel path),
+    /// and every pick consumes it exactly once, so a gate can prove the arm CALLS the
+    /// seam and that what it returns is what gets opened. No test ever opens a real
+    /// dialog.
     #[cfg(test)]
     pub(crate) fn pick_folder() -> Option<PathBuf> {
-        None
+        PICK_STUB.with(|c| c.borrow_mut().take())
     }
 
     /// Ingest a folder that has already been chosen. Split from the dialog so the whole wizard
@@ -1291,28 +1317,113 @@ impl Document {
     /// `pose_gen` so the mesh re-skins live.
     pub(crate) fn apply_gizmo_delta(&mut self, sel: usize, globals: &[Mat4], world_delta: Vec3) {
         // Parent's current posed rotation/scale takes the world delta into parent-local (root = world).
-        let parent_inv = self
-            .source
-            .as_ref()
-            .and_then(|s| s.parsed.as_ref())
-            .and_then(|p| p.model.bones.get(sel))
-            .and_then(|b| usize::try_from(b.parent).ok())
-            .and_then(|pi| globals.get(pi))
-            .map(|g| glam::Mat3::from_mat4(*g).inverse())
-            .unwrap_or(glam::Mat3::IDENTITY);
-        let dt = parent_inv * world_delta;
+        let Some(model) = self.source.as_ref().and_then(|s| s.parsed.as_ref()) else {
+            return;
+        };
+        let dt = parent_local_delta(globals, &model.model, sel, world_delta);
         if !dt.is_finite() {
             return;
         }
+        self.edit_offset(sel, |o| {
+            for k in 0..3 {
+                o.t[k] += dt[k];
+            }
+        });
+    }
+
+    /// ROTATE the selected bone's authored offset by the gadget's world-space `delta`.
+    ///
+    /// [`BoneOffset`] carries ONE rotation — `roll`, about the bone's own X axis, which is the axis
+    /// a limb chain actually wants and the one the `off_roll` dial writes. So the world delta is
+    /// projected onto that axis (the swing-twist twist angle) and only its twist reaches the offset:
+    /// the dial and the gadget keep writing ONE value instead of two rotations that could disagree.
+    /// A ring turned about an axis the bone cannot express contributes nothing, which is the honest
+    /// answer rather than a silent second rotation channel.
+    pub(crate) fn apply_gizmo_rotate(&mut self, sel: usize, globals: &[Mat4], delta: glam::Quat) {
+        let Some(axis) = globals
+            .get(sel)
+            .map(|g| g.x_axis.truncate())
+            .and_then(|a| a.try_normalize())
+        else {
+            return;
+        };
+        let twist = 2.0 * delta.xyz().dot(axis).atan2(delta.w);
+        if !twist.is_finite() || twist == 0.0 {
+            return;
+        }
+        self.edit_offset(sel, |o| o.roll += twist.to_degrees());
+    }
+
+    /// SCALE the selected bone's authored offset by the gadget's per-axis `factors` (multiplicative,
+    /// in the bone's local frame — the space [`BoneOffset::scale`] multiplies). Floored at
+    /// [`flicker_mechanics::MIN_SCALE`], so a drag through the pivot pins rather than inverting the
+    /// bone (a negative scale is a reflection, and mirroring is `flip`'s guarded job).
+    pub(crate) fn apply_gizmo_scale(&mut self, sel: usize, factors: Vec3) {
+        if !factors.is_finite() {
+            return;
+        }
+        self.edit_offset(sel, |o| {
+            for k in 0..3 {
+                o.scale[k] = (o.scale[k] * factors[k]).max(flicker_mechanics::MIN_SCALE);
+            }
+        });
+    }
+
+    /// MIRROR the selected bone's authored offset onto its `_l`/`_r` twin, through the gadget's
+    /// guarded reflection `m` (invariant C670523A: the caller's validator has already refused a
+    /// joint with no twin, so reaching here means one exists). The authored translation is
+    /// parent-local, so it goes to world, through the reflection, and back into the TWIN's parent
+    /// frame; the roll negates because a reflection reverses handedness, and the scale carries
+    /// across unchanged (its magnitude is the same on both sides).
+    ///
+    /// `false` when there is no twin — the same answer [`Self::mirror_of`] gives, so a caller that
+    /// skipped the validator still cannot write invalid geometry.
+    pub(crate) fn mirror_offset(&mut self, sel: usize, globals: &[Mat4], m: Mat4) -> bool {
+        let Some(twin) = self.mirror_of(sel) else {
+            return false;
+        };
+        let Some(off) = self
+            .source
+            .as_ref()
+            .and_then(|s| s.rig.as_ref())
+            .and_then(|r| r.offsets.get(sel))
+            .copied()
+        else {
+            return false;
+        };
+        let Some(model) = self.source.as_ref().and_then(|s| s.parsed.as_ref()) else {
+            return false;
+        };
+        let world = parent_basis(globals, &model.model, sel) * Vec3::from_array(off.t);
+        let reflected = glam::Mat3::from_mat4(m) * world;
+        let t = parent_basis(globals, &model.model, twin).inverse() * reflected;
+        if !t.is_finite() {
+            return false;
+        }
+        self.edit_offset(twin, |o| {
+            *o = BoneOffset {
+                t: t.to_array(),
+                roll: -off.roll,
+                scale: off.scale,
+            };
+        });
+        true
+    }
+
+    /// Edit one bone's authored offset in place, then re-derive the pose once and bump `pose_gen`
+    /// so the live skin re-uploads — the shared tail of every authored-offset write.
+    fn edit_offset(&mut self, sel: usize, edit: impl FnOnce(&mut BoneOffset)) {
         let Some(src) = self.source.as_mut() else {
             return;
         };
         let Some(slot) = src.rig.as_mut().and_then(|r| r.offsets.get_mut(sel)) else {
             return;
         };
-        slot.t[0] += dt.x;
-        slot.t[1] += dt.y;
-        slot.t[2] += dt.z;
+        let before = *slot;
+        edit(slot);
+        if *slot == before {
+            return;
+        }
         let offsets = src
             .rig
             .as_ref()
@@ -1397,21 +1508,7 @@ impl Document {
     /// Restore the focused joint's [`BoneOffset`] to `offset` (its pre-drag value) — the spring-back
     /// that ends a Perspective deform TEST, snapping the joint back to its rest position.
     pub(crate) fn restore_offset(&mut self, sel: usize, offset: BoneOffset) {
-        let Some(src) = self.source.as_mut() else {
-            return;
-        };
-        if let Some(slot) = src.rig.as_mut().and_then(|r| r.offsets.get_mut(sel)) {
-            *slot = offset;
-        }
-        let offsets = src
-            .rig
-            .as_ref()
-            .map(|r| r.offsets.clone())
-            .unwrap_or_default();
-        if let Some(p) = src.parsed.as_mut() {
-            p.rebuild(&offsets);
-        }
-        self.pose_gen = self.pose_gen.wrapping_add(1);
+        self.edit_offset(sel, |o| *o = offset);
     }
 
     /// Return to the rig view to import the NEXT piece. THE loop a weapon set or an outfit needs:
@@ -1991,7 +2088,7 @@ pub(crate) fn rest_globals(model: &RawModel, offsets: &[BoneOffset]) -> (Vec<Mat
     for (i, b) in model.bones.iter().enumerate() {
         let o = offsets.get(i).copied().unwrap_or_default();
         let local = Mat4::from_scale_rotation_translation(
-            Vec3::from_array(b.scale),
+            Vec3::from_array(b.scale) * Vec3::from_array(o.scale),
             glam::Quat::from_array(b.rotation) * glam::Quat::from_rotation_x(o.roll.to_radians()),
             Vec3::from_array(b.translation) + Vec3::from_array(o.t),
         );
@@ -2009,16 +2106,29 @@ pub(crate) fn rest_globals(model: &RawModel, offsets: &[BoneOffset]) -> (Vec<Mat
 /// The same arithmetic as `rest_globals` applies, one level down: local TRS, parent-relative.
 pub(crate) fn apply_offsets(model: &mut RawModel, offsets: &[BoneOffset]) {
     for (b, o) in model.bones.iter_mut().zip(offsets) {
-        if o.is_zero() {
+        if o.is_identity() {
             continue;
         }
         for k in 0..3 {
             b.translation[k] += o.t[k];
+            b.scale[k] *= o.scale[k];
         }
         let q =
             glam::Quat::from_array(b.rotation) * glam::Quat::from_rotation_x(o.roll.to_radians());
         b.rotation = q.to_array();
     }
+}
+
+/// The rotation/scale part of a bone's PARENT frame in world space (identity at the root) — the
+/// basis `RawBone::translation` and [`BoneOffset::t`] are expressed in.
+pub(crate) fn parent_basis(globals: &[Mat4], model: &RawModel, sel: usize) -> glam::Mat3 {
+    model
+        .bones
+        .get(sel)
+        .and_then(|b| usize::try_from(b.parent).ok())
+        .and_then(|pi| globals.get(pi))
+        .map(|g| glam::Mat3::from_mat4(*g))
+        .unwrap_or(glam::Mat3::IDENTITY)
 }
 
 /// A WORLD-space translation delta expressed in a bone's PARENT-local frame (root = world), using the
@@ -2030,14 +2140,7 @@ pub(crate) fn parent_local_delta(
     sel: usize,
     world_delta: Vec3,
 ) -> Vec3 {
-    let parent_inv = model
-        .bones
-        .get(sel)
-        .and_then(|b| usize::try_from(b.parent).ok())
-        .and_then(|pi| globals.get(pi))
-        .map(|g| glam::Mat3::from_mat4(*g).inverse())
-        .unwrap_or(glam::Mat3::IDENTITY);
-    parent_inv * world_delta
+    parent_basis(globals, model, sel).inverse() * world_delta
 }
 
 /// The symmetric bone NAME for a left/right bone (`thigh_l`↔`thigh_r`), or `None` for a centre bone.
@@ -2159,4 +2262,17 @@ pub(crate) fn model_bounds(model: &RawModel, globals: &[Mat4]) -> (Vec3, f32, f3
         ((hi - lo).max_element() * 0.5).max(1.0),
         lo.z - centre.z,
     )
+}
+
+// The `#[cfg(test)]` dialog seam's answer, armed by `stub_pick` and consumed once by
+// `Document::pick_folder`. Thread-local, so parallel tests never see each other's arm.
+#[cfg(test)]
+thread_local! {
+    static PICK_STUB: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Arm the headless dialog seam: the next [`Document::pick_folder`] returns `dir`.
+#[cfg(test)]
+pub(crate) fn stub_pick(dir: PathBuf) {
+    PICK_STUB.with(|c| *c.borrow_mut() = Some(dir));
 }

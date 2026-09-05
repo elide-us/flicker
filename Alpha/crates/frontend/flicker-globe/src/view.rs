@@ -116,14 +116,23 @@ impl GlobeView {
             seat,
             base_layer,
             stage,
+            StageInputs::default(),
             Self::draw_pass(camera, meshes, arrows),
         );
     }
 
     /// The target + composite plumbing of [`Self::render`] with a CALLER-supplied pass
-    /// body — the seam a non-globe surface filler (the flat [`crate::WorldMap`]) reuses so
-    /// the offscreen-target lifecycle exists exactly once. `draw` runs inside the stage's
-    /// declared pass with the target bound; it sets its own camera.
+    /// body — the seam a non-globe surface filler (the flat [`crate::WorldMap`], the rig
+    /// view and its doll) reuses so the offscreen-target lifecycle exists exactly once.
+    /// `draw` runs inside the stage's declared pass with the target bound; it sets its own
+    /// camera.
+    ///
+    /// `inputs` carries what the CONTENT publishes to the graph — chiefly
+    /// [`StageInputs::with_dirty`], the signal a [`Rate::Dirty`] seat re-renders on. A
+    /// filler whose image only changes on an edit (a still doll) is a poster the rest of
+    /// the time, and this is the only channel that can tell the clock otherwise.
+    // Seven arguments and one closure, each an independent fact about ONE declared pass.
+    #[allow(clippy::too_many_arguments)]
     pub fn render_pass<'f>(
         &mut self,
         r: &mut Renderer,
@@ -131,6 +140,7 @@ impl GlobeView {
         seat: Seat,
         base_layer: f32,
         stage: &StageDef,
+        inputs: StageInputs,
         draw: impl FnOnce(&mut Renderer) + 'f,
     ) {
         let rect = seat.rect;
@@ -154,7 +164,7 @@ impl GlobeView {
         fg.surface(
             CompositeTarget::Target(target),
             stage,
-            StageInputs::default(),
+            inputs,
             seat.rate,
             draw,
         );

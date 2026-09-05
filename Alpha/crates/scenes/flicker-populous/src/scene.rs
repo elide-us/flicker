@@ -51,12 +51,17 @@ use std::time::Duration;
 use flicker::render::{FrameGraph, MeshDrawOptions, Renderer, TextureHandle, Vec3};
 use flicker::scene::{Scene, SceneInput, Transition};
 use flicker::script::{HudCommand, ScriptHost, UiNode, ValueMap};
-use flicker::ui::{render_hud, run_ui, SceneDef, UiInput, UiIntents, UiState, WalkerHandler};
+use flicker::ui::{
+    render_hud, run_ui, Plot, PlotKind, PlotSeries, PlotStyle, SceneDef, UiInput, UiIntents,
+    UiState, WalkerHandler,
+};
 use flicker_globe::{
     column_frame, lerp3, stippled, temp_color, tile_width, water_temp_color, Arrows, GlobeWorld,
     HexSphereMap, ShellSpec, WorldMap, RADIUS,
 };
-use flicker_input_core::{AbstractControls, GamepadConfig, InputContext, InputMap, InputState};
+use flicker_input_core::{
+    AbstractControls, ActionSignal, GamepadConfig, InputContext, InputMap, InputState,
+};
 use flicker_input_router::{InputHandler, Router};
 use flicker_shell::{PauseScene, Theme};
 use flicker_worldengine::{
@@ -195,6 +200,11 @@ const DEFAULT_WATER: u32 = 100;
 /// loop admits one per frame, so throughput ≈ frame rate — keeping frames
 /// fast IS the fast path.
 const RUN_FRAME_MS: u128 = 12;
+/// How many ticks of climate the history sparkline remembers. A BOUNDED ring, so a
+/// million-tick era costs exactly these floats and never grows; sized well past the
+/// well's pixel width because the plot downsamples to one segment per column — a
+/// longer memory costs storage, never draw calls.
+const CLIMATE_HISTORY: usize = 1024;
 // (The climate dial's MIN/MAX_TEMP range died with the dial — the climate
 // readout is a 0..1 gauge now and the baseline stays the era default.)
 /// Ice caps — the ink the frozen ground shades toward, in the view and stack.
@@ -435,6 +445,19 @@ pub struct PopulousBench {
     /// Which data the published tile shell is painted with — kept so a tab
     /// change rebuilds the world's colours exactly once, not per frame.
     shown_view: WorldView,
+    /// **The era's CLIMATE HISTORY** — the ice-age runner's live temperature
+    /// (`Evolution::climate`, an O(1) reading the engine refreshes inside the tick)
+    /// sampled ONCE PER TICK into a bounded ring. Plotted against the gauge's own
+    /// `0..1` range so the curve does not re-scale itself every time the world warms
+    /// a little, and emptied whenever the era restarts — the history belongs to the
+    /// era, not to the bench.
+    climate_history: PlotSeries,
+    /// The readout that draws it: the shared [`Plot`] filler seated on the
+    /// [`ui::TEMP_PLOT_SLOT`] `surface` under the climate gauge — the walker
+    /// reserves the rect, the scene seats and layers what the filler draws over the
+    /// HUD. Its ink is read ONCE out of the scene's own `plot` style block; the
+    /// filler owns no palette.
+    climate_plot: Plot,
 }
 
 impl PopulousBench {
@@ -476,6 +499,20 @@ impl PopulousBench {
         );
         let look = worldmap.authored_look();
         worldmap.content_mut().set_look(look);
+        // THE CLIMATE HISTORY readout (the `plot` filler's first consumer, B05B3D09
+        // §4d): the ice-age curve behind the live gauge. The RING is the scene's —
+        // the filler samples nothing itself — and the INK comes off the scene's own
+        // `plot` style block, token-resolved like every other colour in the bench.
+        let climate_plot = Plot::new(
+            PlotKind::Curve,
+            PlotStyle {
+                line: style_rgba(&ui_styles, "plot.line"),
+                fill: style_rgba(&ui_styles, "plot.fill"),
+                baseline: style_rgba(&ui_styles, "plot.baseline"),
+                grid: style_rgba(&ui_styles, "plot.grid"),
+                ..Default::default()
+            },
+        );
         let seams = SeamField::new(&map, DEFAULT_CELLS, DEFAULT_SPOTS, fastrand::u64(..));
         let crust = CrustField::derive(&map, &seams);
         let mut evolve = Evolution::new(&map, &seams);
@@ -514,6 +551,10 @@ impl PopulousBench {
             focus_tile: 0,
             highlight: None,
             shown_view: WorldView::Authored,
+            // The gauge's own range, fixed: a history that re-scaled itself would
+            // make every era look identically dramatic.
+            climate_history: PlotSeries::new(CLIMATE_HISTORY).fixed_range(0.0, 1.0),
+            climate_plot,
         };
         // The opening reticle: whatever the default camera faces.
         bench.focus_tile = bench.world.facing(&bench.map.grid().dirs).unwrap_or(0) as TileId;
@@ -524,6 +565,36 @@ impl PopulousBench {
         bench.world.show(bench.shown_view.key());
         bench.publish_hex();
         bench
+    }
+
+    /// **One tick of the era, recorded.** Every path that advances the clock
+    /// flat-out (PLAY, PLAY-N) or one at a time (the TICK button) runs it here, so
+    /// the climate history cannot drift from the era: ONE site pushes, and it pushes
+    /// the O(1) reading the engine just refreshed — never a scan of the world (a
+    /// per-tick `coverage()` would re-resolve the sea over every tile, 405F7034).
+    fn tick_era(&mut self) {
+        let Self {
+            map,
+            seams,
+            crust,
+            evolve,
+            climate_history,
+            ..
+        } = &mut *self;
+        let sea = evolve.resolve_sea();
+        evolve.tick(map, seams, crust, sea);
+        climate_history.push(evolve.climate());
+        self.drift_fields();
+    }
+
+    /// **Return the era to its bare shell**, and take its history with it: the
+    /// engine's own reset, the default water, and the ring emptied. Every restart —
+    /// the RESET button, a seams re-roll, a cells/spots re-pour, a new tiling —
+    /// goes through here, so a curve can never outlive the era it measured.
+    fn reset_era(&mut self) {
+        self.evolve.reset(&self.map, &self.seams);
+        self.evolve.set_water(DEFAULT_WATER as f32);
+        self.climate_history.clear();
     }
 
     /// The CURRENT page's tab — its remembered selection, clamped to the
@@ -1628,6 +1699,17 @@ impl PopulousBench {
     /// live to publish.
     fn model(&self) -> ValueMap {
         let mut m = ValueMap::default();
+        // CONFIRM = APPLY (Aaron 2026-09-04): every dial stages its pad steps until a
+        // Confirm commits them; the footer's "Press {Confirm} to apply" legend entry
+        // lights on this flag, read straight off the walker. The legend's affordance is
+        // device-adaptive, so the bench publishes the Confirm binding + device exactly as
+        // Clayworks does for its footer.
+        m.set("ui_staged", self.ui_state.staged_any());
+        flicker_shell::publish_signal_bindings(
+            &mut m,
+            &flicker_shell::current_world_map(),
+            [ActionSignal::Confirm],
+        );
         m.set(ui::PAGE_BIND, self.sel_page as f64);
         m.set(ui::TAB_BIND, self.sel_tab() as f64);
         m.set(ui::TABS_SHOWN, !ui::page(self.sel_page).tabs.is_empty());
@@ -1825,8 +1907,7 @@ impl PopulousBench {
         let mut content = HexSphereMap::from_tiling(&self.map.grid().dirs, self.map.outlines());
         content.set_look(self.worldmap.authored_look());
         self.worldmap.replace_content(content);
-        self.evolve.reset(&self.map, &self.seams);
-        self.evolve.set_water(DEFAULT_WATER as f32);
+        self.reset_era();
         self.bake_view(WorldView::Authored);
         self.bake_molten_views();
         if self.map_open {
@@ -1899,8 +1980,7 @@ impl PopulousBench {
             self.seams.set_cells(&self.map, v.round().max(0.0) as u32);
             if self.seams.cells() != before {
                 self.crust = CrustField::derive(&self.map, &self.seams);
-                self.evolve.reset(&self.map, &self.seams);
-                self.evolve.set_water(DEFAULT_WATER as f32);
+                self.reset_era();
                 self.bake_molten_views();
                 self.publish_hex();
             }
@@ -1912,8 +1992,7 @@ impl PopulousBench {
             self.seams.set_spots(&self.map, v.round().max(0.0) as u32);
             if self.seams.spots() != before {
                 self.crust = CrustField::derive(&self.map, &self.seams);
-                self.evolve.reset(&self.map, &self.seams);
-                self.evolve.set_water(DEFAULT_WATER as f32);
+                self.reset_era();
                 self.bake_molten_views();
                 self.publish_hex();
             }
@@ -2005,16 +2084,7 @@ impl PopulousBench {
         }
         if results.is_on(ui::EVOLVE_TICK_ACTION) {
             self.complete_open_tick();
-            let Self {
-                map,
-                seams,
-                crust,
-                evolve,
-                ..
-            } = &mut *self;
-            let sea = evolve.resolve_sea();
-            evolve.tick(map, seams, crust, sea);
-            self.drift_fields();
+            self.tick_era();
             self.run_complete();
         }
         if results.is_on(ui::EVOLVE_STEP_ACTION) {
@@ -2023,10 +2093,14 @@ impl PopulousBench {
                 seams,
                 crust,
                 evolve,
+                climate_history,
                 ..
             } = &mut *self;
             let sea = evolve.resolve_sea();
+            // A STEP is one PROCEDURE, not one tick — the history advances only on
+            // the step that CLOSES the cycle, exactly as `drift_fields` does.
             if evolve.tick_phase(map, seams, crust, sea) {
+                climate_history.push(evolve.climate());
                 self.drift_fields();
             }
             self.run_complete(); // one procedure, then the bake shows it
@@ -2034,8 +2108,7 @@ impl PopulousBench {
         if results.is_on(ui::EVOLVE_RESET_ACTION) {
             self.roll_until = 0;
             self.roll_from = 0;
-            self.evolve.reset(&self.map, &self.seams);
-            self.evolve.set_water(DEFAULT_WATER as f32);
+            self.reset_era();
             self.evolve_running = false;
             self.bake_view(WorldView::Evolve);
             self.publish_hex();
@@ -2045,8 +2118,7 @@ impl PopulousBench {
         if results.is_on(ui::SEAMS_ACTION) {
             self.seams.randomize(&self.map);
             self.crust = CrustField::derive(&self.map, &self.seams);
-            self.evolve.reset(&self.map, &self.seams);
-            self.evolve.set_water(DEFAULT_WATER as f32);
+            self.reset_era();
             self.bake_molten_views();
             self.publish_hex();
         }
@@ -2156,6 +2228,39 @@ fn phase_token(p: flicker_worldengine::Phase) -> &'static str {
     }
 }
 
+/// One AUTHORED colour out of the scene's own styles: a dotted path (`plot.line`)
+/// into the token-resolved style tree, as the rgba a surface filler draws with.
+/// This is the five-line split at the seam — `ui_theme.json` holds the palette, the
+/// scene's `styles` block names which token each element wears, and the Rust filler
+/// receives finished numbers and owns no colour of its own. A path that does not
+/// resolve warns and comes back TRANSPARENT: the element then draws nothing, which
+/// is the loud answer — never a stand-in colour nobody authored.
+fn style_rgba(styles: &serde_json::Value, path: &str) -> [f32; 4] {
+    let mut cur = styles;
+    for seg in path.split('.') {
+        match cur.get(seg) {
+            Some(v) => cur = v,
+            None => {
+                tracing::warn!("populous: no style at `{path}` — that ink stays unset");
+                return [0.0; 4];
+            }
+        }
+    }
+    match cur.as_array() {
+        Some(a) if a.len() >= 4 => {
+            let mut out = [0.0f32; 4];
+            for (i, c) in a.iter().take(4).enumerate() {
+                out[i] = c.as_f64().unwrap_or(0.0) as f32;
+            }
+            out
+        }
+        _ => {
+            tracing::warn!("populous: style `{path}` is not a resolved rgba — that ink stays unset");
+            [0.0; 4]
+        }
+    }
+}
+
 /// `92162` → `92,162` — thousands separators for the stat readouts. Formatting
 /// lives in the scene and rides a Model bind (docs/ui-authoring: pre-format in
 /// Rust, publish on a bind); a node never carries a composed number.
@@ -2259,6 +2364,11 @@ impl Scene for PopulousBench {
         // The map modal's surface: reserved only while the modal's slice is lit,
         // so a closed map seats `None` and costs nothing.
         self.worldmap.seat(frame.surface(ui::MAP_SLOT));
+        // The CLIMATE HISTORY readout: the same hand-off, for a 2D filler — the
+        // walker reserves the well under the climate gauge (and reserves NOTHING
+        // while the evolve slice is dark, so the plot is unseated and costs nothing
+        // on every other tab), and the filler draws the ring into it below.
+        self.climate_plot.seat(frame.surface(ui::TEMP_PLOT_SLOT));
         let map_pointer = frame.surface_pointer(ui::MAP_SLOT).cloned();
         // The pointer SAMPLE for the globe's surface — the walker's barrier (A8C9F02B
         // §4b): present while the cursor is over the planet with no UI over it, or while
@@ -2266,6 +2376,10 @@ impl Scene for PopulousBench {
         let pointer = frame.surface_pointer(ui::VIEW_SLOT).cloned();
         let hex_pointer = frame.surface_pointer(ui::HEX_SLOT).cloned();
         self.hud_commands = frame.commands;
+        // The era's climate curve, layered over the walker's own draw at the slot's
+        // band — clip-safe by construction, so it needs no scissor of its own.
+        self.hud_commands
+            .extend(self.climate_plot.commands(&self.climate_history));
         // THE ELEMENT BILLBOARDS (Aaron 2026-08-26): a super-tiny label a
         // hair above each vein node's column — the EXTRACTED element's symbol
         // (bauxite digs as Al, per canon A4), projected through the globe's
@@ -2445,16 +2559,7 @@ impl Scene for PopulousBench {
             while (self.roll_until == 0 || self.evolve.ticks() < self.roll_until)
                 && start.elapsed().as_millis() < RUN_FRAME_MS
             {
-                let Self {
-                    map,
-                    seams,
-                    crust,
-                    evolve,
-                    ..
-                } = &mut *self;
-                let sea = evolve.resolve_sea();
-                evolve.tick(map, seams, crust, sea);
-                self.drift_fields();
+                self.tick_era();
             }
             if self.roll_until > 0 && self.evolve.ticks() >= self.roll_until {
                 self.run_complete(); // PLAY-N arrived: the run's one bake
@@ -2480,7 +2585,19 @@ impl Scene for PopulousBench {
                 )));
             }
         }
+        // The stick tried to leave a pane holding pad-staged dial values: the shared
+        // Apply / Revert prompt (Aaron 2026-09-04) — one call, the answer folds through
+        // `modal_closed` below.
+        if let Some(t) = flicker_shell::stage_prompt(self.theme, &mut self.ui_state) {
+            return t;
+        }
         Transition::None
+    }
+
+    /// The stage prompt's answer (Apply / Revert / Keep editing) folds into the walker
+    /// state; nothing else opens a modal on this bench yet.
+    fn modal_closed(&mut self, _modal: &str, result: &str, _payload: Option<&str>) {
+        flicker_shell::stage_prompt_closed(&mut self.ui_state, result);
     }
 
     fn render<'f>(&'f mut self, renderer: &mut Renderer, fg: &mut FrameGraph<'f>) {
@@ -2630,8 +2747,9 @@ mod tests {
         assert_eq!(count("panel"), 3, "two UI Panels and one RTT Panel");
         assert_eq!(
             count("surface"),
-            4,
-            "the root surface + the globe's viewport + the hex stack's viewport + the map modal's sheet"
+            5,
+            "the root surface + the globe's viewport + the hex stack's viewport + \
+             the map modal's sheet + the climate history's plot well"
         );
         assert_eq!(
             count("slider"),
@@ -2766,7 +2884,10 @@ mod tests {
         assert!(
             nodes.iter().all(|n| matches!(
                 n.component.as_str(),
-                "panel" | "cell" | "row" | "text" | "resource_gauge"
+                // `surface` joins the list as the climate history's well: a
+                // reserved RECT, not a control — it takes no focus and answers no
+                // signal, so the pane is still display-only with it in.
+                "panel" | "cell" | "row" | "text" | "resource_gauge" | "surface"
             )),
             "the stats pane is display-only (the gauge shows, never interacts)"
         );
@@ -4413,7 +4534,7 @@ mod tests {
     fn a_key_press_steps_the_dial_through_the_component_chain() {
         use flicker::render::Vec2;
         use flicker_input_core::device::Key;
-        use flicker_input_core::EventKind;
+        use flicker_input_core::{EventKind, InputBinding};
 
         let bench = test_bench();
         let tree = bench.build_tree();
@@ -4457,9 +4578,11 @@ mod tests {
             walker.take_fired().is_empty(),
             "a nudge is not a declared intent"
         );
+        drop(walker);
 
-        // The next `run_ui` pass applies the nudge with the NODE's own step and
-        // writes the bind — the component's committed write, one step up.
+        // The next `run_ui` pass applies the nudge with the NODE's own step. The size
+        // dial stages on Confirm (Aaron 2026-09-04, "all of them"): the step is HELD —
+        // the bench keeps seeing the resting value — until a Confirm commits it.
         let snap = UiInput {
             mouse: Vec2::ZERO,
             clicked: false,
@@ -4473,8 +4596,31 @@ mod tests {
         let frame = run_ui(&tree, &model, &styles, &snap, &mut ui);
         assert_eq!(
             frame.results.number(ui::FREQ_BIND),
+            Some(96.0),
+            "NavUp STAGED the step: the bench still sees the resting value"
+        );
+        assert!(ui.staged_any(), "the stage is held for Confirm");
+
+        // Confirm on the dial commits the pane's stage; the next pass writes it.
+        let confirm = Fired {
+            signal: ActionSignal::Confirm,
+            kind: EventKind::Press,
+            control: InputBinding::Key(Key::Enter),
+        };
+        let events = vec![InputEvent::from_fired(&confirm, ctx, &input)];
+        let mut walker = WalkerHandler::hud(&mut ui, false)
+            .with_nav(&tree, &model)
+            .with_intents(&intents);
+        {
+            let mut chain: [&mut dyn InputHandler; 1] = [&mut walker];
+            Router::dispatch(&events, &mut chain, &mut route);
+        }
+        drop(walker);
+        let frame = run_ui(&tree, &model, &styles, &snap, &mut ui);
+        assert_eq!(
+            frame.results.number(ui::FREQ_BIND),
             Some(97.0),
-            "NavUp stepped the focused vertical dial by its own step"
+            "Confirm applied the staged step by the dial's own step"
         );
     }
 
@@ -4753,6 +4899,113 @@ mod tests {
         PopulousBench::new(&def)
     }
 
+    /// **The seams tab is pad-operable end to end** (incident A0D3CE6A; Aaron's
+    /// 2026-09-04 scheme): the stick lands the cursor on the first dial; Up/Down STAGE
+    /// the vertical dial (nothing reaches the bench until a Confirm); Left/Right hop
+    /// dial → dial → the randomize button (which carries an id now); Confirm on the
+    /// button commits the staged value FIRST and fires the button in the pass that
+    /// lands it. Every dial on the bench stages (Aaron: "all of them").
+    #[test]
+    fn the_seams_tab_is_pad_operable_and_stages_until_confirm() {
+        use flicker::render::Vec2;
+        use flicker_input_core::device::Key;
+        use flicker_input_core::InputBinding;
+
+        let bench = test_bench();
+        let tree = bench.build_tree();
+        let all = flatten(&tree);
+        let dials: Vec<&&UiNode> = all.iter().filter(|n| n.component == "slider").collect();
+        assert_eq!(dials.len(), 5, "five dials on the bench");
+        assert!(
+            dials
+                .iter()
+                .all(|n| n.props.get("apply") == Some(&Value::Text("confirm".into()))),
+            "every dial stages on Confirm"
+        );
+
+        let mut model = bench.model();
+        model.set("shown_page0", true);
+        model.set("shown_p0_t1", true);
+        assert!(!model.is_on("ui_staged"), "nothing staged at rest");
+        let styles = load_shared_styles(None);
+        let intents = UiIntents::of(&tree);
+        let input = InputState::new();
+        let snap = UiInput {
+            mouse: Vec2::ZERO,
+            clicked: false,
+            down: false,
+            right_down: false,
+            screen: Vec2::new(1600.0, 900.0),
+            wheel: 0.0,
+            exclusive: false,
+            motion: Default::default(),
+        };
+        let press = |ui: &mut UiState, sig: ActionSignal| -> Vec<String> {
+            let f = Fired {
+                signal: sig,
+                kind: EventKind::Press,
+                control: InputBinding::Key(Key::Up),
+            };
+            let events = vec![InputEvent::from_fired(&f, InputContext::World, &input)];
+            let mut walker = WalkerHandler::hud(ui, false)
+                .with_nav(&tree, &model)
+                .with_intents(&intents);
+            let mut route = RouteCtx::default();
+            {
+                let mut chain: [&mut dyn InputHandler; 1] = [&mut walker];
+                Router::dispatch(&events, &mut chain, &mut route);
+            }
+            walker.take_fired()
+        };
+
+        let mut ui = UiState::default();
+        let _ = run_ui(&tree, &model, &styles, &snap, &mut ui);
+        press(&mut ui, ActionSignal::PanelNext);
+        assert_eq!(
+            ui.focused(),
+            Some("pop_cells"),
+            "the stick descends onto the first dial"
+        );
+        assert_eq!(ui.focused_pane(), Some(ui::LEFT_PANE));
+
+        press(&mut ui, ActionSignal::NavDown);
+        let f = run_ui(&tree, &model, &styles, &snap, &mut ui);
+        let cells = model.number(ui::CELLS_BIND).expect("cells published");
+        assert_eq!(
+            f.results.number(ui::CELLS_BIND),
+            Some(cells),
+            "a pad step STAGES: the bench keeps seeing the resting value"
+        );
+        assert!(ui.staged_any(), "…and `ui_staged` lights the footer's apply hint");
+
+        press(&mut ui, ActionSignal::NavRight);
+        assert_eq!(ui.focused(), Some("pop_spots"), "Right hops to the next dial");
+        press(&mut ui, ActionSignal::NavRight);
+        assert_eq!(
+            ui.focused(),
+            Some(ui::SEAMS_ACTION),
+            "…and on to the randomize button, reachable now that it has an id"
+        );
+
+        let fired = press(&mut ui, ActionSignal::Confirm);
+        assert!(fired.is_empty(), "the activation waits behind the commit");
+        assert!(!ui.staged_any(), "Confirm committed the pane's stage");
+        let f = run_ui(&tree, &model, &styles, &snap, &mut ui);
+        assert_eq!(
+            f.results.number(ui::CELLS_BIND),
+            Some(cells - 1.0),
+            "the commit lands in the next pass"
+        );
+        let mut walker = WalkerHandler::hud(&mut ui, false)
+            .with_nav(&tree, &model)
+            .with_intents(&intents);
+        assert_eq!(
+            walker.take_fired(),
+            vec![ui::SEAMS_ACTION.to_string()],
+            "…and the button fires in that same pass, after the values"
+        );
+    }
+
     #[test]
     fn the_static_tree_loads_and_gates_both_tabs() {
         let tree = SceneDef::parse("populous", POPULOUS_SCENE)
@@ -4795,4 +5048,167 @@ mod tests {
             "the seams tab's slice is gated"
         );
     }
+    /// **THE CLIMATE HISTORY ADVANCES WITH THE ERA — AND DIES WITH IT.** The ring
+    /// the sparkline reads is the scene's, sampled once per SIM TICK (never per
+    /// frame, never per procedure), and a restart empties it: a curve that outlived
+    /// its era would be a readout of a world that no longer exists. The invariant
+    /// the gate holds is the simplest one there is — one sample per tick run.
+    #[test]
+    fn the_climate_history_records_one_sample_per_tick_and_empties_with_the_era() {
+        let mut bench = test_bench();
+        let fire = |name: &str| {
+            let mut r = ValueMap::default();
+            r.set(name, true);
+            r
+        };
+        assert!(bench.climate_history.is_empty(), "a fresh era has no history");
+        assert_eq!(
+            bench.climate_history.capacity(),
+            CLIMATE_HISTORY,
+            "the ring is BOUNDED — a million-tick era costs these floats and no more"
+        );
+        // TICK: one complete cycle, one sample.
+        for expect in 1..=3u64 {
+            bench.apply_results(&fire(ui::EVOLVE_TICK_ACTION));
+            assert_eq!(bench.evolve().ticks(), expect);
+            assert_eq!(
+                bench.climate_history.len() as u64,
+                expect,
+                "the ring tracks the era's own clock"
+            );
+        }
+        // STEP: one PROCEDURE. The ring must not move until the step that closes
+        // the cycle — the history counts ticks, not phases.
+        let ticks = bench.evolve().ticks();
+        let mut steps = 0;
+        while bench.evolve().ticks() == ticks && steps < 64 {
+            bench.apply_results(&fire(ui::EVOLVE_STEP_ACTION));
+            steps += 1;
+            assert_eq!(
+                bench.climate_history.len() as u64,
+                bench.evolve().ticks(),
+                "a partial tick recorded a sample"
+            );
+        }
+        assert!(steps > 1, "a tick really is several procedures ({steps})");
+        assert_eq!(bench.evolve().ticks(), ticks + 1);
+        // Every sample is the gauge's own fraction, so the fixed 0..1 range is honest.
+        assert!(
+            bench.climate_history.iter().all(|v| (0.0..=1.05).contains(&v)),
+            "the history holds the climate READING, not some other number"
+        );
+        // RESET returns the bare shell — and the history goes with the era.
+        bench.apply_results(&fire(ui::EVOLVE_RESET_ACTION));
+        assert_eq!(bench.evolve().ticks(), 0);
+        assert!(
+            bench.climate_history.is_empty(),
+            "the curve must not outlive the era it measured"
+        );
+    }
+
+    /// **The history readout actually gets its pixels** (rules 93B5000F): the plot's
+    /// `surface` is reserved with real extent on the EVOLVE slice, is reserved on NO
+    /// other slice (so the filler is unseated and free), and what the seated filler
+    /// emits lands inside the well the walker gave it.
+    #[test]
+    fn the_climate_plot_is_seated_with_extent_on_the_evolve_slice_alone() {
+        use flicker::render::Vec2;
+
+        let mut bench = test_bench();
+        let tree = bench.build_tree();
+        let styles = bench.ui_styles.clone();
+        let snap = UiInput {
+            mouse: Vec2::ZERO,
+            clicked: false,
+            down: false,
+            right_down: false,
+            screen: Vec2::new(1600.0, 900.0),
+            wheel: 0.0,
+            exclusive: false,
+            motion: Default::default(),
+        };
+        let walk = |gate: &str| {
+            let mut model = ValueMap::default();
+            model.set("shown_page0", true);
+            model.set(gate, true);
+            let mut state = UiState::default();
+            run_ui(&tree, &model, &styles, &snap, &mut state)
+        };
+
+        // The MAP slice reserves nothing for the plot — an unseated filler costs
+        // nothing on every tab but its own.
+        let frame = walk("shown_p0_t0");
+        assert!(frame.surface(ui::TEMP_PLOT_SLOT).is_none());
+        bench.climate_plot.seat(frame.surface(ui::TEMP_PLOT_SLOT));
+        assert!(bench.climate_plot.rect().is_none());
+        assert!(bench
+            .climate_plot
+            .commands(&bench.climate_history)
+            .is_empty());
+
+        // The EVOLVE slice reserves a real well under the climate gauge.
+        let frame = walk("shown_p0_t3");
+        let rect = frame
+            .surface_rect(ui::TEMP_PLOT_SLOT)
+            .expect("the history well is reserved on the evolve slice");
+        assert!(
+            rect.size.x > 100.0 && rect.size.y > 10.0,
+            "the plot well has real pixels, got {}x{}",
+            rect.size.x,
+            rect.size.y
+        );
+        let gauge = frame
+            .rect("pop_temp_gauge")
+            .expect("the live gauge it reads under");
+        assert!(
+            rect.pos.y > gauge.pos.y,
+            "the history sits UNDER the live gauge it belongs to"
+        );
+        // Seated, with a ring behind it, the filler draws — inside its own well.
+        for i in 0..200 {
+            bench.climate_history.push((i as f32 * 0.05).sin() * 0.5 + 0.5);
+        }
+        bench.climate_plot.seat(frame.surface(ui::TEMP_PLOT_SLOT));
+        let cmds = bench.climate_plot.commands(&bench.climate_history);
+        assert!(!cmds.is_empty(), "a seated plot over a full ring draws");
+        for c in &cmds {
+            let (x, y, w, h) = match c {
+                HudCommand::Rect { x, y, w, h, .. } => (*x, *y, *w, *h),
+                HudCommand::Line { from, to, .. } => (
+                    from[0].min(to[0]),
+                    from[1].min(to[1]),
+                    (to[0] - from[0]).abs(),
+                    (to[1] - from[1]).abs(),
+                ),
+                other => panic!("the plot emitted an unexpected command: {other:?}"),
+            };
+            assert!(
+                x >= rect.pos.x - 0.01
+                    && y >= rect.pos.y - 0.01
+                    && x + w <= rect.pos.x + rect.size.x + 0.01
+                    && y + h <= rect.pos.y + rect.size.y + 0.01,
+                "the plot drew outside its well: {x},{y} {w}x{h} in {rect:?}"
+            );
+        }
+    }
+
+    /// **The plot's INK is authored, not invented** (the colour rule): the filler
+    /// carries no palette, so every colour it draws with is a `plot.*` path in the
+    /// scene's own styles resolving to a real token. A path that stops resolving is
+    /// an INVISIBLE readout — loud in the log, silent on the screen — so the gate
+    /// asserts the resolve rather than trusting it.
+    #[test]
+    fn the_plots_ink_resolves_from_the_scenes_own_style_block() {
+        let bench = test_bench();
+        for path in ["plot.line", "plot.fill", "plot.baseline", "plot.grid"] {
+            let rgba = style_rgba(&bench.ui_styles, path);
+            assert!(
+                rgba[3] > 0.0,
+                "`{path}` must resolve to a visible token, got {rgba:?}"
+            );
+        }
+        // And an unauthored path is transparent rather than a stand-in colour.
+        assert_eq!(style_rgba(&bench.ui_styles, "plot.nope"), [0.0; 4]);
+    }
+
 }

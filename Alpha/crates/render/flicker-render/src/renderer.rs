@@ -54,6 +54,24 @@ use crate::{AttachmentFormat, DepthPass, Rate, TargetColor};
 /// sub-rect.
 pub const FULL_TEXTURE: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
 
+/// The rotated quad that draws a line segment of `width` px from `from` to `to`:
+/// `(position, size, rotation, pivot)` for [`Renderer::draw_sprite_ex`].
+///
+/// The quad is `|to - from|` long and `width` tall, laid out axis-aligned about the
+/// segment's midpoint and then spun about that same midpoint by the segment's angle —
+/// so its long axis lands exactly on the segment and its two ends sit exactly on the
+/// endpoints. Screen y is down, so `atan2` gives a clockwise-positive angle, matching
+/// [`Renderer::draw_sprite_ex`]'s convention.
+///
+/// Pure — [`Renderer::draw_line`] is the only caller, and this is the half that is
+/// unit-tested (no GPU needed to check length, thickness and orientation).
+pub fn line_quad(from: Vec2, to: Vec2, width: f32) -> (Vec2, Vec2, f32, Vec2) {
+    let d = to - from;
+    let size = Vec2::new(d.length(), width);
+    let mid = (from + to) * 0.5;
+    (mid - size * 0.5, size, d.y.atan2(d.x), mid)
+}
+
 /// Opaque handle to an offscreen render target created by
 /// [`Renderer::create_render_target`].
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -1000,6 +1018,28 @@ impl Renderer {
             rotation,
             pivot,
         );
+    }
+
+    /// Submit a **line segment** of `width` px from `from` to `to` — one ROTATED
+    /// quad through the existing sprite batch ([`Self::draw_sprite_ex`]), so a line
+    /// costs exactly what a `draw_sprite` costs, sorts at the current
+    /// [`Renderer::layer`], and is scissored by the current clip like every other 2D
+    /// draw. `texture` is the 1×1 white texture (the same one a solid `HudCommand::Rect`
+    /// samples); `color` tints it.
+    ///
+    /// Geometry is [`line_quad`] — a pure function, so the length/width/orientation
+    /// contract is testable without a GPU. A degenerate segment (`from == to`) draws
+    /// a zero-length quad, which rasterises to nothing.
+    pub fn draw_line(
+        &mut self,
+        texture: TextureHandle,
+        from: Vec2,
+        to: Vec2,
+        width: f32,
+        color: [f32; 4],
+    ) {
+        let (position, size, rotation, pivot) = line_quad(from, to, width);
+        self.draw_sprite_ex(texture, position, size, color, FULL_TEXTURE, rotation, pivot);
     }
 
     /// Submit a **vector UI panel**: a rounded-rectangle filled with a solid or
@@ -2429,6 +2469,73 @@ fn scene_to_sky_uniform(rig: &LightRig, inv_view_proj: Mat4, camera_pos: Vec3) -
         zenith: [rig.sky_zenith.x, rig.sky_zenith.y, rig.sky_zenith.z, 0.0],
         horizon: [rig.sky_horizon.x, rig.sky_horizon.y, rig.sky_horizon.z, 0.0],
         star_rotation: rig.star_rotation.to_cols_array_2d(),
+    }
+}
+
+#[cfg(test)]
+mod line_quad_tests {
+    use super::line_quad;
+    use glam::Vec2;
+
+    /// The rotated quad a line becomes must have the segment's LENGTH, the authored
+    /// WIDTH, and the segment's ORIENTATION — and its two short edges must land on the
+    /// endpoints. Checked by rotating the quad's own mid-left / mid-right points back
+    /// out through the same transform the sprite batch applies.
+    fn ends(from: Vec2, to: Vec2, width: f32) -> (Vec2, Vec2) {
+        let (pos, size, rot, pivot) = line_quad(from, to, width);
+        let (s, c) = rot.sin_cos();
+        // The midpoints of the quad's two short edges, before rotation.
+        let spin = |p: Vec2| {
+            let d = p - pivot;
+            pivot + Vec2::new(d.x * c - d.y * s, d.x * s + d.y * c)
+        };
+        (
+            spin(Vec2::new(pos.x, pos.y + size.y * 0.5)),
+            spin(Vec2::new(pos.x + size.x, pos.y + size.y * 0.5)),
+        )
+    }
+
+    #[test]
+    fn the_quad_carries_the_length_width_and_orientation() {
+        // A horizontal segment is the identity case: no rotation, size = (len, width).
+        let (pos, size, rot, pivot) = line_quad(Vec2::new(10.0, 40.0), Vec2::new(90.0, 40.0), 3.0);
+        assert_eq!(size, Vec2::new(80.0, 3.0), "length along x, width across");
+        assert_eq!(rot, 0.0, "a horizontal segment does not turn");
+        assert_eq!(pivot, Vec2::new(50.0, 40.0), "spins about the midpoint");
+        assert_eq!(pos, Vec2::new(10.0, 38.5), "the band straddles the segment");
+
+        // Screen y is down, so a segment going down-right turns CLOCKWISE by +45°.
+        let (_, size, rot, _) = line_quad(Vec2::new(0.0, 0.0), Vec2::new(10.0, 10.0), 2.0);
+        assert!((size.x - 200.0f32.sqrt()).abs() < 1e-4, "true segment length");
+        assert_eq!(size.y, 2.0, "width is never scaled by the length");
+        assert!(
+            (rot - std::f32::consts::FRAC_PI_4).abs() < 1e-6,
+            "down-right is +45° with y down"
+        );
+    }
+
+    #[test]
+    fn the_quads_short_edges_land_on_the_endpoints() {
+        for (from, to) in [
+            (Vec2::new(10.0, 40.0), Vec2::new(90.0, 40.0)), // horizontal
+            (Vec2::new(5.0, 5.0), Vec2::new(5.0, 65.0)),    // vertical
+            (Vec2::new(-30.0, 12.0), Vec2::new(44.0, -19.0)), // arbitrary
+        ] {
+            let (a, b) = ends(from, to, 4.0);
+            assert!(
+                a.distance(from) < 1e-3 && b.distance(to) < 1e-3,
+                "{from} -> {to} rotated to {a} -> {b}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_degenerate_segment_is_a_zero_length_quad() {
+        // from == to: nothing to rasterise, and no NaN out of `atan2(0, 0)`.
+        let (_, size, rot, pivot) = line_quad(Vec2::new(7.0, 7.0), Vec2::new(7.0, 7.0), 5.0);
+        assert_eq!(size, Vec2::new(0.0, 5.0));
+        assert!(rot.is_finite(), "atan2(0, 0) is 0, never NaN");
+        assert_eq!(pivot, Vec2::new(7.0, 7.0));
     }
 }
 

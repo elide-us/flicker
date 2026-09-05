@@ -1,3 +1,11 @@
 {
-  "_comment": "DEFAULT UI WEIGHTS AND EFFECTS (five-line architecture). Deliberately EMPTY: component looks are the Rust drawing code's token defaults, and each scene carries its own layout details in its .scene.json `styles`. Add a key here ONLY for a truly global weight/effect default — never a per-component or per-scene block, and never a `theme` (palette) key."
+  "_comment": "DEFAULT UI WEIGHTS AND EFFECTS (five-line architecture). Deliberately near-EMPTY: component looks are the Rust drawing code's token defaults, and each scene carries its own layout details in its .scene.json `styles`. Add a key here ONLY for a truly global weight/effect default — never a per-component or per-scene block, and never a `theme` (palette) key. `focus_ring` is one such default: the SECONDARY FOCUS cursor the walker draws around the focused control inside the focused pane (Aaron 2026-09-04) — its colour is the `rune_glow_hi` palette token, these are only its weights.",
+  "focus_ring": {
+    "w": 2,
+    "pad": 3,
+    "radius": 4,
+    "glow_pad": 4,
+    "feather": 6,
+    "glow_alpha": 0.35
+  }
 }

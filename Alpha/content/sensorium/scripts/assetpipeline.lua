@@ -29,6 +29,19 @@ local VIEW = {
   prep = "quad", rig = "quad", mount = "quad", preview = "bake", clip = "clip",
 }
 
+-- WHAT THE 3D GADGET MAY DO, per step. This is the gadget's per-surface gate (direction
+-- F28531B5) authored where every other per-step decision lives. A mode is listed only
+-- where the DOCUMENT has something for it to write:
+--   rig — the joint's authored BoneOffset carries translation, a roll, and a per-axis
+--         scale, and a left/right joint can be mirrored onto its twin. All four.
+-- Every other step publishes nothing, which is an inert gadget: the Prep/Mount/Attach
+-- documents have no gadget consumer wired yet, and a mode listed here without one would
+-- be a control that silently does nothing.
+local GADGET = {
+  rig = { "translate", "rotate", "scale", "flip" },
+}
+local GADGET_MODES = { "translate", "rotate", "scale", "flip" }
+
 function M.arrange()
   local wf = (Model and Model.wf) or "character"
   local tab = (Model and Model.tab) or 0
@@ -47,12 +60,17 @@ function M.arrange()
     -- other stop shows NEXT.
     ["shown_ft_commit"]    = { on = (step == "review") },
     ["shown_ft_next"]      = { on = (step ~= "review") },
-    -- The discard dialog: the engine publishes its runtime flag (`discard_open`, raised
-    -- when Back leaves a dirty step) and this lights the modal's slice.
-    ["shown_discard"]      = { on = ((Model and Model.discard_open) == true) },
   }
   for _, name in ipairs({ "source", "prep", "rig", "mount", "preview", "attach", "clip", "review" }) do
     out["shown_t_" .. name] = { on = (step == name) }
+  end
+  -- The gadget's gate, one key per mode: the scene's Rust collects the ON names and hands
+  -- them to the ONE mode vocabulary (`modes_from_names`), so a step's manipulations are
+  -- authored here rather than compiled in.
+  local allowed = {}
+  for _, name in ipairs(GADGET[step] or {}) do allowed[name] = true end
+  for _, name in ipairs(GADGET_MODES) do
+    out["gadget_" .. name] = { on = (allowed[name] == true) }
   end
   return out
 end

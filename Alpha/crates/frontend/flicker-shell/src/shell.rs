@@ -1739,6 +1739,15 @@ const PAUSE_SCRIPT: &str = include_str!("../../../../content/sensorium/scripts/s
 const CONFIRM_SCRIPT: &str =
     include_str!("../../../../content/sensorium/scripts/shared/confirm.lua");
 
+/// The `busy` tree's pair-script (`scripts/shared/busy.lua`) — the one PARAM-DRIVEN
+/// modal that has a runtime behaviour of its own rather than a pure arrangement of the
+/// caller's params. Its `arrange()` folds `modal_cancellable` + `modal_done` into
+/// `modal_dismissable`, the key the tree's `dismissable_bind` reads: the walker swallows
+/// Cancel while a busy modal with nothing to abort is still working (ruling DA0E1B57 —
+/// dismissability is a behaviour toggle on the COMPONENT, configured from Lua). Held by
+/// [`SharedModal`] through the same [`shared_modal_script`] slot pause / confirm use.
+const BUSY_SCRIPT: &str = include_str!("../../../../content/sensorium/scripts/shared/busy.lua");
+
 /// The main-menu Lua ORCHESTRATION script (`arrange()` only): it latches the
 /// realm-button press mirror (`sig_mode_<realm>`) into a persistent page and lights
 /// that realm's `shown_realm_<n>` scene slice. The reference is `populous.lua`; this
@@ -1774,6 +1783,20 @@ const SETTINGS_SCENE_JSON: &str =
 /// includes, never roster scenes.
 const PAUSE_SCENE_JSON: &str =
     include_str!("../../../../content/sensorium/scenes/shared/pause.scene.json");
+/// The PARAM-DRIVEN shared modal trees ([`SHARED_MODALS`]) — the ones a bench opens
+/// by id through [`SharedModal`] rather than through a scene of their own. Embedded like
+/// the pause / confirm pair above, for the same reason (the manifest skips
+/// `scenes/shared/`, so a client inherits them with no copied files).
+const CHOICE_DIALOG_SCENE_JSON: &str =
+    include_str!("../../../../content/sensorium/scenes/shared/choice_dialog.scene.json");
+const CONFLICT_SCENE_JSON: &str =
+    include_str!("../../../../content/sensorium/scenes/shared/conflict.scene.json");
+const POPUP_MENU_SCENE_JSON: &str =
+    include_str!("../../../../content/sensorium/scenes/shared/popup_menu.scene.json");
+const TEXT_PROMPT_SCENE_JSON: &str =
+    include_str!("../../../../content/sensorium/scenes/shared/text_prompt.scene.json");
+const BUSY_SCENE_JSON: &str =
+    include_str!("../../../../content/sensorium/scenes/shared/busy.scene.json");
 const CONFIRM_SCENE_JSON: &str =
     include_str!("../../../../content/sensorium/scenes/shared/confirm.scene.json");
 
@@ -1863,7 +1886,17 @@ fn parse_shared_modal(json: &str, id: &str, on_cancel: Option<&str>) -> UiNode {
         }
     };
     match parse_ui_json(&def["tree"]) {
-        Ok(t) => t,
+        // The caller's `on_cancel` OVERRIDES whatever the file authored. A modal's
+        // back-out belongs to its HOST: pause hands `resume`, the shared seam hands
+        // `modal_cancel`, and neither depends on the tree spelling it correctly —
+        // trusting the file is how a modal ships with no exit at all (B89FAC21).
+        Ok(mut t) => {
+            if let Some(oc) = on_cancel {
+                t.props
+                    .insert("on_cancel".to_string(), Value::Text(oc.to_string()));
+            }
+            t
+        }
         Err(e) => {
             tracing::error!("{id}.scene.json tree failed to parse: {e}");
             fallback()
@@ -2053,6 +2086,373 @@ mod menu_tree_tests {
         );
     }
 
+    /// THE SHARED-MODAL FOLDER GATE: every `scenes/shared/*.scene.json` on disk is
+    /// either registered in [`SHARED_MODALS`] (so a bench can open it by id) or the ONE
+    /// named exemption, `settings` — the settings SCREEN, hosted by
+    /// [`UnifiedSettingsScene`] with hardened Rust rows rather than by params.
+    ///
+    /// Walks the FOLDER, not a hardcoded list, so a shared modal tree added and never
+    /// registered fails the build instead of shipping as a file nothing can open — and
+    /// so every gate below (parse · pad-reachability · draw) automatically covers it.
+    #[test]
+    fn every_shared_modal_file_is_registered() {
+        /// The settings screen is not a param-driven modal; it is loaded by its own
+        /// scene. Named here so the exemption is a decision, not a silent gap.
+        const NOT_A_MODAL: [&str; 1] = ["settings"];
+
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../content/sensorium/scenes/shared");
+        let mut on_disk: Vec<String> = std::fs::read_dir(&dir)
+            .expect("scenes/shared reads")
+            .filter_map(|e| {
+                let name = e
+                    .expect("dir entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned();
+                name.strip_suffix(".scene.json").map(str::to_string)
+            })
+            .collect();
+        on_disk.sort();
+        assert!(!on_disk.is_empty(), "scenes/shared holds shared trees");
+
+        for id in &on_disk {
+            assert!(
+                NOT_A_MODAL.contains(&id.as_str()) || SHARED_MODALS.iter().any(|(k, _, _)| k == id),
+                "scenes/shared/{id}.scene.json is not registered in SHARED_MODALS — a \
+                 shared tree no `SharedModal::open` id reaches is a file nothing can open"
+            );
+        }
+        for (id, json, _) in SHARED_MODALS {
+            assert!(
+                on_disk.iter().any(|d| d == id),
+                "SHARED_MODALS registers '{id}' but scenes/shared/{id}.scene.json is gone"
+            );
+            assert!(!json.is_empty(), "shared modal '{id}' embeds its tree");
+        }
+    }
+
+    /// PAD-REACHABILITY GATE: every button any shared modal authors carries BOTH
+    /// `tab_group` and `nav_ordinal`. A modal is the one surface a player cannot walk
+    /// away from, and a button with no focus group is invisible to the d-pad while the
+    /// mouse still hits it — the exact "a pad Confirm could never reach a button the
+    /// mouse could" bug the menu nav already fixed once. Controller is the floor.
+    #[test]
+    fn every_shared_modal_button_is_pad_reachable() {
+        // Read the RAW file, not the parsed tree: `nav_ordinal` parses into a typed
+        // field defaulting to 0, so only the JSON can tell an authored 0 from a missing
+        // one — and a missing one silently stacks every button on the same rung.
+        fn buttons(v: &serde_json::Value, id: &str, broken: &mut Vec<String>) {
+            if v.get("component").and_then(|c| c.as_str()) == Some("button") {
+                let bid = v.get("id").and_then(|i| i.as_str()).unwrap_or("<anon>");
+                for key in ["tab_group", "nav_ordinal"] {
+                    if v.get(key).is_none() {
+                        broken.push(format!(
+                            "{id}: button '{bid}' authors no `{key}` — a modal button \
+                             the d-pad cannot reach"
+                        ));
+                    }
+                }
+            }
+            if let Some(kids) = v.get("children").and_then(|c| c.as_array()) {
+                for k in kids {
+                    buttons(k, id, broken);
+                }
+            }
+        }
+
+        let mut broken = Vec::new();
+        let mut seen = 0usize;
+        for (id, json, _) in SHARED_MODALS {
+            let doc: serde_json::Value =
+                serde_json::from_str(json).unwrap_or_else(|e| panic!("{id} parses: {e}"));
+            buttons(&doc["tree"], id, &mut broken);
+            seen += 1;
+        }
+        assert_eq!(
+            seen,
+            SHARED_MODALS.len(),
+            "every registered modal is walked"
+        );
+        assert!(
+            broken.is_empty(),
+            "shared modal buttons must be pad-reachable:\n{}",
+            broken.join("\n")
+        );
+    }
+
+    /// THE PARAMS CHANNEL: what a bench hands [`SharedModal::open`] reaches the tree
+    /// through the MODEL — never by rewriting the tree — and the two things the Model
+    /// cannot carry take the two ratified data channels instead.
+    ///
+    /// Pins all four param-driven trees at once: the fixed slots light and darken with
+    /// the option count (`choice_dialog`), the option list becomes one navigable row per
+    /// option (`popup_menu`'s `rows_from`), the field is seeded and shaped
+    /// (`text_prompt`), and the cancel affordance is present exactly when the caller
+    /// declared one (`busy`).
+    #[test]
+    fn a_shared_modal_publishes_its_params_into_its_tree() {
+        // `choice_dialog`: two of three slots filled → the third stays dark, and each
+        // filled slot carries the caller's label AND its variant.
+        let two = ModalParams::new()
+            .title("$wf_discard_title")
+            .body("$wf_discard_msg")
+            .option(ModalOption::danger("$wf_discard_confirm", "discard_yes"))
+            .option(ModalOption::secondary("$wf_discard_cancel", "discard_no"));
+        let built = build_shared_modal("choice_dialog", &two);
+        assert_eq!(built.id, "choice_dialog");
+        assert_eq!(
+            built.model.text("modal_title"),
+            Some(flicker::ui::strings::resolve("$wf_discard_title").as_ref()),
+            "the title is published RESOLVED — the tree carries no copy of its own"
+        );
+        assert_eq!(
+            built.model.text("modal_body"),
+            Some(flicker::ui::strings::resolve("$wf_discard_msg").as_ref())
+        );
+        assert!(built.model.is_on("opt0_shown") && built.model.is_on("opt1_shown"));
+        assert!(
+            !built.model.is_on("opt2_shown"),
+            "a slot the caller did not fill stays dark"
+        );
+        assert_eq!(built.model.text("opt0_variant"), Some("danger"));
+        assert_eq!(built.model.text("opt1_variant"), Some("secondary"));
+        assert!(
+            !built.model.is_on("modal_cancellable"),
+            "a modal with no declared cancel says so — Esc must not invent an answer"
+        );
+
+        // `popup_menu`: the option list is DATA — one navigable row per option, each
+        // firing its OWN action, with the ordinals stepped so the pad walks them in
+        // order. No option copy enters the tree.
+        let menu = ModalParams::new()
+            .title("$modal_unsaved_title")
+            .option(ModalOption::secondary("$modal_lbl_ok", "alpha"))
+            .option(ModalOption::secondary("$modal_lbl_cancel", "bravo"))
+            .option(ModalOption::secondary("$modal_lbl_save", "charlie"));
+        let built = build_shared_modal("popup_menu", &menu);
+        let mut rows: Vec<(String, u32)> = Vec::new();
+        fn buttons(n: &UiNode, out: &mut Vec<(String, u32)>) {
+            if n.component == "button" {
+                out.push((n.action.clone().unwrap_or_default(), n.nav_ordinal));
+            }
+            for c in &n.children {
+                buttons(c, out);
+            }
+        }
+        buttons(&built.tree, &mut rows);
+        assert_eq!(
+            rows,
+            vec![
+                ("alpha".to_string(), 0),
+                ("bravo".to_string(), 1),
+                ("charlie".to_string(), 2)
+            ],
+            "each menu row fires its own action and steps the d-pad order"
+        );
+        assert_eq!(
+            built.model.text("modal_opt_1_label"),
+            Some(flicker::ui::strings::resolve("$modal_lbl_cancel").as_ref()),
+            "row labels are published, never authored into the tree"
+        );
+
+        // `text_prompt`: the seed text rides the Model (the field's `bind`), while
+        // `kind` / `max_len` — which the walker's text session reads off the NODE — are
+        // applied as scalar prop overrides, the same channel Lua's `arrange()` uses.
+        let prompt = ModalParams::new()
+            .title("$modal_unsaved_title")
+            .option(ModalOption::primary("$modal_lbl_ok", "rename_commit"))
+            .cancellable(ModalOption::secondary("$modal_lbl_cancel", "rename_cancel"))
+            .text(ModalText {
+                kind: "digits".into(),
+                initial: "1200".into(),
+                max_len: 7,
+            });
+        let built = build_shared_modal("text_prompt", &prompt);
+        assert_eq!(
+            built.model.text(MODAL_TEXT),
+            Some("1200"),
+            "the field is seeded"
+        );
+        assert!(
+            built.model.is_on("modal_cancellable"),
+            "a declared cancel lights the affordance"
+        );
+        let field = find_by_id(&built.tree, MODAL_TEXT).expect("the prompt authors its field");
+        assert_eq!(field.props.get("kind"), Some(&Value::Text("digits".into())));
+        assert_eq!(field.props.get("max_len"), Some(&Value::Number(7.0)));
+        assert_eq!(
+            field.props.get("submit_action"),
+            Some(&Value::Text(MODAL_SUBMIT.into())),
+        );
+        assert_eq!(
+            field.props.get("cancel_action"),
+            Some(&Value::Text(MODAL_CANCEL.into())),
+        );
+
+        // `busy`: no declared cancel → the bar shows and the Cancel button stays dark,
+        // so the modal never offers a stop it cannot honour.
+        let busy = ModalParams::new()
+            .title("$modal_busy_title")
+            .progress(ModalProgress::new());
+        let built = build_shared_modal("busy", &busy);
+        assert!(!built.model.is_on("modal_cancellable"));
+        assert!(
+            find_by_id(&built.tree, "modal_progress").is_some(),
+            "the busy modal authors the bar its host's progress handle drives"
+        );
+
+        // An UNREGISTERED id is survivable, not fatal: an empty overlay that still
+        // declares its back-out, so a typo cannot trap the player.
+        let unknown = build_shared_modal(
+            "no_such_modal",
+            &two.clone()
+                .cancellable(ModalOption::secondary("$modal_lbl_cancel", "cancel")),
+        );
+        assert_eq!(unknown.id, "");
+        assert_eq!(
+            UiIntents::of(&unknown.tree).result_for(ActionSignal::Cancel),
+            Some(MODAL_CANCEL),
+            "the fallback overlay can always be backed out of"
+        );
+    }
+
+    /// THE CONFLICT ROUND-TRIP GATE: the shared dialog publishes both sides of a
+    /// collision and its "apply to the remaining N" checkbox, and the answer rides out
+    /// as `(result, payload)` — the caller's own verb plus the batch flag, which is what
+    /// lets a 40-item move stay ONE undo entry (F5E9D671).
+    #[test]
+    fn the_conflict_modal_carries_its_answer_and_its_apply_to_the_rest_flag() {
+        let params = ModalParams::new()
+            .title("$modal_conflict_title")
+            .option(ModalOption::secondary("$modal_conflict_lbl_skip", "skip"))
+            .option(ModalOption::secondary(
+                "$modal_conflict_lbl_keep_both",
+                "keep_both",
+            ))
+            .option(ModalOption::primary(
+                "$modal_conflict_lbl_replace",
+                "replace",
+            ))
+            .cancellable(ModalOption::secondary("$modal_lbl_cancel", "cancelled"))
+            .conflict(ModalConflict {
+                name: "Gate.json".into(),
+                folder: "package / props".into(),
+                existing: "4 KB".into(),
+                incoming: "5 KB".into(),
+                remaining: 2,
+                apply_rest: false,
+            });
+        let built = build_shared_modal(MODAL_CONFLICT, &params);
+        assert_eq!(built.model.text("modal_conflict_name"), Some("Gate.json"));
+        assert_eq!(
+            built.model.text("modal_conflict_existing_facts"),
+            Some("4 KB")
+        );
+        assert_eq!(
+            built.model.text("modal_conflict_incoming_facts"),
+            Some("5 KB")
+        );
+        assert!(
+            built.model.is_on("modal_conflict_multi"),
+            "the batch checkbox shows only when more than one is outstanding"
+        );
+        assert!(
+            built
+                .model
+                .text("modal_conflict_rest_label")
+                .is_some_and(|l| l.ends_with('2')),
+            "the label carries the COUNT — the caption itself is a $token"
+        );
+        assert!(!built.model.is_on(MODAL_APPLY_REST), "it opens unticked");
+
+        // The three answers ride the fixed slots, so they map back to the CALLER's verbs.
+        let slots = find_by_id(&built.tree, "modal_opt_2").expect("Replace is slot 2");
+        assert_eq!(
+            slots.props.get("label_bind"),
+            Some(&Value::Text("opt2_label".into()))
+        );
+        assert_eq!(
+            built.model.text("opt2_label"),
+            Some(flicker::ui::strings::resolve("$modal_conflict_lbl_replace").as_ref()),
+            "the slot's label is the caller's token, resolved once at open"
+        );
+
+        // …and the PAYLOAD is the checkbox, ticked or not — the whole batch contract.
+        assert_eq!(
+            modal_payload(&params, None, true).as_deref(),
+            Some("1"),
+            "Replace + apply-to-the-rest answers the remaining conflicts too"
+        );
+        assert_eq!(modal_payload(&params, None, false).as_deref(), Some("0"));
+
+        // A single outstanding conflict offers no batch answer at all.
+        let lone = build_shared_modal(
+            MODAL_CONFLICT,
+            &params.clone().conflict(ModalConflict {
+                name: "Gate.json".into(),
+                remaining: 0,
+                ..Default::default()
+            }),
+        );
+        assert!(
+            !lone.model.is_on("modal_conflict_multi"),
+            "a choice that cannot matter is not offered"
+        );
+    }
+
+    /// Every `$token` the shell's own modal PRESETS carry is seeded in the shipped
+    /// stringtable. `strings::resolve` returns an unknown token unchanged, so a missing
+    /// seed would draw the literal `$modal_lbl_save` on screen and every other gate here
+    /// would still pass — this is the one that catches it. Derived FROM the preset, so a
+    /// new token added to it must be seeded too.
+    #[test]
+    fn every_modal_preset_token_is_seeded_in_the_stringtable() {
+        let table = flicker::ui::strings::flatten(SHELL_STRINGS_JSON, "en-us")
+            .expect("shell stringtable flattens");
+        let preset = ModalParams::unsaved_changes("discard", "keep").with_save("save");
+        let stage = ModalParams::apply_or_revert("apply", "revert", "keep");
+        let busy = ModalParams::new().title("$modal_busy_title");
+        let mut tokens: Vec<String> = vec![
+            preset.title.clone(),
+            preset.body.clone(),
+            stage.title.clone(),
+            stage.body.clone(),
+            busy.title.clone(),
+            "$modal_lbl_ok".to_string(),
+            "$modal_lbl_cancel".to_string(),
+        ];
+        tokens.extend(preset.options.iter().map(|o| o.label.clone()));
+        tokens.extend(preset.cancel.iter().map(|o| o.label.clone()));
+        tokens.extend(stage.options.iter().map(|o| o.label.clone()));
+        tokens.extend(stage.cancel.iter().map(|o| o.label.clone()));
+        // The one token the BUILD path resolves from Rust rather than from a tree —
+        // the conflict's batch caption. No tree gate can see it, so it is named here or
+        // it is seeded nowhere.
+        tokens.push("$modal_conflict_apply_rest".to_string());
+        let missing: Vec<&String> = tokens
+            .iter()
+            .filter(|t| t.starts_with('$') && !table.contains_key(t.trim_start_matches('$')))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "modal preset tokens with no stringtable seed: {missing:?}"
+        );
+        assert!(
+            tokens.iter().all(|t| t.starts_with('$')),
+            "a preset must not carry raw display copy: {tokens:?}"
+        );
+    }
+
+    /// Find the first descendant (or self) with `id` — the read-only twin of
+    /// [`find_by_id_mut`], for the gates above.
+    fn find_by_id<'a>(node: &'a UiNode, id: &str) -> Option<&'a UiNode> {
+        if node.id == id {
+            return Some(node);
+        }
+        node.children.iter().find_map(|c| find_by_id(c, id))
+    }
+
     /// LIVE-PAIR GATE — the shared modals are example pairs now (Aaron 2026-08-17): each
     /// tree gates its optional buttons on `visible_bind` slices its pair script (`pause.lua`
     /// / `confirm.lua`) `arrange()` lights. A gated button the default script leaves dark
@@ -2239,10 +2639,11 @@ mod menu_tree_tests {
     /// until someone opens the window. This turns that into a build failure.
     #[test]
     fn the_shipped_screens_name_only_kinds_the_engine_knows() {
-        // Pause + display-confirm are the shipped popup screens — SHARED modal trees now
-        // (`scenes/shared/*.scene.json`, Aaron 2026-08-14). The live main menu's vocabulary
-        // is gated by `the_main_menu_composes_from_the_rust_components`.
-        for (screen, json) in [("pause", PAUSE_SCENE_JSON), ("confirm", CONFIRM_SCENE_JSON)] {
+        // The shipped popup screens are SHARED modal trees (`scenes/shared/*.scene.json`,
+        // Aaron 2026-08-14) — the whole registry, so a modal added to `SHARED_MODALS` is
+        // gated the day it lands. The live main menu's vocabulary is gated by
+        // `the_main_menu_composes_from_the_rust_components`.
+        for (screen, json, _) in SHARED_MODALS {
             let tree = shared_tree(json);
             assert!(
                 flicker::ui::unknown_kinds(&tree).is_empty(),
@@ -2467,6 +2868,13 @@ impl MenuView {
         }
 
         results
+    }
+
+    /// Whether a `text_field` session in this view owns the keyboard — the seam an
+    /// owning scene's [`Scene::input_context`] switches to `TextEntry` on (E559B955),
+    /// so the typist's Enter / Esc reach the session instead of the modal's nav.
+    fn text_entry(&self) -> bool {
+        self.ui_state.text_entry()
     }
 
     /// Blit the stashed commands (`textures[0]` is the 1×1 white for rect fills).
@@ -3994,6 +4402,854 @@ impl Scene for UnifiedSettingsScene {
     }
 }
 
+// ───────────────────────────────────────────────────────────────────
+// The shared-modal host seam
+// ───────────────────────────────────────────────────────────────────
+
+/// Every SHARED MODAL a scene can open by id — the registry [`SharedModal::open`]
+/// resolves against, and the roster the folder gate walks the shipped
+/// `scenes/shared/` files against.
+///
+/// `(id, tree, pair script)`. The trees are embedded exactly like
+/// [`PAUSE_SCENE_JSON`] (the manifest skips `scenes/shared/`), so a client inherits
+/// them with no copied files. `settings.scene.json` is deliberately ABSENT: it is the
+/// settings SCREEN, hosted by [`UnifiedSettingsScene`] with hardened Rust rows, not a
+/// param-driven modal — the gate names it as the one exemption rather than letting the
+/// folder and this list drift silently.
+///
+/// A param-driven modal carries a pair script only when it has a RUNTIME BEHAVIOUR of
+/// its own: an arrangement that is purely the caller's params has nothing for a `.lua`
+/// to say. `busy` is the one that does — its script folds the published progress into
+/// the `dismissable` toggle (ruling DA0E1B57). Pause and confirm keep theirs (the
+/// authoring examples).
+const SHARED_MODALS: &[(&str, &str, Option<&str>)] = &[
+    ("pause", PAUSE_SCENE_JSON, Some(PAUSE_SCRIPT)),
+    ("confirm", CONFIRM_SCENE_JSON, Some(CONFIRM_SCRIPT)),
+    ("choice_dialog", CHOICE_DIALOG_SCENE_JSON, None),
+    ("popup_menu", POPUP_MENU_SCENE_JSON, None),
+    ("text_prompt", TEXT_PROMPT_SCENE_JSON, None),
+    ("busy", BUSY_SCENE_JSON, Some(BUSY_SCRIPT)),
+    ("conflict", CONFLICT_SCENE_JSON, None),
+];
+
+/// The id [`SharedModal::open`] takes for the shared name-collision dialog.
+pub const MODAL_CONFLICT: &str = "conflict";
+
+/// The shared trees that are NOT param-driven — each is hosted by its OWN scene, whose
+/// authored buttons fire names ([`resume`] / `keep` / `revert`) that mean nothing to
+/// the param seam. `(id, the scene that hosts it)`.
+///
+/// [`SharedModal::open`] refuses these by name. Hosting one here was incident
+/// B89FAC21: the Component Catalog opened `pause` and `confirm` through the seam and
+/// got an overlay with no working control and no back-out — a TRAP, which is the one
+/// thing a modal may never be (rule 1B5F6BB8: Cancel exits one level). The refusal is
+/// the structural fix; the always-injected exit below is the belt to its braces.
+///
+/// [`resume`]: PauseScene
+const HOSTED_ELSEWHERE: &[(&str, &str)] = &[
+    ("pause", "PauseScene::new"),
+    ("confirm", "ConfirmDisplayScene::new"),
+    ("settings", "UnifiedSettingsScene::new"),
+];
+
+/// The scene that owns `id`, when `id` is not the param seam's to host — `None` for a
+/// param-driven tree (and for an id nobody registered at all).
+///
+/// Public because a caller offering a modal has to be able to ASK, and because the
+/// exerciser (the Component Catalog) must derive its roster from the registry rather
+/// than keep a second copy that can drift (F1BFA408).
+#[must_use]
+pub fn modal_host_of(id: &str) -> Option<&'static str> {
+    HOSTED_ELSEWHERE
+        .iter()
+        .find(|(k, _)| *k == id)
+        .map(|(_, host)| *host)
+}
+
+fn hosted_elsewhere(id: &str) -> Option<&'static str> {
+    modal_host_of(id)
+}
+
+/// Every PARAM-DRIVEN shared modal id, in registry order — the trees
+/// [`SharedModal`] hosts, because their whole arrangement comes from the caller's
+/// [`ModalParams`]. The registry of record for anything that enumerates them.
+#[must_use]
+pub fn param_driven_modals() -> Vec<&'static str> {
+    SHARED_MODALS
+        .iter()
+        .map(|(id, _, _)| *id)
+        .filter(|id| hosted_elsewhere(id).is_none())
+        .collect()
+}
+
+/// The result name every shared modal's Cancel affordance fires — the tree's Cancel
+/// button AND its root `on_cancel` (Esc / pad-B) fold to this ONE name, exactly as
+/// pause folds both to `resume`. The name only REACHES the host when the topmost
+/// `popup_panel` is currently dismissable; the ladder then answers it with the caller's
+/// action, or [`MODAL_CANCELLED`] where the caller named none.
+const MODAL_CANCEL: &str = "modal_cancel";
+/// The result a modal closes with when the walker's Cancel arrives and the CALLER
+/// declared no cancel option of its own. The exit is the HOST's, not the caller's and
+/// not the tree's: a shared modal is never a trap (incident B89FAC21, rule 1B5F6BB8).
+const MODAL_CANCELLED: &str = "cancelled";
+/// The result name a text prompt's OK button and its field's `submit_action` both fire.
+const MODAL_SUBMIT: &str = "modal_submit";
+/// The Model key a text prompt's field binds — the seed text in, the edited text out.
+const MODAL_TEXT: &str = "modal_text";
+/// The `rows_from` source name `popup_menu` expands its option list from.
+const MODAL_OPTIONS: &str = "modal_options";
+/// The result name [`SharedModal`] closes a busy modal with when its work finishes.
+const MODAL_DONE: &str = "done";
+/// The Model key `busy`'s bar binds — the live fraction, 0..1.
+const MODAL_PROGRESS: &str = "modal_progress";
+/// The Model key saying THERE IS NOTHING LEFT TO WAIT FOR: the shared handle finished,
+/// its bar reached full, or the caller handed no handle at all (a busy modal with no
+/// work is done before it starts). Published beside [`MODAL_PROGRESS`] so
+/// `scripts/shared/busy.lua` can fold it into the slab's `dismissable` toggle without
+/// the host deciding the policy (ruling DA0E1B57).
+const MODAL_DONE_KEY: &str = "modal_done";
+/// The Model key `popup_menu`'s option list binds its scroll offset to. A list's
+/// offset rides its bind: the walker writes it into the results and reads it back off
+/// the Model next frame, so a host that does not fold it back pins the list to its top.
+const MODAL_MENU_SCROLL: &str = "modal_options_scroll";
+/// The Model key + result name `conflict`'s "apply to the remaining N" checkbox binds.
+/// Its state rides out as the close PAYLOAD (`"1"` / `"0"`).
+const MODAL_APPLY_REST: &str = "modal_conflict_apply_rest";
+
+/// One button a [`SharedModal`] offers: what it says, what it fires, and how it looks.
+///
+/// The label is a `$stringtable` token or already-resolved text (the modal resolves it
+/// once, so both work); the action is the CALLER'S OWN result name — the fixed slot
+/// names the trees author (`modal_opt_0..2`) never leave the shell.
+#[derive(Clone, Debug)]
+pub struct ModalOption {
+    label: String,
+    action: String,
+    variant: &'static str,
+}
+
+impl ModalOption {
+    /// The affirmative choice (Save, OK, Load).
+    pub fn primary(label: impl Into<String>, action: impl Into<String>) -> Self {
+        Self::new(label, action, "primary")
+    }
+    /// A neutral choice (Cancel, Keep editing, Later).
+    pub fn secondary(label: impl Into<String>, action: impl Into<String>) -> Self {
+        Self::new(label, action, "secondary")
+    }
+    /// A destructive choice (Discard, Delete, Overwrite).
+    pub fn danger(label: impl Into<String>, action: impl Into<String>) -> Self {
+        Self::new(label, action, "danger")
+    }
+    fn new(label: impl Into<String>, action: impl Into<String>, variant: &'static str) -> Self {
+        Self {
+            label: label.into(),
+            action: action.into(),
+            variant,
+        }
+    }
+}
+
+/// A long operation's live progress, SHARED with the busy modal it drives.
+///
+/// The scene that opened the modal is FROZEN beneath it (only the top scene updates), so
+/// it cannot publish a fraction per frame — this handle is the channel instead. The host
+/// clones one into its [`ModalParams`], hands the other end to whatever does the work,
+/// and the modal reads it every frame it is up. [`finish`](Self::finish) closes the
+/// modal with the `done` result.
+#[derive(Clone, Default)]
+pub struct ModalProgress(std::sync::Arc<ProgressCell>);
+
+#[derive(Default)]
+struct ProgressCell {
+    /// The fraction in PER-MILLE, so the cell is lock-free and `Send` for a worker
+    /// thread without an f32 atomic.
+    permille: std::sync::atomic::AtomicU32,
+    done: std::sync::atomic::AtomicBool,
+}
+
+impl ModalProgress {
+    /// A fresh handle at zero.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+    /// Publish the current fraction (clamped to 0..=1).
+    pub fn set(&self, fraction: f32) {
+        let p = (fraction.clamp(0.0, 1.0) * 1000.0).round() as u32;
+        self.0
+            .permille
+            .store(p, std::sync::atomic::Ordering::Relaxed);
+    }
+    /// The current fraction, 0..=1.
+    #[must_use]
+    pub fn fraction(&self) -> f32 {
+        self.0.permille.load(std::sync::atomic::Ordering::Relaxed) as f32 / 1000.0
+    }
+    /// The work is over — the busy modal closes itself with the `done` result.
+    pub fn finish(&self) {
+        self.set(1.0);
+        self.0
+            .done
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    /// Whether [`finish`](Self::finish) has been called.
+    #[must_use]
+    pub fn is_done(&self) -> bool {
+        self.0.done.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+/// The text-entry configuration a `text_prompt` modal opens with — the field's seed
+/// text and the two knobs that shape what may be typed into it.
+#[derive(Clone, Debug, Default)]
+pub struct ModalText {
+    /// The `text_field` kind: empty for free text, `"digits"` / `"number"` to constrain.
+    pub kind: String,
+    /// The text the field starts holding (already-resolved text, never a token — this
+    /// is DATA the user edits, not display copy).
+    pub initial: String,
+    /// Character cap; `0` leaves the field uncapped.
+    pub max_len: u32,
+}
+
+/// What the shared `conflict` modal shows about ONE name collision: the two sides as
+/// measured facts, and how many more collisions are still waiting behind it.
+///
+/// Only NAMES and measured facts are data here — every caption on the dialog is a
+/// `$token` in the tree. `remaining` is what lights the "apply to the remaining N"
+/// checkbox: a batch answer is only meaningful with more than one outstanding.
+#[derive(Clone, Debug, Default)]
+pub struct ModalConflict {
+    /// The colliding name, as the destination spells it.
+    pub name: String,
+    /// The folder it would land in (a breadcrumb line, not a raw path).
+    pub folder: String,
+    /// The measured facts for what is already there / what would land on it.
+    pub existing: String,
+    pub incoming: String,
+    /// Collisions still outstanding AFTER this one. `0` hides the checkbox.
+    pub remaining: usize,
+    /// The checkbox's initial state (a caller re-opening mid-batch keeps the answer).
+    pub apply_rest: bool,
+}
+
+/// What a scene hands [`SharedModal::open`] — everything the shared tree needs to say,
+/// offer and collect, with no per-caller tree.
+///
+/// Strings are `$stringtable` tokens or already-resolved text: the modal resolves each
+/// ONCE when it opens and publishes the resolved text through the Model, so the tree is
+/// never rewritten and the localisation gates keep holding.
+#[derive(Clone, Default)]
+pub struct ModalParams {
+    title: String,
+    body: String,
+    options: Vec<ModalOption>,
+    cancel: Option<ModalOption>,
+    text: Option<ModalText>,
+    progress: Option<ModalProgress>,
+    conflict: Option<ModalConflict>,
+}
+
+impl ModalParams {
+    /// Empty params — fill with the builders below.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+    /// The modal's heading.
+    #[must_use]
+    pub fn title(mut self, title: impl Into<String>) -> Self {
+        self.title = title.into();
+        self
+    }
+    /// The wrapping body copy under the heading.
+    #[must_use]
+    pub fn body(mut self, body: impl Into<String>) -> Self {
+        self.body = body.into();
+        self
+    }
+    /// Offer one more choice. `choice_dialog` draws up to three (a slot nobody filled
+    /// stays dark); `popup_menu` draws as many as it is given; `text_prompt` uses the
+    /// first as its OK button.
+    #[must_use]
+    pub fn option(mut self, option: ModalOption) -> Self {
+        self.options.push(option);
+        self
+    }
+    /// Make Esc / pad-B (and the Cancel button the tree draws, where it has one) close
+    /// the modal with `option`'s action.
+    ///
+    /// A modal with no cancel affordance still HAS an exit — the host injects one and it
+    /// reports [`MODAL_CANCELLED`] — but whether that exit may be taken is the tree's
+    /// own `popup_panel` toggle (ruling DA0E1B57): `busy` holds it shut while its work
+    /// runs, and every other shared tree leaves it at its default (open). So this
+    /// builder is "back out with MY action", not "back out at all".
+    #[must_use]
+    pub fn cancellable(mut self, option: ModalOption) -> Self {
+        self.cancel = Some(option);
+        self
+    }
+    /// Open a text-entry field (the `text_prompt` tree) seeded and shaped by `text`.
+    #[must_use]
+    pub fn text(mut self, text: ModalText) -> Self {
+        self.text = Some(text);
+        self
+    }
+    /// Drive the `busy` tree's bar from a shared progress handle.
+    #[must_use]
+    pub fn progress(mut self, progress: ModalProgress) -> Self {
+        self.progress = Some(progress);
+        self
+    }
+
+    /// Configure the `conflict` tree: the two sides of one name collision and how many
+    /// more are waiting. The three [`option`](Self::option)s are Skip / Keep both /
+    /// Replace, in the caller's own names.
+    #[must_use]
+    pub fn conflict(mut self, conflict: ModalConflict) -> Self {
+        self.conflict = Some(conflict);
+        self
+    }
+
+    /// What a modal opened with these params CLOSES WITH when the player backs out —
+    /// the caller's own cancel action, or [`MODAL_CANCELLED`] when it declared none.
+    ///
+    /// Never `None`: the host injects the exit whatever the caller asked for and
+    /// whatever the tree authored, so "what will I be told when the player backs out?"
+    /// has one answer for every shared modal (incident B89FAC21; rule 1B5F6BB8 — Cancel
+    /// exits one level). WHEN that exit is reachable is the slab's `dismissable` toggle
+    /// (DA0E1B57) — open by default, held shut only while a tree's Lua says so.
+    #[must_use]
+    pub fn cancel_result(&self) -> &str {
+        self.cancel
+            .as_ref()
+            .map_or(MODAL_CANCELLED, |c| c.action.as_str())
+    }
+
+    /// THE UNSAVED-CHANGES PRESET — a `choice_dialog`, not a tree of its own.
+    ///
+    /// "Unsaved changes" is the standard title + body over a Discard / Keep-editing
+    /// pair; that is PARAMS, and a fifth shared tree carrying the same three nodes
+    /// would be the duplicate the decompose-before-promoting rule exists to stop. Add
+    /// [`with_save`](Self::with_save) when the caller actually has somewhere to save to.
+    /// Keep-editing is also the cancel affordance, so Esc backs out the safe way.
+    #[must_use]
+    pub fn unsaved_changes(discard_action: impl Into<String>, keep_action: &str) -> Self {
+        let keep = ModalOption::secondary("$modal_lbl_keep_editing", keep_action);
+        Self::new()
+            .title("$modal_unsaved_title")
+            .body("$modal_unsaved_body")
+            .option(ModalOption::danger("$modal_lbl_discard", discard_action))
+            .option(keep.clone())
+            .cancellable(keep)
+    }
+
+    /// Put a Save choice in front of the [`unsaved_changes`](Self::unsaved_changes)
+    /// pair, for a caller that can commit the work instead of losing it.
+    #[must_use]
+    pub fn with_save(mut self, save_action: impl Into<String>) -> Self {
+        self.options.insert(
+            0,
+            ModalOption::primary("$modal_lbl_save", save_action.into()),
+        );
+        self
+    }
+
+    /// THE APPLY-OR-REVERT PRESET (Aaron 2026-09-04) — a `choice_dialog`, not a tree.
+    ///
+    /// Raised by [`stage_prompt`] when the left stick tries to leave a pane whose
+    /// controls hold pad-STAGED values ("Confirm = apply"): Apply commits them, Revert
+    /// drops them, and Keep-editing — also the Esc / pad-B back-out, so a stray press
+    /// never loses or applies anything — leaves the cursor where it was.
+    #[must_use]
+    pub fn apply_or_revert(
+        apply_action: impl Into<String>,
+        revert_action: impl Into<String>,
+        keep_action: &str,
+    ) -> Self {
+        let keep = ModalOption::secondary("$modal_lbl_keep_editing", keep_action);
+        Self::new()
+            .title("$modal_apply_title")
+            .body("$modal_apply_body")
+            .option(ModalOption::primary("$modal_lbl_apply", apply_action))
+            .option(ModalOption::danger("$modal_lbl_revert", revert_action))
+            .option(keep.clone())
+            .cancellable(keep)
+    }
+}
+
+/// The three answers of the stage prompt, as the result names its options fire —
+/// fixed, so every bench folds them through [`stage_prompt_closed`] identically.
+pub const STAGE_APPLY: &str = "stage_apply";
+/// See [`STAGE_APPLY`].
+pub const STAGE_REVERT: &str = "stage_revert";
+/// See [`STAGE_APPLY`].
+pub const STAGE_KEEP: &str = "stage_keep";
+
+/// THE STAGE-PROMPT SEAM, opening half (Aaron 2026-09-04): call once per frame from a
+/// bench's `update`, after its walker dispatch. When the walker parked a pane move
+/// behind pad-staged values, this raises the shared Apply / Revert / Keep-editing
+/// `choice_dialog` and hands back the push to return. A bench with no theme yet cannot
+/// host a modal, so the move is simply forgotten (the stages stand).
+///
+/// One call, no choreography in the scene: the walker decides WHEN (it parked the
+/// move), the shared tree decides HOW it looks, and [`stage_prompt_closed`] folds the
+/// answer — the scene never touches a stage.
+pub fn stage_prompt(theme: Option<Theme>, ui: &mut UiState) -> Option<Transition> {
+    if !ui.take_stage_prompt() {
+        return None;
+    }
+    let Some(theme) = theme else {
+        ui.keep_stages();
+        return None;
+    };
+    Some(Transition::Push(Box::new(SharedModal::open(
+        theme,
+        "choice_dialog",
+        ModalParams::apply_or_revert(STAGE_APPLY, STAGE_REVERT, STAGE_KEEP),
+    ))))
+}
+
+/// THE STAGE-PROMPT SEAM, closing half: call first thing in a bench's `modal_closed`.
+/// Folds the prompt's answer into the walker state — Apply commits every stage and
+/// releases the parked pane move, Revert drops the stages and releases it, Keep leaves
+/// the stages standing and the cursor where it was — and returns whether `result` was
+/// the prompt's at all, so any other modal's answer falls through to the bench.
+pub fn stage_prompt_closed(ui: &mut UiState, result: &str) -> bool {
+    match result {
+        STAGE_APPLY => ui.apply_stages(),
+        STAGE_REVERT => ui.revert_stages(),
+        STAGE_KEEP => ui.keep_stages(),
+        _ => return false,
+    }
+    true
+}
+
+/// The tree + Model a [`ModalParams`] resolves to, before any GPU is involved.
+struct BuiltModal {
+    /// The registered id (empty when the requested one is unknown or refused).
+    id: &'static str,
+    script: Option<&'static str>,
+    tree: UiNode,
+    model: ValueMap,
+    /// The id names a scene-hosted tree ([`HOSTED_ELSEWHERE`]): the built overlay is
+    /// the bare fallback and its host closes it on the first update.
+    refused: bool,
+}
+
+/// The bar's fraction for these params — `0` where the caller handed no handle.
+fn progress_fraction(params: &ModalParams) -> f32 {
+    params
+        .progress
+        .as_ref()
+        .map_or(0.0, ModalProgress::fraction)
+}
+
+/// Whether there is NOTHING LEFT TO WAIT FOR: the handle finished, its bar reached full,
+/// or there is no handle at all. ONE definition, read by both publish sites (the resting
+/// model and the per-frame refresh) so the two can never disagree about what "done"
+/// means — which is what `busy.lua` turns into the slab's dismissability.
+fn progress_done(params: &ModalParams) -> bool {
+    params
+        .progress
+        .as_ref()
+        .is_none_or(|p| p.is_done() || p.fraction() >= 1.0)
+}
+
+/// What a closing modal carries out, by what its params asked it to collect: a
+/// conflict's "apply to the remaining" flag, or a text prompt's committed value. One
+/// function, so the payload contract is one place (and gated headlessly).
+fn modal_payload(params: &ModalParams, text: Option<&str>, apply_rest: bool) -> Option<String> {
+    if params.conflict.is_some() {
+        return Some(if apply_rest { "1" } else { "0" }.to_string());
+    }
+    text.map(str::to_string)
+}
+
+/// Resolve `params` against the shared tree registered under `id` — the whole publish
+/// path of [`SharedModal::open`], split out so it runs (and is GATED) without a
+/// [`Theme`] and therefore without a GPU.
+///
+/// Nothing here rewrites display copy INTO the tree: every string the caller supplied is
+/// resolved once through the stringtable and published as a Model value the tree's
+/// `title_bind` / `text_bind` / `label_bind` read. The two things that cannot ride the
+/// Model — a menu's variable-length option list and a text field's `kind` / `max_len`,
+/// which the walker reads off the NODE — go through the two ratified data channels
+/// instead: `rows_from` expansion and `arrange()`-style scalar prop overrides.
+fn build_shared_modal(id: &str, params: &ModalParams) -> BuiltModal {
+    // A scene-hosted tree is REFUSED, not hosted. Its buttons fire the owning scene's
+    // names, which this seam cannot map to anything — so it would show an overlay with
+    // no working control and no exit (incident B89FAC21). Loud in debug, logged in
+    // release, and in both cases the caller gets a modal that leaves immediately.
+    let refused = hosted_elsewhere(id);
+    debug_assert!(
+        refused.is_none(),
+        "SharedModal cannot host '{id}' — it is hosted by {}. The param seam hosts only \
+         the param-driven trees; open the owning scene instead.",
+        refused.unwrap_or_default()
+    );
+    if let Some(host) = refused {
+        tracing::error!(
+            "SharedModal cannot host '{id}' — it is hosted by {host}; showing an \
+             overlay that closes itself. Open the owning scene instead."
+        );
+    }
+    let entry = (refused.is_none())
+        .then(|| SHARED_MODALS.iter().find(|(k, _, _)| *k == id))
+        .flatten();
+    if entry.is_none() && refused.is_none() {
+        tracing::error!(
+            "no shared modal is registered under '{id}' — showing an empty, \
+             back-out-able overlay; register its tree in SHARED_MODALS"
+        );
+    }
+    let refused = refused.is_some();
+    let (id, json, script) = entry.copied().unwrap_or(("", "", None));
+    let cancellable = params.cancel.is_some();
+    let mut model = ValueMap::new();
+    let resolve = |s: &str| flicker::ui::strings::resolve(s).to_string();
+    model.set("modal_title", resolve(&params.title));
+    model.set("modal_body", resolve(&params.body));
+    model.set("modal_cancellable", cancellable);
+    if let Some(c) = &params.cancel {
+        model.set("modal_cancel_label", resolve(&c.label));
+    }
+    // THE PROGRESS CHANNEL, at rest. `frame_model` refreshes both every frame a handle
+    // is live; publishing them HERE too means the state is complete from the first walk
+    // and — the part that matters — a modal handed NO handle still says so: it is done
+    // before it starts, which is what keeps `busy.lua`'s toggle from holding a bar that
+    // will never move (B89FAC21: a modal may never be a trap).
+    model.set(MODAL_PROGRESS, progress_fraction(params));
+    model.set(MODAL_DONE_KEY, progress_done(params));
+    // The FIXED slots (`choice_dialog`): a slot the caller filled lights and wears its
+    // variant; the rest stay dark. `popup_menu` ignores these — its rows come from the
+    // expansion below — and its answers map back through the same option order.
+    for (i, opt) in params.options.iter().enumerate() {
+        model.set(format!("opt{i}_shown"), true);
+        model.set(format!("opt{i}_label"), resolve(&opt.label));
+        model.set(format!("opt{i}_variant"), opt.variant);
+    }
+    if let Some(t) = &params.text {
+        model.set(MODAL_TEXT, t.initial.clone());
+    }
+    // The COLLISION facts (`conflict`): names and measured sizes are data; every caption
+    // beside them is a `$token` the tree authors. "Apply to the remaining N" only means
+    // anything with more than one outstanding, so the checkbox is gated on the count
+    // rather than offering a choice that cannot matter.
+    if let Some(c) = &params.conflict {
+        model.set("modal_conflict_name", c.name.clone());
+        model.set("modal_conflict_where", c.folder.clone());
+        model.set("modal_conflict_existing_facts", c.existing.clone());
+        model.set("modal_conflict_incoming_facts", c.incoming.clone());
+        model.set("modal_conflict_multi", c.remaining > 0);
+        model.set(
+            "modal_conflict_rest_label",
+            format!("{} {}", resolve("$modal_conflict_apply_rest"), c.remaining),
+        );
+        model.set(MODAL_APPLY_REST, c.apply_rest);
+    }
+    // THE EXIT IS ALWAYS INJECTED, whatever the file authored: the host owns the
+    // back-out, so a tree that declares the wrong `on_cancel` (or none) still leaves the
+    // player a way out. Whether that exit carries the CALLER's action or the host's
+    // `cancelled` is decided at close, not here (incident B89FAC21) — and whether it is
+    // currently REACHABLE is the slab's own `dismissable` toggle, decided by the walker
+    // against the tree's Lua, not by anything on this side (DA0E1B57).
+    let mut tree = parse_shared_modal(json, id, Some(MODAL_CANCEL));
+    // A `popup_menu`'s option list is DATA: expand the `rows_from` repeater once (a
+    // modal's options never change while it is up), which clones one button per row,
+    // steps each clone's `nav_ordinal` so the pad walks them in order, and publishes
+    // each row's label. A tree with no `rows_from` passes through untouched.
+    let rows: Vec<flicker::ui::Row> = params
+        .options
+        .iter()
+        .map(|o| flicker::ui::Row::new(o.action.clone(), resolve(&o.label)))
+        .collect();
+    tree = flicker::ui::instantiate_rows(&tree, &mut model, &|name| {
+        (name == MODAL_OPTIONS).then(|| rows.clone())
+    });
+    // The field's `kind` / `max_len` are component PROPS, not binds — the text session
+    // reads them off the node — so they cross the seam the way Lua's `arrange()` crosses
+    // it: scalar prop overrides applied onto the node with that id.
+    if let Some(t) = &params.text {
+        let mut props = std::collections::HashMap::new();
+        props.insert("kind".to_string(), Value::Text(t.kind.clone()));
+        if t.max_len > 0 {
+            props.insert("max_len".to_string(), Value::Number(f64::from(t.max_len)));
+        }
+        let mut arrangement = flicker::script::Arrangement::default();
+        arrangement.components.insert(
+            MODAL_TEXT.to_string(),
+            flicker::script::ComponentArrange {
+                on: true,
+                props,
+                ..Default::default()
+            },
+        );
+        arrangement.apply_props(&mut tree);
+    }
+    BuiltModal {
+        id,
+        script,
+        tree,
+        model,
+        refused,
+    }
+}
+
+/// Everything a shared modal decides WITHOUT a GPU: what the caller offered, what the
+/// tree collects, and the map from ONE walked frame's fired names to a [`Transition`].
+///
+/// Split out of [`SharedModal`] the way [`build_shared_modal`] is split out of `open`:
+/// [`MenuView`] needs a [`Theme`] (and therefore a GPU), so a gate that drives the
+/// modal's ANSWER through the real names could not exist while the ladder lived inside
+/// `Scene::update`. It has to exist — incident B89FAC21 shipped a trap and three inert
+/// buttons under green tests precisely because no gate covered the pointer/pad channel
+/// (rule 8634C200: a gate must cover the channel the drift travels).
+#[derive(Clone)]
+struct ModalAnswer {
+    /// The shared tree's id — what the host is told the answer came from.
+    id: &'static str,
+    /// Everything the params published, folded into every frame's walk. Static: a
+    /// modal's offer does not change while it is up (only `busy`'s bar moves, and that
+    /// rides the progress handle).
+    model: ValueMap,
+    /// The CALLER's action per option slot, in order — the map back from the tree's
+    /// fixed `modal_opt_<n>` names (and from a menu row's own id) to the bench's names.
+    actions: Vec<String>,
+    /// What the caller's Cancel affordance closes with. `None` does NOT mean "no exit":
+    /// the host always injects one (see [`Self::resolve`]) — it only means the caller
+    /// named no action of its own, so the exit reports [`MODAL_CANCELLED`].
+    cancel: Option<String>,
+    /// The live bar's source, for the `busy` tree.
+    progress: Option<ModalProgress>,
+    /// A text prompt's current field text.
+    text: Option<String>,
+    /// The params, kept whole so the payload contract reads what the caller asked to
+    /// collect rather than a second copy of it.
+    params: ModalParams,
+    /// The `conflict` checkbox's live state, carried out as the close payload.
+    apply_rest: bool,
+    /// This modal was opened on an id the seam MUST NOT host (pause / confirm /
+    /// settings — each has its own scene). It closes itself on its first update rather
+    /// than sitting there as an un-exitable overlay.
+    refused: bool,
+}
+
+impl ModalAnswer {
+    /// The headless half of an open modal, from what [`build_shared_modal`] resolved
+    /// and the params that drove it. [`SharedModal::open`] calls this; so does every
+    /// gate, so a gate can never drive a state production does not build.
+    fn new(built: &BuiltModal, params: ModalParams) -> Self {
+        Self {
+            id: built.id,
+            actions: params.options.iter().map(|o| o.action.clone()).collect(),
+            cancel: params.cancel.clone().map(|c| c.action),
+            progress: params.progress.clone(),
+            text: params
+                .text
+                .as_ref()
+                .map(|t| t.initial.clone())
+                .or_else(|| built.model.text(MODAL_TEXT).map(str::to_string)),
+            apply_rest: params.conflict.as_ref().is_some_and(|c| c.apply_rest),
+            refused: built.refused,
+            model: built.model.clone(),
+            params,
+        }
+    }
+
+    /// Close with `result`, carrying whatever this tree collects: a text prompt's
+    /// committed value, or a conflict's "apply to the remaining" flag.
+    fn close(&self, result: &str) -> Transition {
+        Transition::CloseModal {
+            modal: self.id.to_string(),
+            result: result.to_string(),
+            payload: modal_payload(&self.params, self.text.as_deref(), self.apply_rest),
+        }
+    }
+
+    /// The Model THIS frame walks. `busy` is the one tree whose Model moves between
+    /// frames (its bar reads the shared handle), so it is the one that copies; every
+    /// other tree walks the held one rather than paying a clone 60×/s to change nothing.
+    ///
+    /// Refreshes BOTH halves of the progress channel — the fraction the bar draws and
+    /// the `modal_done` flag `busy.lua` folds into the slab's `dismissable` toggle — so
+    /// the moment the work is over the modal becomes dismissable in the same frame.
+    fn frame_model(&self) -> Option<ValueMap> {
+        self.progress.as_ref()?;
+        let mut model = self.model.clone();
+        model.set(MODAL_PROGRESS, progress_fraction(&self.params));
+        model.set(MODAL_DONE_KEY, progress_done(&self.params));
+        Some(model)
+    }
+
+    /// Read one walked frame's fired names and decide. The ONE answer ladder for every
+    /// param-driven tree, driven by exactly the names the walker fires.
+    fn resolve(&mut self, actions: &ValueMap) -> Transition {
+        // The field's edited text arrives on its bind; hold it so the close carries it,
+        // and mirror it back into the Model so the field keeps what was typed (the
+        // walker redraws a field from the Model between sessions).
+        if let Some(t) = actions.text(MODAL_TEXT) {
+            let t = t.to_string();
+            self.model.set(MODAL_TEXT, t.clone());
+            self.text = Some(t);
+        }
+        // A list's scroll offset rides its bind out and must ride back in, or the
+        // walker reads last frame's Model and pins the list to the top forever.
+        if let Some(v) = actions.number(MODAL_MENU_SCROLL) {
+            self.model.set(MODAL_MENU_SCROLL, v);
+        }
+        // The conflict checkbox is a VALUE, not a fire: the walker writes the flipped
+        // bool onto its bind, and the echo republishes the resting one — so reading it
+        // every frame is both the click and the steady state, and holding it here is
+        // what lets the answer ride out as the payload.
+        if self.params.conflict.is_some() {
+            self.apply_rest = actions.is_on(MODAL_APPLY_REST);
+            self.model.set(MODAL_APPLY_REST, self.apply_rest);
+        }
+        // One answer channel for every tree: a fixed slot (`choice_dialog`, `conflict`),
+        // a menu row firing its own action (`popup_menu`), or the prompt's submit — each
+        // maps to the same caller action.
+        for (i, action) in self.actions.iter().enumerate() {
+            let slot_fired = actions.is_on(&format!("modal_opt_{i}"));
+            let own_fired = actions.is_on(action);
+            let submit_fired = i == 0 && actions.is_on(MODAL_SUBMIT);
+            if slot_fired || own_fired || submit_fired {
+                return self.close(action);
+            }
+        }
+        // THE EXIT IS THE HOST'S, NOT THE TREE'S (incident B89FAC21, rule 1B5F6BB8 —
+        // Cancel backs out one level). `build_shared_modal` injects `on_cancel` onto
+        // every hosted root, so this name arrives whatever the file authored, and a
+        // caller that declared no cancel option still gets out, reporting
+        // [`MODAL_CANCELLED`] with no payload.
+        //
+        // WHAT THE HOST NO LONGER DOES (ruling DA0E1B57, retiring the overnight "close
+        // regardless" override): it does not decide WHETHER the exit may be taken. That
+        // is the slab's own `dismissable` toggle, read by the walker at its Cancel
+        // routing — so a name that reaches this ladder is one the component allowed
+        // through, and there is no second policy here that could contradict it. The
+        // toggle defaults TRUE, so by default nothing traps.
+        if actions.is_on(MODAL_CANCEL) {
+            return match self.cancel.clone() {
+                Some(c) => self.close(&c),
+                None => Transition::CloseModal {
+                    modal: self.id.to_string(),
+                    result: MODAL_CANCELLED.to_string(),
+                    payload: None,
+                },
+            };
+        }
+        Transition::None
+    }
+}
+
+/// A SHARED MODAL opened by id over the scene that asked for it — the one host for
+/// every param-driven pop-up (`choice_dialog` · `popup_menu` · `text_prompt` · `busy` ·
+/// `conflict`).
+///
+/// It is [`PauseScene`]'s hosting generalised, not a parallel system: the same
+/// [`parse_shared_modal`] / [`shared_modal_script`] / [`MenuView::from_tree`] path, the
+/// same `is_overlay` + `InputContext::Menu`, the same `on_cancel` back-out. What it adds
+/// is the PARAMS channel — a bench says what the modal should say and offer, in typed
+/// Rust, and the modal publishes that through the Model rather than anyone editing a
+/// tree — and the RESULT channel: it closes on [`Transition::CloseModal`], which the
+/// kernel hands to the frozen scene beneath through [`Scene::modal_closed`].
+///
+/// It hosts ONLY the param-driven trees. `pause` / `confirm` / `settings` carry their
+/// own buttons and their own exits and belong to their own scenes; opening one here is
+/// refused loudly ([`hosted_elsewhere`]) rather than shown as an overlay whose controls
+/// mean nothing to this host — the trap of incident B89FAC21.
+///
+/// A bench opens one exactly as it opens the pause menu:
+/// `Transition::Push(Box::new(SharedModal::open(theme, "choice_dialog", params)))`.
+pub struct SharedModal {
+    view: MenuView,
+    /// Everything decided without a GPU — the params, the Model and the answer ladder.
+    answer: ModalAnswer,
+}
+
+impl SharedModal {
+    /// Open the shared modal registered under `id`, configured by `params`.
+    ///
+    /// An unregistered id — or one belonging to a scene-hosted tree — is a LOUD failure
+    /// that still leaves the player a way out, never a crash and never a trap: it
+    /// asserts in debug, logs in release, and shows the bare-surface fallback
+    /// [`build_shared_modal`] builds, which closes itself on its first update.
+    #[must_use]
+    pub fn open(theme: Theme, id: &str, params: ModalParams) -> Self {
+        let built = build_shared_modal(id, &params);
+        let answer = ModalAnswer::new(&built, params);
+        Self {
+            view: MenuView::from_tree(
+                &theme,
+                built.tree,
+                built
+                    .script
+                    .and_then(|s| shared_modal_script(s, &format!("{}.lua", built.id))),
+            ),
+            answer,
+        }
+    }
+}
+
+impl Scene for SharedModal {
+    fn is_overlay(&self) -> bool {
+        true
+    }
+
+    /// Menu context, or `TextEntry` while a field session owns the keyboard (E559B955):
+    /// the field's Enter / Esc are the session's, not the modal's, so the tree's
+    /// `on_cancel` cannot steal the typist's Escape.
+    fn input_context(&self) -> Option<InputContext> {
+        Some(if self.view.text_entry() {
+            InputContext::TextEntry
+        } else {
+            InputContext::Menu
+        })
+    }
+
+    fn update(
+        &mut self,
+        _dt: Duration,
+        input: &InputState,
+        signals: &mut SceneInput,
+        renderer: &Renderer,
+    ) -> Transition {
+        // A refused id never draws a second frame: it is an overlay whose controls this
+        // host cannot answer, so it leaves rather than sits (B89FAC21).
+        if self.answer.refused {
+            return Transition::CloseModal {
+                modal: self.answer.id.to_string(),
+                result: MODAL_CANCELLED.to_string(),
+                payload: None,
+            };
+        }
+        // The bar reads the SHARED handle: the host that opened this modal is frozen
+        // beneath it and could not feed a fraction per frame.
+        if self
+            .answer
+            .progress
+            .as_ref()
+            .is_some_and(ModalProgress::is_done)
+        {
+            return self.answer.close(MODAL_DONE);
+        }
+        let actions = match self.answer.frame_model() {
+            Some(m) => self.view.update(signals, input, renderer, &m),
+            None => self
+                .view
+                .update(signals, input, renderer, &self.answer.model),
+        };
+        self.answer.resolve(&actions)
+    }
+
+    fn render<'f>(&'f mut self, _renderer: &mut Renderer, fg: &mut FrameGraph<'f>) {
+        let view = &self.view;
+        fg.overlay(move |r| view.render(r));
+    }
+}
+
 /// Pause overlay pushed over the frozen game. Resume (or Escape) pops back to
 /// the game; Quit exits. Reuses the game's already-uploaded [`Theme`].
 ///
@@ -4420,57 +5676,717 @@ mod script_smoke {
         );
     }
 
+    /// The resolved styles every shared-modal walk uses — the shell furniture plus
+    /// `Main.scene.json`'s carrier, exactly what `MenuView::from_tree` resolves.
+    fn modal_styles() -> serde_json::Value {
+        flicker::ui::load_styles_strs_for(
+            &[SHELL_UI_JSON, SHELL_STYLE_JSON],
+            main_scene_styles().as_ref(),
+        )
+    }
+
+    /// One pointer sample at 1600×900 — the runner's own `UiInput` shape.
+    fn pointer_at(x: f32, y: f32, pressed: bool) -> UiInput {
+        use flicker::render::Vec2;
+        UiInput {
+            mouse: Vec2::new(x, y),
+            clicked: pressed,
+            down: pressed,
+            right_down: false,
+            screen: Vec2::new(1600.0, 900.0),
+            wheel: 0.0,
+            exclusive: false,
+            motion: Default::default(),
+        }
+    }
+
+    /// Open a shared modal HEADLESSLY through the production path: `build_shared_modal`
+    /// for the tree + Model, `ModalAnswer::new` for the state `SharedModal::open` hands
+    /// its `Scene::update`. Only [`MenuView`] (and therefore the GPU) is left out, so a
+    /// gate here drives the same publish, the same tree and the same answer ladder the
+    /// player does.
+    fn open_headless(id: &str, params: ModalParams) -> (UiNode, ModalAnswer) {
+        let built = build_shared_modal(id, &params);
+        let answer = ModalAnswer::new(&built, params);
+        (built.tree, answer)
+    }
+
+    /// The EFFECTIVE model one frame walks — the answer's Model, refreshed for a live
+    /// progress handle, folded through the tree's pair script exactly as [`MenuView`]
+    /// folds it (`set_model` ▸ `arrange` ▸ `to_model`). The `dismissable` toggle is
+    /// PRODUCED in that fold, so a gate that read `answer.model` alone would be testing
+    /// a screen the player never sees (rule 8634C200 — cover the channel).
+    fn frame_model_of(id: &str, answer: &ModalAnswer) -> ValueMap {
+        let mut eff = answer.frame_model().unwrap_or_else(|| answer.model.clone());
+        if let Some(src) = SHARED_MODALS
+            .iter()
+            .find(|(k, _, _)| *k == id)
+            .and_then(|(_, _, s)| *s)
+        {
+            let host = shared_modal_script(src, &format!("{id}.lua"))
+                .unwrap_or_else(|| panic!("'{id}' registers a pair script that loads"));
+            host.set_model(&eff).expect("the model publishes to Lua");
+            if let Some(a) = host.arrange().expect("arrange() runs") {
+                eff.extend(a.to_model());
+            }
+        }
+        eff
+    }
+
+    /// The DEMO params each param-driven tree is exercised with — the same shape the
+    /// Component Catalog's Modals page hands the seam (`modal_params`, 4C534537): a
+    /// title, real options in the caller's own names, and each tree's own channel
+    /// filled. Representative, not empty: a gate over empty params would never lay out
+    /// the buttons that were inert in-window.
+    fn demo_params(id: &str) -> ModalParams {
+        let cancel = ModalOption::secondary("$modal_lbl_cancel", "demo_cancelled");
+        match id {
+            "popup_menu" => ModalParams::new()
+                .title("$modal_unsaved_title")
+                .option(ModalOption::secondary("$modal_lbl_ok", "demo_alpha"))
+                .option(ModalOption::secondary("$modal_lbl_save", "demo_bravo"))
+                .option(ModalOption::secondary("$modal_lbl_discard", "demo_charlie"))
+                .cancellable(cancel),
+            "text_prompt" => ModalParams::new()
+                .title("$modal_unsaved_title")
+                .body("$modal_unsaved_body")
+                .option(ModalOption::primary("$modal_lbl_ok", "demo_named"))
+                .cancellable(cancel)
+                .text(ModalText {
+                    kind: String::new(),
+                    initial: "draft".into(),
+                    max_len: 32,
+                }),
+            // The busy tree is the ONE that declares no cancel option — which is
+            // exactly why it has to be in these gates: the exit is the HOST's.
+            "busy" => ModalParams::new()
+                .title("$modal_busy_title")
+                .body("$modal_unsaved_body")
+                .progress(ModalProgress::new()),
+            MODAL_CONFLICT => ModalParams::new()
+                .title("$modal_conflict_title")
+                .option(ModalOption::secondary(
+                    "$modal_conflict_lbl_skip",
+                    "demo_skip",
+                ))
+                .option(ModalOption::secondary(
+                    "$modal_conflict_lbl_keep_both",
+                    "demo_keep_both",
+                ))
+                .option(ModalOption::danger(
+                    "$modal_conflict_lbl_replace",
+                    "demo_replace",
+                ))
+                .cancellable(cancel)
+                .conflict(ModalConflict {
+                    name: "Gate.json".into(),
+                    folder: "package / props".into(),
+                    existing: "4 KB".into(),
+                    incoming: "5 KB".into(),
+                    remaining: 2,
+                    apply_rest: false,
+                }),
+            // `choice_dialog` (and any tree added to the registry before it grows demo
+            // params of its own) takes ALL THREE fixed slots filled — the click gate
+            // has to reach every slot a tree authors, not just the one a minimal
+            // caller lights.
+            _ => ModalParams::unsaved_changes("demo_discard", "demo_keep")
+                .with_save("demo_save")
+                .cancellable(cancel),
+        }
+    }
+
+    /// Every authored control of one kind in `tree`, in tree order.
+    fn controls_of(node: &UiNode, kind: &str, out: &mut Vec<String>) {
+        if node.component == kind && !node.id.is_empty() {
+            out.push(node.id.clone());
+        }
+        for c in &node.children {
+            controls_of(c, kind, out);
+        }
+    }
+
+    /// **NO SHARED MODAL CAN TRAP.** For EVERY param-driven tree — opened with EMPTY
+    /// params (no options, not cancellable) and again with the demo params the Catalog
+    /// hands it — the walker's Cancel closes the modal, unless the tree's own
+    /// `popup_panel` is deliberately holding it shut.
+    ///
+    /// Aaron was locked inside a shared modal in-window and had to force-quit
+    /// (B89FAC21). Two things had to be true and were not: the tree's root had to
+    /// declare the exit the HOST reads (not whatever the file happened to author), and
+    /// the exit had to be honoured even when the caller declared no cancel option. This
+    /// gate drives the real channel — the root's declared `on_cancel`, which is what
+    /// `WalkerHandler::with_intents` turns a pad-B / Esc into, folded into a walked
+    /// frame's results exactly as a click is — and demands a `CloseModal` back.
+    ///
+    /// Since DA0E1B57 it also drives the DISMISSABLE gate the walker consults first, off
+    /// the same frame model the player's screen is walked with (pair script folded in).
+    /// The rule it pins: **empty params trap nothing** — a modal nobody configured is
+    /// always dismissable — and the only tree that may hold Cancel at all is `busy`,
+    /// only while it has work still running.
+    #[test]
+    fn every_param_driven_modal_closes_on_cancel_however_it_was_opened() {
+        flicker::ui::strings::load_str(SHELL_STRINGS_JSON, "en-us");
+        let styles = modal_styles();
+        let ids = param_driven_modals();
+        assert!(!ids.is_empty(), "the shell registers param-driven modals");
+
+        for id in ids {
+            for (shape, params) in [
+                ("empty params", ModalParams::new()),
+                ("the catalog's demo params", demo_params(id)),
+            ] {
+                let declared = params.cancel.clone().map(|c| c.action);
+                let (tree, mut answer) = open_headless(id, params);
+
+                // The exit the WALKER reads: the root's `on_cancel`, collected into the
+                // tree's declarative intents exactly as `MenuView::from_tree` collects
+                // them. A tree that declares none is a modal a pad can never leave.
+                let fired = UiIntents::of(&tree)
+                    .result_for(ActionSignal::Cancel)
+                    .unwrap_or_else(|| {
+                        panic!("'{id}' ({shape}) declares no Cancel intent — no way out")
+                    })
+                    .to_string();
+                assert_eq!(
+                    fired, MODAL_CANCEL,
+                    "'{id}' ({shape}) must hand the HOST its back-out, not its own name"
+                );
+
+                // Walk the frame the player would be looking at — through the SAME
+                // effective model, so the slab's toggle is the one production computes.
+                let model = frame_model_of(id, &answer);
+                let mut results = run_ui(
+                    &tree,
+                    &model,
+                    &styles,
+                    &pointer_at(-9.0, -9.0, false),
+                    &mut UiState::new(),
+                )
+                .results;
+
+                // THE COMPONENT DECIDES. A held slab means the walker never fires the
+                // name at all, so the ladder is never reached — assert that, rather than
+                // folding a name production would have swallowed.
+                if !flicker::ui::popup_dismissable(&tree, &model) {
+                    assert_eq!(
+                        id, "busy",
+                        "'{id}' ({shape}) holds Cancel — only `busy` may, and only while \
+                         it works"
+                    );
+                    assert_eq!(
+                        shape, "the catalog's demo params",
+                        "empty params must never trap: a modal nobody configured is \
+                         always dismissable"
+                    );
+                    assert!(
+                        !model.is_on(MODAL_DONE_KEY) && !model.is_on("modal_cancellable"),
+                        "'{id}' may only hold Cancel while there is work running and \
+                         nothing to abort"
+                    );
+                    assert!(
+                        matches!(answer.resolve(&results), Transition::None),
+                        "'{id}' ({shape}) must not close on a Cancel the slab swallowed"
+                    );
+                    continue;
+                }
+
+                // Dismissable: fold the fired intent the way the walker folds it
+                // (`results.set(name, true)`) and demand the close.
+                results.set(fired.as_str(), true);
+                match answer.resolve(&results) {
+                    Transition::CloseModal {
+                        modal,
+                        result,
+                        payload,
+                    } => {
+                        assert_eq!(modal, id, "the answer names the tree it came from");
+                        match &declared {
+                            Some(action) => assert_eq!(
+                                &result, action,
+                                "'{id}' ({shape}) reports the CALLER's cancel action"
+                            ),
+                            None => {
+                                assert_eq!(
+                                    result, MODAL_CANCELLED,
+                                    "'{id}' ({shape}) still closes — with the host's own \
+                                     `cancelled`, never a trap"
+                                );
+                                assert!(
+                                    payload.is_none(),
+                                    "'{id}' ({shape}) collected nothing to hand back"
+                                );
+                            }
+                        }
+                    }
+                    _ => panic!("'{id}' ({shape}) did not close on Cancel — that is a TRAP"),
+                }
+            }
+        }
+    }
+
+    /// **THE BUSY MODAL REFUSES CANCEL MID-WORK AND ALLOWS IT AT DONE** — the ruling's
+    /// worked case (DA0E1B57), driven end to end: the host's published progress, the
+    /// pair script's fold, the component's toggle, and the answer ladder behind it.
+    ///
+    /// Three legs, because three things must all be true: an operation with nothing to
+    /// abort holds the player while it runs; it lets go the moment there is nothing left
+    /// to wait for; and a caller who DID offer a cancel is never held at all.
+    #[test]
+    fn busy_refuses_cancel_while_it_works_and_honours_it_when_done() {
+        flicker::ui::strings::load_str(SHELL_STRINGS_JSON, "en-us");
+        let styles = modal_styles();
+
+        // The wiring first: `busy` reaches `SharedModal::open` carrying its pair script,
+        // through the SAME slot pause / confirm use. Without this the toggle is a bind
+        // nobody publishes and the modal is simply always dismissable — green tests over
+        // a feature that never runs.
+        let built = build_shared_modal("busy", &ModalParams::new());
+        let src = built.script.expect("busy registers its pair script");
+        assert!(
+            shared_modal_script(src, "busy.lua").is_some(),
+            "busy.lua must load through the production loader"
+        );
+
+        // Walk one frame of a busy modal and answer a Cancel through the real path:
+        // `None` when the slab swallowed it, else whatever the ladder decided.
+        let cancel_on = |params: ModalParams| -> Option<Transition> {
+            let (tree, mut answer) = open_headless("busy", params);
+            let model = frame_model_of("busy", &answer);
+            let mut results = run_ui(
+                &tree,
+                &model,
+                &styles,
+                &pointer_at(-9.0, -9.0, false),
+                &mut UiState::new(),
+            )
+            .results;
+            if !flicker::ui::popup_dismissable(&tree, &model) {
+                return None;
+            }
+            results.set(MODAL_CANCEL, true);
+            Some(answer.resolve(&results))
+        };
+
+        // 1 — not cancellable, work still running: Cancel is REFUSED.
+        let running = ModalProgress::new();
+        running.set(0.4);
+        let busy = || {
+            ModalParams::new()
+                .title("$modal_busy_title")
+                .progress(running.clone())
+        };
+        assert!(
+            cancel_on(busy()).is_none(),
+            "a busy modal with nothing to abort must swallow Cancel while it works"
+        );
+
+        // 2 — the same handle, now finished: Cancel is HONOURED, with the host's own
+        // `cancelled` (the caller named no action).
+        running.finish();
+        match cancel_on(busy()) {
+            Some(Transition::CloseModal { modal, result, .. }) => {
+                assert_eq!(modal, "busy");
+                assert_eq!(
+                    result, MODAL_CANCELLED,
+                    "a finished busy modal closes on Cancel with the host's `cancelled`"
+                );
+            }
+            _ => panic!("a finished busy modal must close on Cancel"),
+        }
+
+        // …and a bar that merely REACHED FULL counts as done too: the fraction is what
+        // the player sees, so a modal sitting at 100% must not hold them.
+        let full = ModalProgress::new();
+        full.set(1.0);
+        assert!(
+            !full.is_done(),
+            "the handle is not `finish`ed — this leg is about the FRACTION"
+        );
+        assert!(
+            cancel_on(
+                ModalParams::new()
+                    .title("$modal_busy_title")
+                    .progress(full.clone())
+            )
+            .is_some(),
+            "a bar at 100% is done enough to walk away from"
+        );
+
+        // 3 — CANCELLABLE: the caller offered an abort, so the player may take it at any
+        // point in the work, and it reports the CALLER's action.
+        let mid = ModalProgress::new();
+        mid.set(0.2);
+        match cancel_on(
+            ModalParams::new()
+                .title("$modal_busy_title")
+                .progress(mid)
+                .cancellable(ModalOption::secondary(
+                    "$modal_lbl_cancel",
+                    "abort_the_bake",
+                )),
+        ) {
+            Some(Transition::CloseModal { result, .. }) => assert_eq!(
+                result, "abort_the_bake",
+                "a cancellable busy modal closes on Cancel with the caller's action, \
+                 whatever the bar says"
+            ),
+            _ => panic!("a cancellable busy modal must close mid-work"),
+        }
+    }
+
+    /// **NO SHARED TREE AUTHORS `dismissable: false`.** The toggle defaults TRUE and only
+    /// LUA may flip it: a static `false` in a shipped tree is a trap the moment its
+    /// script stops running (or fails to load — [`shared_modal_script`] survives a Lua
+    /// error by design), which is the one thing a modal may never be (B89FAC21).
+    ///
+    /// Walks the FOLDER, so a tree added tomorrow is covered without touching this list,
+    /// and pins the two halves of the one tree that does use the toggle: `busy` authors
+    /// the bind AND registers the script that publishes its key.
+    #[test]
+    fn no_shared_tree_authors_a_static_dismissable_false() {
+        fn scan(node: &serde_json::Value, id: &str, binds: &mut Vec<String>) {
+            if let Some(v) = node.get("dismissable") {
+                assert_eq!(
+                    v.as_bool(),
+                    Some(true),
+                    "{id}.scene.json authors `dismissable: {v}` statically — only Lua may \
+                     hold a modal shut (`dismissable_bind`); a static false traps the \
+                     player the moment the script is not there"
+                );
+            }
+            if let Some(k) = node.get("dismissable_bind").and_then(|b| b.as_str()) {
+                assert!(
+                    !k.is_empty(),
+                    "{id}.scene.json binds dismissable to nothing"
+                );
+                binds.push(k.to_string());
+            }
+            if let Some(kids) = node.get("children").and_then(|c| c.as_array()) {
+                for kid in kids {
+                    scan(kid, id, binds);
+                }
+            }
+        }
+
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../content/sensorium/scenes/shared");
+        let mut bound_trees = Vec::new();
+        for entry in std::fs::read_dir(&dir).expect("scenes/shared reads") {
+            let path = entry.expect("dir entry").path();
+            let name = path.file_name().expect("file name").to_string_lossy();
+            let Some(id) = name.strip_suffix(".scene.json") else {
+                continue;
+            };
+            let doc: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&path).expect("scene reads"))
+                    .unwrap_or_else(|e| panic!("{id}.scene.json parses: {e}"));
+            let mut binds = Vec::new();
+            if let Some(tree) = doc.get("tree") {
+                scan(tree, id, &mut binds);
+            }
+            if !binds.is_empty() {
+                bound_trees.push((id.to_string(), binds));
+            }
+        }
+
+        // `busy` is the worked example — and a bind is only a toggle if something
+        // publishes it, so every bound tree must register a pair script that does.
+        assert!(
+            bound_trees.iter().any(|(id, _)| id == "busy"),
+            "busy.scene.json must author `dismissable_bind` — it is the tree the ruling \
+             is about"
+        );
+        for (id, binds) in &bound_trees {
+            let script = SHARED_MODALS
+                .iter()
+                .find(|(k, _, _)| k == id)
+                .and_then(|(_, _, s)| *s)
+                .unwrap_or_else(|| {
+                    panic!("{id} binds dismissable but registers no pair script to publish it")
+                });
+            let host = ScriptHost::new(script, &format!("{id}.lua")).expect("pair script loads");
+            // Mid-work, nothing to abort: the script must actually be able to say NO —
+            // a script that lights the key unconditionally is the toggle not existing.
+            let mut working = ValueMap::new();
+            working.set("modal_cancellable", false);
+            working.set(MODAL_DONE_KEY, false);
+            host.set_model(&working).expect("model publishes");
+            let held = host
+                .arrange()
+                .expect("arrange runs")
+                .expect("arrange present")
+                .to_model();
+            // …and done: it must let go again.
+            let mut finished = working.clone();
+            finished.set(MODAL_DONE_KEY, true);
+            host.set_model(&finished).expect("model publishes");
+            let freed = host
+                .arrange()
+                .expect("arrange runs")
+                .expect("arrange present")
+                .to_model();
+            for b in binds {
+                assert!(
+                    !held.is_on(b),
+                    "{id}.lua must hold `{b}` shut while it works"
+                );
+                assert!(
+                    freed.is_on(b),
+                    "{id}.lua must release `{b}` when it is done"
+                );
+            }
+        }
+    }
+
+    /// **THE SCENE-HOSTED TREES ARE REFUSED, NOT HOSTED.** `pause` / `confirm` /
+    /// `settings` carry their own buttons and their own exits; the param seam cannot map
+    /// any of them, so hosting one shows an overlay with no working control — which is
+    /// what the Catalog did to Aaron (B89FAC21). Each is refused by name, the refusal
+    /// names the scene that DOES host it, and the built overlay leaves on its first
+    /// update rather than sitting there.
+    #[test]
+    fn the_scene_hosted_modals_are_refused_by_the_param_seam() {
+        for id in ["pause", "confirm", "settings"] {
+            let host = modal_host_of(id)
+                .unwrap_or_else(|| panic!("'{id}' must name the scene that hosts it"));
+            assert!(!host.is_empty());
+            assert!(
+                !param_driven_modals().contains(&id),
+                "'{id}' must not be offered as a param-driven tree"
+            );
+        }
+        // …and the param-driven roster is exactly the registry minus those three, so a
+        // tree added to `SHARED_MODALS` is hostable unless it is named as hosted.
+        assert_eq!(
+            param_driven_modals().len(),
+            SHARED_MODALS.len() - 2,
+            "pause + confirm are the registry's two scene-hosted entries (settings is \
+             not registered at all)"
+        );
+    }
+
+    /// **EVERY AUTHORED CONTROL ANSWERS A CLICK AT ITS OWN RECT** — the standing gate
+    /// for incident B89FAC21's second half, and the channel rule 8634C200 demands.
+    ///
+    /// The conflict dialog's three buttons did nothing in-window while every headless
+    /// gate was green, because the gates fired result NAMES directly and nothing ever
+    /// laid the tree out and clicked where the buttons actually were. They laid out
+    /// 154 × **0** px: their row carried `align: "center"`, which sizes each child to
+    /// its INTRINSIC cross extent, and a `button` naming no `size` / `height` /
+    /// `size_class` measures zero. Invisible to the draw, unreachable by the pointer.
+    ///
+    /// So: lay every param-driven tree out at 1600×900, and for each authored control
+    /// that is visible this frame — assert a real rect, drive a pointer press + release
+    /// at its centre through the runner's own `UiInput`, and require that the seam
+    /// either CLOSES on it or that the control moved a bound value. A control that does
+    /// neither is furniture pretending to be a control.
+    #[test]
+    fn every_shared_modal_control_answers_a_click_at_its_laid_out_rect() {
+        flicker::ui::strings::load_str(SHELL_STRINGS_JSON, "en-us");
+        let styles = modal_styles();
+        let mut checked = 0usize;
+
+        for id in param_driven_modals() {
+            let (tree, answer) = open_headless(id, demo_params(id));
+            let model = answer.model.clone();
+
+            // The idle frame: what the player sees, and where everything actually is.
+            let idle = run_ui(
+                &tree,
+                &model,
+                &styles,
+                &pointer_at(-9.0, -9.0, false),
+                &mut UiState::new(),
+            );
+
+            let mut controls = Vec::new();
+            controls_of(&tree, "button", &mut controls);
+            let buttons = controls.len();
+            let mut boxes = Vec::new();
+            controls_of(&tree, "checkbox", &mut boxes);
+            assert!(
+                buttons > 0,
+                "'{id}' authors no button — a modal must offer at least one answer"
+            );
+
+            for ctl in controls.iter().chain(boxes.iter()) {
+                // A control gated dark this frame is not this frame's business; one that
+                // IS shown must have somewhere to be clicked.
+                let Some(r) = idle.rect(ctl) else { continue };
+                assert!(
+                    r.size.x > 2.0 && r.size.y > 2.0,
+                    "'{id}' lays `{ctl}` out at {:?} — a zero-extent control cannot be \
+                     drawn and cannot be clicked (the conflict dialog shipped exactly \
+                     this: a row's `align` against a button with no intrinsic height)",
+                    r.size
+                );
+
+                // SOMEWHERE inside its rect, the control must answer. A button's whole
+                // rect is its hit region; a `checkbox` owns a TIGHT one (its box at the
+                // left edge — deliberate, so the caption beside it is not a second
+                // invisible target: see `rust_owns_hit`). The gate must not encode
+                // either geometry, so it sweeps the rect at the vertical centre and
+                // demands that at least one point is live.
+                let cy = r.pos.y + r.size.y * 0.5;
+                let mut probes: Vec<f32> = (0..24)
+                    .map(|i| r.pos.x + r.size.x * (i as f32 + 0.5) / 24.0)
+                    .collect();
+                probes.extend([r.pos.x + 3.0, r.pos.x + 6.0]);
+
+                let answered = probes.iter().any(|&cx| {
+                    // PRESS then RELEASE on ONE ui state, so whichever edge the
+                    // component answers on is the edge this gate delivers.
+                    let mut st = UiState::new();
+                    let down = run_ui(&tree, &model, &styles, &pointer_at(cx, cy, true), &mut st);
+                    let up = run_ui(&tree, &model, &styles, &pointer_at(cx, cy, false), &mut st);
+                    let mut results = down.results;
+                    for (k, v) in up.results.entries() {
+                        results.set(k.clone(), v.clone());
+                    }
+                    // The click either ANSWERS the modal (a close through the real
+                    // ladder) or MOVES a bound value (a checkbox flipping its bind).
+                    let mut answer = answer.clone();
+                    matches!(answer.resolve(&results), Transition::CloseModal { .. })
+                        || (boxes.contains(ctl) && results.is_on(ctl))
+                });
+                assert!(
+                    answered,
+                    "'{id}': no click anywhere across `{ctl}`'s laid-out rect (pos {:?}, \
+                     size {:?}) did anything — it neither closed the modal nor moved its \
+                     bind, which is a control that only LOOKS like one",
+                    r.pos, r.size
+                );
+                checked += 1;
+            }
+        }
+        assert!(
+            checked >= 8,
+            "the click gate actually exercised the trees ({checked} controls)"
+        );
+    }
+
     #[test]
     fn shared_modals_render_and_draw_their_buttons() {
-        // The SHARED modal trees (`scenes/shared/pause|confirm.scene.json`) parse and DRAW:
-        // the Rust walker renders the popup_panel chrome + every authored button, resolving
-        // the shell-furniture styles (`modal`/`screens.*` from Main's carrier). Proves the
-        // migrated files render at build time — the runtime path PauseScene/ConfirmDisplayScene
-        // walk. Button labels are read back FROM the parsed tree, so the file is the one source.
+        // EVERY shared modal in the registry (`SHARED_MODALS`, itself gated against the
+        // `scenes/shared/` folder) parses and DRAWS: the Rust walker renders the
+        // popup_panel chrome + every button that is visible this frame, resolving the
+        // shell-furniture styles (`modal`/`screens.*` from Main's carrier). Proves the
+        // files render at build time — the runtime path PauseScene / ConfirmDisplayScene /
+        // SharedModal walk. Labels are read back FROM the tree and the published Model, so
+        // the file and the params stay the one source. A modal added to the registry is
+        // covered here the day it lands.
         use flicker::render::Vec2;
         use flicker::script::HudCommand;
 
-        fn button_labels(node: &UiNode, out: &mut Vec<String>) {
+        /// The label a button actually draws this frame: its bound Model text where it
+        /// has a `label_bind` (the param-driven modals), else its authored `$token`
+        /// (pause / confirm). `None` for a button the model gates dark — it correctly
+        /// draws nothing, and asserting its label would be asserting a bug.
+        fn visible_labels(node: &UiNode, model: &ValueMap, out: &mut Vec<String>) {
+            let shown = match &node.visible_bind {
+                Some(b) => model.is_on(b),
+                None => true,
+            };
+            if !shown {
+                return;
+            }
             if node.component == "button" {
-                if let Some(Value::Text(l)) = node.props.get("label") {
-                    out.push(l.clone());
+                let text = match node.props.get("label_bind") {
+                    Some(Value::Text(key)) => model.text(key).map(str::to_string),
+                    _ => match node.props.get("label") {
+                        Some(Value::Text(l)) => Some(flicker::ui::strings::resolve(l).into_owned()),
+                        _ => None,
+                    },
+                };
+                if let Some(t) = text.filter(|t| !t.is_empty()) {
+                    out.push(t);
                 }
             }
             for c in &node.children {
-                button_labels(c, out);
+                visible_labels(c, model, out);
             }
         }
+
+        /// The chrome copy keys a tree binds — a `popup_panel`'s `title_bind` and a
+        /// `text` node's `text_bind`. What the tree asks for is what gets checked.
+        fn chrome_binds(node: &UiNode, out: &mut Vec<String>) {
+            for key in ["title_bind", "text_bind"] {
+                if let Some(Value::Text(k)) = node.props.get(key) {
+                    out.push(k.clone());
+                }
+            }
+            for c in &node.children {
+                chrome_binds(c, out);
+            }
+        }
+
+        // One representative params set: it fills every channel every tree reads, so a
+        // single walk exercises the fixed slots, the menu rows, the prompt field, the
+        // busy bar and the conflict's fact cards. Pause / confirm ignore it and run off
+        // their pair scripts below.
+        let params = ModalParams::new()
+            .title("$modal_unsaved_title")
+            .body("$modal_unsaved_body")
+            .option(ModalOption::danger("$modal_lbl_discard", "discard"))
+            .option(ModalOption::secondary("$modal_lbl_keep_editing", "keep"))
+            .option(ModalOption::primary("$modal_lbl_save", "save"))
+            .cancellable(ModalOption::secondary("$modal_lbl_cancel", "keep"))
+            .text(ModalText {
+                kind: String::new(),
+                initial: "draft".into(),
+                max_len: 32,
+            })
+            .progress(ModalProgress::new())
+            .conflict(ModalConflict {
+                name: "Gate.json".into(),
+                folder: "package / props".into(),
+                existing: "4 KB".into(),
+                incoming: "5 KB".into(),
+                remaining: 2,
+                apply_rest: false,
+            });
 
         let styles = flicker::ui::load_styles_strs_for(
             &[SHELL_UI_JSON, SHELL_STYLE_JSON],
             main_scene_styles().as_ref(),
         );
-        for (screen, json, script) in [
-            ("pause", PAUSE_SCENE_JSON, PAUSE_SCRIPT),
-            ("confirm", CONFIRM_SCENE_JSON, CONFIRM_SCRIPT),
-        ] {
-            // The real production parse path (`PauseScene`/`ConfirmDisplayScene` load this).
-            let tree = parse_shared_modal(json, screen, None);
-            let mut labels = Vec::new();
-            button_labels(&tree, &mut labels);
-            assert!(
-                !labels.is_empty(),
-                "shared modal '{screen}' authors its buttons"
-            );
-            // The countdown subtitle, composed around its token exactly as the scene does —
-            // PLUS the pair script's default `arrange()` gates. The optional buttons are
-            // `visible_bind`-gated now, so the render folds the slices exactly as MenuView does
-            // live; without them a gated button correctly would not draw.
-            let mut model = ValueMap::new();
+        for (screen, json, script) in SHARED_MODALS {
+            // The real production build path for each KIND of tree: a param-driven one
+            // goes through `build_shared_modal` (what `SharedModal::open` calls); a
+            // scene-hosted one (pause / confirm) goes through `parse_shared_modal` with
+            // its OWN host's back-out name, because the param seam refuses to host it.
+            let (tree, mut model) = match modal_host_of(screen) {
+                None => {
+                    let b = build_shared_modal(screen, &params);
+                    (b.tree, b.model)
+                }
+                Some(_) => (
+                    parse_shared_modal(json, screen, Some("resume")),
+                    ValueMap::new(),
+                ),
+            };
+            // The confirm modal's countdown, composed around its token exactly as the
+            // scene does — PLUS each pair script's default `arrange()` gates, since the
+            // optional buttons are `visible_bind`-gated and the render folds the slices
+            // exactly as MenuView does live.
             model.set(
                 "subtitle",
                 format!("{} 9s", flicker::ui::strings::resolve("$menu_reverting_in")),
             );
-            let host =
-                ScriptHost::new(script, &format!("{screen}.lua")).expect("pair script loads");
-            if let Some(a) = host.arrange().expect("arrange runs") {
-                model.extend(a.to_model());
+            if let Some(src) = script {
+                let host =
+                    ScriptHost::new(src, &format!("{screen}.lua")).expect("pair script loads");
+                if let Some(a) = host.arrange().expect("arrange runs") {
+                    model.extend(a.to_model());
+                }
             }
+            let mut labels = Vec::new();
+            visible_labels(&tree, &model, &mut labels);
+            assert!(
+                !labels.is_empty(),
+                "shared modal '{screen}' shows at least one button this frame"
+            );
             let snap = UiInput {
                 mouse: Vec2::new(-1.0, -1.0),
                 clicked: false,
@@ -4486,30 +6402,49 @@ mod script_smoke {
                 !frame.commands.is_empty(),
                 "shared modal '{screen}' emits panel + buttons + text"
             );
-            // Every authored button's label renders as a text command — the tree actually
-            // produced its buttons. Labels are stringtable tokens, so the RESOLVED text lands.
+            let drew = |want: &str| {
+                frame
+                    .commands
+                    .iter()
+                    .any(|c| matches!(c, HudCommand::Text { text, .. } if text == want))
+            };
+            // Every button visible this frame renders its label — the tree actually
+            // produced its buttons, and the params actually reached them.
             for label in &labels {
-                let want = flicker::ui::strings::resolve(label);
                 assert!(
-                    frame
-                        .commands
-                        .iter()
-                        .any(|c| matches!(c, HudCommand::Text { text, .. } if *text == want)),
-                    "shared modal '{screen}' renders button label '{want}'"
+                    drew(label),
+                    "shared modal '{screen}' renders button '{label}'"
                 );
+            }
+            // The param-driven modals also draw the caller's copy through the chrome
+            // binds they name — the proof that params reach the panel, not just the
+            // buttons. Derived FROM the tree (a menu names no body; a dialog does), so a
+            // tree that stops binding a key stops being checked for it rather than
+            // failing on a line it never had. (Pause / confirm author static copy.)
+            if script.is_none() {
+                let mut bound = Vec::new();
+                chrome_binds(&tree, &mut bound);
+                assert!(
+                    bound.contains(&"modal_title".to_string()),
+                    "every param-driven modal binds its title"
+                );
+                for key in bound {
+                    let want = model.text(&key).expect("published").to_string();
+                    assert!(
+                        drew(&want),
+                        "shared modal '{screen}' draws its {key} '{want}'"
+                    );
+                }
             }
             // The confirm modal's countdown is a LIVE bind the popup_panel chrome draws
             // (`subtitle_bind` → `subtitle_live`); the model's current text reaches a command.
-            if screen == "confirm" {
+            if *screen == "confirm" {
                 let want = model
                     .text("subtitle")
                     .expect("countdown published")
                     .to_string();
                 assert!(
-                    frame
-                        .commands
-                        .iter()
-                        .any(|c| matches!(c, HudCommand::Text { text, .. } if *text == want)),
+                    drew(&want),
                     "the confirm modal draws the live countdown '{want}'"
                 );
             }

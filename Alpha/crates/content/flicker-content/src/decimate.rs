@@ -443,7 +443,10 @@ mod tests {
         let m = grid(12);
         let src = tris(&m);
         let mut prev = usize::MAX;
-        for (i, target) in [src, src * 9 / 10, src * 3 / 4, src / 2].into_iter().enumerate() {
+        for (i, target) in [src, src * 9 / 10, src * 3 / 4, src / 2]
+            .into_iter()
+            .enumerate()
+        {
             let model = decimate_to(&m, target);
             // Non-deduped invariant: sequential indices, one per corner.
             assert_eq!(model.indices.len(), model.vertices.len());

@@ -139,6 +139,7 @@
                                     "id": "pop_freq",
                                     "style": "slider",
                                     "bind": "pop_freq",
+                                    "apply": "confirm",
                                     "label": "$pop_size",
                                     "vertical": true,
                                     "min": 48,
@@ -170,6 +171,7 @@
                                         "id": "pop_cells",
                                         "style": "slider",
                                         "bind": "pop_cells",
+                                        "apply": "confirm",
                                         "label": "$pop_cells",
                                         "vertical": true,
                                         "min": 2,
@@ -188,6 +190,7 @@
                                         "id": "pop_spots",
                                         "style": "slider",
                                         "bind": "pop_spots",
+                                        "apply": "confirm",
                                         "label": "$pop_spots",
                                         "vertical": true,
                                         "min": 0,
@@ -205,6 +208,7 @@
                                   },
                                   {
                                     "component": "button",
+                                    "id": "pop_seams_randomize",
                                     "action": "pop_seams_randomize",
                                     "tab_group": "pop_left",
                                     "nav_ordinal": 3,
@@ -279,6 +283,7 @@
                                     "id": "pop_water_target",
                                     "style": "slider",
                                     "bind": "pop_water_target",
+                                    "apply": "confirm",
                                     "label": "$pop_water_target",
                                     "min": 0,
                                     "max": 100,
@@ -296,6 +301,7 @@
                                     "id": "pop_veg_target",
                                     "style": "slider",
                                     "bind": "pop_veg_target",
+                                    "apply": "confirm",
                                     "label": "$pop_veg_target",
                                     "min": 0,
                                     "max": 100,
@@ -328,6 +334,7 @@
                                       },
                                       {
                                         "component": "button",
+                                        "id": "pop_evolve_roll",
                                         "action": "pop_evolve_roll",
                                         "size": 120,
                                         "tab_group": "pop_left",
@@ -340,6 +347,7 @@
                                   },
                                   {
                                     "component": "button",
+                                    "id": "pop_evolve_run",
                                     "action": "pop_evolve_run",
                                     "tab_group": "pop_left",
                                     "nav_ordinal": 9,
@@ -348,6 +356,7 @@
                                   },
                                   {
                                     "component": "button",
+                                    "id": "pop_evolve_tick",
                                     "action": "pop_evolve_tick",
                                     "tab_group": "pop_left",
                                     "nav_ordinal": 10,
@@ -356,6 +365,7 @@
                                   },
                                   {
                                     "component": "button",
+                                    "id": "pop_evolve_step",
                                     "action": "pop_evolve_step",
                                     "tab_group": "pop_left",
                                     "nav_ordinal": 11,
@@ -364,6 +374,7 @@
                                   },
                                   {
                                     "component": "button",
+                                    "id": "pop_evolve_reset",
                                     "action": "pop_evolve_reset",
                                     "tab_group": "pop_left",
                                     "nav_ordinal": 12,
@@ -762,7 +773,7 @@
                                   },
                                   {
                                     "component": "cell",
-                                    "size": 40,
+                                    "size": 62,
                                     "gap": 4,
                                     "children": [
                                       {
@@ -796,6 +807,14 @@
                                         "tone": "health",
                                         "style": "load.gauge",
                                         "height": 5
+                                      },
+                                      {
+                                        "_comment": "The era's CLIMATE HISTORY \u2014 a plain `surface` the walker reserves and the scene seats the shared Plot filler on (B05B3D09 \u00a74d). No source: its content is 2D chrome the behaviour publishes itself, like the globe's viewport. The label above serves both the gauge (now) and the curve (the era).",
+                                        "component": "surface",
+                                        "id": "pop_temp_plot",
+                                        "style": "rtt_holder",
+                                        "inset": 3,
+                                        "size": 32
                                       }
                                     ]
                                   },
@@ -1575,7 +1594,7 @@
                 ]
               },
               {
-                "_comment": "NAV FOOTER (the sablework/catalog band): the bench's flow controls in one right-aligned cluster. MENU fires the same `pause_open` the screen's on_menu does; BACK/NEXT fire the tab rail's own step names (`tab_prev`/`tab_next`), so the visible rail steps itself exactly as the shoulder intents already do. On the final EVOLVE tab, NEXT yields its place to COMMIT (arrange() gates the swap on `shown_ft_next`/`shown_ft_commit`): the era's world is captured as a v2 .epoch into staging/worlds/ for the Content Manager to promote. The status text carries the commit's result line. No glyph legend here \u2014 the paged_menu's own gutters already carry the pad hints, and a second copy would fork that chrome.",
+                "_comment": "NAV FOOTER (the sablework/catalog band): the bench's flow controls in one right-aligned cluster. MENU fires the same `pause_open` the screen's on_menu does; BACK/NEXT fire the tab rail's own step names (`tab_prev`/`tab_next`), so the visible rail steps itself exactly as the shoulder intents already do. On the final EVOLVE tab, NEXT yields its place to COMMIT (arrange() gates the swap on `shown_ft_next`/`shown_ft_commit`): the era's world is captured as a v2 .epoch into staging/worlds/ for the Content Manager to promote. The status text carries the commit's result line. The one legend entry is the APPLY hint (Aaron 2026-09-04, Confirm = apply): it shows only while a dial holds a pad-staged value (`ui_staged`, published by the bench from the walker), so the pad hints the paged_menu's gutters already carry are not copied here.",
                 "component": "nav_footer",
                 "id": "pop_nav",
                 "style": "nav_footer.frame",
@@ -1585,6 +1604,13 @@
                 "pad_y": 10,
                 "gap": 8,
                 "children": [
+                  {
+                    "component": "option",
+                    "signal": "Confirm",
+                    "label": "$pop_ft_apply",
+                    "visible_bind": "ui_staged",
+                    "text_size": 12
+                  },
                   {
                     "component": "text",
                     "text_bind": "pop_commit_status",
@@ -2060,6 +2086,13 @@
           "caret": "$rune_glow"
         }
       }
+    },
+    "plot": {
+      "_comment": "THE CLIMATE HISTORY sparkline's ink (the shared `plot` surface filler, seated by the scene on `pop_temp_plot`): the curve, its translucent area, and the well's rules. The filler owns no palette \u2014 it takes finished rgba; the palette tokens stay single-sourced in ui_theme.json, like every other style block.",
+      "line": "$sig_orange",
+      "fill": "$sig_orange_glow",
+      "baseline": "$edge2",
+      "grid": "$edge2"
     }
   }
 }

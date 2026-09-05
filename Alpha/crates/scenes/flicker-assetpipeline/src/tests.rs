@@ -9,10 +9,11 @@ use flicker::ui::strings;
 use flicker_content::{default_reference, AssetClass, Fit, PropKind, RawModel, RawVertex};
 use flicker_skeletal::pose::{global_transforms, sample_local_poses};
 
-use crate::services::{
-    BoneOffset, Document, MapState, Parsed, class_label, model_bounds, rest_globals, ATTACH_POINTS, CONFORMED_BONES, REFERENCE_BONES, SOCKETS, WF_ANIMATION, WF_CHARACTER, WF_PROP,
-};
 use crate::meshes::{BasePreview, BASE_MESH_BUDGET};
+use crate::services::{
+    class_label, model_bounds, rest_globals, BoneOffset, Document, MapState, Parsed, ATTACH_POINTS,
+    CONFORMED_BONES, REFERENCE_BONES, SOCKETS, WF_ANIMATION, WF_CHARACTER, WF_PROP,
+};
 
 /// The real source folder the whole pipeline is developed against. Every test that needs a
 /// genuine skeleton goes through this, and SKIPS when the content tree is absent — the same
@@ -233,6 +234,7 @@ fn authored_offsets_move_the_skeleton_and_reset_restores_it() {
     let offset = BoneOffset {
         t: [0.0, 0.0, 7.0],
         roll: 0.0,
+        ..Default::default()
     };
     doc.set_selected_offset(offset);
     assert_eq!(doc.selected_offset(), Some(offset));
@@ -364,11 +366,7 @@ fn a_prop_is_routed_not_conform_failed() {
     doc.open(dir);
     assert_eq!(doc.workflow, WF_PROP, "a prop dispatches the prop workflow");
     assert_eq!(doc.class(), Some(AssetClass::Prop));
-    assert_eq!(
-        doc.workflow,
-        WF_PROP,
-        "a prop conforms by mounting"
-    );
+    assert_eq!(doc.workflow, WF_PROP, "a prop conforms by mounting");
     let src = doc.source.as_ref().unwrap();
     assert!(
         src.rig.is_none(),
@@ -749,11 +747,7 @@ fn fit_stage_authors_the_prop_mount() {
     doc.pending_class = Some(AssetClass::Prop);
     doc.open(dir);
     assert_eq!(doc.workflow, WF_PROP);
-    assert_eq!(
-        doc.workflow,
-        WF_PROP,
-        "a prop conforms by mounting"
-    );
+    assert_eq!(doc.workflow, WF_PROP, "a prop conforms by mounting");
     let sockets = doc.socket_rows();
     assert_eq!(
         sockets.len(),
@@ -846,6 +840,7 @@ fn commit_writes_a_loadable_rig_carrying_the_authored_offsets() {
     doc.set_selected_offset(BoneOffset {
         t: [0.0, 0.0, 3.5],
         roll: 0.0,
+        ..Default::default()
     });
     let baseline = doc
         .source
@@ -1029,6 +1024,7 @@ fn the_preview_page_plays_the_commit_bake_under_the_shared_idle() {
     doc.set_selected_offset(BoneOffset {
         t: [0.0, 0.0, 3.5],
         roll: 0.0,
+        ..Default::default()
     });
 
     let (_rig_file, bones, clip) = doc.bake_preview_parts().expect("the preview bakes");
@@ -1195,13 +1191,21 @@ fn the_decimate_target_resolves_against_the_source_count() {
 /// A closed lat-long sphere in `parse_fbx`'s convention (per-corner vertices, sequential
 /// indices) with SMOOTH normals and one uv, so the decimator's weld sees a closed interior
 /// mesh it can legally collapse — the raw-mesh stand-in for a Meshy export.
+/// A clean scratch SOURCE FOLDER — the stand-in for a vendor export directory, and the
+/// thing the OS folder dialog returns. Shared by the rigged-document fixture and by the
+/// pick-seam gate, so both speak about the same kind of place.
+pub(crate) fn synth_source_dir(tag: &str) -> std::path::PathBuf {
+    let scratch = std::env::temp_dir().join(format!("flicker_assetpipeline_{tag}"));
+    let _ = std::fs::remove_dir_all(&scratch);
+    std::fs::create_dir_all(&scratch).expect("the scratch source folder is created");
+    scratch
+}
+
 /// A headless document with the canon rig installed on a synthetic sphere: opened in a
 /// scratch folder, parsed from `sphere_mesh`, prepped, then conformed — the shape the
 /// Rig step works on, with no vendor file in sight.
 pub(crate) fn synthetic_rigged_doc(tag: &str) -> Document {
-    let scratch = std::env::temp_dir().join(format!("flicker_assetpipeline_{tag}"));
-    let _ = std::fs::remove_dir_all(&scratch);
-    std::fs::create_dir_all(&scratch).unwrap();
+    let scratch = synth_source_dir(tag);
     let mut doc = Document::new();
     doc.pending_class = Some(AssetClass::Skin);
     doc.open(scratch);

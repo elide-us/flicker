@@ -1024,14 +1024,14 @@ mod tests {
         RawModel {
             bones: vec![
                 bone("root", -1, [0.0, 0.0, 0.0]),
-                bone("pelvis", 0, [0.0, 0.0, 100.0]),       // segment (0,0,100)→(0,0,120)
-                bone("spine_01", 1, [0.0, 0.0, 20.0]),      // segment (0,0,120)→(0,0,140)
-                bone("neck_01", 2, [0.0, 0.0, 20.0]),       // point (0,0,140)
+                bone("pelvis", 0, [0.0, 0.0, 100.0]), // segment (0,0,100)→(0,0,120)
+                bone("spine_01", 1, [0.0, 0.0, 20.0]), // segment (0,0,120)→(0,0,140)
+                bone("neck_01", 2, [0.0, 0.0, 20.0]), // point (0,0,140)
                 bone("lowerarm_l", 0, [20.0, -14.0, 110.0]), // segment across the belly front
-                bone("hand_l", 4, [-40.0, 0.0, 0.0]),       // point (-20,-14,110)
-                bone("calf_l", 0, [8.0, 0.0, 30.0]),        // point
-                bone("foot_l", 0, [8.0, 0.0, 8.0]),         // segment (8,0,8)→(8,-12,2)
-                bone("ball_l", 7, [0.0, -12.0, -6.0]),      // point
+                bone("hand_l", 4, [-40.0, 0.0, 0.0]), // point (-20,-14,110)
+                bone("calf_l", 0, [8.0, 0.0, 30.0]),  // point
+                bone("foot_l", 0, [8.0, 0.0, 8.0]),   // segment (8,0,8)→(8,-12,2)
+                bone("ball_l", 7, [0.0, -12.0, -6.0]), // point
             ],
             vertices: vec![
                 // Belly skin, facing forward: forearm 6 cm OUT in front, pelvis 8 cm under.
@@ -1058,7 +1058,9 @@ mod tests {
         bake_skin(&mut m);
         let nm: Vec<&str> = m.bones.iter().map(|b| b.name.as_str()).collect();
         let dominant = |v: &RawVertex| -> &str {
-            let k = (0..4).max_by(|&a, &b| v.weights[a].total_cmp(&v.weights[b])).unwrap();
+            let k = (0..4)
+                .max_by(|&a, &b| v.weights[a].total_cmp(&v.weights[b]))
+                .unwrap();
             nm[v.joints[k] as usize]
         };
         assert_eq!(

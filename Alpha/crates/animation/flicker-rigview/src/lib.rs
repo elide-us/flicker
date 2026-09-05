@@ -20,8 +20,9 @@
 //! the perspective panel through the pump's continuous queries.
 
 use flicker::render::{
-    Camera, FrameGraph, MeshDrawOptions, MeshHandle, Orbit, PbrMaps, QuadView, Rect, Renderer,
-    SkinnedMeshHandle, StageDef, TextureHandle, TexturedMeshHandle, EDITOR_QUADS,
+    Camera, FrameGraph, MeshDrawOptions, MeshHandle, Orbit, PbrMaps, QuadView, Rate, Rect,
+    Renderer, SkinnedMeshHandle, StageDef, StageInputs, TextureHandle, TexturedMeshHandle,
+    EDITOR_QUADS,
 };
 use flicker::ui::{stage_def, SurfacePointer, SurfaceSlot};
 use flicker_globe::view::Seat;
@@ -29,6 +30,11 @@ use flicker_globe::{Arrows, GlobeView, GlobeWorld};
 use flicker_input_core::{AbstractControls, ActionSignal};
 use flicker_input_router::{Flow, InputEvent, InputHandler, RouteCtx};
 use glam::{Mat4, Vec2, Vec3};
+
+pub mod doll;
+pub mod gadget;
+pub use doll::{Doll, DollRig, DOLL_LAYERS, LIVE_HZ};
+pub use gadget::{Gadget, GadgetDelta, GadgetStyle, HandleState, Press};
 
 /// Which of the editor's four projections a panel shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -52,7 +58,17 @@ impl Projection {
     }
 
     pub fn is_ortho(self) -> bool {
-        self.quad().ortho.is_some()
+        self.depth_axis().is_some()
+    }
+
+    /// The world direction an ORTHOGRAPHIC panel looks ALONG — the camera sits at
+    /// `target + dir * …`, so this is the picture's depth axis, the one direction the
+    /// panel cannot show. `None` for the perspective panel, which has no single one.
+    ///
+    /// The [`Gadget`] hides (and refuses to pick) the handle that lies along it: a
+    /// handle pointing at the camera projects to a point.
+    pub fn depth_axis(self) -> Option<Vec3> {
+        self.quad().ortho.map(|(dir, _)| dir)
     }
 }
 
@@ -103,6 +119,13 @@ pub struct RigView {
     /// gizmo handles, the selection ball.
     overlay: Arrows,
     draws: Vec<Draw>,
+    /// A liveness policy the BEHAVIOUR decides, overriding the seat's authored rate.
+    /// `None` = the seat's. A [`Doll`] uses it to say "only the selected card animates";
+    /// a panel the user is flying leaves it alone.
+    rate: Option<Rate>,
+    /// Whether the content changed this frame — the signal a [`Rate::Dirty`] surface
+    /// re-renders on. Consumed by each `render`.
+    dirty: bool,
 }
 
 impl RigView {
@@ -126,6 +149,8 @@ impl RigView {
             lines: Vec::new(),
             overlay: Vec::new(),
             draws: Vec::new(),
+            rate: None,
+            dirty: false,
         }
     }
 
@@ -147,8 +172,33 @@ impl RigView {
         self.seat = slot.map(Seat::from);
     }
 
+    /// Seat the panel at a rect the HOST laid out rather than at a walker-reserved
+    /// `surface` node — a [`Doll`] on a card the graph canvas placed, which has no node of
+    /// its own to reserve it. Liveness then comes from [`Self::set_rate`], the only place
+    /// a behaviour-owned seat can express it.
+    pub fn seat_at(&mut self, rect: Rect, layer: f32, tint: [f32; 4]) {
+        self.seat = Some(Seat {
+            rect,
+            layer,
+            tint,
+            rate: Rate::Live,
+        });
+    }
+
     pub fn rect(&self) -> Option<Rect> {
         self.seat.map(|s| s.rect)
+    }
+
+    /// Override the seated rate: the behaviour's own liveness policy (only the selected
+    /// doll animates), or `None` to honour whatever the `surface` node authored.
+    pub fn set_rate(&mut self, rate: Option<Rate>) {
+        self.rate = rate;
+    }
+
+    /// Say whether this frame's content changed — what a [`Rate::Dirty`] surface
+    /// re-renders on. Consumed by the next [`Self::render`].
+    pub fn set_dirty(&mut self, dirty: bool) {
+        self.dirty = dirty;
     }
 
     pub fn set_controls(&mut self, controls: AbstractControls) {
@@ -163,9 +213,27 @@ impl RigView {
         self.orbit.pan = centre;
     }
 
+    /// The radius the camera is ACTUALLY framing — what [`Self::set_frame`] settled on
+    /// after its floor, which a metric subject (a [`Doll`] at ~0.9 m) sits under while a
+    /// centimetre rig does not. A caller expressing a distance against the subject reads
+    /// it back here rather than re-deriving the floor and drifting from it.
+    pub fn framing_radius(&self) -> f32 {
+        self.radius
+    }
+
     /// Reset the camera to the framed subject's default view.
     pub fn reset_framing(&mut self) {
         self.orbit = default_orbit(self.centre);
+    }
+
+    /// Point the camera along an AUTHORED shot — `stages.<source>.camera`'s angles, with
+    /// the distance expressed as a multiple of the subject radius so the one authored
+    /// shot frames a rig of any size. A panel the user flies never calls this (its angles
+    /// are the user's); a PREVIEW ([`Doll`], the bake view) is framed by the author.
+    pub fn set_orbit(&mut self, yaw: f32, pitch: f32, dist_scale: f32) {
+        self.orbit.yaw = yaw;
+        self.orbit.pitch = pitch;
+        self.orbit.dist_scale = dist_scale;
     }
 
     /// This frame's depth-tested line batches (colour, segments) — the ground grid, the
@@ -270,8 +338,15 @@ impl RigView {
 
     /// Declare the panel's pass into the walker's reserved rect (nothing while unseated).
     pub fn render<'f>(&'f mut self, r: &mut Renderer, fg: &mut FrameGraph<'f>, base_layer: f32) {
-        let Some(seat) = self.seat else { return };
+        let Some(mut seat) = self.seat else { return };
         let camera = self.camera();
+        // The behaviour's liveness policy wins over the seat's authored rate: a doll's
+        // "only the selected card animates" is a runtime fact the JSON cannot know.
+        if let Some(rate) = self.rate {
+            seat.rate = rate;
+        }
+        let mut inputs = StageInputs::default();
+        inputs.with_dirty(std::mem::take(&mut self.dirty));
         let Self {
             view,
             stage,
@@ -281,7 +356,7 @@ impl RigView {
             ..
         } = self;
         let draws = std::mem::take(draws);
-        view.render_pass(r, fg, seat, base_layer, stage, move |r| {
+        view.render_pass(r, fg, seat, base_layer, stage, inputs, move |r| {
             r.set_camera(&camera);
             for d in draws {
                 match d {

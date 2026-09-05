@@ -44,7 +44,9 @@ mod config;
 ///
 /// [`UiNode`]: flicker_script::UiNode
 pub mod component;
-pub use component::{run_ui, DragPayload, SurfacePointer, SurfaceSlot, UiFrame, UiInput, UiState};
+pub use component::{
+    popup_dismissable, run_ui, DragPayload, SurfacePointer, SurfaceSlot, UiFrame, UiInput, UiState,
+};
 
 /// The **router adapter** — [`WalkerHandler`] makes the walker one layer of the
 /// `flicker-input-router` event bus (`hud_hit` → consume-pointer, focus writes
@@ -76,6 +78,13 @@ pub mod chat_modal;
 pub mod chat_panel;
 pub use chat_modal::{ChatFrame, ChatModal};
 pub use chat_panel::{chat_panel, ChatLineKind, ChatLineView, ChatView, RosterEntry};
+
+/// The **2D readout filler** — a bounded series drawn into a `surface` node's
+/// reserved rect as a sparkline, a histogram or a filled curve, over
+/// [`HudCommand::Line`]. The [`ChatModal`] shape: a component STRUCT the scene
+/// hosts, seated on a rect the walker reserved. See [`plot`].
+pub mod plot;
+pub use plot::{Plot, PlotKind, PlotSeries, PlotStyle};
 
 /// The **Screen declaration** (S8) — a scene declares its screen's SECTIONS (the
 /// `visible_bind`-gated subtrees: settings sections, dialogs, inspector panes) as
@@ -421,6 +430,25 @@ pub fn render_hud(
                     *border,
                     *border_color,
                     *feather,
+                );
+            }
+            HudCommand::Line {
+                from,
+                to,
+                width,
+                color,
+                layer,
+            } => {
+                // One ROTATED quad in the SAME sprite batch a `Rect` uses (the 1×1
+                // white tinted by `color`) — no line pipeline, and the current clip
+                // and layer apply exactly as they do to every other 2D draw.
+                renderer.set_layer(base + layer);
+                renderer.draw_line(
+                    white,
+                    Vec2::new(from[0], from[1]),
+                    Vec2::new(to[0], to[1]),
+                    *width,
+                    *color,
                 );
             }
             HudCommand::Clip { rect } => match rect {

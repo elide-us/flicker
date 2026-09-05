@@ -9,6 +9,7 @@
 //! [`save`]: EditorDoc::save
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use flicker_skeletal::format::{self, Model};
@@ -418,7 +419,9 @@ impl Tab {
 pub struct EditorDoc {
     path: PathBuf,
     pack: PackFile,
-    model: Model,
+    /// Shared: the bench's `Doll`s pose from this same rig, so a screenful of previews
+    /// costs one skeleton and one clip library, not one per doll.
+    model: Arc<Model>,
     preview: Option<StateMachine>,
     warnings: Vec<String>,
     selected: Option<usize>,
@@ -434,7 +437,7 @@ impl EditorDoc {
         let mut doc = Self {
             path: pack_path.to_path_buf(),
             pack,
-            model,
+            model: Arc::new(model),
             preview: None,
             warnings: Vec::new(),
             selected: None,
@@ -450,7 +453,7 @@ impl EditorDoc {
         let mut doc = Self {
             path,
             pack,
-            model,
+            model: Arc::new(model),
             preview: None,
             warnings: Vec::new(),
             selected: None,
@@ -474,6 +477,10 @@ impl EditorDoc {
     }
     pub fn model(&self) -> &Model {
         &self.model
+    }
+    /// The rig the bench's dolls share — a handle, not a copy.
+    pub fn model_arc(&self) -> Arc<Model> {
+        Arc::clone(&self.model)
     }
     /// Unsaved edits pending — drives the Save button's enabled/dirty affordance.
     pub fn dirty(&self) -> bool {

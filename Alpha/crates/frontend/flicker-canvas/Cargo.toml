@@ -1,0 +1,27 @@
+[package]
+name = "flicker-canvas"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# flicker-canvas — the two 2D EDITOR SURFACE FILLERS: a node-graph canvas and a lane
+# timeline. Both were written once inside the Loomforge bench (its `canvas.rs` /
+# `tae.rs` plus the edge builder in its `lib.rs`) and are needed again by the Dungeon
+# Maker's tech tree and the Game Master's event timelines, so they live here rather
+# than in a scene (rule 8B511B67: shared functionality in engine crates, scene Rust
+# thin; rule DDD070C7: one implementation, moved — never copied).
+#
+# Both fillers are seated in a rect the WALKER reserved (a `surface` node), take
+# POINTER SAMPLES rather than the device, and emit `HudCommand`s (Line/Panel/Text)
+# rather than touching a `Renderer` — so every line of geometry, hit-testing and
+# gesture handling in here is unit-tested without a GPU.
+[lib]
+name = "flicker_canvas"
+path = "src/lib.rs"
+
+[dependencies]
+# Umbrella: `flicker::render` (Vec2/Rect), `flicker::script` (HudCommand/FontRole/
+# TextAlign) and `flicker::ui` (SurfacePointer — the sample shape the walker hands a
+# seated surface, which `PointerSample` converts from).
+flicker = { version = "0.1.0", path = "../../core/flicker" }

@@ -131,6 +131,12 @@ pub struct WalkerHandler<'a> {
     /// Every visible `text_field` with an id — the nodes a text-entry session can
     /// open on, with their authored exits. Filled by [`Self::with_nav`].
     text_fields: Vec<TextFieldNav>,
+    /// Whether this screen's TOPMOST visible modal slab currently lets Cancel leave —
+    /// [`popup_dismissable`], read once per frame from the same tree + model the walk
+    /// used. `true` (the default, and the answer for every screen with no slab) leaves
+    /// Cancel exactly as it was; `false` makes this layer SWALLOW it. Filled by
+    /// [`Self::with_nav`].
+    dismissable: bool,
 }
 
 /// A `text_field` the walker can enter (see [`WalkerHandler::frame`]).
@@ -185,6 +191,9 @@ impl<'a> WalkerHandler<'a> {
             claimed: std::collections::HashSet::new(),
             pane_flagged: std::collections::HashSet::new(),
             text_fields: Vec::new(),
+            // No tree yet ⇒ no slab ⇒ nothing holds Cancel. `with_nav` reads the real
+            // answer off the screen.
+            dismissable: true,
         }
     }
 
@@ -203,6 +212,12 @@ impl<'a> WalkerHandler<'a> {
             &mut self.steppables,
         );
         self = self.with_text_fields(tree, model);
+        // THE DISMISSABLE TOGGLE (ruling DA0E1B57): whether the screen's topmost modal
+        // slab lets Cancel out is a property of the COMPONENT, read from the same tree
+        // and model this pass flattened — riding here, rather than on a builder of its
+        // own, because a second builder is a second thing to remember and every screen
+        // that can host a modal already calls this one.
+        self.dismissable = crate::popup_dismissable(tree, model);
         // OWNERSHIP vs MEMBERSHIP (nested panes, Aaron 2026-08-15): a node's
         // `tab_group` names the ring it BELONGS to; a node is a CONTAINER because
         // other nodes claim its id as their group — or because it authors the
@@ -248,6 +263,17 @@ impl<'a> WalkerHandler<'a> {
             }
         }
         self
+    }
+
+    /// Whether a Cancel would be ANSWERED here rather than passed down: the screen
+    /// declared what Cancel means (`on_cancel`), or this layer owns a focusable tree and
+    /// so runs the scene-level back-out. The gate the dismissable swallow rides, so a
+    /// non-navigable HUD pass never eats a Cancel it was not going to answer anyway.
+    fn owns_cancel(&self) -> bool {
+        !self.focusables.is_empty()
+            || self
+                .intents
+                .is_some_and(|i| i.result_for(ActionSignal::Cancel).is_some())
     }
 
     /// Whether `id` is a pane container — claimed by members, or explicitly
@@ -370,6 +396,24 @@ impl<'a> WalkerHandler<'a> {
             ActionSignal::PanelNext => self.pane_move(current.as_deref(), NavDir::Right, true),
             ActionSignal::PanelPrev => self.pane_move(current.as_deref(), NavDir::Left, false),
             ActionSignal::Confirm => {
+                // THE DRAG CHANNEL rides Confirm exactly as it rides the pointer
+                // button (controller is the floor, BA4487BD): pressing a `drag_kind`
+                // source picks the payload up, and the next press over a matching
+                // `drop_accept` target drops it. WHICH of the two this is, the node's
+                // own props decide, so the focused id is recorded here and resolved by
+                // the next `run_ui` pass — the same shape as `push_nudge`.
+                //
+                // While a payload is in flight Confirm IS the drop and nothing else: a
+                // pointer release over a target likewise drops rather than clicking,
+                // because the click edge was spent on the press that picked it up.
+                let carrying = self.ui.drag().is_some();
+                if let Some(id) = current.as_deref() {
+                    self.ui.push_drag_confirm(id);
+                }
+                if carrying {
+                    self.sync_pane();
+                    return;
+                }
                 // Controller selection of a text field: Confirm on it IS the way in
                 // (Aaron 2026-09-03) — the same switch a click into it and `EnterText`
                 // reach. A pad press commits no character, so no trigger guard.
@@ -382,6 +426,11 @@ impl<'a> WalkerHandler<'a> {
                     self.sync_pane();
                     return;
                 }
+                // CONFIRM = APPLY (Aaron 2026-09-04): the stages pending in the FOCUSED
+                // pane commit first — the pad's release edge — whatever else this press
+                // does. The next `run_ui` pass writes them.
+                let pane = self.ui.focused_pane().map(str::to_string);
+                let committing = self.ui.commit_stages(pane.as_deref());
                 // A focused node WITH an action activates like a click (menu buttons,
                 // pane controls, settings rows) — same path, same `sig_<name>` mirror.
                 let action = current
@@ -389,6 +438,12 @@ impl<'a> WalkerHandler<'a> {
                     .and_then(|id| self.action_for(id))
                     .map(str::to_string);
                 match action {
+                    Some(a) if committing => {
+                        // "Commit, then fire" (Aaron 2026-09-04): the activation waits
+                        // for the pass that lands the commit, so the scene folds the
+                        // values before the action — one press, the right order.
+                        self.ui.defer_fire(&a);
+                    }
                     Some(a) => {
                         // A pad Confirm is an activation like any click — the focused
                         // button lights the same flash (one acknowledgement, every route).
@@ -399,10 +454,13 @@ impl<'a> WalkerHandler<'a> {
                     // application loop reads as "invert"), so Confirm operates a checkbox
                     // the way it activates a button. Any other actionless node (a pane
                     // container) is a no-op: a pane is never entered (Aaron 2026-09-02).
+                    // A Confirm that just committed a stage is SPENT: it must not also
+                    // flip the staged toggle straight back.
                     None => {
                         if let Some((id, StepKind::Toggle)) = current
                             .as_deref()
                             .and_then(|id| self.step_kind(id).map(|k| (id, k)))
+                            .filter(|_| !committing)
                         {
                             self.ui.push_nudge(id, 0, false);
                         }
@@ -413,6 +471,10 @@ impl<'a> WalkerHandler<'a> {
             // is no level to exit, so B pops the scene's modal/context and the scene
             // decides what backing out means where the cursor stands.
             ActionSignal::Cancel => {
+                // Backing out ABANDONS whatever the cursor was carrying — the pad's
+                // twin of releasing the button over nothing. Additive: Cancel is still
+                // SCENE-LEVEL as always, never consumed by the drag.
+                self.ui.cancel_drag();
                 self.cancelled = true;
                 rc.pop_context();
             }
@@ -520,6 +582,14 @@ impl<'a> WalkerHandler<'a> {
                 // heuristic (BA4487BD).
                 let ring = self.ring_for(Some(&p));
                 if let Some(id) = nav(&ring, Some(&p), dir) {
+                    // PENDING-STAGES GUARD (Aaron 2026-09-04): a pane holding pad-staged
+                    // values is never left silently — the move is PARKED and the scene
+                    // raises the Apply / Revert prompt; its answer resumes the move
+                    // (`frame`) or keeps the cursor here.
+                    if self.ui.stages_in(Some(&p)) {
+                        self.ui.park_pane_move(id);
+                        return;
+                    }
                     self.ui.request_focus(id);
                     self.descend();
                 }
@@ -933,6 +1003,14 @@ impl InputHandler for WalkerHandler<'_> {
     /// ways in (Aaron 2026-09-03); a focus that has left the field (a click elsewhere,
     /// a nav move) LEAVES with the value standing.
     fn frame(&mut self, rc: &mut RouteCtx) {
+        // A pane move the Apply / Revert prompt released: complete it now — focus the
+        // target and descend into it, exactly as the parked stick press would have.
+        if let Some(target) = self.ui.take_resume_pane_move() {
+            self.ui.note_nav_input();
+            self.ui.request_focus(target);
+            self.descend();
+            self.sync_pane();
+        }
         if let Some(id) = self.ui.edit_id().map(str::to_string) {
             if self.ui.focused() != Some(id.as_str()) {
                 self.leave_text(rc, TextExit::Blur);
@@ -972,6 +1050,17 @@ impl InputHandler for WalkerHandler<'_> {
         // is over UI, the walker consumes the click so the gameplay base handler
         // (last in the chain) never world-picks through the panel.
         if self.consumed_pointer && is_pointer_signal(ev.signal) {
+            return Flow::Consumed;
+        }
+        // THE DISMISSABLE TOGGLE (ruling DA0E1B57), on the ONE Cancel path: while the
+        // screen's topmost modal slab reads NOT dismissable, this layer eats Cancel on
+        // both edges and produces NOTHING — the declared `on_cancel` below does not
+        // fire, the nav back-out in `act` does not run, and nothing leaks to the layers
+        // beneath. Only a layer that WOULD have answered Cancel swallows it, so a
+        // pass-through HUD stays a pass-through. The exit still exists (the host injects
+        // it); the component decides when it is allowed — and it says yes by default, so
+        // no modal traps unless something is actively holding the player (B89FAC21).
+        if ev.signal == ActionSignal::Cancel && !self.dismissable && self.owns_cancel() {
             return Flow::Consumed;
         }
         // Declarative intents (S9): a signal the screen ROOT bound (`on_<signal>`)
@@ -1185,6 +1274,208 @@ mod tests {
         );
         assert!(h.take_fired().is_empty());
         assert_eq!(h.ui.flash_intensity("tab_next"), 0.0);
+    }
+
+    /// Two panes for the staging contract (Aaron 2026-09-04): `a` holds a dial that
+    /// stages on Confirm plus a button, `b` holds a button; stick order a → b.
+    fn staged_panes() -> UiNode {
+        use flicker_script::Value;
+        let mut dial = UiNode {
+            component: "slider".into(),
+            id: "dial".into(),
+            ..Default::default()
+        };
+        dial.bind = Some("v".into());
+        dial.tab_group = "a".into();
+        dial.nav_ordinal = 0;
+        dial.size = Some(24.0);
+        dial.props.insert("min".into(), Value::Number(0.0));
+        dial.props.insert("max".into(), Value::Number(100.0));
+        dial.props
+            .insert("apply".into(), Value::Text("confirm".into()));
+        let mut go = button("go", "a", 1, "go");
+        go.size = Some(24.0);
+        let mut a = UiNode {
+            component: "cell".into(),
+            id: "a".into(),
+            nav_ordinal: 1,
+            ..Default::default()
+        };
+        a.children = vec![dial, go];
+        let mut bgo = button("bgo", "b", 0, "bgo");
+        bgo.size = Some(24.0);
+        let mut b = UiNode {
+            component: "cell".into(),
+            id: "b".into(),
+            nav_ordinal: 2,
+            ..Default::default()
+        };
+        b.children = vec![bgo];
+        let mut col = UiNode {
+            component: "cell".into(),
+            ..Default::default()
+        };
+        col.anchor = Some(flicker_script::UiAnchor::TopLeft);
+        col.width = Some(200.0);
+        col.children = vec![a, b];
+        let mut tree = UiNode {
+            component: "surface".into(),
+            id: "root".into(),
+            ..Default::default()
+        };
+        tree.children.push(col);
+        tree
+    }
+
+    fn idle_input() -> crate::UiInput {
+        use flicker_render::Vec2;
+        crate::UiInput {
+            mouse: Vec2::ZERO,
+            clicked: false,
+            down: false,
+            right_down: false,
+            screen: Vec2::new(800.0, 600.0),
+            wheel: 0.0,
+            exclusive: false,
+            motion: Default::default(),
+        }
+    }
+
+    /// **CONFIRM = APPLY, then FIRE** (Aaron 2026-09-04): a Confirm anywhere in a pane
+    /// commits the values its dials STAGED; on a focused BUTTON the activation waits
+    /// for the pass that lands the commit, so the scene folds the values before the
+    /// action — one press, the right order.
+    #[test]
+    fn confirm_commits_the_panes_stages_then_fires_the_button() {
+        let raw = InputState::new();
+        let tree = staged_panes();
+        let mut model = ValueMap::new();
+        model.set("v", 50.0);
+        let styles = serde_json::json!({});
+        let idle = idle_input();
+        let mut ui = UiState::new();
+        ui.request_focus("dial");
+        let mut rc = RouteCtx::new();
+
+        // A step on the dial is staged, not written.
+        {
+            let mut h = WalkerHandler::hud(&mut ui, false).with_nav(&tree, &model);
+            assert_eq!(
+                h.handle(&press(ActionSignal::NavRight, &raw), &mut rc),
+                Flow::Consumed
+            );
+        }
+        let frame = crate::run_ui(&tree, &model, &styles, &idle, &mut ui);
+        assert_eq!(
+            frame.results.number("v"),
+            Some(50.0),
+            "the scene keeps seeing the resting value"
+        );
+        assert!(ui.staged_any(), "the stage is held");
+
+        // Down walks to the pane's button; Confirm there commits, THEN fires.
+        {
+            let mut h = WalkerHandler::hud(&mut ui, false).with_nav(&tree, &model);
+            h.handle(&press(ActionSignal::NavDown, &raw), &mut rc);
+            assert_eq!(h.ui.focused(), Some("go"));
+            assert_eq!(
+                h.handle(&press(ActionSignal::Confirm, &raw), &mut rc),
+                Flow::Consumed
+            );
+            assert!(
+                h.take_fired().is_empty(),
+                "the activation waits behind the commit"
+            );
+            assert!(!h.ui.staged_any(), "the stage is queued for commit");
+        }
+        let frame = crate::run_ui(&tree, &model, &styles, &idle, &mut ui);
+        assert_eq!(frame.results.number("v"), Some(51.0), "the commit lands");
+        {
+            let mut h = WalkerHandler::hud(&mut ui, false).with_nav(&tree, &model);
+            assert_eq!(
+                h.take_fired(),
+                vec!["go".to_string()],
+                "…and the button fires in that same pass"
+            );
+        }
+    }
+
+    /// **A pane holding stages is never left silently** (Aaron 2026-09-04): the stick's
+    /// move is PARKED, the scene is handed exactly one prompt, and its answer completes
+    /// the move on the walker's next frame — Apply commits first, Revert drops the
+    /// stage — while Keep-editing leaves the cursor and the stage where they were.
+    #[test]
+    fn the_stick_asks_before_leaving_a_pane_with_stages() {
+        let raw = InputState::new();
+        let tree = staged_panes();
+        let mut model = ValueMap::new();
+        model.set("v", 50.0);
+        let styles = serde_json::json!({});
+        let idle = idle_input();
+        let mut rc = RouteCtx::new();
+
+        let stage_then_stick = |ui: &mut UiState| {
+            ui.request_focus("dial");
+            {
+                let mut h = WalkerHandler::hud(ui, false).with_nav(&tree, &model);
+                h.handle(&press(ActionSignal::NavRight, &raw), &mut RouteCtx::new());
+            }
+            crate::run_ui(&tree, &model, &styles, &idle, ui);
+            assert!(ui.staged_any());
+            let mut h = WalkerHandler::hud(ui, false).with_nav(&tree, &model);
+            assert_eq!(
+                h.handle(&press(ActionSignal::PanelNext, &raw), &mut RouteCtx::new()),
+                Flow::Consumed
+            );
+            assert_eq!(
+                h.ui.focused(),
+                Some("dial"),
+                "the move is parked, not made"
+            );
+        };
+
+        // Keep editing: the cursor stays, the stage stands, the move is forgotten.
+        let mut ui = UiState::new();
+        stage_then_stick(&mut ui);
+        assert!(ui.take_stage_prompt(), "one prompt for the scene");
+        assert!(!ui.take_stage_prompt(), "…exactly one");
+        ui.keep_stages();
+        {
+            let mut h = WalkerHandler::hud(&mut ui, false).with_nav(&tree, &model);
+            h.frame(&mut rc);
+            assert_eq!(h.ui.focused(), Some("dial"));
+            assert!(h.ui.staged_any(), "the stage still stands");
+        }
+
+        // Apply: the commit lands and the cursor lands in pane b.
+        {
+            let mut h = WalkerHandler::hud(&mut ui, false).with_nav(&tree, &model);
+            h.handle(&press(ActionSignal::PanelNext, &raw), &mut rc);
+        }
+        assert!(ui.take_stage_prompt());
+        ui.apply_stages();
+        {
+            let mut h = WalkerHandler::hud(&mut ui, false).with_nav(&tree, &model);
+            h.frame(&mut rc);
+            assert_eq!(h.ui.focused(), Some("bgo"), "the parked move completes");
+            assert_eq!(h.ui.focused_pane(), Some("b"));
+        }
+        let frame = crate::run_ui(&tree, &model, &styles, &idle, &mut ui);
+        assert_eq!(frame.results.number("v"), Some(51.0), "applied");
+
+        // Revert: the stage is dropped, the move completes, the model stands.
+        let mut ui = UiState::new();
+        stage_then_stick(&mut ui);
+        assert!(ui.take_stage_prompt());
+        ui.revert_stages();
+        {
+            let mut h = WalkerHandler::hud(&mut ui, false).with_nav(&tree, &model);
+            h.frame(&mut rc);
+            assert_eq!(h.ui.focused(), Some("bgo"));
+        }
+        let frame = crate::run_ui(&tree, &model, &styles, &idle, &mut ui);
+        assert!(!ui.staged_any());
+        assert_eq!(frame.results.number("v"), Some(50.0), "reverted to the model");
     }
 
     /// **Every slider owns the pad channel** — the component-level contract,
@@ -1886,6 +2177,137 @@ mod tests {
         assert_eq!(h.take_fired(), vec!["b_one".to_string()]);
     }
 
+    /// **The pad carries and drops a payload end to end** (controller is the floor,
+    /// BA4487BD). Confirm on the focused `drag_kind` source picks it up (and still
+    /// fires the source's own action, exactly as a pointer PRESS on a drag source
+    /// does); Confirm on the focused `drop_accept` target IS the drop and nothing
+    /// else — no plain activation while a payload is in flight, the same way a
+    /// pointer release over a target drops rather than clicking.
+    #[test]
+    fn the_pad_picks_up_a_payload_and_drops_it_on_an_accepting_target() {
+        use crate::component::{run_ui, UiInput};
+        use flicker_script::{UiAnchor, Value};
+        use flicker_render::Vec2;
+
+        let raw = InputState::new();
+        let styles = serde_json::json!({});
+        let model = shown();
+        // The pointer sits nowhere near either box for the whole test — every edge
+        // below comes from the pad.
+        let idle = UiInput {
+            mouse: Vec2::new(-9.0, -9.0),
+            clicked: false,
+            down: false,
+            right_down: false,
+            screen: Vec2::new(200.0, 100.0),
+            wheel: 0.0,
+            exclusive: false,
+            motion: Default::default(),
+        };
+
+        let mut src = button("src", "g", 1, "open_clip");
+        src.anchor = Some(UiAnchor::TopLeft);
+        src.width = Some(60.0);
+        src.height = Some(40.0);
+        src.props
+            .insert("drag_kind".into(), Value::Text("clip".into()));
+        src.props
+            .insert("drag_id".into(), Value::Text("walk_forward".into()));
+        let mut bin = button("bin", "g", 2, "bind_clip");
+        bin.anchor = Some(UiAnchor::TopLeft);
+        bin.offset = [100.0, 0.0];
+        bin.width = Some(60.0);
+        bin.height = Some(40.0);
+        bin.props
+            .insert("drop_accept".into(), Value::Text("clip".into()));
+        let mut tree = UiNode {
+            id: "root".into(),
+            component: "screen".into(),
+            ..Default::default()
+        };
+        tree.children = vec![src, bin];
+
+        let mut ui = UiState::new();
+        let mut rc = RouteCtx::new();
+        {
+            let mut h = WalkerHandler::hud(&mut ui, false).with_nav(&tree, &model);
+            h.handle(&press(ActionSignal::NavDown, &raw), &mut rc); // acquire → src
+            assert_eq!(h.ui.focused(), Some("src"));
+            // Confirm on the SOURCE: a pickup is recorded AND the button still fires,
+            // the same pair a pointer press on a drag source produces.
+            h.handle(&press(ActionSignal::Confirm, &raw), &mut rc);
+            assert_eq!(h.take_fired(), vec!["open_clip".to_string()]);
+        }
+        let f = run_ui(&tree, &model, &styles, &idle, &mut ui);
+        assert!(f.results.is_on("drag_active"), "the pad is carrying it");
+        assert_eq!(f.results.text("drag_id"), Some("walk_forward"));
+
+        {
+            let mut h = WalkerHandler::hud(&mut ui, false).with_nav(&tree, &model);
+            h.handle(&press(ActionSignal::NavDown, &raw), &mut rc); // → bin
+            assert_eq!(h.ui.focused(), Some("bin"));
+            // Confirm while CARRYING is the drop alone — `bind_clip` must NOT arrive
+            // here as a plain activation, or the scene would see it twice.
+            h.handle(&press(ActionSignal::Confirm, &raw), &mut rc);
+            assert!(
+                h.take_fired().is_empty(),
+                "Confirm while carrying activates nothing directly"
+            );
+        }
+        let f = run_ui(&tree, &model, &styles, &idle, &mut ui);
+        assert!(f.results.is_on("bind_clip"), "…it lands as the DROP instead");
+        assert_eq!(f.results.text("drop_id"), Some("walk_forward"));
+        assert_eq!(f.results.text("drop_target"), Some("bin"));
+        assert!(ui.drag().is_none(), "the payload is delivered");
+    }
+
+    /// **Cancel abandons the carry** — the pad's twin of releasing over nothing — and
+    /// is STILL scene-level (Aaron 2026-09-02): backing out is never consumed by the
+    /// drag, so the scene pops its context exactly as it always did.
+    #[test]
+    fn cancel_abandons_an_in_flight_drag_and_stays_scene_level() {
+        use crate::component::{run_ui, UiInput};
+        use flicker_script::Value;
+        use flicker_render::Vec2;
+
+        let raw = InputState::new();
+        let styles = serde_json::json!({});
+        let model = shown();
+        let idle = UiInput {
+            mouse: Vec2::new(-9.0, -9.0),
+            clicked: false,
+            down: false,
+            right_down: false,
+            screen: Vec2::new(200.0, 100.0),
+            wheel: 0.0,
+            exclusive: false,
+            motion: Default::default(),
+        };
+        let mut src = button("a", "g", 1, "a");
+        src.props
+            .insert("drag_kind".into(), Value::Text("clip".into()));
+        let tree = UiNode {
+            id: "root".into(),
+            component: "cell".into(),
+            children: vec![src],
+            ..Default::default()
+        };
+        let mut ui = UiState::new();
+        let mut rc = RouteCtx::new();
+        {
+            let mut h = WalkerHandler::hud(&mut ui, false).with_nav(&tree, &model);
+            h.handle(&press(ActionSignal::NavDown, &raw), &mut rc);
+            h.handle(&press(ActionSignal::Confirm, &raw), &mut rc);
+        }
+        run_ui(&tree, &model, &styles, &idle, &mut ui);
+        assert!(ui.drag().is_some(), "the pad is carrying a payload");
+
+        let mut h = WalkerHandler::hud(&mut ui, false).with_nav(&tree, &model);
+        h.handle(&press(ActionSignal::Cancel, &raw), &mut rc);
+        assert!(h.ui.drag().is_none(), "backing out drops what was carried");
+        assert!(h.cancelled(), "…and Cancel is still the scene's");
+    }
+
     /// **A value control STEPS on its own axis and MOVES FOCUS on the cross axis** — never a
     /// focus trap (nav-tier contract 1B5F6BB8). A focused `select`: Left/Right nudge it
     /// (focus stays), Up/Down move to the next control.
@@ -2364,6 +2786,175 @@ mod tests {
             h.ui.focused(),
             Some("start"),
             "nav still walks the focusables"
+        );
+    }
+
+    // ── The DISMISSABLE toggle (ruling DA0E1B57) ─────────────────────────────
+
+    /// A modal screen: the declaring root with a `popup_panel` slab under it, carrying
+    /// whatever `dismissable` / `dismissable_bind` props the case is about.
+    fn modal_tree(props: &[(&str, flicker_script::Value)]) -> UiNode {
+        let mut slab = UiNode {
+            id: "popup".into(),
+            component: "popup_panel".into(),
+            children: vec![button("ok", "modal", 0, "ok")],
+            ..Default::default()
+        };
+        for (k, v) in props {
+            slab.props.insert((*k).to_string(), v.clone());
+        }
+        let mut tree = UiNode {
+            id: "root".into(),
+            component: "surface".into(),
+            children: vec![slab],
+            ..Default::default()
+        };
+        tree.props.insert(
+            "on_cancel".into(),
+            flicker_script::Value::Text("modal_cancel".into()),
+        );
+        tree
+    }
+
+    /// Drive ONE Cancel press at a screen and report what the walker produced.
+    fn cancel_on(tree: &UiNode, model: &ValueMap) -> (Flow, Vec<String>, bool) {
+        let raw = InputState::new();
+        let intents = UiIntents::of(tree);
+        let mut ui = UiState::new();
+        let mut rc = RouteCtx::new();
+        let mut h = WalkerHandler::hud(&mut ui, false)
+            .with_nav(tree, model)
+            .with_intents(&intents);
+        let flow = h.handle(&press(ActionSignal::Cancel, &raw), &mut rc);
+        (flow, h.take_fired(), h.cancelled())
+    }
+
+    /// **A NON-DISMISSABLE SLAB SWALLOWS CANCEL.** The screen still DECLARES its
+    /// `on_cancel` (the host always injects one — the exit exists), but while the
+    /// component says no, the walker eats the signal and fires nothing: no result name,
+    /// no scene-level back-out, and nothing leaks below.
+    #[test]
+    fn a_non_dismissable_popup_panel_swallows_cancel() {
+        let tree = modal_tree(&[("dismissable", flicker_script::Value::Bool(false))]);
+        let (flow, fired, cancelled) = cancel_on(&tree, &shown());
+        assert_eq!(
+            flow,
+            Flow::Consumed,
+            "the signal never leaks below the slab"
+        );
+        assert!(
+            fired.is_empty(),
+            "the declared `on_cancel` must NOT fire while the slab holds the player"
+        );
+        assert!(!cancelled, "…and the nav back-out does not run either");
+
+        // The same through the BIND: a pair script publishing `false` holds it shut.
+        let bound = modal_tree(&[(
+            "dismissable_bind",
+            flicker_script::Value::Text("modal_dismissable".into()),
+        )]);
+        let mut model = ValueMap::new();
+        model.set("modal_dismissable", false);
+        let (_, fired, cancelled) = cancel_on(&bound, &model);
+        assert!(fired.is_empty(), "a bound `false` swallows Cancel too");
+        assert!(!cancelled);
+    }
+
+    /// **A DISMISSABLE SLAB IS UNCHANGED.** Default (nothing authored), an explicit
+    /// `true`, and a bind published `true` all fire the screen's declared exit exactly
+    /// as they did before the toggle existed.
+    #[test]
+    fn a_dismissable_popup_panel_fires_the_declared_on_cancel() {
+        let mut lit = ValueMap::new();
+        lit.set("modal_dismissable", true);
+        for (case, tree, model) in [
+            ("nothing authored (the default)", modal_tree(&[]), shown()),
+            (
+                "an explicit `dismissable: true`",
+                modal_tree(&[("dismissable", flicker_script::Value::Bool(true))]),
+                shown(),
+            ),
+            (
+                "a bind published true",
+                modal_tree(&[(
+                    "dismissable_bind",
+                    flicker_script::Value::Text("modal_dismissable".into()),
+                )]),
+                lit,
+            ),
+            // No slab at all: an ordinary screen is untouched by any of this.
+            (
+                "no popup_panel on the screen",
+                {
+                    let mut t = menu_tree();
+                    t.props.insert(
+                        "on_cancel".into(),
+                        flicker_script::Value::Text("modal_cancel".into()),
+                    );
+                    t
+                },
+                shown(),
+            ),
+        ] {
+            let (flow, fired, _) = cancel_on(&tree, &model);
+            assert_eq!(flow, Flow::Consumed, "{case}: Cancel is still this layer's");
+            assert_eq!(
+                fired,
+                vec!["modal_cancel".to_string()],
+                "{case}: the declared exit fires"
+            );
+        }
+    }
+
+    /// **A BIND NOBODY PUBLISHES READS AS DISMISSABLE.** The fail-loud direction of the
+    /// toggle: a typo'd `dismissable_bind` (or a pair script that failed to load) must
+    /// cost you the FEATURE, never the way out — the alternative is a modal with no
+    /// exit, which is the one thing a modal may never be (B89FAC21).
+    #[test]
+    fn an_unpublished_dismissable_bind_reads_as_dismissable() {
+        let tree = modal_tree(&[(
+            "dismissable_bind",
+            flicker_script::Value::Text("nobody_publishes_this".into()),
+        )]);
+        let (_, fired, _) = cancel_on(&tree, &shown());
+        assert_eq!(
+            fired,
+            vec!["modal_cancel".to_string()],
+            "an unpublished bind is never a trap"
+        );
+        // …and a slab HIDDEN this frame holds nothing either, whatever it authored.
+        let mut hidden = modal_tree(&[("dismissable", flicker_script::Value::Bool(false))]);
+        hidden.children[0].visible_bind = Some("slab_shown".into());
+        let (_, fired, _) = cancel_on(&hidden, &shown());
+        assert_eq!(
+            fired,
+            vec!["modal_cancel".to_string()],
+            "a slab that is not on screen does not hold Cancel"
+        );
+    }
+
+    /// The toggle is scoped to the CANCEL routing: every other signal the screen owns
+    /// keeps working while the slab is held shut (a busy modal still walks its buttons).
+    #[test]
+    fn a_held_slab_still_answers_every_other_signal() {
+        let raw = InputState::new();
+        let tree = modal_tree(&[("dismissable", flicker_script::Value::Bool(false))]);
+        let intents = UiIntents::of(&tree);
+        let mut ui = UiState::new();
+        let mut rc = RouteCtx::new();
+        let mut h = WalkerHandler::hud(&mut ui, false)
+            .with_nav(&tree, &shown())
+            .with_intents(&intents);
+        assert_eq!(
+            h.handle(&press(ActionSignal::NavDown, &raw), &mut rc),
+            Flow::Consumed
+        );
+        assert_eq!(h.ui.focused(), Some("ok"), "nav still walks the slab");
+        h.handle(&press(ActionSignal::Confirm, &raw), &mut rc);
+        assert_eq!(
+            h.take_fired(),
+            vec!["ok".to_string()],
+            "Confirm still activates the focused control"
         );
     }
 

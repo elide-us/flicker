@@ -151,13 +151,8 @@
         "label": "$ink_bright",
         "radius": 2
       },
-      "scrim": {
-        "_comment": "The bench's modal dim — passed to the `conflict_dialog` proto as its `overlay_style` skin. The dialog chrome itself is the proto's (modal.panel).",
-        "panel_bg": "$scrim",
-        "radius": 0
-      },
       "card": {
-        "_comment": "One side of a collision (existing / incoming) — passed to the `conflict_dialog` proto as its `card_style` skin.",
+        "_comment": "The bench's inset card — the Review tab's fact groups wear it. (It skinned the inline collision dialog too, until that lifted to the shared `conflict` modal.)",
         "panel_bg": "$stone0",
         "border": "$edge3",
         "border_w": 1,
@@ -2334,130 +2329,6 @@
                 "label": "$qm_menu_newfolder",
                 "style_bind": "menu_sty_4",
                 "size": 30
-              }
-            ]
-          }
-        ]
-      },
-      {
-        "component": "popup_panel",
-        "id": "qm_prompt",
-        "visible_bind": "has_prompt",
-        "layer": 50,
-        "anchor": "center",
-        "title": "$qm_conflict_title",
-        "children": [
-          {
-            "component": "text",
-            "text_bind": "conflict_name",
-            "text_size": 15,
-            "size": 24,
-            "color": "quartermaster.title.color",
-            "align": "center"
-          },
-          {
-            "component": "text",
-            "text_bind": "conflict_where",
-            "text_size": 12,
-            "size": 20,
-            "align": "center",
-            "style": "quartermaster.meta"
-          },
-          {
-            "component": "row",
-            "gap": 10,
-            "size": 64,
-            "children": [
-              {
-                "component": "cell",
-                "grow": 1,
-                "style": "quartermaster.card",
-                "pad": 8,
-                "children": [
-                  {
-                    "component": "text",
-                    "text": "$qm_conflict_existing",
-                    "text_size": 11,
-                    "size": 18,
-                    "style": "quartermaster.header"
-                  },
-                  {
-                    "component": "text",
-                    "text_bind": "conflict_existing",
-                    "text_size": 11,
-                    "wrap": true,
-                    "grow": 1,
-                    "style": "quartermaster.meta"
-                  }
-                ]
-              },
-              {
-                "component": "cell",
-                "grow": 1,
-                "style": "quartermaster.card",
-                "pad": 8,
-                "children": [
-                  {
-                    "component": "text",
-                    "text": "$qm_conflict_incoming",
-                    "text_size": 11,
-                    "size": 18,
-                    "style": "quartermaster.header"
-                  },
-                  {
-                    "component": "text",
-                    "text_bind": "conflict_incoming",
-                    "text_size": 11,
-                    "wrap": true,
-                    "grow": 1,
-                    "style": "quartermaster.meta"
-                  }
-                ]
-              }
-            ]
-          },
-          {
-            "component": "checkbox",
-            "id": "conflict_apply_rest",
-            "bind": "conflict_apply_rest",
-            "visible_bind": "conflict_multi",
-            "label": "$qm_conflict_apply_rest",
-            "box": 14,
-            "size": 24,
-            "style": "quartermaster.checkbox"
-          },
-          {
-            "component": "row",
-            "gap": 10,
-            "size": 38,
-            "align": "center",
-            "children": [
-              {
-                "component": "button",
-                "id": "conflict_skip",
-                "action": "conflict_skip",
-                "label": "$qm_conflict_skip",
-                "variant": "secondary",
-                "size_class": "md",
-                "grow": 1
-              },
-              {
-                "component": "button",
-                "id": "conflict_keep_both",
-                "action": "conflict_keep_both",
-                "label": "$qm_conflict_keep_both",
-                "variant": "secondary",
-                "size_class": "md",
-                "grow": 1
-              },
-              {
-                "component": "button",
-                "id": "conflict_replace",
-                "action": "conflict_replace",
-                "label": "$qm_conflict_replace",
-                "variant": "primary",
-                "size_class": "md",
-                "grow": 1
               }
             ]
           }

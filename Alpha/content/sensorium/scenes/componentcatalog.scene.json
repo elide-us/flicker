@@ -1,7 +1,86 @@
 {
-  "_comment": "ComponentCatalog UI-TEST scene DEFINITION (201F4F51 template-free). A left nav rail of bookmarks beside a RIGHT scroll TRAY: every component in its own card box, all present, flowing in a scrollable `list`; a bookmark scrolls the tray to that card (card_i.y - card_0.y), the top card's bookmark highlights. The standalone `tabs` control is RETIRED here — superseded by the PTT (paged_menu); the Paged Menu card demos the real nested page->tab behavior (Page 1: Tab 1/Tab 2, Page 2: Tab 3/Tab 4) via two page-gated `pill_toggle` tab rails (the PTT lays out the first VISIBLE rail). The Nav Footer card's BACK/NEXT buttons fire the SAME cat_pm_page_prev/next names the page rail steps on and the root's on_page_prev/next intents fire — one signal name, every trigger. 27 cards. Display strings are $tokens; interactive VALUES ride binds the bench seeds + folds; the paged-menu visibility binds are derived in the PAIR SCRIPT (componentcatalog.lua) from the page/tab. The bench owns + loads this file.",
+  "_comment": "ComponentCatalog UI-TEST scene DEFINITION (201F4F51 template-free). A left nav rail of bookmarks beside a RIGHT scroll TRAY: every component in its own card box, all present, flowing in a scrollable `list`; a bookmark scrolls the tray to that card (card_i.y - card_0.y), the top card's bookmark highlights. The standalone `tabs` control is RETIRED here — superseded by the PTT (paged_menu); the Paged Menu card demos the real nested page->tab behavior (Page 1: Tab 1/Tab 2, Page 2: Tab 3/Tab 4) via two page-gated `pill_toggle` tab rails (the PTT lays out the first VISIBLE rail). The Nav Footer card's BACK/NEXT buttons fire the SAME cat_pm_page_prev/next names the page rail steps on and the root's on_page_prev/next intents fire — one signal name, every trigger. FOUR SECTIONS: the roster-derived KIND cards (0-27), then the RECIPES page (28-39: the canonical arrangements the catalog documents without promoting a kind), the FILLERS page (40-45: each engine-crate surface filler seated live on a plain `surface`) and the MODALS page (46-47: one button per shared tree in scenes/shared/, opened through the SharedModal host seam, with the modal_closed answer read back). 48 cards, every one with its bookmark. Display strings are $tokens; interactive VALUES ride binds the bench seeds + folds; the paged-menu visibility binds are derived in the PAIR SCRIPT (componentcatalog.lua) from the page/tab. The bench owns + loads this file.",
   "behaviour": "componentcatalog",
   "params": {},
+  "stages": {
+    "cat_gadget_stage": {
+      "_comment": "One of the two 3D stages the FILLERS page seats (the other is `cat_doll_stage`); both are ordinary stage sources the catalog reads through `stages.<source>`, exactly as every other bench does. The Gadget card's surface — one lit `scene` pass into the surface colour, cleared to the void so the card's panel reads behind it. Nothing is drawn but the gadget's own overlay lines, which is the point: the handles ARE the demo.",
+      "lighting": "studio",
+      "clear": "$stage_void",
+      "camera": {
+        "kind": "orbit",
+        "yaw": 0.7,
+        "pitch": 0.35,
+        "dist": 3.2,
+        "target_y": 0.0
+      },
+      "attachments": {
+        "color": {
+          "format": "surface"
+        },
+        "depth": {
+          "format": "depth32"
+        }
+      },
+      "passes": [
+        {
+          "pass": "scene",
+          "writes": [
+            "color",
+            "depth"
+          ]
+        }
+      ]
+    },
+    "cat_doll_stage": {
+      "_comment": "The Doll card's surface — the Loomforge portrait shot, ring and all. The catalog uploads no rig, so the ring is what draws; a consumer that sets a rig gets the character in the same seat with no stage change.",
+      "lighting": "studio",
+      "clear": "$stage_void",
+      "camera": {
+        "kind": "orbit",
+        "yaw": 0.55,
+        "pitch": 0.18,
+        "dist": 2.6,
+        "target_y": 0.95
+      },
+      "layers": [
+        {
+          "draw": "skinned"
+        },
+        {
+          "draw": "ring",
+          "radius": 0.45,
+          "y": 0.0,
+          "segments": 24,
+          "color": "$bronze",
+          "color_active": "$rune_glow"
+        }
+      ],
+      "attachments": {
+        "hdr": {
+          "format": "rgba16f"
+        },
+        "color": {
+          "format": "surface"
+        },
+        "depth": {
+          "format": "depth32"
+        }
+      },
+      "passes": [
+        {
+          "pass": "scene",
+          "writes": [
+            "hdr",
+            "depth"
+          ]
+        },
+        {
+          "pass": "tonemap_grade"
+        }
+      ]
+    }
+  },
   "tree": {
     "component": "surface",
     "id": "catalog",
@@ -328,6 +407,206 @@
                             "size_class": "md",
                             "tab_group": "cat_nav",
                             "nav_ordinal": 28
+                          },
+                          {
+                            "component": "button",
+                            "id": "nav_28",
+                            "label": "$cat_nav_recipes",
+                            "style_bind": "nav_sty_28",
+                            "action": "nav_28",
+                            "size_class": "md",
+                            "tab_group": "cat_nav",
+                            "nav_ordinal": 29
+                          },
+                          {
+                            "component": "button",
+                            "id": "nav_29",
+                            "label": "$cat_rec_toast",
+                            "style_bind": "nav_sty_29",
+                            "action": "nav_29",
+                            "size_class": "md",
+                            "tab_group": "cat_nav",
+                            "nav_ordinal": 30
+                          },
+                          {
+                            "component": "button",
+                            "id": "nav_30",
+                            "label": "$cat_rec_property",
+                            "style_bind": "nav_sty_30",
+                            "action": "nav_30",
+                            "size_class": "md",
+                            "tab_group": "cat_nav",
+                            "nav_ordinal": 31
+                          },
+                          {
+                            "component": "button",
+                            "id": "nav_31",
+                            "label": "$cat_rec_tree",
+                            "style_bind": "nav_sty_31",
+                            "action": "nav_31",
+                            "size_class": "md",
+                            "tab_group": "cat_nav",
+                            "nav_ordinal": 32
+                          },
+                          {
+                            "component": "button",
+                            "id": "nav_32",
+                            "label": "$cat_rec_breadcrumb",
+                            "style_bind": "nav_sty_32",
+                            "action": "nav_32",
+                            "size_class": "md",
+                            "tab_group": "cat_nav",
+                            "nav_ordinal": 33
+                          },
+                          {
+                            "component": "button",
+                            "id": "nav_33",
+                            "label": "$cat_rec_notice",
+                            "style_bind": "nav_sty_33",
+                            "action": "nav_33",
+                            "size_class": "md",
+                            "tab_group": "cat_nav",
+                            "nav_ordinal": 34
+                          },
+                          {
+                            "component": "button",
+                            "id": "nav_34",
+                            "label": "$cat_rec_transport",
+                            "style_bind": "nav_sty_34",
+                            "action": "nav_34",
+                            "size_class": "md",
+                            "tab_group": "cat_nav",
+                            "nav_ordinal": 35
+                          },
+                          {
+                            "component": "button",
+                            "id": "nav_35",
+                            "label": "$cat_rec_resource",
+                            "style_bind": "nav_sty_35",
+                            "action": "nav_35",
+                            "size_class": "md",
+                            "tab_group": "cat_nav",
+                            "nav_ordinal": 36
+                          },
+                          {
+                            "component": "button",
+                            "id": "nav_36",
+                            "label": "$cat_rec_command",
+                            "style_bind": "nav_sty_36",
+                            "action": "nav_36",
+                            "size_class": "md",
+                            "tab_group": "cat_nav",
+                            "nav_ordinal": 37
+                          },
+                          {
+                            "component": "button",
+                            "id": "nav_37",
+                            "label": "$cat_rec_legend",
+                            "style_bind": "nav_sty_37",
+                            "action": "nav_37",
+                            "size_class": "md",
+                            "tab_group": "cat_nav",
+                            "nav_ordinal": 38
+                          },
+                          {
+                            "component": "button",
+                            "id": "nav_38",
+                            "label": "$cat_rec_collapse",
+                            "style_bind": "nav_sty_38",
+                            "action": "nav_38",
+                            "size_class": "md",
+                            "tab_group": "cat_nav",
+                            "nav_ordinal": 39
+                          },
+                          {
+                            "component": "button",
+                            "id": "nav_39",
+                            "label": "$cat_rec_dragdrop",
+                            "style_bind": "nav_sty_39",
+                            "action": "nav_39",
+                            "size_class": "md",
+                            "tab_group": "cat_nav",
+                            "nav_ordinal": 40
+                          },
+                          {
+                            "component": "button",
+                            "id": "nav_40",
+                            "label": "$cat_nav_fillers",
+                            "style_bind": "nav_sty_40",
+                            "action": "nav_40",
+                            "size_class": "md",
+                            "tab_group": "cat_nav",
+                            "nav_ordinal": 41
+                          },
+                          {
+                            "component": "button",
+                            "id": "nav_41",
+                            "label": "$cat_fill_plot",
+                            "style_bind": "nav_sty_41",
+                            "action": "nav_41",
+                            "size_class": "md",
+                            "tab_group": "cat_nav",
+                            "nav_ordinal": 42
+                          },
+                          {
+                            "component": "button",
+                            "id": "nav_42",
+                            "label": "$cat_fill_graph",
+                            "style_bind": "nav_sty_42",
+                            "action": "nav_42",
+                            "size_class": "md",
+                            "tab_group": "cat_nav",
+                            "nav_ordinal": 43
+                          },
+                          {
+                            "component": "button",
+                            "id": "nav_43",
+                            "label": "$cat_fill_timeline",
+                            "style_bind": "nav_sty_43",
+                            "action": "nav_43",
+                            "size_class": "md",
+                            "tab_group": "cat_nav",
+                            "nav_ordinal": 44
+                          },
+                          {
+                            "component": "button",
+                            "id": "nav_44",
+                            "label": "$cat_fill_gadget",
+                            "style_bind": "nav_sty_44",
+                            "action": "nav_44",
+                            "size_class": "md",
+                            "tab_group": "cat_nav",
+                            "nav_ordinal": 45
+                          },
+                          {
+                            "component": "button",
+                            "id": "nav_45",
+                            "label": "$cat_fill_doll",
+                            "style_bind": "nav_sty_45",
+                            "action": "nav_45",
+                            "size_class": "md",
+                            "tab_group": "cat_nav",
+                            "nav_ordinal": 46
+                          },
+                          {
+                            "component": "button",
+                            "id": "nav_46",
+                            "label": "$cat_nav_modals",
+                            "style_bind": "nav_sty_46",
+                            "action": "nav_46",
+                            "size_class": "md",
+                            "tab_group": "cat_nav",
+                            "nav_ordinal": 47
+                          },
+                          {
+                            "component": "button",
+                            "id": "nav_47",
+                            "label": "$cat_modal_result_title",
+                            "style_bind": "nav_sty_47",
+                            "action": "nav_47",
+                            "size_class": "md",
+                            "tab_group": "cat_nav",
+                            "nav_ordinal": 48
                           }
                         ]
                       }
@@ -1048,6 +1327,7 @@
                                 "color": "panel.stat_value"
                               },
                               {
+                                "_comment": "THE DISMISSABLE TOGGLE (ruling DA0E1B57), demonstrated: `dismissable_bind` names a Model key, the checkbox below writes it, and the walker reads it at its Cancel routing — so turning the box OFF makes THIS slab refuse Esc / pad-B, exactly as busy.lua does to the shared busy modal while its work runs. The prop defaults TRUE: a slab that authors neither is always dismissable.",
                                 "component": "popup_panel",
                                 "title": "$cat_popup_title",
                                 "subtitle": "$cat_popup_sub",
@@ -1055,7 +1335,18 @@
                                 "divider": true,
                                 "items_gap": 12,
                                 "panel_style": "modal.panel",
+                                "dismissable_bind": "cat_popup_dismissable",
                                 "children": [
+                                  {
+                                    "component": "checkbox",
+                                    "id": "cat_popup_dismissable",
+                                    "bind": "cat_popup_dismissable",
+                                    "label": "$cat_lbl_dismissable",
+                                    "box": 16,
+                                    "size": 26,
+                                    "tab_group": "cat_content",
+                                    "nav_ordinal": 13
+                                  },
                                   {
                                     "component": "button",
                                     "id": "cat_popup_ok",
@@ -1064,7 +1355,7 @@
                                     "size_class": "lg",
                                     "variant": "primary",
                                     "tab_group": "cat_content",
-                                    "nav_ordinal": 13
+                                    "nav_ordinal": 14
                                   },
                                   {
                                     "component": "button",
@@ -1074,9 +1365,18 @@
                                     "size_class": "lg",
                                     "variant": "secondary",
                                     "tab_group": "cat_content",
-                                    "nav_ordinal": 14
+                                    "nav_ordinal": 15
                                   }
                                 ]
+                              },
+                              {
+                                "component": "text",
+                                "text": "$cat_popup_toggle_note",
+                                "text_size": 11,
+                                "font": "label",
+                                "color": "panel.stat_label",
+                                "wrap": true,
+                                "size": 34
                               }
                             ]
                           },
@@ -1355,6 +1655,1363 @@
                                 "color": "panel.stat_label"
                               }
                             ]
+                          },
+                          {
+                            "_comment": "RECIPES PAGE (B05B3D09 §4b, Aaron's Q3 = YES): the canonical ARRANGEMENTS the catalog documents as the registry of record. Every card below names only roster kinds and resolves only shared style blocks — a recipe is the answer to \"that looks like a duplicate kind\" (F1BFA408): decompose before promoting.",
+                            "component": "panel",
+                            "id": "card_28",
+                            "style": "panel",
+                            "pad": 14,
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text": "$cat_nav_recipes",
+                                "text_size": 18,
+                                "font": "label",
+                                "color": "panel.stat_value"
+                              },
+                              {
+                                "component": "text",
+                                "text": "$cat_rec_intro",
+                                "text_size": 11,
+                                "font": "label",
+                                "color": "panel.stat_label"
+                              }
+                            ]
+                          },
+                          {
+                            "_comment": "RECIPE — toast + Undo: panel > row > text + button. The transient message and its ONE verb.",
+                            "component": "panel",
+                            "id": "card_29",
+                            "style": "panel",
+                            "pad": 14,
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text": "$cat_rec_toast",
+                                "text_size": 14,
+                                "font": "label",
+                                "color": "panel.stat_value"
+                              },
+                              {
+                                "component": "panel",
+                                "id": "cat_rec_toast",
+                                "style": "panel.resting",
+                                "pad": 10,
+                                "children": [
+                                  {
+                                    "component": "row",
+                                    "align": "center",
+                                    "gap": 12,
+                                    "height": 34,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$cat_rec_toast_msg",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "grow": 1
+                                      },
+                                      {
+                                        "component": "button",
+                                        "id": "cat_rec_undo",
+                                        "action": "cat_rec_undo",
+                                        "label": "$cat_rec_toast_undo",
+                                        "size_class": "sm",
+                                        "variant": "primary",
+                                        "tab_group": "cat_content",
+                                        "nav_ordinal": 16,
+                                        "size": 92
+                                      }
+                                    ]
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "text",
+                                "text": "$cat_rec_toast_note",
+                                "text_size": 11,
+                                "font": "label",
+                                "color": "panel.stat_label"
+                              }
+                            ]
+                          },
+                          {
+                            "_comment": "RECIPE — property row: text + one editor. Metadata editing (402A4B93 #16) is a stack of these, never a `kv_row` kind (retired, DCA4DFB2).",
+                            "component": "panel",
+                            "id": "card_30",
+                            "style": "panel",
+                            "pad": 14,
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text": "$cat_rec_property",
+                                "text_size": 14,
+                                "font": "label",
+                                "color": "panel.stat_value"
+                              },
+                              {
+                                "component": "row",
+                                "align": "center",
+                                "gap": 12,
+                                "height": 42,
+                                "children": [
+                                  {
+                                    "component": "text",
+                                    "text": "$cat_rec_prop_name",
+                                    "text_size": 11,
+                                    "font": "label",
+                                    "color": "panel.stat_label",
+                                    "size": 110
+                                  },
+                                  {
+                                    "component": "text_field",
+                                    "id": "cat_rec_field",
+                                    "bind": "cat_rec_field_val",
+                                    "placeholder": "$cat_rec_ph_name",
+                                    "width": 240,
+                                    "height": 32,
+                                    "style": "settings.controls.field",
+                                    "tab_group": "cat_content",
+                                    "nav_ordinal": 17
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "row",
+                                "align": "center",
+                                "gap": 12,
+                                "height": 42,
+                                "children": [
+                                  {
+                                    "component": "text",
+                                    "text": "$cat_rec_prop_kind",
+                                    "text_size": 11,
+                                    "font": "label",
+                                    "color": "panel.stat_label",
+                                    "size": 110
+                                  },
+                                  {
+                                    "component": "select",
+                                    "id": "cat_rec_select",
+                                    "bind": "cat_rec_select_val",
+                                    "size": 200,
+                                    "placeholder": "$cat_rec_ph_kind",
+                                    "style": "settings.controls",
+                                    "tab_group": "cat_content",
+                                    "nav_ordinal": 18,
+                                    "children": [
+                                      {
+                                        "component": "option",
+                                        "value": 0,
+                                        "label": "$cat_rec_opt_mesh"
+                                      },
+                                      {
+                                        "component": "option",
+                                        "value": 1,
+                                        "label": "$cat_rec_opt_bone"
+                                      },
+                                      {
+                                        "component": "option",
+                                        "value": 2,
+                                        "label": "$cat_rec_opt_clip"
+                                      }
+                                    ]
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "row",
+                                "align": "center",
+                                "gap": 12,
+                                "height": 42,
+                                "children": [
+                                  {
+                                    "component": "text",
+                                    "text": "$cat_rec_prop_count",
+                                    "text_size": 11,
+                                    "font": "label",
+                                    "color": "panel.stat_label",
+                                    "size": 110
+                                  },
+                                  {
+                                    "component": "stepper",
+                                    "id": "cat_rec_stepper",
+                                    "bind": "cat_rec_stepper_val",
+                                    "min": 0,
+                                    "max": 12,
+                                    "step": 1,
+                                    "decimals": 0,
+                                    "size": 180,
+                                    "tab_group": "cat_content",
+                                    "nav_ordinal": 19
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "text",
+                                "text": "$cat_rec_prop_note",
+                                "text_size": 11,
+                                "font": "label",
+                                "color": "panel.stat_label"
+                              }
+                            ]
+                          },
+                          {
+                            "_comment": "RECIPE — tree row: a caret button + a name button, and the DEPTH is an ARRANGE BIND (`<id>_off_x`, published by componentcatalog.lua) on an anchored cell — a hierarchy is rows + an indent value, never a nest of containers and never a `tree_row` kind.",
+                            "component": "panel",
+                            "id": "card_31",
+                            "style": "panel",
+                            "pad": 14,
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text": "$cat_rec_tree",
+                                "text_size": 14,
+                                "font": "label",
+                                "color": "panel.stat_value"
+                              },
+                              {
+                                "component": "row",
+                                "height": 30,
+                                "children": [
+                                  {
+                                    "component": "cell",
+                                    "id": "cat_rec_tree_r1",
+                                    "anchor": "left",
+                                    "offset": [
+                                      0,
+                                      0
+                                    ],
+                                    "gap": 6,
+                                    "children": [
+                                      {
+                                        "component": "row",
+                                        "align": "center",
+                                        "gap": 6,
+                                        "height": 26,
+                                        "children": [
+                                          {
+                                            "component": "button",
+                                            "id": "cat_rec_tree_r1_caret",
+                                            "action": "cat_rec_tree_r1_caret",
+                                            "label": "$cat_rec_caret_open",
+                                            "size_class": "sm",
+                                            "variant": "secondary",
+                                            "tab_group": "cat_content",
+                                            "nav_ordinal": 20,
+                                            "size": 26
+                                          },
+                                          {
+                                            "component": "button",
+                                            "id": "cat_rec_tree_r1_name",
+                                            "action": "cat_rec_tree_r1_name",
+                                            "label": "$cat_rec_tree_n1",
+                                            "size_class": "sm",
+                                            "variant": "secondary",
+                                            "tab_group": "cat_content",
+                                            "nav_ordinal": 21,
+                                            "size": 150
+                                          }
+                                        ]
+                                      }
+                                    ]
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "row",
+                                "height": 30,
+                                "children": [
+                                  {
+                                    "component": "cell",
+                                    "id": "cat_rec_tree_r2",
+                                    "anchor": "left",
+                                    "offset": [
+                                      0,
+                                      0
+                                    ],
+                                    "gap": 6,
+                                    "children": [
+                                      {
+                                        "component": "row",
+                                        "align": "center",
+                                        "gap": 6,
+                                        "height": 26,
+                                        "children": [
+                                          {
+                                            "component": "button",
+                                            "id": "cat_rec_tree_r2_caret",
+                                            "action": "cat_rec_tree_r2_caret",
+                                            "label": "$cat_rec_caret_open",
+                                            "size_class": "sm",
+                                            "variant": "secondary",
+                                            "tab_group": "cat_content",
+                                            "nav_ordinal": 22,
+                                            "size": 26
+                                          },
+                                          {
+                                            "component": "button",
+                                            "id": "cat_rec_tree_r2_name",
+                                            "action": "cat_rec_tree_r2_name",
+                                            "label": "$cat_rec_tree_n2",
+                                            "size_class": "sm",
+                                            "variant": "secondary",
+                                            "tab_group": "cat_content",
+                                            "nav_ordinal": 23,
+                                            "size": 150
+                                          }
+                                        ]
+                                      }
+                                    ]
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "row",
+                                "height": 30,
+                                "children": [
+                                  {
+                                    "component": "cell",
+                                    "id": "cat_rec_tree_r3",
+                                    "anchor": "left",
+                                    "offset": [
+                                      0,
+                                      0
+                                    ],
+                                    "gap": 6,
+                                    "children": [
+                                      {
+                                        "component": "row",
+                                        "align": "center",
+                                        "gap": 6,
+                                        "height": 26,
+                                        "children": [
+                                          {
+                                            "component": "button",
+                                            "id": "cat_rec_tree_r3_caret",
+                                            "action": "cat_rec_tree_r3_caret",
+                                            "label": "$cat_rec_caret_shut",
+                                            "size_class": "sm",
+                                            "variant": "secondary",
+                                            "tab_group": "cat_content",
+                                            "nav_ordinal": 24,
+                                            "size": 26
+                                          },
+                                          {
+                                            "component": "button",
+                                            "id": "cat_rec_tree_r3_name",
+                                            "action": "cat_rec_tree_r3_name",
+                                            "label": "$cat_rec_tree_n3",
+                                            "size_class": "sm",
+                                            "variant": "secondary",
+                                            "tab_group": "cat_content",
+                                            "nav_ordinal": 25,
+                                            "size": 150
+                                          }
+                                        ]
+                                      }
+                                    ]
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "text",
+                                "text": "$cat_rec_tree_note",
+                                "text_size": 11,
+                                "font": "label",
+                                "color": "panel.stat_label"
+                              }
+                            ]
+                          },
+                          {
+                            "_comment": "RECIPE — breadcrumb: a `row` with `rows_from` over ONE button prototype. The path is DATA (the bench publishes the crumbs), so a deeper path is more rows and never more tree.",
+                            "component": "panel",
+                            "id": "card_32",
+                            "style": "panel",
+                            "pad": 14,
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text": "$cat_rec_breadcrumb",
+                                "text_size": 14,
+                                "font": "label",
+                                "color": "panel.stat_value"
+                              },
+                              {
+                                "component": "row",
+                                "id": "cat_rec_crumbs",
+                                "rows_from": "cat_rec_crumbs",
+                                "align": "center",
+                                "gap": 4,
+                                "height": 30,
+                                "children": [
+                                  {
+                                    "component": "button",
+                                    "id": "cat_rec_crumb_{row}",
+                                    "action": "cat_rec_crumb_{row}",
+                                    "label_bind": "cat_rec_crumb_{row}_label",
+                                    "size_class": "sm",
+                                    "variant": "secondary",
+                                    "size": 120,
+                                    "tab_group": "cat_content",
+                                    "nav_ordinal": 200
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "text",
+                                "text": "$cat_rec_crumb_note",
+                                "text_size": 11,
+                                "font": "label",
+                                "color": "panel.stat_label"
+                              }
+                            ]
+                          },
+                          {
+                            "_comment": "RECIPE — notice card: a severity panel over a glyph text + the copy. The SEVERITY is the glyph's colour token, not a kind (`notice_card` retired, DCA4DFB2).",
+                            "component": "panel",
+                            "id": "card_33",
+                            "style": "panel",
+                            "pad": 14,
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text": "$cat_rec_notice",
+                                "text_size": 14,
+                                "font": "label",
+                                "color": "panel.stat_value"
+                              },
+                              {
+                                "component": "panel",
+                                "id": "cat_rec_notice",
+                                "style": "panel.resting",
+                                "pad": 10,
+                                "gap": 6,
+                                "children": [
+                                  {
+                                    "component": "row",
+                                    "align": "center",
+                                    "gap": 10,
+                                    "height": 26,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$cat_rec_notice_glyph",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "notice.warn",
+                                        "size": 20
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text": "$cat_rec_notice_title",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "grow": 1
+                                      },
+                                      {
+                                        "component": "button",
+                                        "id": "cat_rec_notice_copy",
+                                        "action": "cat_rec_notice_copy",
+                                        "label": "$cat_rec_notice_copy",
+                                        "size_class": "sm",
+                                        "variant": "secondary",
+                                        "tab_group": "cat_content",
+                                        "nav_ordinal": 26,
+                                        "size": 84
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "text",
+                                    "text": "$cat_rec_notice_body",
+                                    "text_size": 11,
+                                    "font": "label",
+                                    "color": "panel.stat_label"
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "text",
+                                "text": "$cat_rec_notice_note",
+                                "text_size": 11,
+                                "font": "label",
+                                "color": "panel.stat_label"
+                              }
+                            ]
+                          },
+                          {
+                            "_comment": "RECIPE — transport bar: three verbs and a readout. The time controls of every timeline consumer (Loomforge TAE, the DM wave editor, the GM clock).",
+                            "component": "panel",
+                            "id": "card_34",
+                            "style": "panel",
+                            "pad": 14,
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text": "$cat_rec_transport",
+                                "text_size": 14,
+                                "font": "label",
+                                "color": "panel.stat_value"
+                              },
+                              {
+                                "component": "row",
+                                "align": "center",
+                                "gap": 8,
+                                "height": 36,
+                                "children": [
+                                  {
+                                    "component": "button",
+                                    "id": "cat_rec_tp_prev",
+                                    "action": "cat_rec_tp_prev",
+                                    "label": "$cat_rec_tp_prev",
+                                    "size_class": "sm",
+                                    "variant": "secondary",
+                                    "tab_group": "cat_content",
+                                    "nav_ordinal": 27,
+                                    "size": 44
+                                  },
+                                  {
+                                    "component": "button",
+                                    "id": "cat_rec_tp_play",
+                                    "action": "cat_rec_tp_play",
+                                    "label": "$cat_rec_tp_play",
+                                    "size_class": "sm",
+                                    "variant": "primary",
+                                    "tab_group": "cat_content",
+                                    "nav_ordinal": 28,
+                                    "size": 44
+                                  },
+                                  {
+                                    "component": "button",
+                                    "id": "cat_rec_tp_next",
+                                    "action": "cat_rec_tp_next",
+                                    "label": "$cat_rec_tp_next",
+                                    "size_class": "sm",
+                                    "variant": "secondary",
+                                    "tab_group": "cat_content",
+                                    "nav_ordinal": 29,
+                                    "size": 44
+                                  },
+                                  {
+                                    "component": "text",
+                                    "id": "cat_rec_tp_readout",
+                                    "text_bind": "cat_rec_tp_readout",
+                                    "text": "$cat_rec_tp_readout",
+                                    "text_size": 12,
+                                    "font": "label",
+                                    "color": "panel.stat_value",
+                                    "size": 120
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "text",
+                                "text": "$cat_rec_tp_note",
+                                "text_size": 11,
+                                "font": "label",
+                                "color": "panel.stat_label"
+                              }
+                            ]
+                          },
+                          {
+                            "_comment": "RECIPE — resource readout bar: a `resource_gauge` and its number. The Dungeon Maker's top strip is a row of these (B05B3D09 §3B).",
+                            "component": "panel",
+                            "id": "card_35",
+                            "style": "panel",
+                            "pad": 14,
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text": "$cat_rec_resource",
+                                "text_size": 14,
+                                "font": "label",
+                                "color": "panel.stat_value"
+                              },
+                              {
+                                "component": "row",
+                                "align": "center",
+                                "gap": 12,
+                                "height": 36,
+                                "children": [
+                                  {
+                                    "component": "resource_gauge",
+                                    "id": "cat_rec_gauge",
+                                    "bind": "cat_rec_gauge_val",
+                                    "tone": "health",
+                                    "label": "$cat_rec_res_label",
+                                    "width": 220,
+                                    "height": 28,
+                                    "style": "resource_gauge"
+                                  },
+                                  {
+                                    "component": "text",
+                                    "id": "cat_rec_res_readout",
+                                    "text_bind": "cat_rec_res_readout",
+                                    "text": "$cat_rec_res_readout",
+                                    "text_size": 12,
+                                    "font": "label",
+                                    "color": "panel.stat_value",
+                                    "size": 110
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "text",
+                                "text": "$cat_rec_res_note",
+                                "text_size": 11,
+                                "font": "label",
+                                "color": "panel.stat_label"
+                              }
+                            ]
+                          },
+                          {
+                            "_comment": "RECIPE — command card: a `grid` of `action_slot`. The RTS command card and the adventurer's hotbar are the same arrangement at two densities.",
+                            "component": "panel",
+                            "id": "card_36",
+                            "style": "panel",
+                            "pad": 14,
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text": "$cat_rec_command",
+                                "text_size": 14,
+                                "font": "label",
+                                "color": "panel.stat_value"
+                              },
+                              {
+                                "component": "grid",
+                                "id": "cat_rec_cmd",
+                                "cols": "52 52 52 52",
+                                "rows": "52",
+                                "gap": 6,
+                                "height": 52,
+                                "children": [
+                                  {
+                                    "component": "action_slot",
+                                    "id": "cat_rec_cmd_0",
+                                    "action": "cat_rec_cmd_0",
+                                    "rune": "ᚠ",
+                                    "key": "1",
+                                    "charges": 0,
+                                    "cd": 0.0,
+                                    "active": true,
+                                    "width": 52,
+                                    "height": 52,
+                                    "style": "action_slot",
+                                    "tab_group": "cat_content",
+                                    "nav_ordinal": 30
+                                  },
+                                  {
+                                    "component": "action_slot",
+                                    "id": "cat_rec_cmd_1",
+                                    "action": "cat_rec_cmd_1",
+                                    "rune": "ᚢ",
+                                    "key": "2",
+                                    "charges": 2,
+                                    "cd": 0.0,
+                                    "active": false,
+                                    "width": 52,
+                                    "height": 52,
+                                    "style": "action_slot",
+                                    "tab_group": "cat_content",
+                                    "nav_ordinal": 31
+                                  },
+                                  {
+                                    "component": "action_slot",
+                                    "id": "cat_rec_cmd_2",
+                                    "action": "cat_rec_cmd_2",
+                                    "rune": "ᚦ",
+                                    "key": "3",
+                                    "charges": 0,
+                                    "cd": 0.55,
+                                    "active": false,
+                                    "width": 52,
+                                    "height": 52,
+                                    "style": "action_slot",
+                                    "tab_group": "cat_content",
+                                    "nav_ordinal": 32
+                                  },
+                                  {
+                                    "component": "action_slot",
+                                    "id": "cat_rec_cmd_3",
+                                    "action": "cat_rec_cmd_3",
+                                    "rune": "ᚨ",
+                                    "key": "4",
+                                    "charges": 0,
+                                    "cd": 0.0,
+                                    "active": false,
+                                    "width": 52,
+                                    "height": 52,
+                                    "style": "action_slot",
+                                    "tab_group": "cat_content",
+                                    "nav_ordinal": 33
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "text",
+                                "text": "$cat_rec_cmd_note",
+                                "text_size": 11,
+                                "font": "label",
+                                "color": "panel.stat_label"
+                              }
+                            ]
+                          },
+                          {
+                            "_comment": "RECIPE — legend row: a `stat_dot` and its label, once per series. Layer legends, status keys and the sim-viz map key are all this.",
+                            "component": "panel",
+                            "id": "card_37",
+                            "style": "panel",
+                            "pad": 14,
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text": "$cat_rec_legend",
+                                "text_size": 14,
+                                "font": "label",
+                                "color": "panel.stat_value"
+                              },
+                              {
+                                "component": "row",
+                                "align": "center",
+                                "gap": 16,
+                                "height": 26,
+                                "children": [
+                                  {
+                                    "component": "row",
+                                    "align": "center",
+                                    "gap": 8,
+                                    "size": 110,
+                                    "height": 24,
+                                    "children": [
+                                      {
+                                        "component": "stat_dot",
+                                        "hue": "green",
+                                        "glow": true,
+                                        "width": 14,
+                                        "height": 14,
+                                        "style": "stat_dot"
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text": "$cat_rec_legend_a",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "align": "center",
+                                    "gap": 8,
+                                    "size": 110,
+                                    "height": 24,
+                                    "children": [
+                                      {
+                                        "component": "stat_dot",
+                                        "hue": "yellow",
+                                        "glow": true,
+                                        "width": 14,
+                                        "height": 14,
+                                        "style": "stat_dot"
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text": "$cat_rec_legend_b",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "align": "center",
+                                    "gap": 8,
+                                    "size": 110,
+                                    "height": 24,
+                                    "children": [
+                                      {
+                                        "component": "stat_dot",
+                                        "hue": "red",
+                                        "glow": true,
+                                        "width": 14,
+                                        "height": 14,
+                                        "style": "stat_dot"
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text": "$cat_rec_legend_c",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1
+                                      }
+                                    ]
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "text",
+                                "text": "$cat_rec_legend_note",
+                                "text_size": 11,
+                                "font": "label",
+                                "color": "panel.stat_label"
+                              }
+                            ]
+                          },
+                          {
+                            "_comment": "RECIPE — collapsible group: a header button that flips a Model flag, and a `cell` behind the matching `visible_bind`. The DS group header, with no `collapsible` prop promoted.",
+                            "component": "panel",
+                            "id": "card_38",
+                            "style": "panel",
+                            "pad": 14,
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text": "$cat_rec_collapse",
+                                "text_size": 14,
+                                "font": "label",
+                                "color": "panel.stat_value"
+                              },
+                              {
+                                "component": "button",
+                                "id": "cat_rec_collapse_hdr",
+                                "action": "cat_rec_collapse_hdr",
+                                "label": "$cat_rec_collapse_hdr",
+                                "size_class": "sm",
+                                "variant": "secondary",
+                                "tab_group": "cat_content",
+                                "nav_ordinal": 34,
+                                "size": 200
+                              },
+                              {
+                                "component": "cell",
+                                "id": "cat_rec_collapse_body",
+                                "visible_bind": "cat_rec_collapse_open",
+                                "pad": 8,
+                                "gap": 6,
+                                "children": [
+                                  {
+                                    "component": "text",
+                                    "text": "$cat_rec_collapse_body",
+                                    "text_size": 11,
+                                    "font": "label",
+                                    "color": "panel.stat_label"
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "text",
+                                "text": "$cat_rec_collapse_note",
+                                "text_size": 11,
+                                "font": "label",
+                                "color": "panel.stat_label"
+                              }
+                            ]
+                          },
+                          {
+                            "_comment": "RECIPE — DRAG → DROP (the walker's drag channel, F652B72F): a `drag_kind` source and a `drop_accept` + `drop_action` target. Both channels are live here — a pointer release over the target, and a pad Confirm on the focused target while a payload is carried.",
+                            "component": "panel",
+                            "id": "card_39",
+                            "style": "panel",
+                            "pad": 14,
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text": "$cat_rec_dragdrop",
+                                "text_size": 14,
+                                "font": "label",
+                                "color": "panel.stat_value"
+                              },
+                              {
+                                "component": "row",
+                                "align": "center",
+                                "gap": 24,
+                                "height": 92,
+                                "children": [
+                                  {
+                                    "component": "tile",
+                                    "id": "cat_rec_drag_tile",
+                                    "drag_kind": "cat_demo",
+                                    "drag_id": "ore",
+                                    "label": "$cat_rec_drag_tile",
+                                    "width": 76,
+                                    "height": 76,
+                                    "tab_group": "cat_content",
+                                    "nav_ordinal": 35
+                                  },
+                                  {
+                                    "component": "panel",
+                                    "id": "cat_rec_drop_target",
+                                    "style": "panel.resting",
+                                    "drop_accept": "cat_demo",
+                                    "drop_action": "cat_rec_dropped",
+                                    "action": "cat_rec_dropped",
+                                    "width": 200,
+                                    "height": 76,
+                                    "pad": 10,
+                                    "tab_group": "cat_content",
+                                    "nav_ordinal": 36,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$cat_rec_drop_here",
+                                        "text_size": 12,
+                                        "font": "label",
+                                        "color": "panel.stat_label"
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "text",
+                                    "id": "cat_rec_drop_readout",
+                                    "text_bind": "cat_rec_drop_readout",
+                                    "text": "$cat_rec_drop_result",
+                                    "text_size": 12,
+                                    "font": "label",
+                                    "color": "panel.stat_value",
+                                    "grow": 1
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "text",
+                                "text": "$cat_rec_drop_note",
+                                "text_size": 11,
+                                "font": "label",
+                                "color": "panel.stat_label"
+                              }
+                            ]
+                          },
+                          {
+                            "_comment": "FILLERS PAGE (B05B3D09 §4d, Aaron's Q1 = fillers, not kinds): each engine-crate surface filler seated LIVE on a plain `surface` — the RigView / WorldMap pattern. The catalog is the registry of record for these too (A466E4C7).",
+                            "component": "panel",
+                            "id": "card_40",
+                            "style": "panel",
+                            "pad": 14,
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text": "$cat_nav_fillers",
+                                "text_size": 18,
+                                "font": "label",
+                                "color": "panel.stat_value"
+                              },
+                              {
+                                "component": "text",
+                                "text": "$cat_fill_intro",
+                                "text_size": 11,
+                                "font": "label",
+                                "color": "panel.stat_label"
+                              }
+                            ]
+                          },
+                          {
+                            "_comment": "FILLER — Plot (110D345F, flicker_widgets::Plot): the same demo series read three ways. Seated on a plain `surface` by rect; the ink comes off this scene's `plot` style block.",
+                            "component": "panel",
+                            "id": "card_41",
+                            "style": "panel",
+                            "pad": 14,
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text": "$cat_fill_plot",
+                                "text_size": 14,
+                                "font": "label",
+                                "color": "panel.stat_value"
+                              },
+                              {
+                                "component": "row",
+                                "gap": 12,
+                                "height": 104,
+                                "children": [
+                                  {
+                                    "component": "cell",
+                                    "gap": 4,
+                                    "grow": 1,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$cat_fill_plot_spark",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label"
+                                      },
+                                      {
+                                        "component": "surface",
+                                        "id": "cat_plot_spark",
+                                        "style": "panel.resting",
+                                        "height": 76
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "cell",
+                                    "gap": 4,
+                                    "grow": 1,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$cat_fill_plot_bars",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label"
+                                      },
+                                      {
+                                        "component": "surface",
+                                        "id": "cat_plot_bars",
+                                        "style": "panel.resting",
+                                        "height": 76
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "cell",
+                                    "gap": 4,
+                                    "grow": 1,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$cat_fill_plot_curve",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label"
+                                      },
+                                      {
+                                        "component": "surface",
+                                        "id": "cat_plot_curve",
+                                        "style": "panel.resting",
+                                        "height": 76
+                                      }
+                                    ]
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "text",
+                                "text": "$cat_fill_plot_note",
+                                "text_size": 11,
+                                "font": "label",
+                                "color": "panel.stat_label"
+                              }
+                            ]
+                          },
+                          {
+                            "_comment": "FILLER — GraphCanvas (E5721AE6, flicker_canvas::GraphCanvas): three demo nodes with one SELF-LOOP. Drag a card, wheel to zoom about the cursor, middle-drag to pan.",
+                            "component": "panel",
+                            "id": "card_42",
+                            "style": "panel",
+                            "pad": 14,
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text": "$cat_fill_graph",
+                                "text_size": 14,
+                                "font": "label",
+                                "color": "panel.stat_value"
+                              },
+                              {
+                                "component": "surface",
+                                "id": "cat_graph",
+                                "style": "panel.resting",
+                                "height": 220
+                              },
+                              {
+                                "component": "text",
+                                "text": "$cat_fill_graph_note",
+                                "text_size": 11,
+                                "font": "label",
+                                "color": "panel.stat_label"
+                              }
+                            ]
+                          },
+                          {
+                            "_comment": "FILLER — Timeline (E5721AE6, flicker_canvas::Timeline): seven lanes carrying span and point events under a moving playhead. Wheel zooms about the frame under the cursor.",
+                            "component": "panel",
+                            "id": "card_43",
+                            "style": "panel",
+                            "pad": 14,
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text": "$cat_fill_timeline",
+                                "text_size": 14,
+                                "font": "label",
+                                "color": "panel.stat_value"
+                              },
+                              {
+                                "component": "surface",
+                                "id": "cat_timeline",
+                                "style": "panel.resting",
+                                "height": 200
+                              },
+                              {
+                                "component": "text",
+                                "text": "$cat_fill_timeline_note",
+                                "text_size": 11,
+                                "font": "label",
+                                "color": "panel.stat_label"
+                              }
+                            ]
+                          },
+                          {
+                            "_comment": "FILLER — Gadget (7811D68B, flicker_rigview::Gadget over a RigView surface): the ONE 3D manipulation overlay, in translate mode over an empty rig. Aim → Locked → Modify colours each handle from this scene's `gadget` style block.",
+                            "component": "panel",
+                            "id": "card_44",
+                            "style": "panel",
+                            "pad": 14,
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text": "$cat_fill_gadget",
+                                "text_size": 14,
+                                "font": "label",
+                                "color": "panel.stat_value"
+                              },
+                              {
+                                "component": "surface",
+                                "id": "cat_gadget",
+                                "source": "cat_gadget_stage",
+                                "style": "panel.resting",
+                                "height": 220
+                              },
+                              {
+                                "component": "text",
+                                "text": "$cat_fill_gadget_note",
+                                "text_size": 11,
+                                "font": "label",
+                                "color": "panel.stat_label"
+                              }
+                            ]
+                          },
+                          {
+                            "_comment": "FILLER — Doll (D708485E, flicker_rigview::Doll): the small-panel skinned-rig preview on its authored stage. The catalog uploads no rig (a rig is bench content), so the card shows the doll's authored ground ring, live on the per-surface clock.",
+                            "component": "panel",
+                            "id": "card_45",
+                            "style": "panel",
+                            "pad": 14,
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text": "$cat_fill_doll",
+                                "text_size": 14,
+                                "font": "label",
+                                "color": "panel.stat_value"
+                              },
+                              {
+                                "component": "row",
+                                "align": "start",
+                                "height": 200,
+                                "children": [
+                                  {
+                                    "component": "surface",
+                                    "id": "cat_doll",
+                                    "source": "cat_doll_stage",
+                                    "style": "panel.resting",
+                                    "width": 200,
+                                    "height": 200
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "text",
+                                "text": "$cat_fill_doll_note",
+                                "text_size": 11,
+                                "font": "label",
+                                "color": "panel.stat_label"
+                              }
+                            ]
+                          },
+                          {
+                            "_comment": "MODALS PAGE (1F0F7347 + DE51BC4B): one button per shared tree under scenes/shared/, each opened by id through `SharedModal::open` with demo params. The catalog is the EXERCISER of the seam — `settings` is the one exemption (it is the settings SCREEN, not a modal).",
+                            "component": "panel",
+                            "id": "card_46",
+                            "style": "panel",
+                            "pad": 14,
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text": "$cat_nav_modals",
+                                "text_size": 18,
+                                "font": "label",
+                                "color": "panel.stat_value"
+                              },
+                              {
+                                "component": "text",
+                                "text": "$cat_modal_intro",
+                                "text_size": 11,
+                                "font": "label",
+                                "color": "panel.stat_label"
+                              },
+                              {
+                                "component": "grid",
+                                "id": "cat_modal_grid",
+                                "cols": "1fr 1fr 1fr",
+                                "rows": "32 32",
+                                "gap": 8,
+                                "height": 72,
+                                "children": [
+                                  {
+                                    "component": "button",
+                                    "id": "cat_modal_choice",
+                                    "action": "cat_modal_choice",
+                                    "label": "$cat_modal_choice",
+                                    "size_class": "md",
+                                    "variant": "secondary",
+                                    "tab_group": "cat_content",
+                                    "nav_ordinal": 37,
+                                    "size": 150
+                                  },
+                                  {
+                                    "component": "button",
+                                    "id": "cat_modal_menu",
+                                    "action": "cat_modal_menu",
+                                    "label": "$cat_modal_menu",
+                                    "size_class": "md",
+                                    "variant": "secondary",
+                                    "tab_group": "cat_content",
+                                    "nav_ordinal": 38,
+                                    "size": 150
+                                  },
+                                  {
+                                    "component": "button",
+                                    "id": "cat_modal_prompt",
+                                    "action": "cat_modal_prompt",
+                                    "label": "$cat_modal_prompt",
+                                    "size_class": "md",
+                                    "variant": "secondary",
+                                    "tab_group": "cat_content",
+                                    "nav_ordinal": 39,
+                                    "size": 150
+                                  },
+                                  {
+                                    "component": "button",
+                                    "id": "cat_modal_busy",
+                                    "action": "cat_modal_busy",
+                                    "label": "$cat_modal_busy",
+                                    "size_class": "md",
+                                    "variant": "secondary",
+                                    "tab_group": "cat_content",
+                                    "nav_ordinal": 40,
+                                    "size": 150
+                                  },
+                                  {
+                                    "component": "button",
+                                    "id": "cat_modal_conflict",
+                                    "action": "cat_modal_conflict",
+                                    "label": "$cat_modal_conflict",
+                                    "size_class": "md",
+                                    "variant": "secondary",
+                                    "tab_group": "cat_content",
+                                    "nav_ordinal": 41,
+                                    "size": 150
+                                  }
+                                ]
+                              }
+                            ]
+                          },
+                          {
+                            "_comment": "The SharedModal seam's answer channel, read back: `Scene::modal_closed(modal, result, payload)` folded into two bound readouts. Open any modal above and its verdict lands here.",
+                            "component": "panel",
+                            "id": "card_47",
+                            "style": "panel",
+                            "pad": 14,
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text": "$cat_modal_result_title",
+                                "text_size": 14,
+                                "font": "label",
+                                "color": "panel.stat_value"
+                              },
+                              {
+                                "component": "row",
+                                "align": "center",
+                                "gap": 12,
+                                "height": 28,
+                                "children": [
+                                  {
+                                    "component": "text",
+                                    "text": "$cat_modal_result",
+                                    "text_size": 11,
+                                    "font": "label",
+                                    "color": "panel.stat_label",
+                                    "size": 110
+                                  },
+                                  {
+                                    "component": "text",
+                                    "id": "cat_modal_result_val",
+                                    "text_bind": "cat_modal_result_val",
+                                    "text": "$cat_modal_none",
+                                    "text_size": 12,
+                                    "font": "label",
+                                    "color": "panel.stat_value",
+                                    "grow": 1
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "row",
+                                "align": "center",
+                                "gap": 12,
+                                "height": 28,
+                                "children": [
+                                  {
+                                    "component": "text",
+                                    "text": "$cat_modal_payload",
+                                    "text_size": 11,
+                                    "font": "label",
+                                    "color": "panel.stat_label",
+                                    "size": 110
+                                  },
+                                  {
+                                    "component": "text",
+                                    "id": "cat_modal_payload_val",
+                                    "text_bind": "cat_modal_payload_val",
+                                    "text": "$cat_modal_none",
+                                    "text_size": 12,
+                                    "font": "label",
+                                    "color": "panel.stat_value",
+                                    "grow": 1
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "text",
+                                "text": "$cat_modal_note",
+                                "text_size": 11,
+                                "font": "label",
+                                "color": "panel.stat_label"
+                              }
+                            ]
                           }
                         ]
                       }
@@ -1384,6 +3041,57 @@
   },
   "exits": {},
   "styles": {
+    "notice": {
+      "_comment": "A notice's SEVERITY as a colour token — the recipe card's glyph points here instead of a `notice_card` kind carrying its own palette (DCA4DFB2 retired that kind; 790872EE keeps colour in the one palette).",
+      "warn": "$sig_orange",
+      "info": "$sig_blue",
+      "bad": "$danger_base",
+      "good": "$sig_green"
+    },
+    "plot": {
+      "_comment": "The Plot filler's ink (110D345F): the filler owns no palette — it takes finished rgba, and these point at ui_theme.json tokens like every other block.",
+      "line": "$sig_orange",
+      "fill": "$sig_orange_glow",
+      "baseline": "$edge2",
+      "grid": "$edge2"
+    },
+    "canvas": {
+      "_comment": "The GraphCanvas filler's colour slots (E5721AE6). CanvasStyle is nothing but slots the consumer fills; blank() is transparent, which is 'unset' rather than a colour choice.",
+      "bg": "$well_bot",
+      "edge": "$edge2",
+      "edge_lit": "$sap_base",
+      "card_fill_top": "$stone3",
+      "card_fill_bot": "$stone1",
+      "card_border": "$edge2",
+      "card_border_selected": "$sap_border",
+      "label": "$ink_bright",
+      "label_selected": "$ink_sapphire",
+      "meta": "$dim",
+      "icon_top": "$well_top",
+      "icon_bot": "$well_bot",
+      "icon_border": "$seam",
+      "port": "$bronze",
+      "link": "$rune_glow"
+    },
+    "timeline": {
+      "_comment": "The Timeline filler's strip colours (E5721AE6). Each lane's own four colours come off `stat_dot.hues.<hue>` so a lane's ink and a legend dot's ink are literally the same token.",
+      "ruler": "$dim",
+      "tick": "$edge2",
+      "playhead": "$sig_orange",
+      "event_selected": "$ink_bright",
+      "row": "$well_bot",
+      "row_border": "$edge2"
+    },
+    "gadget": {
+      "_comment": "The Gadget overlay's STATE colours (7811D68B): the three axes at rest, then the Aim -> Locked -> Modify machine and the refused handle. GadgetStyle holds no colour of its own.",
+      "x": "$sig_red",
+      "y": "$sig_green",
+      "z": "$sig_blue",
+      "aimed": "$sig_yellow",
+      "locked": "$sig_white",
+      "modifying": "$sig_orange",
+      "refused": "$danger_base"
+    },
     "modal": {
       "panel": {
         "w": 404,

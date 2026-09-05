@@ -1,0 +1,81 @@
+{
+  "_comment": "SHARED choice-dialog modal (scenes/shared/ — Aaron 2026-08-14 ruling 2A3592D0: pop-up modals are shared modal TREES, one definition, no per-scene copy). The confirm.scene.json shape: a full-bleed `surface` with a `screens.confirm` backdrop cell under a centered `popup_panel`. EVERYTHING it says comes from the HOST through the Model — the shell's `SharedModal` scene publishes `modal_title` / `modal_body` and each slot's `opt<n>_label` / `opt<n>_variant` / `opt<n>_shown` from the typed `ModalParams` a bench hands it, so the tree is never rewritten per caller. Three fixed slots: a slot the caller does not fill stays dark (`visible_bind`), and each fires its stable slot name (`modal_opt_0..2`), which `SharedModal` maps back to the caller's own action before it closes. Esc / pad-B fold to `modal_cancel` via the root `on_cancel`, honoured only when the caller declared the modal cancellable (exactly as pause folds to `resume`). NO `behaviour` key (the manifest skips scenes/shared/); NO pair script (the params ARE the arrangement); chrome styles ride Main.scene.json's carrier through `main_scene_styles()`.",
+  "tree": {
+    "component": "surface",
+    "anchor": "top_left",
+    "width_frac": 1.0,
+    "height_frac": 1.0,
+    "on_cancel": "modal_cancel",
+    "children": [
+      {
+        "component": "cell",
+        "anchor": "top_left",
+        "style": "screens.confirm",
+        "width_frac": 1.0,
+        "height_frac": 1.0,
+        "layer": 0
+      },
+      {
+        "component": "popup_panel",
+        "id": "popup",
+        "anchor": "center",
+        "layer": 1,
+        "divider": true,
+        "title_bind": "modal_title",
+        "title_size": 38,
+        "children": [
+          {
+            "component": "text",
+            "id": "body",
+            "text_bind": "modal_body",
+            "size": 44,
+            "align": "center",
+            "wrap": true,
+            "text_size": 12,
+            "font": "label",
+            "color": "$dim"
+          },
+          {
+            "component": "button",
+            "id": "modal_opt_0",
+            "action": "modal_opt_0",
+            "visible_bind": "opt0_shown",
+            "label_bind": "opt0_label",
+            "variant_bind": "opt0_variant",
+            "label_size": 15,
+            "size": 48,
+            "variant": "primary",
+            "tab_group": "modal",
+            "nav_ordinal": 0
+          },
+          {
+            "component": "button",
+            "id": "modal_opt_1",
+            "action": "modal_opt_1",
+            "visible_bind": "opt1_shown",
+            "label_bind": "opt1_label",
+            "variant_bind": "opt1_variant",
+            "label_size": 15,
+            "size": 48,
+            "variant": "secondary",
+            "tab_group": "modal",
+            "nav_ordinal": 1
+          },
+          {
+            "component": "button",
+            "id": "modal_opt_2",
+            "action": "modal_opt_2",
+            "visible_bind": "opt2_shown",
+            "label_bind": "opt2_label",
+            "variant_bind": "opt2_variant",
+            "label_size": 15,
+            "size": 48,
+            "variant": "danger",
+            "tab_group": "modal",
+            "nav_ordinal": 2
+          }
+        ]
+      }
+    ]
+  }
+}

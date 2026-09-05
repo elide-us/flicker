@@ -26,7 +26,7 @@
 
 use flicker::render::{
     Camera, FrameGraph, MeshDrawOptions, MeshHandle, MeshIndices, MeshVertex, Rect, Renderer,
-    StageDef, StageLayer, Vec3,
+    StageDef, StageInputs, StageLayer, Vec3,
 };
 use flicker::ui::{SurfacePointer, SurfaceSlot};
 use glam::{Mat4, Vec2};
@@ -467,7 +467,10 @@ impl<C: MapContent> WorldMap<C> {
         } = self;
         let meshes: Vec<(MeshHandle, MeshDrawOptions)> = meshes.clone();
         let lines: &'f Arrows = lines;
-        view.render_pass(r, fg, seat, base_layer, stage, move |r| {
+        // A map is flown, so it changes whenever it is looked at — no dirty channel to
+        // publish; its seat's authored rate is the whole liveness story.
+        let inputs = StageInputs::default();
+        view.render_pass(r, fg, seat, base_layer, stage, inputs, move |r| {
             r.set_camera(&camera);
             for dx in &offsets {
                 let m = Mat4::from_translation(Vec3::new(*dx, 0.0, 0.0));
