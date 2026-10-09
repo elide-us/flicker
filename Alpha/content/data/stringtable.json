@@ -263,6 +263,9 @@
   "ap_authored_here_flicker_rig_carries_a_sing": {
     "en-us": "Authored here; flicker.rig carries a single"
   },
+  "ap_auto_depth": {
+    "en-us": "Auto depth"
+  },
   "ap_auto_inferred": {
     "en-us": "auto-inferred"
   },
@@ -310,6 +313,9 @@
   },
   "ap_character": {
     "en-us": "Character"
+  },
+  "ap_creature": {
+    "en-us": "Creature"
   },
   "ap_chest": {
     "en-us": "Chest"
@@ -466,6 +472,24 @@
   },
   "ap_mirror_joints": {
     "en-us": "Mirror joints"
+  },
+  "ap_mirror_to_twin": {
+    "en-us": "MIRROR TO TWIN"
+  },
+  "ap_frame_sel": {
+    "en-us": "FRAME SELECTED"
+  },
+  "ap_solo": {
+    "en-us": "Solo selected"
+  },
+  "ap_limb": {
+    "en-us": "Limb"
+  },
+  "ap_cull": {
+    "en-us": "Cull"
+  },
+  "ap_backdrop_dark": {
+    "en-us": "Dark backdrop"
   },
   "ap_motion_inscribed_upon_a_skeleton_already": {
     "en-us": "Motion inscribed upon a skeleton already woven."
@@ -651,13 +675,13 @@
     "en-us": "Scale Z"
   },
   "ap_prefer_staged": {
-    "en-us": "Load staged version first"
+    "en-us": "Import as rigged — re-open the staged version (or the promoted one)"
   },
   "ap_prefer_staged_hint": {
     "en-us": "Re-open this asset's staged rig — or its promoted one if staging is empty — so you adjust the last committed fit instead of starting over from the source."
   },
   "ap_as_provided": {
-    "en-us": "Import rig as provided"
+    "en-us": "Keep the vendor's skeleton as provided (rigged FBX only)"
   },
   "wf_step_preview": {
     "en-us": "Preview"
@@ -1952,6 +1976,12 @@
   "ctt_ctx_world": {
     "en-us": "World"
   },
+  "ctt_body_prev": {
+    "en-us": "‹ Body"
+  },
+  "ctt_body_next": {
+    "en-us": "Body ›"
+  },
   "ctt_ctx_menu": {
     "en-us": "Menu"
   },
@@ -1984,6 +2014,12 @@
   },
   "ctt_golem_failed": {
     "en-us": "reference body failed to load:"
+  },
+  "ctt_generated": {
+    "en-us": "generated"
+  },
+  "ctt_no_generator": {
+    "en-us": "no generator yet"
   },
   "ctt_analog_latch": {
     "en-us": "ANALOG LATCH  ·  input.analog_latch() (volatile cache)"
@@ -2819,6 +2855,27 @@
   "qm_warn_epoch_invalid": {
     "en-us": "world will not load — the .epoch is unreadable or fails its own validation"
   },
+  "qm_warn_material_legacy_layout": {
+    "en-us": "folder is not a material slot id — this is the old name-keyed layout and has nowhere to promote to"
+  },
+  "qm_warn_material_maps_missing": {
+    "en-us": "bundle is short of its seven baked maps — the bake was interrupted or files were removed"
+  },
+  "qm_warn_material_recipe_missing": {
+    "en-us": "no recipe named for this slot — the bundle's .texture.json has been renamed"
+  },
+  "qm_warn_material_slot_mismatch": {
+    "en-us": "recipe names a different material slot than the folder — the folder decides where it promotes"
+  },
+  "qm_warn_material_slot_reserved": {
+    "en-us": "slot is not writable — 0 is Air and the top of the range is reserved for shader-first emissives"
+  },
+  "qm_warn_material_unbound": {
+    "en-us": "recipe is not bound to a material slot — bind it on the Materials page and commit again"
+  },
+  "qm_warn_material_wrong_tier": {
+    "en-us": "recipe is staged outside the materials tier — re-commit it from Sablework so it lands in materials/<slot>"
+  },
   "qm_warn_missing_textures": {
     "en-us": "referenced textures are missing beside the rig"
   },
@@ -3185,6 +3242,12 @@
   "sw_commit_working": {
     "en-us": "Baking…"
   },
+  "sw_commit_unbound": {
+    "en-us": "Refused — bind a material slot on the Materials page first"
+  },
+  "sw_commit_slot_closed": {
+    "en-us": "Refused — slot 0 is Air and the top of the range is reserved"
+  },
   "sw_contrast": {
     "en-us": "Contrast"
   },
@@ -3336,7 +3399,7 @@
     "en-us": "reroll this patch"
   },
   "sw_commit_meta": {
-    "en-us": "bake to staging"
+    "en-us": "bake to staging — needs a bound material slot"
   },
   "sw_rough_mod": {
     "en-us": "Rough mod"
@@ -3467,6 +3530,102 @@
   "ap_stature": {
     "en-us": "Height"
   },
+  "ap_facing": {
+    "en-us": "Facing"
+  },
+  "ap_facing_turn": {
+    "en-us": "Turn 90°"
+  },
+  "ap_stance": {
+    "en-us": "Square from"
+  },
+  "ap_stance_auto": {
+    "en-us": "Auto"
+  },
+  "ap_stance_left": {
+    "en-us": "Left"
+  },
+  "ap_stance_right": {
+    "en-us": "Right"
+  },
+  "ap_marker_place": {
+    "en-us": "Place: {}"
+  },
+  "ap_marker_accept": {
+    "en-us": "ACCEPT"
+  },
+  "ap_marker_back": {
+    "en-us": "BACK"
+  },
+  "ap_marker_skip": {
+    "en-us": "SKIP"
+  },
+  "ap_marker_infer": {
+    "en-us": "INFER"
+  },
+  "ap_marker_match": {
+    "en-us": "Matched {n} of {total} \u00b7 unmatched: {names}"
+  },
+  "ap_marker_match_all": {
+    "en-us": "Matched {n} of {total} \u00b7 nothing left to place"
+  },
+  "ap_mirror_keep": {
+    "en-us": "Mirror from"
+  },
+  "ap_mirror_off": {
+    "en-us": "Off"
+  },
+  "ap_mirror_left": {
+    "en-us": "Left"
+  },
+  "ap_mirror_right": {
+    "en-us": "Right"
+  },
+  "ap_face_forward": {
+    "en-us": "Face forward"
+  },
+  "ap_hang_cm": {
+    "en-us": "Hang (cm)"
+  },
+  "ap_regions": {
+    "en-us": "REGIONS"
+  },
+  "ap_region_chains": {
+    "en-us": "Chains (0 = rigid)"
+  },
+  "ap_region_stiffness": {
+    "en-us": "Stiffness"
+  },
+  "ap_region_split": {
+    "en-us": "SPLIT GARMENT"
+  },
+  "ap_region_grow": {
+    "en-us": "GROW FROM CLICK"
+  },
+  "ap_region_culled": {
+    "en-us": "SELECT CULLED"
+  },
+  "ap_region_remove": {
+    "en-us": "REMOVE"
+  },
+  "ap_region_cloth": {
+    "en-us": "Cloth"
+  },
+  "ap_region_hair": {
+    "en-us": "Hair"
+  },
+  "ap_region_mane": {
+    "en-us": "Mane"
+  },
+  "ap_region_tail": {
+    "en-us": "Tail"
+  },
+  "ap_region_pendant": {
+    "en-us": "Pendant"
+  },
+  "ap_region_appendage": {
+    "en-us": "Appendage"
+  },
   "ap_height_cm": {
     "en-us": "cm"
   },
@@ -3479,8 +3638,77 @@
   "ap_decimate_apply": {
     "en-us": "APPLY"
   },
+  "ap_skeleton_prev": {
+    "en-us": "‹"
+  },
+  "ap_skeleton_next": {
+    "en-us": "›"
+  },
+  "ap_modules": {
+    "en-us": "MODULES"
+  },
+  "ap_legs_flat": {
+    "en-us": "Flat"
+  },
+  "ap_legs_heeled": {
+    "en-us": "Heeled"
+  },
+  "ap_legs_toe": {
+    "en-us": "Toe walker"
+  },
+  "ap_heel_pct": {
+    "en-us": "Heel, % of height"
+  },
+  "ap_arms_humanoid": {
+    "en-us": "A-pose arms"
+  },
+  "ap_arms_hanging": {
+    "en-us": "Hanging arms"
+  },
+  "ap_tail_none": {
+    "en-us": "No tail"
+  },
+  "ap_tail_short": {
+    "en-us": "Short tail"
+  },
+  "ap_tail_hair": {
+    "en-us": "Hair tail"
+  },
+  "ap_tail_long": {
+    "en-us": "Long tail"
+  },
+  "ap_tail_bones": {
+    "en-us": "Tail bones"
+  },
+  "ap_head_on": {
+    "en-us": "Head"
+  },
+  "ap_proboscis_bones": {
+    "en-us": "Proboscis bones"
+  },
+  "ap_pbr": {
+    "en-us": "PBR materials"
+  },
+  "ap_quadruped": {
+    "en-us": "Quadruped trunk"
+  },
+  "ap_legs_hooves": {
+    "en-us": "Hooves"
+  },
+  "ap_arms_foreleg": {
+    "en-us": "Forelegs"
+  },
+  "ap_legs_bird": {
+    "en-us": "Bird"
+  },
+  "ap_arms_bird": {
+    "en-us": "Bird wings"
+  },
+  "ap_arms_bat": {
+    "en-us": "Bat wings"
+  },
   "ap_prep_rigged": {
-    "en-us": "Already rigged — game-ready, no prep needed"
+    "en-us": "Already rigged — the height resizes body and skeleton together; the triangle count is fixed"
   },
   "ap_wireframe": {
     "en-us": "Wireframe"
@@ -3529,6 +3757,9 @@
   },
   "qm_class_texture_recipe": {
     "en-us": "Recipe"
+  },
+  "qm_class_skeleton_recipe": {
+    "en-us": "Skeleton recipe"
   },
   "set_profile_default": {
     "en-us": "Default (Keyboard & Mouse)"
@@ -4518,7 +4749,7 @@
     "en-us": "Working"
   },
   "cat_modal_busy_body": {
-    "en-us": "A demo job runs for about two seconds. Escape is refused while it works, honoured once the bar is full \u2014 wait and it closes itself with done."
+    "en-us": "A demo job runs for about two seconds. Escape is refused while it works, honoured once the bar is full — wait and it closes itself with done."
   },
   "cat_modal_prompt_title": {
     "en-us": "Name this thing"
@@ -4594,5 +4825,26 @@
   },
   "cat_fill_lane_7": {
     "en-us": "Marker"
+  },
+  "ap_export_failed": {
+    "en-us": "EXPORT FAILED —"
+  },
+  "mv_top": {
+    "en-us": "TOP"
+  },
+  "mv_bottom": {
+    "en-us": "BOTTOM"
+  },
+  "mv_left": {
+    "en-us": "LEFT"
+  },
+  "mv_right": {
+    "en-us": "RIGHT"
+  },
+  "mv_front": {
+    "en-us": "FRONT"
+  },
+  "mv_back": {
+    "en-us": "BACK"
   }
 }
