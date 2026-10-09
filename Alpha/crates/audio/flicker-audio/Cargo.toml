@@ -1,0 +1,28 @@
+[package]
+name = "flicker-audio"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+# The audio ENGINE — music first. Slice 1 plays Standard MIDI Files through
+# the engine's own synthesized instruments: the file is read ONCE at the
+# boundary into event ROWS (exact rational time, notes with duration, patch
+# per channel, controller lanes, tempo map), the rows drive fundsp voices
+# mapped from General MIDI program numbers, and the mix runs through strips,
+# a reverb bus and a limiter. Nothing downstream of the reader knows MIDI.
+[features]
+# Live output through the default device (cpal). Off by default so headless
+# builds, tests and CI need no audio stack; the tester turns it on.
+playback = ["dep:cpal"]
+
+[dependencies]
+fundsp.workspace = true
+hound.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+# Seeded, dependency-free RNG for the generator's reseedable choices.
+fastrand.workspace = true
+cpal = { workspace = true, optional = true }
+
+[dev-dependencies]
+anyhow.workspace = true
