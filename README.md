@@ -57,7 +57,7 @@ world-sim crates under `crates/` are standalone libraries exercised by their own
 `prism-alpha` is the single launcher binary; it hosts every scene. Scenes are **data**:
 each is a `*.scene.json` layout under `Alpha/content/sensorium/scenes/` (authoring guide:
 [Alpha/content/sensorium/README.md](Alpha/content/sensorium/README.md)), driven by a Rust
-behaviour crate under `Alpha/crates/scenes/`, with runtime behaviour scripted through a
+behaviour crate under a realm folder (`Alpha/crates/devmode/`, `adventurer/`, `gamemaster/`), with runtime behaviour scripted through a
 strict data-only Luau boundary. The launcher presents them across realms — **Adventurer**,
 **Developer**, and **Game Master** — with a manifest↔roster gate that keeps the shipped
 menu and the packaged content in sync.
@@ -69,9 +69,10 @@ Releases are cut by a **tag-triggered GitHub Actions pipeline**
 installers to **GitHub Releases** — Windows **MSI** (WiX v5), macOS **`.pkg`** (Apple
 Silicon `.app`), Linux **`.deb`** (cargo-deb) — plus portable archives. Game content ships
 as a single deterministic, store-only **`package.flk`** packed once in CI and mounted by
-the engine at runtime. Every release publishes a **`SHA256SUMS`**; alpha builds are
-currently **unsigned** (verify against the checksums). The client shows an in-app
-"update available" hint via an anonymous check against the public Releases API.
+the engine at runtime. Every release publishes a **`SHA256SUMS`**. Windows builds are
+**code-signed** (Azure Trusted Signing); macOS builds are **not yet signed or notarized**,
+so verify them against the checksums (see [SECURITY.md](SECURITY.md)). The client shows
+an in-app "update available" hint via an anonymous check against the public Releases API.
 
 See [SECURITY.md](SECURITY.md) (reporting + supply-chain posture), [PRIVACY.md](PRIVACY.md),
 and [WARRANTY.md](WARRANTY.md).
@@ -106,7 +107,7 @@ Crates are organized as `Alpha/crates/<cluster>/<crate>` (the application) plus 
   [`flicker-poc-chemistry`](Alpha/crates/world/flicker-poc-chemistry/README.md),
   [`flicker-orrery`](Alpha/crates/world/flicker-orrery/README.md).
 - **net** — [`flicker-net`](Alpha/crates/net/flicker-net/README.md) (the `clay-chat` client + the release-update checker).
-- **scenes** — the scene behaviour crates: [`flicker-clicktrainer`](Alpha/crates/scenes/flicker-clicktrainer/README.md), [`flicker-componentcatalog`](Alpha/crates/scenes/flicker-componentcatalog/README.md), [`flicker-controllertester`](Alpha/crates/scenes/flicker-controllertester/README.md), [`flicker-solarbirth`](Alpha/crates/scenes/flicker-solarbirth/README.md), [`flicker-loomforge`](Alpha/crates/scenes/flicker-loomforge/README.md), [`flicker-assetpipeline`](Alpha/crates/scenes/flicker-assetpipeline/README.md), [`flicker-pocclusters`](Alpha/crates/scenes/flicker-pocclusters/README.md), [`flicker-populous`](Alpha/crates/scenes/flicker-populous/README.md), [`flicker-quartermaster`](Alpha/crates/scenes/flicker-quartermaster/README.md), [`flicker-sablework`](Alpha/crates/scenes/flicker-sablework/README.md).
+- **devmode · adventurer · gamemaster** — the scene behaviour crates, one folder per realm: [`flicker-clicktrainer`](Alpha/crates/adventurer/flicker-clicktrainer/README.md), [`flicker-componentcatalog`](Alpha/crates/devmode/flicker-componentcatalog/README.md), [`flicker-controllertester`](Alpha/crates/adventurer/flicker-controllertester/README.md), [`flicker-solarbirth`](Alpha/crates/adventurer/flicker-solarbirth/README.md), [`flicker-loomforge`](Alpha/crates/devmode/flicker-loomforge/README.md), [`flicker-assetpipeline`](Alpha/crates/devmode/flicker-assetpipeline/README.md), [`flicker-pocclusters`](Alpha/crates/adventurer/flicker-pocclusters/README.md), [`flicker-populous`](Alpha/crates/gamemaster/flicker-populous/README.md), [`flicker-quartermaster`](Alpha/crates/devmode/flicker-quartermaster/README.md), [`flicker-sablework`](Alpha/crates/devmode/flicker-sablework/README.md).
 - **prism-alpha** — the launcher application.
 - **root `crates/`** — standalone POC libraries ([`flicker-celestial`](crates/flicker-celestial/README.md), [`flicker-system`](crates/flicker-system/README.md),
   [`flicker-greed`](crates/flicker-greed/README.md)).

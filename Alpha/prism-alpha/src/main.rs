@@ -144,6 +144,12 @@ fn roster() -> Vec<SceneEntry> {
             "The live input-bus inspector — the controller diagram and analog latch beside a real resolver→router exhibit, with the golem stage acting out whatever the gameplay layer consumes.",
             "Clay 0.1 · Bench · bus inspector",
         )),
+        // The ONE "draw a mesh" scene. The manifest↔roster gate below requires every
+        // authored scene's behaviour to be a builtin or a roster entry; this entry has no
+        // launcher row and no realm, so nothing lists it, but `Goto{"model_view"}` resolves
+        // through the manifest like any scene — the same file works at root depth or nested
+        // in a `surface`.
+        SceneEntry::new("model_view", "Model View", "secondary", flicker_modelview::scene),
     ]
 }
 
@@ -195,7 +201,9 @@ mod tests {
     /// retired 2026-08-26, superseded by the Populous Bench), the Developer benches,
     /// then Solar Birth + Click Trainer + the Prism Test Room + the Controller
     /// Tester (Adventurer). DM stays dark until its bench migrates (backlog in
-    /// MCP). Pins the set so a stray re-add of an un-migrated bench is caught.
+    /// MCP). Pins the set so a stray re-add of an un-migrated bench is caught — and pins
+    /// the ONE entry that is a scene without a launcher row: `model_view`, no realm, no
+    /// panel metadata.
     #[test]
     fn roster_holds_the_migrated_benches() {
         let scenes = roster();
@@ -240,8 +248,19 @@ mod tests {
             "realm '{REALM_DM}' has no migrated bench yet"
         );
         assert!(
-            scenes.iter().all(|e| e.info.is_some()),
-            "every launcher bench carries panel metadata for its row"
+            scenes
+                .iter()
+                .filter(|e| !e.realms.is_empty())
+                .all(|e| e.info.is_some()),
+            "every realm-tagged launcher bench carries panel metadata for its row"
+        );
+        let model_view = scenes
+            .iter()
+            .find(|e| e.id == "model_view")
+            .expect("the model view's file names a behaviour, so the roster plays it");
+        assert!(
+            model_view.realms.is_empty() && model_view.info.is_none(),
+            "the model view is a scene with no launcher row: no realm, no panel metadata"
         );
     }
 

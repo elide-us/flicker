@@ -28,19 +28,23 @@ members = [
     "Alpha/crates/content/flicker-texture",
     "Alpha/crates/mechanics/flicker-mechanics",
     "Alpha/crates/world/flicker-voxel",
+    # Audio engine cluster — synthesis, sequencing, playback (the music bench's engine).
+    "Alpha/crates/audio/flicker-audio",
     # Game-package libraries (reusable client scenes hosted by prism-alpha).
-    "Alpha/crates/scenes/flicker-clicktrainer",
-    "Alpha/crates/scenes/flicker-componentcatalog",
-    "Alpha/crates/scenes/flicker-controllertester",
+    "Alpha/crates/adventurer/flicker-clicktrainer",
+    "Alpha/crates/devmode/flicker-componentcatalog",
+    "Alpha/crates/adventurer/flicker-controllertester",
     "Alpha/crates/frontend/flicker-globe",
-    "Alpha/crates/scenes/flicker-solarbirth",
-    "Alpha/crates/scenes/flicker-loomforge",
-    "Alpha/crates/scenes/flicker-assetpipeline",
-    "Alpha/crates/scenes/flicker-pocclusters",
-    "Alpha/crates/scenes/flicker-csgtest",
-    "Alpha/crates/scenes/flicker-populous",
-    "Alpha/crates/scenes/flicker-quartermaster",
-    "Alpha/crates/scenes/flicker-sablework",
+    "Alpha/crates/adventurer/flicker-solarbirth",
+    "Alpha/crates/devmode/flicker-loomforge",
+    "Alpha/crates/devmode/flicker-assetpipeline",
+    # The ONE "draw a mesh" scene a surface node names (`model_view`); the quad view seats it four times.
+    "Alpha/crates/devmode/flicker-modelview",
+    "Alpha/crates/adventurer/flicker-pocclusters",
+    "Alpha/crates/gamemaster/flicker-csgtest",
+    "Alpha/crates/gamemaster/flicker-populous",
+    "Alpha/crates/devmode/flicker-quartermaster",
+    "Alpha/crates/devmode/flicker-sablework",
     # The Prism-Alpha client (the app that hosts the scenes).
     "Alpha/prism-alpha",
     # World-sim / standalone POC crates — root crates/.
@@ -126,6 +130,14 @@ glyphon = "0.6.0"
 # Small, dependency-free RNG used by example games.
 fastrand = "2.5.0"
 
+# Audio — fundsp is the DSP/synthesis graph, kept lean (no symphonia file
+# decoding, no FFT convolver: default-features off). hound writes the offline
+# WAV renders. cpal is the device stream, optional behind flicker-audio's
+# `playback` feature so headless builds, tests and CI need no OS audio stack.
+fundsp = { version = "0.23.0", default-features = false, features = ["std"] }
+hound = "3.5.1"
+cpal = "0.18.2"
+
 # Internal cross-crate deps
 clayengine = { version = "0.1.10", path = "Alpha/crates/core/clayengine" }
 flicker-materials = { version = "0.1.5", path = "Alpha/crates/content/flicker-materials" }
@@ -169,7 +181,7 @@ flicker-rigview = { version = "0.1.10", path = "Alpha/crates/animation/flicker-r
 flicker-mechanics = { version = "0.1.10", path = "Alpha/crates/mechanics/flicker-mechanics" }
 # in-app content pipeline (folder scan → FBX parse → canonical rig → bake).
 flicker-content = { version = "0.1.10", path = "Alpha/crates/content/flicker-content" }
-flicker-assetpipeline = { version = "0.1.10", path = "Alpha/crates/scenes/flicker-assetpipeline" }
+flicker-assetpipeline = { version = "0.1.11", path = "Alpha/crates/devmode/flicker-assetpipeline" }
 # Native open-folder dialog for the Asset Pipeline editor's Load step.
 rfd = "0.15.4"
 # Shared GPU-free planet-layout model (the orrery) — the roster + orbits both the

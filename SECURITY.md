@@ -98,10 +98,14 @@ License 1.1, with the texts included under [Prism/Licenses/](Prism/Licenses/); s
   ships as a single deterministic, store-only `package.flk` packed once in CI.
 - **Verify your download.** Every release publishes a `SHA256SUMS` file. Check your
   download against it before running.
-- **Signing status.** Alpha builds are currently **unsigned**; Windows SmartScreen and
-  macOS Gatekeeper will warn on first launch. Code signing is wired into the pipeline and
-  gated on signing secrets — it will activate without workflow changes once certificates
-  are provisioned. Until then, `SHA256SUMS` verification is the integrity check.
+- **Signing status.** The Windows installer (`.msi`) and executable are **code-signed** in
+  the release pipeline through Azure Trusted Signing; SmartScreen may still prompt while a
+  new publisher's reputation builds. macOS builds are **not yet signed or notarized** —
+  Gatekeeper will warn on first launch (right-click → Open). Linux packages and the
+  portable archives are unsigned. macOS signing and notarization are wired into the
+  pipeline and gated on signing secrets — they will activate without workflow changes
+  once an Apple Developer ID certificate is provisioned. `SHA256SUMS` verification
+  remains the integrity check for every artifact.
 - **Builds obtained anywhere else are unofficial.** The license permits redistribution,
   but we cannot vouch for the integrity of third-party rebuilds or repackages. Prefer the
   official Releases page.

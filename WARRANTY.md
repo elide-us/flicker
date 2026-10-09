@@ -43,8 +43,9 @@ We want you to be able to trust what you run:
   repository (Windows MSI, macOS `.pkg`, Linux `.deb`, and portable archives), with game
   content shipped as a single deterministic `package.flk`.
 - Every release publishes a **`SHA256SUMS`** file; verify your download against it.
-- Alpha builds are currently **unsigned** (see [SECURITY.md](SECURITY.md)); `SHA256SUMS`
-  verification is the integrity check until signing is enabled.
+- Windows alpha builds are **code-signed**; macOS alpha builds are currently **unsigned**
+  (see [SECURITY.md](SECURITY.md)). `SHA256SUMS` verification is the integrity check for
+  every download.
 - The open-source licenses permit **anyone to rebuild and redistribute** flicker. Builds
   obtained from anywhere other than the official Releases page are **unofficial**: they
   carry no warranty from us, and we cannot vouch for their integrity or safety. Prefer the

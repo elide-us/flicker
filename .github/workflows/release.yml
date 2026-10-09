@@ -16,7 +16,7 @@
 # for now. Actions are SHA-pinned; Dependabot proposes bumps.
 #
 # Signing is GATED ON SECRETS: absent secrets ⇒ unsigned artifacts (the release
-# body says so). Wire by adding repo secrets:
+# body reports the per-platform status from the same gates). Wire by adding repo secrets:
 #   AZURE_TENANT_ID / AZURE_CLIENT_ID / AZURE_CLIENT_SECRET   (Trusted Signing CI service principal;
 #     SP needs the "Trusted Signing Certificate Profile Signer" role on the signing account.
 #     Account/profile/region are the TS_* env in the windows job — set TS_ENDPOINT to your region.)
@@ -100,6 +100,9 @@ jobs:
     timeout-minutes: 90
     env:
       VERSION: ${{ needs.gate.outputs.version }}
+      # The ONE place the installer's file name is set. Fixed across releases on
+      # purpose (Aaron 2026-09-07); the version is inside the MSI and on the shortcut.
+      MSI_NAME: Prism-Alpha.msi
       # Trusted Signing (Azure). The CI service principal authenticates the dlib via the
       # AZURE_* env vars (Azure.Identity EnvironmentCredential); it must hold the
       # "Trusted Signing Certificate Profile Signer" role on the account below.
@@ -165,7 +168,7 @@ jobs:
           wix --version
           wix build Alpha\prism-alpha\packaging\windows\prism-alpha.wxs `
             -d Version=$env:VERSION -d StageDir=$PWD\dist\stage `
-            -arch x64 -o dist\prism-alpha-v$env:VERSION-x86_64-pc-windows-msvc.msi
+            -arch x64 -o "dist\$env:MSI_NAME"
       - name: Sign MSI (Trusted Signing, gated on secrets)
         if: env.AZURE_CLIENT_ID != ''
         shell: pwsh
@@ -174,12 +177,12 @@ jobs:
           $dlib = (Get-ChildItem -Recurse -Filter Azure.CodeSigning.Dlib.dll $env:RUNNER_TEMP\ts | Select-Object -First 1).FullName
           $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" | Select-Object -Last 1
           & $signtool sign /v /fd SHA256 /tr http://timestamp.acs.microsoft.com /td SHA256 `
-            /dlib $dlib /dmdf $env:RUNNER_TEMP\ts-metadata.json dist\prism-alpha-v$env:VERSION-x86_64-pc-windows-msvc.msi
+            /dlib $dlib /dmdf $env:RUNNER_TEMP\ts-metadata.json "dist\$env:MSI_NAME"
           if ($LASTEXITCODE -ne 0) { throw "MSI signing failed" }
       - name: MSI content smoke (admin extract, no elevation)
         shell: pwsh
         run: |
-          $msi = Resolve-Path "dist\prism-alpha-v$env:VERSION-x86_64-pc-windows-msvc.msi"
+          $msi = Resolve-Path "dist\$env:MSI_NAME"
           Start-Process msiexec -ArgumentList "/a `"$msi`" /qn TARGETDIR=$env:RUNNER_TEMP\extract" -Wait
           $root = Get-ChildItem -Recurse -Filter prism-alpha.exe $env:RUNNER_TEMP\extract | Select-Object -First 1
           if (!$root) { throw "MSI does not contain prism-alpha.exe" }
@@ -378,15 +381,28 @@ jobs:
       - name: Checksums
         run: cd dist && sha256sum ./* > SHA256SUMS
       - name: Release notes header
+        env:
+          # Mirror the sign-step gates exactly: the secret presence that turns signing
+          # on is what the release body claims, so the note can never drift from the build.
+          WIN_SIGNED: ${{ secrets.AZURE_CLIENT_ID != '' }}
+          MAC_SIGNED: ${{ secrets.MACOS_CERT_P12_BASE64 != '' && secrets.MACOS_NOTARY_APPLE_ID != '' }}
         run: |
           {
             echo "Prism Alpha ${{ github.ref_name }} — Windows (MSI), macOS (pkg, Apple Silicon), Linux (deb / tar.gz)."
             echo ""
-            echo "> ⚠ These alpha builds are **unsigned**: Windows SmartScreen shows"
-            echo "> \"unrecognized app\" (More info → Run anyway) and macOS requires"
-            echo "> right-click → Open on first launch. Verify downloads against SHA256SUMS."
+            if [[ "$WIN_SIGNED" == "true" ]]; then
+              echo "> ✔ Windows: the installer and executable are code-signed (Azure Trusted Signing)."
+            else
+              echo "> ⚠ Windows: this installer is **unsigned** — SmartScreen shows \"unrecognized app\" (More info → Run anyway)."
+            fi
+            if [[ "$MAC_SIGNED" == "true" ]]; then
+              echo "> ✔ macOS: the package is signed and notarized."
+            else
+              echo "> ⚠ macOS: this package is **unsigned** — right-click → Open on first launch."
+            fi
+            echo "> Verify every download against SHA256SUMS."
           } > notes.md
-      - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           files: |
             dist/*
