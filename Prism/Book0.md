@@ -26,7 +26,7 @@
 
 ## V. Setting and Anthropy Design
 
-  This book describes the setting of the World of Prism and the various creatures and social systems that define the universe. It holds structural canon only: realms, schools, philosophies, stats, peoples, and the Canon Rulings ledger.
+  This book describes the setting of the World of Prism: the Shattering and the shape it left behind, the one world Home beneath the seven realms of the sky, the schools and their philosophies, the seven statistics, the Principalities, and the peoples of Prism.
 
 ---
 
@@ -44,4 +44,4 @@
 
 ## VIII. Grimoire
 
-  This book holds the actual spells of the fourteen schools — the established, hundred-thousand-year canon that Book IV's word-grammar expresses, not a blank space for invention. Scope and format only so far, calibrated against one sample school (Fire) before the rest are attempted.
+  This book holds the actual spells of the seven schools — the established, hundred-thousand-year canon that Book IV's word-grammar expresses, not a blank space for invention. Scope and format only so far, calibrated against one sample school (Fire) before the rest are attempted.

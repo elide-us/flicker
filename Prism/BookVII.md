@@ -3755,6 +3755,190 @@ Inverted has no bosses of its own — a phenomenon is a hazard, not a foe. But a
 
 ---
 
+## Guardians of the Tomb — Additional Inhabitants
+
+*[DRAFT — 2026-09-13. Ten creature directions approved for expansion by Elideus. The descriptions and attack patterns below are proposed bestiary prose, not ratified mechanics. Names remain working names. Color assignments, numeric statistics, recruitment requirements, material recipes, and individual tier availability are unassigned. This is a thematic collection pending placement within the book's color chapters.]*
+
+### The Inhabited Walls
+
+The tombs of the powerful are not necessarily abandoned. Their floors are polished, their candles tended, their metalwork maintained. Behind the public chambers, little doors and narrow ways admit a population seldom seen by visitors. The smallest inhabitants live within the walls and conduct their work from those concealed passages. What looks like an empty monument may possess both a considerable household and a formidable guard.
+
+An intruder is therefore entering an occupied place. The stillness of the ceremonial chambers says little about the activity behind them. A rattle of keys, a scrap of polishing cloth caught beneath a panel, or the disappearance of a fresh wax shaving may reveal more than an hour spent watching the main door.
+
+*Editorial scope: the wall-dwelling maintenance population and immaculate tombs are user-established direction. Particular duties and behaviors below are proposed. Environments describe Dungeon Maker placement flavor, not natural spawning or mandatory hidden passage simulation. All ten are additions to the existing angelic guardian, two winged gargoyles, and two headless forms. No additional spider or Tomb Knocker is included.*
+
+### 1. Stone Gremlin
+
+**Environments:** concealed maintenance passages, carved wall recesses, monument backs, upper ledges.
+
+**Description:** A squat, wingless little creature with slate-like skin, broad gripping hands, and brows resembling chipped stone. Its compact body fits into the shallow spaces behind relief panels. Unlike the winged gargoyles, it has neither their reach nor their monumental bearing. A small belt or fitted pouch carries implements proportioned to its hands.
+
+**Behaviors:** Works close to the surfaces it maintains, clearing joints, polishing fittings, and carrying small supplies between recesses. Several may occupy a chamber without standing on its floor. Disturbed gremlins retreat toward familiar openings; when challenged there, they gather on different ledges and harry the intruder from several directions.
+
+**Threats & Defenses:** Its strongest defense is access to cover and its ability to cling. Stone-like appearance does not establish that it is a construct or grant a blanket resistance. Attacks made while it is braced on a perch are easier for it to sustain than attacks caught during a crossing.
+
+**Statistics:** Unassigned; no Dungeon Maker tier inferred.
+
+**Attack Patterns:** **Perch Strike** — draws back visibly before dropping into a short downward blow. **Scramble Away** — disengages toward a designated opening, exposing itself during the crossing. A cornered specimen uses quick, short hand strikes rather than a gargoyle's sweeping attacks.
+
+**Materials:** Possible recovered maintenance tools and fittings. No bodily harvest is assigned.
+
+### 2. Onyx Goblin
+
+**Environments:** wall passages, narrow service stairs, concealed storerooms, offering-chamber margins.
+
+**Description:** Smaller than the ordinary goblin, with a compact frame, broad ears, glossy black skin, and pale eyes. Its face remains distinctly goblin. Close-fitting work clothes and tightly secured pouches allow it to pass through small openings without catching. Onyx describes its appearance; mineral composition is not established.
+
+**Behaviors:** Moves supplies through the tomb's interior routes and watches the boundaries between service spaces and public rooms. Often encountered with others of its kind. One may show itself while companions move behind nearby panels, drawing attention away from a second approach.
+
+**Threats & Defenses:** Relies on cover, numbers, and familiar routes. It is less imposing than a goblin or hobgoblin in an open exchange. Quick changes of position are its protection; permanent invisibility, inventory theft, and special resistances are not assumed.
+
+**Statistics:** Unassigned; no Dungeon Maker tier inferred.
+
+**Attack Patterns:** **Gap Thrust** — a short weapon attack from a visible opening. **Crossing Rush** — darts between cover with a passing cut. **Corner Feint** — briefly exposes itself, then withdraws while another goblin approaches.
+
+**Materials:** Possible tools, pouches, and carried supplies. Exact weapon and armor drops remain unassigned.
+
+### 3. Shrouded Repulsor
+
+**Environments:** guarded intersections, inner chambers, approaches patrolled by crystal hounds.
+
+**Description:** A humanoid concealed beneath layered shrouds with weighted borders. Only its hands need emerge to direct a working. The clothing presents an intact, deliberate silhouette; neither a corpse nor disfigurement is implied beneath it. Its nature and school affiliation remain unknown.
+
+**Behaviors:** Holds a position behind its companions and acts to separate intruders from one another. Particularly associated with magically immune headless crystal hounds. It directs a fight through placement and interruptions rather than racing into close combat.
+
+**Threats & Defenses:** Repulsive magic and behavior-control magic are established concept directions. Specific control effects, durations, recovery, and counters remain to be designed. It must be possible to distinguish its different workings before their effects arrive. The hounds' immunity does not extend to their keeper by assumption.
+
+**Statistics:** Unassigned; control economy and tier availability remain open.
+
+**Attack Patterns:** **Repulsion** — proposed tell: the cloth draws inward before the hands open and the hems snap outward. **Commanding Gesture** — a separate, sustained hand posture announces a behavior-control working. **Withdrawal** — retreats behind its companions when pressed.
+
+**Materials:** Possible shroud fastenings or carried implements; no reagent or focus is invented here.
+
+### 4. Headless Crystal Hound
+
+**Environments:** guarded galleries, polished processional corridors, chambers occupied by shrouded repulsors.
+
+**Description:** A low crystalline quadruped with a continuous shoulder ridge where an ordinary hound's neck would rise. The body terminates naturally: there is no severed neck or wound. Interlocking facets define a strong chest, four articulated legs, and an unmistakably pursuing animal-like silhouette.
+
+**Behaviors:** Hunts intruders in groups and pressures those displaced by its shrouded companion. It turns its forequarters to orient toward a target, giving its attention a readable physical expression despite the absence of a head. Its precise means of perception is not yet established.
+
+**Threats & Defenses:** Magical immunity is user-established. Its treatment of indirect consequences such as altered terrain, physical debris, and magically moved objects remains unresolved. Immunity should be consistently communicated. Physical durability is a separate question and is not assumed to be unlimited.
+
+**Statistics:** Unassigned; immunity boundaries require combat integration.
+
+**Attack Patterns:** **Shoulder Charge** — lowers its forequarters before driving forward. **Bounding Strike** — gathers its legs beneath it and leaps into a bodily impact. **Raking Pass** — a short forelimb attack while moving past a target. It does not bite with a nonexistent mouth.
+
+**Materials:** Crystal fragments are a candidate harvest; magical properties and uses are unassigned.
+
+### 5. Pall Moth
+
+**Environments:** banner recesses, textile stores, upper vaults, quiet ceremonial chambers.
+
+**Description:** A large pale moth with heavy wings resembling folded burial cloth. Restrained markings interrupt the pale surfaces without creating a comic face. At rest, its folded silhouette can be overlooked among layered hangings. Its wings retain the texture of an insect rather than becoming literal sewn fabric.
+
+**Behaviors:** Shelters high in the chamber and takes flight when disturbed. Several can occupy different folds and recesses. Its coexistence with a well-maintained tomb does not yet establish that it consumes valuable textiles or serves the maintenance inhabitants deliberately.
+
+**Threats & Defenses:** Moving wings and released dust obstruct sightlines, giving ground defenders opportunities to close. Blindness, poison, and magical control are not assigned. It depends on flight and concealment among hangings rather than heavy protection.
+
+**Statistics:** Unassigned.
+
+**Attack Patterns:** **Dust Fan** — an exaggerated spreading of the wings precedes a localized cloud. **Low Flutter** — crosses an intruder's path in a brief close pass. **Settling Fold** — returns to a perch, making a landing window part of its movement rhythm.
+
+**Materials:** Wing scales or dust are possible ingredients, pending recipes; neither is automatically a poison.
+
+### 6. Graveglass Serpent
+
+**Environments:** shallow channels, spaces beneath slabs, service conduits, chamber perimeters.
+
+**Description:** A long, narrow serpent with translucent mineral-like scales, a clearly defined head, and dark bands visible within its body. Its continuous low silhouette distinguishes it from the angular, headless crystal hounds. Graveglass is a working name, not a settled material classification.
+
+**Behaviors:** Travels along edges and through channels before unfolding into exposed floor space. It draws into a compact coil before striking. The polished surfaces of the tomb allow a moving reflection or a sliding band of shadow to reveal its approach.
+
+**Threats & Defenses:** Its reach and low profile make careless pursuit dangerous. A committed strike exposes the extended body before it can gather itself again. It does not inherit the hounds' magical immunity merely because both appear crystalline; venom and constriction are also unassigned.
+
+**Statistics:** Unassigned.
+
+**Attack Patterns:** **Coiled Lunge** — raises the head and compresses the body before extending forward. **Tail Sweep** — a lateral strike with the trailing length. **Channel Retreat** — withdraws through a designated route rather than passing arbitrarily through solid construction.
+
+**Materials:** Glass-like scales are candidate salvage, with composition and crafting use open.
+
+### 7. Votive Wax Slime / Wax Cube
+
+**Environments:** votive stands, candle stores, offering niches, wax-working service rooms.
+
+**Description:** A living mass of pale ceremonial wax, carrying wick fragments, flecks of gold leaf, and impressions resembling old seals. It may rest as a shallow pool or a dense block like stored wax. Slime and cube are presentations of one proposed family; separate species are not established. Neither requires a face, visible organs, or a gruesome interior.
+
+**Behaviors:** Gathers near the tomb's wax supplies and moves with slow compressions and folds. A seemingly solid block may soften along its lower edge and begin to slide. Whether the staff deliberately tend it or merely keep its movement contained remains an open piece of lore.
+
+**Threats & Defenses:** Contact is proposed to impede footing through adhesive wax. Its motion should remain readable against a polished floor. Fire vulnerability, melting, hardening, splitting, and regeneration require separate decisions; the material resemblance does not settle the mechanics.
+
+**Statistics:** Unassigned.
+
+**Attack Patterns:** **Wax Surge** — compresses, then pushes a low front of material outward. **Heavy Fold** — raises one edge before bringing its weight down. **Trailing Wax** — leaves a bounded slowing patch as a proposed behavior, with duration and stacking undecided.
+
+**Materials:** Recoverable votive wax is a candidate material. Gold leaf and wick fragments are visual inclusions, not guaranteed valuable drops.
+
+### 8. Coffer Mimic
+
+**Environments:** offering chambers, treasure niches, guarded repositories, ceremonial storerooms.
+
+**Description:** A compact funerary coffer with polished surfaces and carefully maintained fittings. In motion, hinges become joints and metal ornaments unfold into grasping feet. Its closing edges can suggest teeth through jagged wood or fitted metal. No fleshy mouth or exposed interior anatomy is required.
+
+**Behaviors:** Waits among genuine containers until an intruder approaches, then snaps and scuttles between cover. Small shifts of a fitting or an unusual distribution of weight can furnish a learnable warning without making every coffer obviously false. Actual loot contents remain independent of its disguise.
+
+**Threats & Defenses:** The sudden closing lid is its main threat. Unlike the older generic Mimic entry, this approved direction can move in pursuit. It should still commit visibly to a snap and require time to reset. Adhesive flesh and the older entry's inability to pursue do not carry over automatically.
+
+**Statistics:** Unassigned; relationship to the existing Orange Mimic remains to be reconciled.
+
+**Attack Patterns:** **Coffer Snap** — rocks back and opens before slamming its lid. **Scuttling Rush** — advances on unfolded fittings, stops, and snaps. **False Rest** — settles back into its closed appearance after disengaging; conditions are unassigned.
+
+**Materials:** Possible salvage includes fittings and shell material. Mimic nature, edible or anatomical harvests, and guaranteed treasure are unresolved.
+
+### 9. Velvet Crypt Bat
+
+**Environments:** vaulted ceilings, recesses behind banners, upper service openings.
+
+**Description:** A large bat with charcoal fur, pale ears, and broad wings whose subtle pattern resembles aged velvet. Its anatomy remains recognizably bat-like. It offers an animal-shaped flying threat alongside the upright mongbat and the heavy winged guardians.
+
+**Behaviors:** Roosts in small groups and gives audible warning before low flights through the chamber. Disturbing one perch can bring neighboring bats into motion. It returns upward between approaches instead of hovering indefinitely at a fighter's reach.
+
+**Threats & Defenses:** Numbers, flight, and repeated changes of height make it troublesome. Its cry is initially a cue and communication, not an assigned magical stun. Low swoops create brief opportunities to strike; diseases and venom are not assumed.
+
+**Statistics:** Unassigned.
+
+**Attack Patterns:** **Warning Cry** — announces agitation before flight. **Low Swoop** — folds into a descending approach and passes close with claws or teeth. **Climbing Break** — pulls upward after the pass, exposing its flight path before returning to cover.
+
+**Materials:** Fur and wing membrane are possible harvests. Existing bat body and rig coverage should be reviewed before new mesh production.
+
+### 10. Keybearer
+
+**Environments:** service doors, gate recesses, concealed junctions, maintenance stores.
+
+**Description:** A tiny, stooped humanoid in layered pale linen, with a concealed face and an oversized ring of mismatched keys. Its garments are maintained workwear, even when their shape recalls a shroud. The keys and its purposeful gait distinguish it immediately from the other wall-dwellers.
+
+**Behaviors:** Tends access through the tomb and travels between chambers using interior service ways. When intruders arrive, it attempts to reach a relevant lock or gate before withdrawing. It can appear pest-like to adventurers while remaining an industrious member of the tomb's household.
+
+**Threats & Defenses:** Its proposed danger is what it admits or separates: opening a designated gate can release defenders or change an approach. It cannot alter arbitrary dungeon connections, seal required routes permanently, or grant itself access outside authored permissions. A pronounced key-rattle announces an attempted interaction.
+
+**Statistics:** Unassigned; gate behavior depends on supported dungeon controls.
+
+**Attack Patterns:** **Key Rattle** — selects a key before an interruptible interaction. **Unlock** — works a designated mechanism. **Hasty Swipe** — a short defensive blow while retreating. Its primary identity is an attendant who summons trouble, not a heavily armed duelist.
+
+**Materials:** Keys, work pouches, and small tools are possible recovered objects. Dropped keys do not automatically unlock dungeon gates; loot and control authorization remain separate design decisions.
+
+### Editorial Integration and Release Scope
+
+- The intended theme roster contains five existing creature entries, these ten extensions, and ten boss encounter entries: 25 entries, not necessarily 25 unique bodies. The basic angelic guardian can also supply the Tier 1 boss body.
+- Spring alpha targets Tier 1, levels 1–10, in approximately seven months from September 2026. NPC retirement is outside this alpha scope. The complete roster is a planning horizon, not a promise to implement all entries for alpha.
+- Tier labels, stat multipliers, and boss unlock language already in the book need reconciliation with the current alpha plan; this addition does not silently revise them or invent numeric blocks.
+- Existing Gray Ooze, Mimic, Goblin, Radiant Guardian, and Gargoyle entries are related references, not automatic replacements or sources of inherited mechanics. The wax and coffer variants especially require explicit differentiation.
+- Stone gremlins and onyx goblins are not assigned construct or undead status by appearance. Likewise the shrouded figure is not declared undead, and the hounds are not assigned a school merely by their crystal bodies.
+- Color placement remains unassigned. Sharing a tomb theme does not imply all ten belong to White or Black. The unavailable project MCP should be checked before treating these proposed details as durable canon.
+- Arachnids remain undecided and the Tomb Knocker is excluded. One animated armor, one stone guardian, and the heraldic lion remain separate candidates outside these ten.
+
+---
+
 # Appendices
 
 *The design and structural detail that orders this book. The register above reads as an in-world catalogue; the appendices below are the editor's and builder's scaffolding — the colors' ownership, the rules every roster obeys, the entry format, and the systems that decide where each creature is found.*
