@@ -36,7 +36,7 @@
 //! Modify machine, drawn.
 //!
 //! ## The consumer sweep this absorbs
-//! Clayworks' `Alpha/crates/scenes/flicker-assetpipeline/src/gizmo.rs` (its `decide` / `nearest_joint`
+//! Clayworks' `Alpha/crates/devmode/flicker-assetpipeline/src/gizmo.rs` (its `decide` / `nearest_joint`
 //! / `Gizmo::interact` deform+reposition loop) becomes a `Gadget` plus a few lines applying each
 //! [`GadgetDelta`] to its `Document`, and `compose.rs`'s private `handles()` (compose.rs:186-195)
 //! plus its `GIZMO_ARROW_FRAC` (compose.rs:42) and the gizmo module's `PICK_TOL_FRAC` (gizmo.rs:22)
@@ -243,6 +243,14 @@ impl Gadget {
         self.mode
     }
 
+    /// Has the live drag actually MOVED anything yet — the Locked → Modifying edge the handles
+    /// draw, and the one question a consumer must ask before it commits anything ON RELEASE: a
+    /// press that travelled nowhere (or never cleared a snap step) applied no delta, so it must
+    /// place nothing. False whenever no drag is live.
+    pub fn moved(&self) -> bool {
+        self.moved
+    }
+
     pub fn pivot(&self) -> Vec3 {
         self.pivot
     }
@@ -329,6 +337,22 @@ impl Gadget {
         self.moved = false;
         self.drag = Some(DragState::begin(
             self.mode, axis, self.basis, self.pivot, ray, snap,
+        ));
+        true
+    }
+
+    /// LOCK the FREE form directly, consulting no handle — the consumer's own press policy where a
+    /// panel's every press is the view-plane drag (Clayworks' orthographic panels, Aaron
+    /// 2026-09-07: a press beside the joint must never lock an axis). Refused while a drag is live
+    /// or the mode is gated off, exactly as [`Self::begin`] is.
+    pub fn begin_free(&mut self, ray: (Vec3, Vec3), snap: Option<f32>) -> bool {
+        if self.drag.is_some() || !self.modes.allows(self.mode) {
+            return false;
+        }
+        self.hover = None;
+        self.moved = false;
+        self.drag = Some(DragState::begin(
+            self.mode, None, self.basis, self.pivot, ray, snap,
         ));
         true
     }

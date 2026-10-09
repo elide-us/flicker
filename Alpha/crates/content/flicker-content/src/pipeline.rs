@@ -12,12 +12,63 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
+use flicker_skeletal::format::SkeletonRecipe;
 
-use crate::bake::bake_rig;
-use crate::conform::{conform_to_canonical, ConformMode};
+use crate::bake::{bake_rig, default_mounts};
+use crate::conform::{
+    conform_to_canonical, face_to_rig, measure_facing, rig_raw_mesh, scale_mesh_to_stature,
+    straighten_frames, ConformMode,
+};
+use crate::decimate::decimate_to;
 use crate::fbx::parse_fbx;
 use crate::rig::rename_to_canonical;
 use crate::scan::{scan_folder, Kind};
+
+/// How to prepare a RAW (skeleton-less) mesh before rigging it — the Clayworks Prep step's two
+/// numbers: the real-world stature to size the mesh to, and the triangle count to collapse it to
+/// (`None` = keep the source count). A mesh that arrives rigged is game-ready and skips Prep, so
+/// this is ignored for it.
+#[derive(Debug, Clone)]
+pub struct RawMeshPrep {
+    pub stature_cm: f32,
+    pub target_tris: Option<usize>,
+    /// The skeleton to compose onto the mesh (the modular skeleton, 2026-09-07).
+    pub recipe: SkeletonRecipe,
+    /// Which side the bake-time stance normaliser squares a mid-stride body FROM (FEFDA2B2).
+    pub stance_source: crate::bake::StanceSource,
+    /// Which half of a LOPSIDED source the mesh mirror keeps — `None` is the bench's "Mirror
+    /// from: Off", the default, because a mirror destroys everything one-sided that is not tagged
+    /// (697DEC55). A SOURCE-SHAPE fix, so it runs before the skeleton is fitted.
+    pub mirror_keep: Option<crate::mirror::Side>,
+    /// Un-turn a source whose HEAD IS TURNED at bake ([`crate::bake::face_forward`]). ON BY
+    /// DEFAULT (Aaron 2026-09-28, A79A6131: turned heads are common across the generated sources,
+    /// not only the birds' 45°) — a normaliser like the stance's, a no-op on a head within 5° of
+    /// forward; `false` is the opt-out.
+    pub face_forward: bool,
+    /// FACING: the human's quarter-turns about the vertical Z, ON TOP of the yaw
+    /// [`crate::conform::measure_facing`] measures off the body itself — the bench's Turn 90°
+    /// (69F4B20D), which is what flips a body that came out tail-first. `None` is no turn of his
+    /// own. WITHOUT any facing at all the headless import fed a broadside body to the trunk
+    /// alignment and measured its chest and rump ACROSS the animal instead of along it.
+    pub facing_quarters: Option<u8>,
+}
+
+impl Default for RawMeshPrep {
+    /// The bench's Prep as it opens: the canon's stature, the source's own triangle count, the
+    /// humanoid pick, the stance read off the pose, no mirror, the head FACED FORWARD, no turn of
+    /// the human's own.
+    fn default() -> Self {
+        Self {
+            stature_cm: crate::baseline::STATURE,
+            target_tris: None,
+            recipe: SkeletonRecipe::humanoid(),
+            stance_source: crate::bake::StanceSource::Auto,
+            mirror_keep: None,
+            face_forward: true,
+            facing_quarters: None,
+        }
+    }
+}
 
 /// What an import produced.
 #[derive(Debug, Clone)]
@@ -31,13 +82,21 @@ pub struct ImportSummary {
 }
 
 /// Import one source folder into `out_dir/<asset_name>.json` (+ role-named textures), conforming to
-/// `reference` (use [`crate::default_reference`] for PrismHumanBaseA). Errors — rather than guessing —
-/// when the folder has no riggable mesh or more than one (the editor disambiguates that case).
+/// `reference` (use [`crate::default_reference`]). Errors — rather than guessing — when the folder
+/// has no riggable mesh or more than one (the editor disambiguates that case).
+///
+/// A mesh that arrives WITH a skeleton takes the vendor-rig path (rename → conform → bake). A RAW
+/// mesh (no skeleton — the ultra Meshy generations) takes the boneless path exactly as the
+/// Clayworks character rail runs it: Prep (collapse to `raw.target_tris`, size to
+/// `raw.stature_cm`) → [`rig_raw_mesh`] → the canonical-frame gate Commit applies → bake; it
+/// needs `raw`, and says so rather than guessing a stature. Either way the character ships the
+/// six untuned [`default_mounts`], as the bench's Attach stage would.
 pub fn import_folder(
     source_dir: &Path,
     out_dir: &Path,
     asset_name: &str,
     reference: &Path,
+    raw: Option<RawMeshPrep>,
 ) -> Result<ImportSummary> {
     let scan =
         scan_folder(source_dir).with_context(|| format!("scanning {}", source_dir.display()))?;
@@ -57,15 +116,69 @@ pub fn import_folder(
     };
 
     let mut model = parse_fbx(&rig_entry.path)?;
-    rename_to_canonical(&mut model);
-    conform_to_canonical(&mut model, reference, ConformMode::Canonical).with_context(|| {
-        format!(
-            "conforming {} to {}",
-            rig_entry.path.display(),
-            reference.display()
-        )
-    })?;
+    if model.bones.is_empty() {
+        let Some(prep) = raw.as_ref() else {
+            bail!(
+                "{} carries no skeleton — a raw mesh needs a stature and a triangle target",
+                rig_entry.path.display()
+            );
+        };
+        let source_tris = model.indices.len() / 3;
+        if let Some(target) = prep.target_tris.filter(|t| *t < source_tris) {
+            model = decimate_to(&model, target);
+        }
+        // SIZE IT, then FACE IT ONTO THE RIG — Prep's own order, and the bench's
+        // (`rebuild_prepped_model`): the scale grounds the mesh and plants it on the plumb line,
+        // and the facing turn lays a side-profile body along the rig's −Y forward BEFORE anything
+        // measures it (69F4B20D). `rig_raw_mesh`'s own scale is then the identity. The mirror
+        // needs both to have happened — it cuts on world X = 0, which is the median plane only
+        // for a centred, faced mesh.
+        scale_mesh_to_stature(&mut model, prep.stature_cm);
+        let yaw = measure_facing(&crate::flesh::Flesh::build_body(&model));
+        let quarters = prep.facing_quarters.unwrap_or(0);
+        tracing::info!(
+            "import_folder: facing {yaw:.1}° measured + {} quarter-turn(s)",
+            quarters % 4
+        );
+        face_to_rig(&mut model, yaw, quarters);
+        // MIRROR THE MESH first of all, in PREP: it changes the SOURCE SHAPE, so a lopsided sculpt
+        // is made symmetric BEFORE the skeleton is fitted to it (the ratified order 42AB9BA8) —
+        // every twin-joint assumption the fit makes then holds.
+        if let Some(keep) = prep.mirror_keep {
+            let r = crate::mirror::mirror_mesh(&mut model, keep);
+            tracing::info!(
+                "import_folder: mirrored from the {keep:?} half — {} dropped, {} added, {} region(s) kept",
+                r.dropped,
+                r.added,
+                r.kept_regions
+            );
+        }
+        rig_prepped_mesh(&mut model, prep)?;
+    } else {
+        rename_to_canonical(&mut model);
+        conform_to_canonical(&mut model, reference, ConformMode::Canonical).with_context(|| {
+            format!(
+                "conforming {} to {}",
+                rig_entry.path.display(),
+                reference.display()
+            )
+        })?;
+    }
     let mut rig = bake_rig(&model, asset_name);
+    // A raw mesh carries the recipe it was composed on; a vendor rig conformed onto the
+    // canonical reference IS the humanoid recipe.
+    rig.skeleton_recipe = Some(
+        raw.as_ref()
+            .map_or_else(SkeletonRecipe::humanoid, |p| p.recipe.clone()),
+    );
+    rig.attach_points = default_mounts()
+        .into_iter()
+        .map(|m| flicker_skeletal::format::AttachPoint {
+            id: m.id,
+            bone: m.bone,
+            offset: m.offset,
+        })
+        .collect();
 
     std::fs::create_dir_all(out_dir).with_context(|| format!("creating {}", out_dir.display()))?;
     let textures = wire_textures(&scan, &rig_entry.path, out_dir, asset_name, &mut rig)?;
@@ -84,6 +197,76 @@ pub fn import_folder(
         tris: rig.mesh.indices.len() / 3,
         textures,
     })
+}
+
+/// THE HEADLESS BAKE OF A PREPPED RAW MESH — the half of [`import_folder`] that runs once the mesh
+/// is collapsed, sized, faced onto the rig and (if asked) mirrored: [`rig_raw_mesh`], then the two
+/// un-poses on the bound skin, then the frames the composed skeleton ships with.
+///
+/// SQUARE THE STANCE before the rig is written — the headless half of the ONE bake path (ruling
+/// 42AB9BA8): a mid-stride source is promoted standing on both feet. `prep.stance_source` names the
+/// side to mirror from (FEFDA2B2); Auto reads the pose. Its feet are read off the body the fit
+/// already read — the mesh is thinned once.
+///
+/// FACE FORWARD right after it and on the same bound skin, BY DEFAULT (A79A6131): the fit laid
+/// the neck along the path the shape took and turned the face with it, and
+/// [`crate::bake::face_forward`] un-turns a head more than 5° off forward — `prep.face_forward`
+/// false is the opt-out.
+pub(crate) fn rig_prepped_mesh(model: &mut crate::fbx::RawModel, prep: &RawMeshPrep) -> Result<()> {
+    let fit = rig_raw_mesh(model, prep.stature_cm, &prep.recipe)?;
+    // How the body sits in its limbs AS POSED, taken before an un-pose moves one — the skin it
+    // moves in is put on last, on this seating.
+    let seating = fit
+        .body
+        .as_ref()
+        .and_then(|b| crate::bake::Seating::read(model, b));
+    // THE HAND-OFF (ruling 7881216F): every boneless appendage the bind found — a horn, an
+    // antler, an ear — ships as a tagged region: rigid with the bone it grows from, or (flat)
+    // soft on its chains. Read off the fit's own body, before an un-pose moves it.
+    if let Some(s) = &seating {
+        let proposed = crate::regions::appendage_regions(model, &s.appendages(model));
+        for r in &proposed {
+            tracing::info!(
+                "import_folder: {} on {} — {} vertices, {} chain(s)",
+                r.name,
+                r.anchor_bone,
+                r.verts.len(),
+                r.chain_count
+            );
+        }
+        model.regions.extend(proposed);
+    }
+    let stance =
+        crate::bake::square_stance_on(model, prep.stance_source, &prep.recipe, fit.body.as_ref());
+    let mut moved = !stance.squared.is_empty();
+    for (limb, lift) in stance.squared {
+        tracing::info!("import_folder: squared {limb} ({lift:.1} cm of lift)");
+    }
+    for (limb, sunk) in stance.declined {
+        tracing::warn!(
+            "import_folder: {limb} left as posed — squaring it would sink the mesh {sunk:.1} cm \
+             through its own floor"
+        );
+    }
+    if prep.face_forward {
+        let r = crate::bake::face_forward(model);
+        tracing::info!(
+            "import_folder: the head was {:.1}° off forward ({})",
+            r.yaw_deg,
+            if r.turned { "turned" } else { "left as posed" }
+        );
+        moved |= r.turned;
+    }
+    // THE SKIN IT MOVES IN, last: the un-poses ran on the tube skin, and the body that ships
+    // carries its haunches and shoulders on the limbs under them
+    // ([`crate::bake::bind_for_motion`]) — through the flesh as it now stands, the fit's own
+    // read unless an un-pose moved it.
+    let as_posed = fit.body.as_ref().map(|b| &b.flesh).filter(|_| !moved);
+    crate::bake::bind_for_motion(model, seating.as_ref(), as_posed);
+    // A COMPOSED rig keeps the IDENTITY frames its pattern skeleton and clip libraries were
+    // baked with — the same bake the bench's Commit runs on a composed or re-opened body.
+    straighten_frames(model);
+    Ok(())
 }
 
 /// Copy the source's texture maps beside the rig under `<AssetName>_<Map>.png` and point the (single)
@@ -312,8 +495,17 @@ mod tests {
         let unresolved: usize = model.clips.iter().map(|c| c.unresolved.len()).sum();
         eprintln!(
             "HumanBaseA: {} bones, {} verts, {} clips ({} tracks resolved, {} unresolved), material base_color '{}'",
-            model.bones.len(), model.mesh.vertices.len(), model.clips.len(), resolved, unresolved,
-            model.mesh.materials.first().map(|m| m.base_color.as_str()).unwrap_or(""),
+            model.bones.len(),
+            model.mesh.vertices.len(),
+            model.clips.len(),
+            resolved,
+            unresolved,
+            model
+                .mesh
+                .materials
+                .first()
+                .map(|m| m.base_color.as_str())
+                .unwrap_or(""),
         );
         assert_eq!(model.bones.len(), 66, "engine sees the canonical 66 bones");
         assert!(model.mesh.vertices.len() > 10_000, "mesh carried through");
@@ -383,6 +575,9 @@ mod tests {
             "REST-skin vs bind mesh: worst {worst:.4} cm across {} verts",
             model.mesh.vertices.len()
         );
-        assert!(worst < 0.5, "rest pose must skin back to the bind mesh (worst {worst:.4} cm) — else inverse_bind is wrong");
+        assert!(
+            worst < 0.5,
+            "rest pose must skin back to the bind mesh (worst {worst:.4} cm) — else inverse_bind is wrong"
+        );
     }
 }

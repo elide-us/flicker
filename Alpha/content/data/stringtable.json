@@ -3689,6 +3689,12 @@
   "ap_pbr": {
     "en-us": "PBR materials"
   },
+  "ap_rig_fitted": {
+    "en-us": "{pattern} fitted — matched {n} of {total} modules · {bones} bones"
+  },
+  "ap_rig_reopened": {
+    "en-us": "Re-opened the {origin} rig as committed — not re-fitted (clear “Import as rigged” to fit afresh)"
+  },
   "ap_quadruped": {
     "en-us": "Quadruped trunk"
   },

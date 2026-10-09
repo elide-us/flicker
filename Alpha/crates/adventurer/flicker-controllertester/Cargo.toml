@@ -1,0 +1,39 @@
+[package]
+name = "flicker-controllertester"
+version = "0.1.11"
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# A diagnostic PACKAGE (library only) — the Controller Tester `Scene`, driven by the
+# unified `prism-alpha` launcher. Draws a live controller diagram (face buttons, d-pad,
+# bumpers, triggers and sticks light up / move as you press them) plus a keyboard + mouse
+# readout, using only engine services (the vector UI panel + text). No Lua HUD, so it
+# touches no `ui_theme.json`.
+[lib]
+name = "flicker_controllertester"
+path = "src/lib.rs"
+
+[dependencies]
+flicker = { version = "0.1.0", path = "../../core/flicker" }
+# The content-roots service (flicker-core::roots): the golem body + clip paths resolve through it.
+flicker-core.workspace = true
+flicker-shell.workspace = true
+# The real input model + event bus this inspector drives (spec §10). Imported
+# directly (not via the `flicker::app` bridge) so the tester exercises the same
+# `flicker_input_core` / `flicker_input_router` surface the scenes do.
+flicker-input-core.workspace = true
+flicker-input-router.workspace = true
+# The golem stage: the reference body playing locomotion off the dispatched signals
+# (rig/clip loading, the state machine, pose sampling and CPU skinning).
+flicker-skeletal.workspace = true
+# The gait generator (flicker-mechanics::gait, G5): a creature pattern's pack names GENERATED
+# gaits — no clip to sample — so the stage steps the driver over the rig's rest frames instead.
+flicker-mechanics.workspace = true
+# The rig head-parse that lists a creature tier (bones only, never a mesh).
+serde.workspace = true
+serde_json.workspace = true
+# Decodes the golem's PNG maps (base colour / normal / roughness / metallic) for the textured
+# stage draw — the same decoder the Clayworks preview uses.
+image.workspace = true
+tracing.workspace = true

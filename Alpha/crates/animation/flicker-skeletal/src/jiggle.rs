@@ -102,6 +102,15 @@ impl JiggleChain {
         &self.pos
     }
 
+    /// The node positions, mutable — for a CONSTRAINT the solver does not own: the cloth runtime
+    /// projects each free node out of the body's collision capsules between `step` and placement
+    /// (6C46CAB9). Moving a node without touching `prev` is the ordinary PBD projection: the
+    /// correction becomes velocity next step and `damping` bleeds it off. `pos[0]` is the pinned
+    /// anchor and the next `step` overwrites it, so writing to it accomplishes nothing.
+    pub fn positions_mut(&mut self) -> &mut [Vec3] {
+        &mut self.pos
+    }
+
     pub fn len(&self) -> usize {
         self.pos.len()
     }

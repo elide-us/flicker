@@ -30,7 +30,10 @@ pub mod tables;
 
 pub use compound::{CompoundDef, CompoundElement, MetamorphicRule};
 pub use element::{Element, ElementId, PhysicalState};
-pub use material::{MaterialDef, MaterialId, RenderClass, RESERVED_EXOTIC_FIRST};
+pub use material::{
+    slot_dir, slot_is_writable, slot_of_dir, MaterialDef, MaterialId, RenderClass,
+    RESERVED_EXOTIC_FIRST,
+};
 pub use rock::RockDef;
 pub use source::{JsonTableSource, MaterialError, TableSource};
 pub use tables::{ElementTraits, Tables};

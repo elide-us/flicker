@@ -38,6 +38,7 @@ mod cluster_map;
 mod contour;
 mod corner_vector;
 mod derive_lod;
+pub mod frame;
 pub mod generators;
 mod local_coord;
 mod lod;
@@ -50,7 +51,7 @@ mod voxel;
 mod voxel_state;
 
 pub use bake::{find_horizon_voxel, BakeError, BakedCluster, BAKE_VERSION};
-pub use clayengine::{CLUSTER_DIM, VOXEL_COUNT};
+pub use clayengine::{CLUSTER_DIM, FEET_PER_VOXEL, VOXEL_COUNT};
 pub use cluster::Cluster;
 pub use cluster_id::ClusterId;
 pub use cluster_map::ClusterMap;

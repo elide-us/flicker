@@ -1,0 +1,58 @@
+[package]
+name = "flicker-loomforge"
+version = "0.1.11"
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# flicker-loomforge — "Loomforge Bench", the animation-authoring editor. A four-tab
+# bench (State Machine · Pack Browser · Creature Composer · TAE Editor) that READS AND
+# WRITES `flicker.pack` JSON. Supersedes `flicker-packeditor`, which was a read-only
+# pack VIEWER with no write path — its reusable parts (the live state-machine driving
+# loop, the clip pose/palette preview, the state→node graph extraction) are salvaged
+# here. The pack runtime (format/pose/skin/state) lives in `flicker-skeletal`; this
+# crate is the editor that authors it.
+#
+# UI split (design decision): the surrounding chrome — tab bar, rails, lists,
+# inspectors — is the `flicker-widgets` component walker; the node-graph canvas and TAE
+# timeline are `flicker-canvas` SURFACE FILLERS seated in walker-reserved rects (they
+# need free 2D positioning, edges and drop targets the closed walker has no components
+# for). This crate keeps only what those gestures MEAN to an animation pack.
+
+# A library-only scene package, driven by the unified `prism-alpha` launcher.
+[lib]
+name = "flicker_loomforge"
+path = "src/lib.rs"
+
+[dependencies]
+# Umbrella: re-exports flicker-app (App/InputState/Key), flicker-render (Renderer +
+# glam math), flicker-scene (Scene/Transition), flicker-script (UiNode/HudCommand/
+# Value), and flicker-widgets (the component walker: run_ui/UiState/UiInput/render_hud +
+# WalkerHandler, the walker's bus adapter).
+flicker = { version = "0.1.0", path = "../../core/flicker" }
+# The two 2D editor surface FILLERS this bench seats: the node-graph canvas and the
+# lane timeline. Both were written here first and now live in the engine crate, so the
+# Dungeon Maker's tech tree and the Game Master's event timelines share one copy
+# (rule DDD070C7 — the code MOVED; there is no second implementation left behind).
+flicker-canvas.workspace = true
+# The `Doll` — the small-panel skinned-rig preview the bench's six Stage sizes are. It
+# was the scene-owned `stage.rs` and now lives beside `RigView` in the animation cluster,
+# so Clayworks's bake view and the equipment paperdoll share one copy (rule DDD070C7 —
+# the code MOVED; there is no second implementation left behind).
+flicker-rigview.workspace = true
+# The new input model (Resolver/Fired/ActionSignal) + the event bus
+# (Router/InputHandler/RouteCtx) this scene routes Menu + the HUD pointer-consume
+# through (spec §9); the bespoke node/timeline canvas tools stay scene-owned.
+flicker-input-core.workspace = true
+flicker-input-router.workspace = true
+# The reusable front-end shell (splash/menu/settings/pause) this editor runs inside.
+flicker-shell.workspace = true
+# The GPU-free skeletal-animation runtime — the pack types this crate authors.
+flicker-skeletal.workspace = true
+# The gz-at-rest content seam (flicker-core::compression): pack existence checks by
+# LOGICAL path; reads/saves go through flicker-skeletal's seam-aware read/write_pack.
+flicker-core.workspace = true
+glam.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+serde_json.workspace = true

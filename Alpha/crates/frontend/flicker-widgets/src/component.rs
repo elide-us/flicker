@@ -444,6 +444,38 @@ pub struct UiState {
     /// never runs a walker (never drains) can accumulate at most one frame of
     /// clicks rather than leaking.
     fired_pointer: Vec<String>,
+    /// **The flow container's own scroll offset** (Aaron 2026-09-15: *"some of the
+    /// panels now vertical overflow the screen, these panels need to be able to scroll
+    /// for content overflow. This should be an update to the panel display flow
+    /// container."*) — `container cache key → offset in px`.
+    ///
+    /// LOCAL DISPLAY OWNERSHIP (`3A04B4CE`) taken to its conclusion: a `cell`/`panel`
+    /// whose content outgrows its box owns where it is scrolled to, exactly as a slider
+    /// owns the position it was released at. There is no bind to author, no Model key
+    /// and no scene fold — a container scrolls because its content overflows, not
+    /// because a scene wired it (contrast the `list`, whose offset is a scene-owned
+    /// `bind`; both feed the same geometry through [`ScrollBox`]).
+    ///
+    /// Keyed by the walker's own cache key ([`Placed::key`] — the node's `id`, else its
+    /// structural path), so the offset survives a tree rebuilt from scratch each frame
+    /// and needs no second identity scheme. Only a container something actually scrolled
+    /// — a wheel tick, a focus-follow correction — ever gets an entry, so the map is the
+    /// size of "regions touched recently", not the size of the tree; an entry left by a
+    /// container that has since stopped overflowing is inert (the offset is re-clamped
+    /// against the live content every frame, and a container that fits reads none).
+    scroll: HashMap<u64, f32>,
+}
+
+/// A flow container that OVERFLOWS: the intrinsic height of its content and the offset
+/// it is currently scrolled to (both px, the offset already clamped to
+/// `content_h − viewport`). Resolved ONCE, in [`resolve`], and carried on [`Placed`] so
+/// the draw's scrollbar, the fingerprint and the wheel all read the very number the
+/// children were placed with — the `list`'s "one content height, no disagreement"
+/// discipline, without its three recomputations.
+#[derive(Clone, Copy, Debug)]
+struct ScrollBox {
+    content_h: f32,
+    offset: f32,
 }
 
 /// How much a press flash fades per frame (per [`UiState::flash_tick`]): full
@@ -780,6 +812,24 @@ pub struct SurfaceSlot {
     /// empty: a surface whose content the behaviour publishes itself (a globe, a
     /// bench viewport) authors no source.
     pub source: String,
+    /// The SUB SCENE this surface plays (the node's `scene` prop), or empty for a
+    /// surface the behaviour fills itself. Aaron 2026-09-09: *"surfaces are complete
+    /// scene rendering objects … the sub scene is managed by the root scene, and
+    /// inherits context from intent."* The id names
+    /// `content/sensorium/scenes/<scene>.scene.json` (the manifest's def, the same one
+    /// `Goto{id}` builds) + `scripts/<scene>.lua`; the HOST builds it from
+    /// `flicker_shell::scene_def(id)` and seats it in this slot through
+    /// `flicker_shell::SubScene`. The walker only carries the name — it never loads or
+    /// runs a scene.
+    pub scene: String,
+    /// The sub scene's PARAMS — the per-instance knobs that make one scene kind serve
+    /// four panels (`projection`, `chrome`, `label`). Authored as `scene_<name>` props on
+    /// the node, keyed here by `<name>`: `"scene": "model_view", "scene_projection":
+    /// "top", "scene_chrome": true` reserves `{projection: "top", chrome: true}`. The
+    /// flat prefix (rather than a nested `params` object) is forced by the node schema —
+    /// a `UiNode`'s props are SCALARS by the boundary contract, and `parse_ui_json` drops
+    /// anything else.
+    pub params: flicker_script::ValueMap,
     /// The IMAGE rect in screen pixels — already inset inside the node's frame.
     pub x: f32,
     pub y: f32,
@@ -1002,6 +1052,11 @@ struct Placed<'a> {
     /// rather than positional so it survives a tree REBUILT from scratch each frame
     /// (flicker-loomforge and the chat panel do exactly that).
     key: u64,
+    /// This node is a FLOW CONTAINER whose content overflows its box, and this is the
+    /// content height + applied offset it was laid out with (see [`ScrollBox`]).
+    /// `None` for every container that fits — which is what keeps a scene that does not
+    /// overflow byte-identical to before scrolling existed.
+    scroll: Option<ScrollBox>,
 }
 
 // ── Run ────────────────────────────────────────────────────────────────────
@@ -1030,6 +1085,7 @@ pub fn run_ui(
         tree,
         screen,
         model,
+        &state.scroll,
         0.0,
         1.0,
         None,
@@ -1125,6 +1181,27 @@ pub fn run_ui(
         if claimed {
             hud_hit = true;
             last_claim = Some(i);
+        }
+    }
+    // THE WHEEL over an overflowing flow container (Aaron 2026-09-15) — the same
+    // gesture, speed and clamp [`hit_list`] folds into a `list`'s bound offset, folded
+    // here into the container's OWN offset ([`UiState::scroll`]) because there is no
+    // bind to write. One tick moves ONE region: placement is pre-order, so the last
+    // candidate under the pointer is the innermost, and a `list` found there has
+    // already answered the tick in its own arm — a nested region never double-scrolls.
+    if input.wheel != 0.0 {
+        if let Some(p) = placed
+            .iter()
+            .rev()
+            .find(|p| p.rect.contains(input.mouse) && in_clip(p.clip, input.mouse) && scrolls(p))
+        {
+            if let Some(s) = p.scroll {
+                let max = s.content_h - p.rect.inset_xy(pad_x(p.node), pad_y(p.node)).h;
+                let speed = pnum(p.node, "scroll_speed").unwrap_or(46.0) as f32;
+                let off = (s.offset - input.wheel * speed).clamp(0.0, max.max(0.0));
+                state.scroll.insert(p.key, off);
+                hud_hit = true; // the tick is spent here, not on the scene beneath
+            }
         }
     }
     // The generic every-frame TEXT-FOLD: the text the route delivered flows into the
@@ -1476,6 +1553,20 @@ pub fn run_ui(
             }
             None => String::new(),
         };
+        // `scene` names a SUB SCENE the surface plays whole (its own tree, lua, chrome
+        // and input — the ruling EBDB3518). OPTIONAL, and unresolvable here: the walker
+        // does not load scenes, so a bad name fails loud where the HOST looks it up.
+        // `scene_<name>` props are that instance's PARAMS, carried as `<name>` — the flat
+        // prefix is forced by the node schema (props are scalars; `parse_ui_json` drops
+        // objects), so `"scene_projection": "top"` is the authoring form for a nested
+        // `params` object.
+        let scene = ptext(p.node, "scene").unwrap_or_default().to_string();
+        let mut params = flicker_script::ValueMap::new();
+        for (key, value) in &p.node.props {
+            if let Some(name) = key.strip_prefix("scene_") {
+                params.set(name, value.clone());
+            }
+        }
         let st = style_of(p.node, styles);
         // `inset` may ride as a node prop or sit in the shared panel style, so a
         // whole family of stages can share one inset without repeating it.
@@ -1519,6 +1610,8 @@ pub fn run_ui(
         surfaces.push(SurfaceSlot {
             id: p.node.id.clone(),
             source,
+            scene,
+            params,
             x: img.x,
             y: img.y,
             w: img.w,
@@ -1673,41 +1766,54 @@ pub fn run_ui(
         .collect();
 
     // Pad FOCUS-FOLLOW (nav-tier contract 1B5F6BB8): keep the pad-focused control visible
-    // in its scrolling list. Only in nav modality (pointer scrolling is untouched), and only
-    // when the focused node sits OUTSIDE its enclosing `list` viewport — then write the
-    // minimally-corrected scroll offset into `results`, which settles next frame through the
-    // scene's own `scroll_off` fold, exactly like a click write. The focused rect is already
-    // placed WITH the current offset, so adjusting the offset by the overflow brings it in.
+    // in its scrolling region — a bound `list`, or a flow container that overflows. Only in
+    // nav modality (pointer scrolling is untouched), and only when the focused node sits
+    // OUTSIDE that viewport — then correct the offset by exactly the overflow. A list's
+    // correction is a `results` write that settles next frame through the scene's own fold,
+    // exactly like a click write; a flow container's lands in its OWN offset, no scene in
+    // the loop. The focused rect is already placed WITH the current offset, so adjusting
+    // the offset by the overflow brings it in.
     if state.nav_mode() {
         if let Some(focus) = state.focused().map(str::to_string) {
-            if let Some(list) = scroll_list_of(tree, &focus) {
-                let find = |id: &str| {
-                    rects
-                        .iter()
-                        .find(|(rid, _)| rid.as_str() == id)
-                        .map(|(_, r)| *r)
+            let host = scroll_host_of(tree, &focus, &|n: &UiNode| match n.component.as_str() {
+                "list" => n.bind.is_some(),
+                "cell" | "panel" => placed
+                    .iter()
+                    .any(|p| std::ptr::eq(p.node, n) && p.scroll.is_some()),
+                _ => false,
+            });
+            let hp = host.and_then(|h| placed.iter().find(|p| std::ptr::eq(p.node, h)));
+            let fr = rects
+                .iter()
+                .find(|(rid, _)| rid.as_str() == focus.as_str())
+                .map(|(_, r)| *r);
+            if let (Some(hp), Some(fr)) = (hp, fr) {
+                let py = pad_y(hp.node);
+                let vy = hp.rect.y + py; // viewport top (the region's inner)
+                let vh = (hp.rect.h - 2.0 * py).max(0.0);
+                let bind = hp.node.bind.as_deref().filter(|_| hp.scroll.is_none());
+                let (max, cur) = match hp.scroll {
+                    Some(s) => ((s.content_h - vh).max(0.0), s.offset),
+                    None => (
+                        (scroll_content_h(hp.node, model) - vh).max(0.0),
+                        bind.and_then(|b| results.number(b).or_else(|| model.number(b)))
+                            .unwrap_or(0.0) as f32,
+                    ),
                 };
-                if let (Some(lr), Some(fr), Some(bind)) =
-                    (find(&list.id), find(&focus), list.bind.as_deref())
-                {
-                    let py = pad_y(list);
-                    let vy = lr[1] + py; // viewport top (the list's inner)
-                    let vh = (lr[3] - 2.0 * py).max(0.0);
-                    let max = (scroll_content_h(list, model) - vh).max(0.0);
-                    let cur = results
-                        .number(bind)
-                        .or_else(|| model.number(bind))
-                        .unwrap_or(0.0) as f32;
-                    let (ftop, fbot) = (fr[1], fr[1] + fr[3]);
-                    let mut off = cur;
-                    if ftop < vy {
-                        off -= vy - ftop; // scroll up to reveal a row above the fold
-                    } else if fbot > vy + vh {
-                        off += fbot - (vy + vh); // scroll down to reveal a row below it
-                    }
-                    let off = off.clamp(0.0, max);
-                    if (off - cur).abs() > 0.5 {
-                        results.set(bind.to_string(), f64::from(off));
+                let (ftop, fbot) = (fr[1], fr[1] + fr[3]);
+                let mut off = cur;
+                if ftop < vy {
+                    off -= vy - ftop; // scroll up to reveal a row above the fold
+                } else if fbot > vy + vh {
+                    off += fbot - (vy + vh); // scroll down to reveal a row below it
+                }
+                let off = off.clamp(0.0, max);
+                if (off - cur).abs() > 0.5 {
+                    match bind {
+                        Some(b) => results.set(b.to_string(), f64::from(off)),
+                        None => {
+                            state.scroll.insert(hp.key, off);
+                        }
                     }
                 }
             }
@@ -1746,6 +1852,7 @@ fn resolve<'a>(
     node: &'a UiNode,
     rect: Rect,
     model: &ValueMap,
+    scroll: &ScrollStore,
     layer: f32,
     fade: f32,
     clip: Option<[f32; 4]>,
@@ -1760,6 +1867,11 @@ fn resolve<'a>(
     let layer = layer + pnum(node, "layer").map(|n| n as f32).unwrap_or(0.0);
     // `faded` accumulates the same way: a faded container dims its whole subtree.
     let fade = fade * node_fade(node, model);
+    let inner = rect.inset_xy(pad_x(node), pad_y(node));
+    // Does this flow container overflow? Resolved BEFORE the node is placed so the
+    // answer rides on `Placed` (see [`ScrollBox`]) and every later reader — the bar,
+    // the fingerprint, the wheel, the pad focus-follow — shares this one number.
+    let overflow = flow_scroll(node, inner, model, scroll, key);
     out.push(Placed {
         node,
         rect,
@@ -1768,11 +1880,11 @@ fn resolve<'a>(
         fade,
         clip,
         key,
+        scroll: overflow,
     });
     if node.children.is_empty() || no_descend(&node.component) {
         return;
     }
-    let inner = rect.inset_xy(pad_x(node), pad_y(node));
     match node.component.as_str() {
         // A `list` (scrolling region): children flow as a column shifted up by the
         // bound offset, and the whole subtree is clipped to the viewport (`inner`).
@@ -1788,21 +1900,23 @@ fn resolve<'a>(
                 .and_then(|b| model.number(b))
                 .unwrap_or(0.0)
                 .clamp(0.0, max as f64) as f32;
-            // Reserve a right gutter for the scrollbar so content lays out (and clips)
-            // to the LEFT of it — otherwise a right-aligned control underlaps the bar and
-            // its edge gets shaved by the viewport clip.
-            let gutter = pnum(node, "gutter").map(|n| n as f32).unwrap_or(16.0);
-            let view_w = (inner.w - gutter).max(0.0);
-            let content = Rect {
-                x: inner.x,
-                y: inner.y - offset,
-                w: view_w,
-                h: content_h,
-            };
-            let view = Some([inner.x, inner.y, view_w, inner.h]);
-            flow(node, content, model, layer, fade, view, key, out, false);
+            let (content, view) = scroll_view(node, inner, content_h, offset, 16.0);
+            flow(
+                node,
+                content,
+                model,
+                scroll,
+                layer,
+                fade,
+                Some(view),
+                key,
+                out,
+                false,
+            );
         }
-        "row" => flow(node, inner, model, layer, fade, clip, key, out, true),
+        "row" => flow(
+            node, inner, model, scroll, layer, fade, clip, key, out, true,
+        ),
         // `cell` is the generic layout BOX (a "div") — same vertical-flow engine as
         // `cell` is THE box — one vertical-flow engine, one name. (It absorbed `column`
         // and `panel`: a vertical list is a `cell`, and a carved-stone panel is a `cell`
@@ -1811,11 +1925,35 @@ fn resolve<'a>(
         // own a backdrop + a focus rim. Without this arm the walker would anchor-
         // overlay its children (the generic fall-through), and a pane's contents
         // would stack on top of one another instead of flowing down it.
-        "cell" | "panel" => flow(node, inner, model, layer, fade, clip, key, out, false),
+        //
+        // …and when its content outgrows the box it SCROLLS — the `list`'s viewport
+        // above, with the offset owned by the container itself instead of by a scene's
+        // bind (Aaron 2026-09-15). A container that fits takes the untouched path, so
+        // every scene that does not overflow draws exactly the bytes it drew before.
+        "cell" | "panel" => match overflow {
+            Some(s) => {
+                let (content, view) = scroll_view(node, inner, s.content_h, s.offset, 0.0);
+                flow(
+                    node,
+                    content,
+                    model,
+                    scroll,
+                    layer,
+                    fade,
+                    Some(view),
+                    key,
+                    out,
+                    false,
+                );
+            }
+            None => flow(
+                node, inner, model, scroll, layer, fade, clip, key, out, false,
+            ),
+        },
         // A 2-D track grid — the CSS-Grid generalisation of `flow` (see the Grid
         // section). Must sit before the `_` catch-all so its children are placed
         // into cells rather than anchor-overlaid.
-        "grid" => grid_arrange(node, inner, model, layer, fade, clip, key, out),
+        "grid" => grid_arrange(node, inner, model, scroll, layer, fade, clip, key, out),
         // The carved modal slab: its authored `children` are the ITEMS (buttons/rows the
         // scene supplies), flowed vertically below the drawn title block. The title /
         // subtitle / divider / footer are CHROME the component draws (not placed nodes),
@@ -1841,6 +1979,7 @@ fn resolve<'a>(
                     child,
                     r,
                     model,
+                    scroll,
                     layer,
                     fade,
                     clip,
@@ -1872,6 +2011,7 @@ fn resolve<'a>(
                                 child,
                                 rail,
                                 model,
+                                scroll,
                                 layer,
                                 fade,
                                 clip,
@@ -1887,6 +2027,7 @@ fn resolve<'a>(
                                 child,
                                 pill,
                                 model,
+                                scroll,
                                 layer,
                                 fade,
                                 clip,
@@ -1903,6 +2044,7 @@ fn resolve<'a>(
                 &content,
                 lay.content,
                 model,
+                scroll,
                 layer,
                 fade,
                 clip,
@@ -1922,6 +2064,7 @@ fn resolve<'a>(
                     child,
                     r,
                     model,
+                    scroll,
                     layer,
                     fade,
                     clip,
@@ -1939,7 +2082,17 @@ fn resolve<'a>(
                     continue;
                 }
                 let r = anchored(c, inner, model);
-                resolve(c, r, model, layer, fade, clip, child_key(key, c, i), out);
+                resolve(
+                    c,
+                    r,
+                    model,
+                    scroll,
+                    layer,
+                    fade,
+                    clip,
+                    child_key(key, c, i),
+                    out,
+                );
             }
         }
     }
@@ -1970,6 +2123,7 @@ fn flow<'a>(
     node: &'a UiNode,
     area: Rect,
     model: &ValueMap,
+    scroll: &ScrollStore,
     layer: f32,
     fade: f32,
     clip: Option<[f32; 4]>,
@@ -1986,7 +2140,7 @@ fn flow<'a>(
         .filter(|(_, c)| visible(c, model))
         .collect();
     flow_kids(
-        node, &kids, area, model, layer, fade, clip, key, out, horizontal,
+        node, &kids, area, model, scroll, layer, fade, clip, key, out, horizontal,
     );
 }
 
@@ -2001,6 +2155,7 @@ fn flow_kids<'a>(
     kids: &[(usize, &'a UiNode)],
     area: Rect,
     model: &ValueMap,
+    scroll: &ScrollStore,
     layer: f32,
     fade: f32,
     clip: Option<[f32; 4]>,
@@ -2074,7 +2229,17 @@ fn flow_kids<'a>(
                 h: len,
             }
         };
-        resolve(c, r, model, layer, fade, clip, child_key(key, c, *i), out);
+        resolve(
+            c,
+            r,
+            model,
+            scroll,
+            layer,
+            fade,
+            clip,
+            child_key(key, c, *i),
+            out,
+        );
         pos += len + node.gap;
     }
 }
@@ -2096,24 +2261,136 @@ fn scroll_content_h(node: &UiNode, model: &ValueMap) -> f32 {
             .sum::<f32>()
 }
 
-/// The nearest `list` ANCESTOR (one carrying a scroll `bind`) of `target` in `tree`, if any
-/// — the scrolling region a pad-focused control lives inside, so [`run_ui`] can keep that
-/// control visible (pad focus-follow, nav-tier contract `1B5F6BB8`). Deepest list wins, so
-/// a nested list scrolls the inner one.
-fn scroll_list_of<'a>(tree: &'a UiNode, target: &str) -> Option<&'a UiNode> {
+/// A vertical flow container's content, split the way [`flow_kids`] splits it:
+/// `(fixed, grow)` — the inter-child gaps plus every no-`grow` child's main extent (an
+/// `aspect` child deriving its height from the box's width, as it does in the flow), and
+/// separately the intrinsic height of the `grow` children.
+///
+/// The split is what decides overflow, and it decides it the way `grow` is defined.
+/// GROW MEANS "TAKE THE SLACK": while there is any slack, a grow child absorbs it and
+/// the container does NOT overflow — a box of grow children has no intrinsic column at
+/// all, and an overfull child inside it is the one that scrolls, not its parent. It is
+/// when the FIXED content alone no longer fits (`flow_kids`' own `free < 0`) that there
+/// is no slack left to take: the container overflows, and from there `grow` degenerates
+/// to "intrinsic" so the grow child's content is scrolled to rather than collapsed to
+/// nothing. One notion of overflow, and nothing is ever placed where no one can reach it.
+///
+/// Distinct from [`scroll_content_h`], which is the authored `list`'s: a list's children
+/// are its ROWS — all of them stack, and none of them is slack.
+fn flow_columns(node: &UiNode, inner: Rect, model: &ValueMap) -> (f32, f32) {
+    let mut n = 0usize;
+    let (mut fixed, mut grow) = (0.0, 0.0);
+    for c in node.children.iter().filter(|c| visible(c, model)) {
+        n += 1;
+        if c.grow.is_some() {
+            grow += child_main(c, model, false);
+            continue;
+        }
+        fixed += match pnum(c, "aspect") {
+            Some(a) => inner.w / (a as f32).max(1e-6),
+            None => child_main(c, model, false),
+        };
+    }
+    (fixed + node.gap * n.saturating_sub(1) as f32, grow)
+}
+
+/// Every scrolling flow container's retained offset, keyed by cache key — see
+/// [`UiState::scroll`]. The fifth thing [`resolve`] carries down the tree, beside
+/// `layer` / `fade` / `clip` / `key`: a container cannot place its children until it
+/// knows where it is scrolled to.
+type ScrollStore = HashMap<u64, f32>;
+
+/// Does this flow container overflow, and if so at what offset? `Some` only for a
+/// `cell`/`panel` whose FIXED column ([`flow_columns`]) is taller than its inner box —
+/// every other kind, and every container with slack left, answers `None` and is laid out
+/// exactly as before.
+///
+/// A half-pixel of slack, so a container whose content lands within rounding noise of
+/// its box is NOT declared overflowing: the threshold decides whether a scene keeps its
+/// historical layout, so it must not be tripped by f32 drift.
+fn flow_scroll(
+    node: &UiNode,
+    inner: Rect,
+    model: &ValueMap,
+    scroll: &ScrollStore,
+    key: u64,
+) -> Option<ScrollBox> {
+    if !matches!(node.component.as_str(), "cell" | "panel") || node.children.is_empty() {
+        return None;
+    }
+    let (fixed, grow) = flow_columns(node, inner, model);
+    if fixed <= inner.h + 0.5 {
+        return None;
+    }
+    let content_h = fixed + grow;
+    let offset = scroll
+        .get(&key)
+        .copied()
+        .unwrap_or(0.0)
+        .clamp(0.0, content_h - inner.h);
+    Some(ScrollBox { content_h, offset })
+}
+
+/// A scrolling region's two rects: the CONTENT box its children flow into (the full
+/// content height, lifted by the offset) and the VIEWPORT the subtree draws through.
+/// THE geometry — the `list` and an overflowing flow container share it, so a bar, a
+/// clip and a wheel clamp can never come from three different opinions.
+///
+/// `gutter` reserves a right strip for the bar so content lays out (and clips) to the
+/// LEFT of it — otherwise a right-aligned control underlaps the bar and its edge gets
+/// shaved by the viewport clip. An authored `list` budgets one (16 px); a flow container
+/// that discovers it overflows does NOT (`0`): stealing width at the moment content grows
+/// would reflow the whole pane sideways, so the bar rides OVER the edge and the
+/// horizontal layout stays exactly what it was. Either can author the prop.
+fn scroll_view(
+    node: &UiNode,
+    inner: Rect,
+    content_h: f32,
+    offset: f32,
+    default_gutter: f32,
+) -> (Rect, [f32; 4]) {
+    let gutter = pnum(node, "gutter")
+        .map(|n| n as f32)
+        .unwrap_or(default_gutter);
+    let view_w = (inner.w - gutter).max(0.0);
+    (
+        Rect {
+            x: inner.x,
+            y: inner.y - offset,
+            w: view_w,
+            h: content_h,
+        },
+        [inner.x, inner.y, view_w, inner.h],
+    )
+}
+
+/// The nearest SCROLLING ancestor of `target` in `tree` — a bound `list` or an
+/// overflowing flow container, whichever `scrolls` accepts — so [`run_ui`] can keep a
+/// pad-focused control visible inside it (focus-follow, nav-tier contract `1B5F6BB8`).
+/// Deepest wins, so a region nested in another scrolls the inner one.
+fn scroll_host_of<'a>(
+    tree: &'a UiNode,
+    target: &str,
+    scrolls: &dyn Fn(&UiNode) -> bool,
+) -> Option<&'a UiNode> {
     fn contains(n: &UiNode, target: &str) -> bool {
         n.id == target || n.children.iter().any(|c| contains(c, target))
     }
-    fn walk<'a>(n: &'a UiNode, target: &str, best: &mut Option<&'a UiNode>) {
-        if n.component == "list" && n.bind.is_some() && contains(n, target) {
+    fn walk<'a>(
+        n: &'a UiNode,
+        target: &str,
+        scrolls: &dyn Fn(&UiNode) -> bool,
+        best: &mut Option<&'a UiNode>,
+    ) {
+        if scrolls(n) && contains(n, target) {
             *best = Some(n);
         }
         for c in &n.children {
-            walk(c, target, best);
+            walk(c, target, scrolls, best);
         }
     }
     let mut best = None;
-    walk(tree, target, &mut best);
+    walk(tree, target, scrolls, &mut best);
     best
 }
 
@@ -2683,6 +2960,7 @@ fn grid_arrange<'a>(
     node: &'a UiNode,
     area: Rect,
     model: &ValueMap,
+    scroll: &ScrollStore,
     layer: f32,
     fade: f32,
     clip: Option<[f32; 4]>,
@@ -2725,7 +3003,17 @@ fn grid_arrange<'a>(
             w: span_extent(&cw, p.col, p.col_span, col_gap),
             h: span_extent(&rh, p.row, p.row_span, row_gap),
         };
-        resolve(k, r, model, layer, fade, clip, child_key(key, k, *i), out); // the child fills its cell
+        resolve(
+            k,
+            r,
+            model,
+            scroll,
+            layer,
+            fade,
+            clip,
+            child_key(key, k, *i),
+            out,
+        ); // the child fills its cell
     }
 }
 
@@ -2775,6 +3063,24 @@ fn grid_measure(node: &UiNode, model: &ValueMap) -> Vec2 {
 /// node, so the component's own row math always gets the click.
 fn no_descend(kind: &str) -> bool {
     matches!(kind, "tabs" | "pill_toggle" | "select" | "context_menu")
+}
+
+/// Does this placed node answer the WHEEL? An overflowing flow container does — it holds
+/// its own offset ([`UiState::scroll`]) — and so does a `list`, named here only so that
+/// finding one stops the search: the list has already folded the tick in [`hit_list`],
+/// and a region nested inside another must never scroll both.
+fn scrolls(p: &Placed) -> bool {
+    p.scroll.is_some() || p.node.component == "list"
+}
+
+/// Is `m` inside a placed node's inherited scissor clip? Unclipped is always yes. THE
+/// gate that keeps content scrolled past the fold from being clicked: it is not drawn,
+/// so it is not there.
+fn in_clip(clip: Option<[f32; 4]>, m: Vec2) -> bool {
+    match clip {
+        Some([x, y, w, h]) => m.x >= x && m.x <= x + w && m.y >= y && m.y <= y + h,
+        None => true,
+    }
 }
 
 pub(crate) fn visible(node: &UiNode, model: &ValueMap) -> bool {
@@ -2912,6 +3218,13 @@ fn hit_node(
 ) {
     let node = p.node;
     let r = p.rect;
+
+    // SCROLLED PAST THE FOLD IS NOT THERE: a node clipped away by a scrolling ancestor
+    // takes no pointer at all — not a claim, not a drag pickup, not a click. The clip is
+    // the same rect the draw scissors to, so what can be hit is exactly what can be seen.
+    if !in_clip(p.clip, input.mouse) {
+        return;
+    }
 
     // Drag source — prop-driven so ANY row/cell/panel can be one (no new component
     // kind). Pressing inside a node carrying `drag_kind` picks up a payload; `run_ui`
@@ -3559,6 +3872,14 @@ fn node_fingerprint(
     // it would otherwise leave a stale thumb.
     if node.component == "list" {
         h.f32(scroll_content_h(node, model));
+    }
+    // An overflowing flow container draws the same bar, sized from the content and
+    // positioned by the offset it was laid out with — both already resolved onto
+    // `Placed`, so the thumb invalidates when a row appears or the region scrolls, and a
+    // container that does NOT overflow folds nothing at all (its bytes are unchanged).
+    if let Some(s) = p.scroll {
+        h.f32(s.content_h);
+        h.f32(s.offset);
     }
 
     // A PRESENTING sprite's alpha ramp is driven by the scene clock
@@ -4253,6 +4574,9 @@ fn draw_node(
                 let rb = ptext(node, "runes_style").map_or(&Json::Null, |p| jpath(styles, p));
                 draw_corner_runes(r, node, rb, out);
             }
+            // …and an overflowing flow container (a `panel`) wears THE scrollbar over
+            // its own backdrop, from the very numbers its children were placed with.
+            flow_scroll_bar(p, st, out);
             return Some(props);
         }
         // Styled boxes — including `cell` (the generic layout box) and a `surface`, whose
@@ -4288,6 +4612,10 @@ fn draw_node(
                 let rb = ptext(node, "runes_style").map_or(&Json::Null, |p| jpath(styles, p));
                 draw_corner_runes(r, node, rb, out);
             }
+            // The same bar the `panel` arm above draws — a `cell` that overflows is a
+            // scrolling region too, styled or not (an unstyled one still gets a usable
+            // bar, exactly as an unstyled `list` does).
+            flow_scroll_bar(p, st, out);
         }
         // (`list` — the scrolling region's backdrop + scrollbar — draws in the
         // engine arm above, like every other component; only its column LAYOUT +
@@ -4348,6 +4676,18 @@ fn draw_node(
         _ => {}
     }
     None
+}
+
+/// An overflowing flow container's scrollbar: [`draw_scroll_bar`] over the node's own
+/// viewport (its rect inset by its pads — the box its children flow inside), fed the
+/// content height and offset [`resolve`] laid those children out with. A container that
+/// fits carries no [`ScrollBox`] and draws nothing, which is what keeps every scene that
+/// does not overflow byte-identical.
+fn flow_scroll_bar(p: &Placed, st: &Json, out: &mut Vec<HudCommand>) {
+    if let Some(s) = p.scroll {
+        let inner = p.rect.inset_xy(pad_x(p.node), pad_y(p.node));
+        draw_scroll_bar(inner, st, s.content_h, s.offset, out);
+    }
 }
 
 /// Scale the alpha of every colour in `cmds` by `f` — the assembly half of the
@@ -6541,13 +6881,43 @@ fn slider_track(r: Rect, props: &Json) -> Rect {
         };
     }
     let label_w = jnum(props, "label_w", 0.0);
-    let h = jnum(props, "slider_h", r.h);
+    // A THIN rail lying down, exactly as it stands up: `slider_h` defaults to the upright
+    // rail's 10, never the row's height — a 40 px row used to draw a 40 px capsule with the
+    // fill inside it, a pill, not a slider (Aaron 2026-09-07: "return the slider to the
+    // correct slider pattern").
+    let h = jnum(props, "slider_h", 10.0);
+    // A caption with no reserved column sits in a band ABOVE the rail when the row has the
+    // room (the upright form's own arrangement), so the rail never runs under its own label.
+    let top = if slider_caption_above(r, props) {
+        let s = props.get("style").unwrap_or(&Json::Null);
+        jnum(s, "label_size", 13.0) + jnum(s, "label_gap", 4.0)
+    } else {
+        0.0
+    };
     Rect {
         x: r.x + label_w,
-        y: r.y + (r.h - h) * 0.5,
+        y: r.y + top + ((r.h - top - h) * 0.5).max(0.0),
         w: (r.w - label_w - jnum(props, "value_w", 0.0)).max(0.0),
         h,
     }
+}
+
+/// Does a horizontal slider's caption sit in a band above its rail? Yes when it has a
+/// caption, reserves no `label_w` column for it, and the row is tall enough to stack the
+/// two (caption + gap + rail + a little air); a short row keeps the caption inline.
+fn slider_caption_above(r: Rect, props: &Json) -> bool {
+    if slider_vertical(props)
+        || jstr(props, "label").is_empty()
+        || jnum(props, "label_w", 0.0) > 0.0
+    {
+        return false;
+    }
+    let s = props.get("style").unwrap_or(&Json::Null);
+    let need = jnum(s, "label_size", 13.0)
+        + jnum(s, "label_gap", 4.0)
+        + jnum(props, "slider_h", 10.0)
+        + 4.0;
+    r.h >= need
 }
 
 /// The **slider** — a labelled value track: an optional caption column, a rail carrying
@@ -6606,7 +6976,7 @@ fn draw_slider(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
         } else {
             INK
         };
-        let ly = if vertical {
+        let ly = if vertical || slider_caption_above(r, props) {
             r.y
         } else {
             r.y + (r.h - lsz) * 0.5
@@ -7262,23 +7632,39 @@ fn list_viewport(r: Rect, props: &Json) -> Rect {
 ///
 /// **props**: `bind_value` (the scroll offset, px) · `content_h` (walker-measured) ·
 /// `pad_x` / `pad_y` (the node's insets — the viewport is the padded rect).
-/// **style**: `bar_w` (4) · `bar_inset` (0, from the viewport's right edge) ·
-/// `thumb_min` (28, the grab floor) · `track` / `thumb` (the two bar colours) · plus the
-/// shared container backdrop keys ([`draw_panel_bg`]: `panel_bg` / `fill` / `border` /
-/// `radius` / …).
+/// **style**: the bar's own keys (see [`draw_scroll_bar`], which this shares with every
+/// overflowing flow container) plus the shared container backdrop keys
+/// ([`draw_panel_bg`]: `panel_bg` / `fill` / `border` / `radius` / …).
 fn draw_list(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
     let s = props.get("style").unwrap_or(&Json::Null);
     if !s.is_null() {
         draw_panel_bg(r, s, out);
     }
-    let inner = list_viewport(r, props);
-    let content_h = jnum(props, "content_h", 0.0);
+    draw_scroll_bar(
+        list_viewport(r, props),
+        s,
+        jnum(props, "content_h", 0.0),
+        jnum(props, "bind_value", 0.0),
+        out,
+    );
+}
+
+/// THE scrollbar — a right-edge track plus a proportional thumb, over the viewport
+/// `inner` of a region holding `content_h` of content at `offset`. One definition for
+/// the `list` and for any flow container that has outgrown its box (Aaron 2026-09-15),
+/// so the two can never drift into two looks.
+///
+/// Content that FITS gets no bar at all: there is nothing to scroll, and a permanent
+/// full-height thumb would only lie about that. Kept in this positive form (rather than
+/// an inverted early return) so a NaN `content_h` falls out here too.
+///
+/// **style**: `bar_w` (4) · `bar_inset` (0, from the viewport's right edge) ·
+/// `thumb_min` (28, the grab floor) · `track` / `thumb` (the two bar colours). A `Null`
+/// block behaves exactly as a missing one, so an unstyled region still gets a usable bar.
+fn draw_scroll_bar(inner: Rect, s: &Json, content_h: f32, offset: f32, out: &mut Vec<HudCommand>) {
     let max = content_h - inner.h;
-    // Content that FITS gets no bar at all: there is nothing to scroll, and a permanent
-    // full-height thumb would only lie about that. Kept in this positive form (rather
-    // than an inverted early return) so a NaN `content_h` falls out here too.
     if max > 0.0 {
-        let offset = jnum(props, "bind_value", 0.0).max(0.0).min(max);
+        let offset = offset.max(0.0).min(max);
         let bw = jnum(s, "bar_w", 4.0);
         let track = Rect {
             x: inner.x + inner.w - bw - jnum(s, "bar_inset", 0.0),
@@ -11666,6 +12052,281 @@ mod tests {
             f.results.number("sy"),
             Some(0.0),
             "wheel up from the top clamps at 0"
+        );
+    }
+
+    // ── THE FLOW CONTAINER SCROLLS (Aaron 2026-09-15) ───────────────────────────
+    //
+    // *"some of the panels now vertical overflow the screen, these panels need to be
+    // able to scroll for content overflow. This should be an update to the panel display
+    // flow container."* A `cell`/`panel` whose content outgrows its box becomes a
+    // scrolling region — no prop to author, no bind, no scene in the loop: the `list`'s
+    // viewport, clip, bar, wheel and focus-follow over an offset the container OWNS.
+
+    /// The `list` fixture as a FLOW container: the same rows in a plain `cell`, its bind
+    /// dropped (nothing wired it — it scrolls because its content overflows) and its
+    /// gutter prop removed, so the flow default (reserve nothing; the bar rides over the
+    /// edge rather than reflowing the pane sideways) is what is under test. `live` makes
+    /// the rows buttons in one nav group, so a row can be clicked and focused.
+    fn flow_fixture(
+        w: f32,
+        h: f32,
+        rows: usize,
+        row_h: f32,
+        style: Option<&str>,
+        live: bool,
+    ) -> UiNode {
+        let mut page = scroll_fixture(w, h, rows, row_h, style);
+        let sc = &mut page.children[0];
+        sc.component = "cell".into();
+        sc.bind = None;
+        sc.props.remove("gutter");
+        if live {
+            for (i, row) in sc.children.iter_mut().enumerate() {
+                row.component = "button".into();
+                row.action = Some(format!("hit{i}"));
+                row.tab_group = "rows".into();
+                row.nav_ordinal = i as u32;
+            }
+        }
+        page
+    }
+
+    #[test]
+    fn a_flow_container_over_its_box_clips_and_draws_the_list_bar() {
+        // 256×100 holding 4 rows of 50 → content 200, viewport 100, max 100; thumb
+        // 100·(100/200) = 50 at the top. Every quantity exact, so the pins are bytes.
+        let styles = serde_json::json!({});
+        let f = run_ui(
+            &flow_fixture(256.0, 100.0, 4, 50.0, None, false),
+            &ValueMap::new(),
+            &styles,
+            &input_at(-9.0, -9.0, false),
+            &mut UiState::new(),
+        );
+        assert_eq!(
+            f.commands,
+            vec![
+                HudCommand::Rect {
+                    x: 252.0,
+                    y: 0.0,
+                    w: 4.0,
+                    h: 100.0,
+                    color: STONE,
+                    layer: 0.0
+                },
+                HudCommand::Rect {
+                    x: 252.0,
+                    y: 0.0,
+                    w: 4.0,
+                    h: 50.0,
+                    color: SAP,
+                    layer: 0.0
+                },
+                HudCommand::Clip {
+                    rect: Some([0.0, 0.0, 256.0, 100.0])
+                },
+                HudCommand::Clip { rect: None },
+            ],
+            "an overflowing cell draws the list's own bar and clips its subtree"
+        );
+        // …and the rows below the fold are still PLACED (the walker reports every rect,
+        // as the `list` does), which is what the scroll-to and the bar measure against.
+        assert_eq!(f.rect("row3").map(|r| r.pos.y), Some(150.0));
+    }
+
+    #[test]
+    fn a_flow_container_that_fits_draws_exactly_what_it_drew_before() {
+        // The byte gate on the no-overflow path: a container that fits emits its
+        // backdrop and NOTHING else — no clip toggle, no track, no thumb — so every
+        // scene that does not overflow is unchanged by scrolling existing at all.
+        let styles = serde_json::json!({
+            "well": { "panel_bg": [0.125, 0.25, 0.5, 1.0], "radius": 2,
+                      "bar_w": 8, "track": [0.25, 0.5, 0.75, 1.0], "thumb": [1.0, 0.5, 0.25, 1.0] }
+        });
+        let backdrop = HudCommand::Panel {
+            x: 0.0,
+            y: 0.0,
+            w: 256.0,
+            h: 128.0,
+            color: [0.125, 0.25, 0.5, 1.0],
+            color2: [0.125, 0.25, 0.5, 1.0],
+            grad: 0.0,
+            radius: 2.0,
+            border: 0.0,
+            border_color: [0.0, 0.0, 0.0, 0.0],
+            feather: 0.0,
+            layer: 0.0,
+        };
+        let draw = |rows: usize, row_h: f32| {
+            run_ui(
+                &flow_fixture(256.0, 128.0, rows, row_h, Some("well"), false),
+                &ValueMap::new(),
+                &styles,
+                &input_at(-9.0, -9.0, false),
+                &mut UiState::new(),
+            )
+            .commands
+        };
+        assert_eq!(
+            draw(2, 64.0),
+            vec![backdrop.clone()],
+            "content that fits exactly scrolls nothing and draws no bar"
+        );
+        // Its overflowing twin: the same backdrop, then the bar, then the clip toggles —
+        // content 256 over a 128 viewport, so the thumb is half the track.
+        let bar = |y: f32, h: f32, color: [f32; 4]| HudCommand::Rect {
+            x: 248.0,
+            y,
+            w: 8.0,
+            h,
+            color,
+            layer: 0.0,
+        };
+        assert_eq!(
+            draw(2, 128.0),
+            vec![
+                backdrop,
+                bar(0.0, 128.0, [0.25, 0.5, 0.75, 1.0]),
+                bar(0.0, 64.0, [1.0, 0.5, 0.25, 1.0]),
+                HudCommand::Clip {
+                    rect: Some([0.0, 0.0, 256.0, 128.0])
+                },
+                HudCommand::Clip { rect: None },
+            ],
+            "the styled overflowing flow draw is byte-stable"
+        );
+    }
+
+    #[test]
+    fn a_wheel_tick_moves_the_flow_offset_and_its_children() {
+        let page = flow_fixture(256.0, 100.0, 4, 50.0, None, false);
+        let styles = serde_json::json!({});
+        let m = ValueMap::new();
+        let mut state = UiState::new();
+        let at_rest = run_ui(
+            &page,
+            &m,
+            &styles,
+            &input_at(100.0, 50.0, false),
+            &mut state,
+        );
+        assert_eq!(at_rest.rect("row1").map(|r| r.pos.y), Some(50.0));
+
+        // One notch down = the list's own 46 px, folded into the container's OWN offset:
+        // no bind is written, because there is no bind to write.
+        let f = run_ui(
+            &page,
+            &m,
+            &styles,
+            &input_wheel(100.0, 50.0, -1.0),
+            &mut state,
+        );
+        assert!(
+            f.results.is_on("hud_hit"),
+            "the tick is spent on the region"
+        );
+        assert_eq!(
+            state.scroll.values().copied().collect::<Vec<_>>(),
+            vec![46.0]
+        );
+        let f = run_ui(
+            &page,
+            &m,
+            &styles,
+            &input_at(100.0, 50.0, false),
+            &mut state,
+        );
+        assert_eq!(
+            f.rect("row1").map(|r| r.pos.y),
+            Some(4.0),
+            "the children move by the offset"
+        );
+
+        // …and the clamp is the content's: a mile of wheel parks at content − viewport.
+        run_ui(
+            &page,
+            &m,
+            &styles,
+            &input_wheel(100.0, 50.0, -99.0),
+            &mut state,
+        );
+        assert_eq!(
+            state.scroll.values().copied().collect::<Vec<_>>(),
+            vec![100.0]
+        );
+        // A container that no longer overflows scrolls nothing, whatever it once held.
+        let short = flow_fixture(256.0, 100.0, 1, 50.0, None, false);
+        let f = run_ui(
+            &short,
+            &m,
+            &styles,
+            &input_at(100.0, 50.0, false),
+            &mut state,
+        );
+        assert_eq!(f.rect("row0").map(|r| r.pos.y), Some(0.0));
+    }
+
+    #[test]
+    fn a_child_below_the_fold_is_hittable_only_after_scrolling() {
+        // SCROLLED PAST THE FOLD IS NOT THERE: row3 lives at y 150..200 of a 100-tall
+        // viewport. Its rect is real — the walker places every row — but it is clipped
+        // away, so a click on it must do nothing until the region scrolls it in.
+        let page = flow_fixture(256.0, 100.0, 4, 50.0, None, true);
+        let styles = serde_json::json!({});
+        let m = ValueMap::new();
+        let mut state = UiState::new();
+        let f = run_ui(
+            &page,
+            &m,
+            &styles,
+            &input_at(100.0, 175.0, true),
+            &mut state,
+        );
+        assert!(
+            !f.results.is_on("hit3"),
+            "a row past the fold takes no click"
+        );
+
+        // Scroll it in (clamped to content − viewport = 100), then the same row answers.
+        run_ui(
+            &page,
+            &m,
+            &styles,
+            &input_wheel(100.0, 50.0, -99.0),
+            &mut state,
+        );
+        let f = run_ui(&page, &m, &styles, &input_at(100.0, 75.0, true), &mut state);
+        assert!(
+            f.results.is_on("hit3"),
+            "…and answers where it is now drawn"
+        );
+    }
+
+    #[test]
+    fn focusing_a_child_below_the_fold_scrolls_it_into_view() {
+        // Pad focus-follow (1B5F6BB8) over a flow container: the focused row must be
+        // visible, and the correction lands in the container's own offset — no bind, no
+        // scene fold, the walker simply keeps its own cursor on screen.
+        let page = flow_fixture(256.0, 100.0, 4, 50.0, None, true);
+        let styles = serde_json::json!({});
+        let m = ValueMap::new();
+        let mut state = UiState::new();
+        state.request_focus("row3");
+        run_ui(&page, &m, &styles, &input_at(-9.0, -9.0, false), &mut state);
+        assert_eq!(
+            state.scroll.values().copied().collect::<Vec<_>>(),
+            vec![100.0],
+            "the offset corrects by exactly the overflow"
+        );
+        let f = run_ui(&page, &m, &styles, &input_at(-9.0, -9.0, false), &mut state);
+        let r = f.rect("row3").expect("the focused row is placed");
+        assert_eq!((r.pos.y, r.size.y), (50.0, 50.0), "…and it is now in view");
+        // Settled: a focused row already inside the viewport moves nothing further.
+        run_ui(&page, &m, &styles, &input_at(-9.0, -9.0, false), &mut state);
+        assert_eq!(
+            state.scroll.values().copied().collect::<Vec<_>>(),
+            vec![100.0]
         );
     }
 
@@ -17041,6 +17702,75 @@ mod tests {
         );
     }
 
+    /// A SUB SCENE is authored on the surface node: `scene` names it, and every
+    /// `scene_<name>` prop is that instance's param (Aaron's ruling EBDB3518 — the
+    /// nested surface is a complete scene the host manages and hands context by intent).
+    /// The prefix is not a preference: a `UiNode`'s props are SCALARS by the boundary
+    /// contract and `parse_ui_json` drops objects, so a nested `params: {..}` could never
+    /// survive the parse. The walker carries the name and the knobs and resolves neither.
+    #[test]
+    fn a_surface_reserves_the_scene_it_names_and_its_scene_prefixed_params() {
+        let mut panel = node("surface");
+        panel.id = "quad_top".into();
+        panel.anchor = Some(UiAnchor::TopLeft);
+        panel.width = Some(120.0);
+        panel.height = Some(80.0);
+        panel = prop(panel, "scene", Value::Text("model_view".into()));
+        panel = prop(panel, "scene_projection", Value::Text("top".into()));
+        panel = prop(panel, "scene_chrome", Value::Bool(true));
+        panel = prop(panel, "scene_zoom", Value::Number(1.5));
+
+        // A surface the BEHAVIOUR fills carries no scene and no params — the host asks
+        // `scene.is_empty()` to tell one from the other.
+        let mut filled = node("surface");
+        filled.id = "own".into();
+        filled.anchor = Some(UiAnchor::TopLeft);
+        filled.width = Some(40.0);
+        filled.height = Some(40.0);
+
+        let mut page = node("surface");
+        page.children = vec![panel, filled];
+
+        let mut state = UiState::new();
+        let frame = run_ui(
+            &page,
+            &ValueMap::new(),
+            &serde_json::json!({}),
+            &input_at(700.0, 500.0, false),
+            &mut state,
+        );
+
+        let slot = |id: &str| frame.surfaces.iter().find(|s| s.id == id).unwrap();
+        let seat = slot("quad_top");
+        assert_eq!(
+            seat.scene, "model_view",
+            "the `scene` prop names the host's def"
+        );
+        assert_eq!(
+            seat.params.get("projection"),
+            Some(&Value::Text("top".into())),
+            "`scene_projection` reaches the slot as `projection`"
+        );
+        assert!(seat.params.is_on("chrome"), "a bool param survives whole");
+        assert_eq!(seat.params.number("zoom"), Some(1.5), "so does a number");
+        assert_eq!(
+            seat.params.get("scene_projection"),
+            None,
+            "the prefix is STRIPPED — a sub scene reads `projection`, not `scene_projection`"
+        );
+
+        let own = slot("own");
+        assert!(
+            own.scene.is_empty(),
+            "no `scene` prop → a behaviour-filled surface, not a sub scene"
+        );
+        assert_eq!(
+            own.params,
+            flicker_script::ValueMap::new(),
+            "and it carries no params"
+        );
+    }
+
     #[test]
     fn corner_rune_flag_draws_four_glyphs_glow_top_bronze_bottom() {
         // The corner runes are a DECORATION FLAG now: a plain cell spanning a
@@ -19766,7 +20496,9 @@ mod tests {
             h: 20.0,
         };
 
-        // `handle_over` — the handle's overhang past the rail, 4px on each side.
+        // `handle_over` — the handle's overhang past the rail, 4px on each side. The rail lying
+        // down is the upright rail's 10px by default (never the row's height — that was the
+        // pill), so the handle stands 10 + 2 × 4.
         let over = |style: Json| {
             let mut out = Vec::new();
             draw_slider(
@@ -19778,12 +20510,12 @@ mod tests {
         };
         assert_eq!(
             over(serde_json::json!({})).3,
-            28.0,
-            "the default still overhangs 4px each side"
+            18.0,
+            "the default still overhangs 4px each side of the 10px rail"
         );
         assert_eq!(
             over(serde_json::json!({ "handle_over": 0.0 })).3,
-            20.0,
+            10.0,
             "0 flushes it to the rail"
         );
 

@@ -24,12 +24,19 @@
 //! purely mechanical FBX-derived atom — combat data lives in the pack, not the rig.
 //! Clips are referenced by **name** and resolved to indices at [`StateMachine::build`]
 //! time, mirroring how the rig loader resolves clip tracks to bones by name.
+//! - A state's **clip source** ([`ClipSource`], gait generator / IK design 37704D6B, G5) is
+//!   either that library clip NAME (every pack authored before the generator, byte-for-byte)
+//!   or a **generated gait** — `{ "gait": "walk" }` — for the bodies that have no motion
+//!   library (the quadrupeds, birds and bats): such a state plays no clip; the runtime steps
+//!   `flicker-mechanics::gait::Locomotion` for that gait instead. Additive to the contract —
+//!   every reader either drives it or says out loud that it cannot (7C46FAC4).
 //!
 //! Several fields (e.g. `root_motion`, window labels) are recorded now for later slices
 //! (capsule locomotion, hitbox binding) — hence the module-wide dead-code allowance.
 #![allow(dead_code)]
 
 use std::collections::HashMap;
+use std::fmt;
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -82,8 +89,9 @@ pub struct StateMachineDef {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StateDef {
     pub name: String,
-    /// Clip name to play in this state (resolved to an index at build).
-    pub clip: String,
+    /// Where this state's pose comes from: a clip name (resolved to an index at build) or a
+    /// generated gait — see [`ClipSource`].
+    pub clip: ClipSource,
     /// Does the clip loop? Locomotion/idle loop; attacks/reactions play once.
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub looping: bool,
@@ -115,6 +123,219 @@ pub struct StateDef {
     /// The TAE event timeline for this state's clip.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub events: Vec<EventDef>,
+}
+
+/// Where a state's pose comes from — the pack's CLIP SOURCE (gait generator / IK design
+/// 37704D6B, phase G5). Authored under the state's `clip` key in one of two shapes:
+///
+/// ```json
+/// { "name": "Walk", "clip": "Walk_nonWeapon" }
+/// { "name": "Walk", "clip": { "gait": "walk", "family": "walker" } }
+/// ```
+///
+/// A bare NAME is the contract every pack was authored to, byte-for-byte: the clip is looked
+/// up in the loaded libraries at [`StateMachine::build`]. An OBJECT names a GENERATED gait: the
+/// state plays no clip at all — the runtime steps `flicker-mechanics::gait::Locomotion` for
+/// that gait on the body's limbs every frame instead (the quadrupeds, birds and bats have no
+/// motion library). `family` defaults to `walker` and is omitted when it is the default, so a
+/// saved pack keeps its hand-authored shape. Any other shape, an unknown gait or family name,
+/// or an unknown key inside the object is a parse error that names it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(untagged)]
+pub enum ClipSource {
+    /// A clip in the loaded libraries, by name.
+    Library(String),
+    /// The gait generator — no clip.
+    Generated(GeneratedGait),
+}
+
+impl ClipSource {
+    /// The library clip this source names — `None` for a generated gait.
+    pub fn library(&self) -> Option<&str> {
+        match self {
+            Self::Library(name) => Some(name),
+            Self::Generated(_) => None,
+        }
+    }
+
+    /// The generated gait this source names — `None` for a library clip.
+    pub fn generated(&self) -> Option<GeneratedGait> {
+        match self {
+            Self::Generated(g) => Some(*g),
+            Self::Library(_) => None,
+        }
+    }
+}
+
+impl From<&str> for ClipSource {
+    fn from(name: &str) -> Self {
+        Self::Library(name.to_string())
+    }
+}
+
+impl From<String> for ClipSource {
+    fn from(name: String) -> Self {
+        Self::Library(name)
+    }
+}
+
+/// The clip name, or `generated:<gait>` — what a caption or a state card shows.
+impl fmt::Display for ClipSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Library(name) => f.write_str(name),
+            Self::Generated(g) => write!(f, "generated:{}", g.gait.name()),
+        }
+    }
+}
+
+// A string is a library clip, a map is a generated gait; anything else says what was expected.
+// Hand-written (not `untagged`) so a bad gait name fails LOUD with serde's own message —
+// `unknown variant 'fly2', expected one of …` — instead of "did not match any variant".
+impl<'de> Deserialize<'de> for ClipSource {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct Visitor;
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = ClipSource;
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("a clip name, or { \"gait\": …, \"family\": … } for a generated gait")
+            }
+            fn visit_str<E: serde::de::Error>(self, name: &str) -> Result<ClipSource, E> {
+                Ok(ClipSource::Library(name.to_string()))
+            }
+            fn visit_map<M: serde::de::MapAccess<'de>>(
+                self,
+                map: M,
+            ) -> Result<ClipSource, M::Error> {
+                GeneratedGait::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+                    .map(ClipSource::Generated)
+            }
+        }
+        d.deserialize_any(Visitor)
+    }
+}
+
+/// A generated gait: the gait a state stands for, and the body's gait family. The driver picks
+/// its gait from SPEED (the Froude number), so `gait` is the state's intent — the consumer
+/// drives at the speed that means it — and `family` is the ladder the driver climbs with speed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GeneratedGait {
+    pub gait: Gait,
+    #[serde(default, skip_serializing_if = "GaitFamily::is_default")]
+    pub family: GaitFamily,
+}
+
+/// The gaits a pack may author — the pack-side vocabulary. Mirrors the driver's table
+/// (`flicker-mechanics::gait::GaitKind`) name for name, plus the flight states the flap cycle
+/// (G4) owes: `fly`, `glide`, `perch`. A consumer maps a name to its driver; a gait it cannot
+/// generate yet must fail LOUD there (a warning and a visible caption), never silently stand.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Gait {
+    /// Every foot planted, the body breathing.
+    Stand,
+    Walk,
+    Trot,
+    Pace,
+    Canter,
+    Gallop,
+    Bound,
+    Hop,
+    Sprawl,
+    /// The walk on a trunk or branch — the body clinging.
+    Climb,
+    /// The flap cycle.
+    Fly,
+    /// Wings spread, no flap.
+    Glide,
+    /// Toes wrapped on a branch.
+    Perch,
+}
+
+impl Gait {
+    pub const ALL: [Gait; 13] = [
+        Self::Stand,
+        Self::Walk,
+        Self::Trot,
+        Self::Pace,
+        Self::Canter,
+        Self::Gallop,
+        Self::Bound,
+        Self::Hop,
+        Self::Sprawl,
+        Self::Climb,
+        Self::Fly,
+        Self::Glide,
+        Self::Perch,
+    ];
+
+    /// The authored spelling — the same name the pack carries.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Stand => "stand",
+            Self::Walk => "walk",
+            Self::Trot => "trot",
+            Self::Pace => "pace",
+            Self::Canter => "canter",
+            Self::Gallop => "gallop",
+            Self::Bound => "bound",
+            Self::Hop => "hop",
+            Self::Sprawl => "sprawl",
+            Self::Climb => "climb",
+            Self::Fly => "fly",
+            Self::Glide => "glide",
+            Self::Perch => "perch",
+        }
+    }
+}
+
+/// How a body steps through its gaits as it speeds up — the driver's Froude ladder
+/// (`flicker-mechanics::gait::LocomotionFamily`, name for name). `walker` is the default: the
+/// hoofed and pawed quadrupeds, and a bird on the ground.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GaitFamily {
+    /// Walk → trot → canter → gallop.
+    #[default]
+    Walker,
+    /// A pace instead of a trot (camels).
+    Pacer,
+    /// Walk → bound (the small mammals).
+    Bounder,
+    /// Walk → hop (rabbit, toad).
+    Hopper,
+    /// A sprawl at every speed (lizard, crocodile, turtle).
+    Sprawler,
+    /// The climb — the walk with cling.
+    Climber,
+}
+
+impl GaitFamily {
+    pub const ALL: [GaitFamily; 6] = [
+        Self::Walker,
+        Self::Pacer,
+        Self::Bounder,
+        Self::Hopper,
+        Self::Sprawler,
+        Self::Climber,
+    ];
+
+    /// The authored spelling.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Walker => "walker",
+            Self::Pacer => "pacer",
+            Self::Bounder => "bounder",
+            Self::Hopper => "hopper",
+            Self::Sprawler => "sprawler",
+            Self::Climber => "climber",
+        }
+    }
+
+    fn is_default(&self) -> bool {
+        *self == Self::Walker
+    }
 }
 
 fn default_true() -> bool {
@@ -502,8 +723,11 @@ struct Event {
 /// A resolved state: its clip index/duration plus resolved transitions + timeline.
 struct State {
     name: String,
-    /// Index into the model's clip list, or [`usize::MAX`] if the clip was missing.
+    /// Index into the model's clip list, or [`usize::MAX`] if the clip was missing — or if the
+    /// state is a generated gait, which has no clip.
     clip: usize,
+    /// The generated gait this state stands for; `None` for a library clip.
+    generated: Option<GeneratedGait>,
     /// Clip length in ticks (≥ 1).
     duration: u32,
     looping: bool,
@@ -666,14 +890,33 @@ impl StateMachine {
 
         let mut states = Vec::with_capacity(def.states.len());
         for s in &def.states {
-            let (clip, duration) = match clip_index.get(s.clip.as_str()) {
-                Some(&(i, d)) => (i, d.max(1)),
-                None => {
-                    warnings.push(format!(
-                        "state '{}' references unknown clip '{}' — will hold rest pose",
-                        s.name, s.clip
-                    ));
-                    (usize::MAX, 1)
+            let (clip, duration, generated) = match &s.clip {
+                ClipSource::Library(name) => match clip_index.get(name.as_str()) {
+                    Some(&(i, d)) => (i, d.max(1), None),
+                    None => {
+                        warnings.push(format!(
+                            "state '{}' references unknown clip '{name}' — will hold rest pose",
+                            s.name
+                        ));
+                        (usize::MAX, 1, None)
+                    }
+                },
+                ClipSource::Generated(g) => {
+                    // A generated state has no clip and no length: its play-head never
+                    // advances and it never completes, so a `next` or a `clip_done` edge on it
+                    // (or `looping: false`) can never do anything — say so, never dangle.
+                    if !s.looping
+                        || s.next.is_some()
+                        || s.transitions.iter().any(|t| t.on == Trigger::ClipDone)
+                    {
+                        warnings.push(format!(
+                            "generated state '{}' ({}) never completes — `looping: false`, \
+                             `next` and `clip_done` edges on it can never fire",
+                            s.name,
+                            g.gait.name()
+                        ));
+                    }
+                    (usize::MAX, 1, Some(*g))
                 }
             };
             let next = match s.next.as_deref() {
@@ -702,6 +945,7 @@ impl StateMachine {
             states.push(State {
                 name: s.name.clone(),
                 clip,
+                generated,
                 duration,
                 looping: s.looping,
                 next,
@@ -741,6 +985,12 @@ impl StateMachine {
     pub fn current_clip(&self) -> usize {
         self.states[self.current].clip
     }
+    /// The generated gait the current state stands for — `Some` means there is NO clip to
+    /// sample ([`Self::current_clip`] is [`usize::MAX`]): the caller steps the gait generator
+    /// for it, or says it cannot.
+    pub fn current_generated(&self) -> Option<GeneratedGait> {
+        self.states[self.current].generated
+    }
     pub fn current_tick(&self) -> u32 {
         self.tick
     }
@@ -751,6 +1001,14 @@ impl StateMachine {
     pub fn current_root_motion(&self) -> bool {
         self.states[self.current].root_motion
     }
+    /// Whether the graph can drive itself: some state carries a transition, or an `any` rule
+    /// exists. A states-only pack (the seeded golem draft) has no edges, so its driver has to
+    /// pick states from outside with [`Self::force_state_by_name`]; a real graph consumes the
+    /// same [`Inputs`] through [`Self::advance`] and must NOT be forced over.
+    pub fn has_graph(&self) -> bool {
+        !self.any.is_empty() || self.states.iter().any(|s| !s.transitions.is_empty())
+    }
+
     pub fn warnings(&self) -> &[String] {
         &self.warnings
     }
@@ -807,11 +1065,13 @@ impl StateMachine {
             }
         }
 
-        // 1. Advance the play-head; note whether the clip completed this tick.
+        // 1. Advance the play-head; note whether the clip completed this tick. A generated
+        //    gait has no clip: its head stays at 0 and it never completes.
         let dur = self.states[self.current].duration;
         let looping = self.states[self.current].looping;
+        let generated = self.states[self.current].generated.is_some();
         let mut clip_done = false;
-        if !self.completed {
+        if !self.completed && !generated {
             self.tick += 1;
             if self.tick >= dur {
                 clip_done = true;
@@ -1000,28 +1260,39 @@ pub fn write_pack(path: &Path, pack: &PackFile) -> Result<()> {
 mod tests {
     use super::*;
 
-    /// Every real pack in the content tree.
+    /// Every real pack in the content tree: the pattern defaults under `skeletons/` and any
+    /// body's own under `characters/`.
     fn real_packs() -> Vec<std::path::PathBuf> {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../../Alpha/content/package/characters");
+        let package = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../../Alpha/content/package");
         let mut out = Vec::new();
-        let Ok(dirs) = std::fs::read_dir(&root) else {
-            return out;
-        };
-        for d in dirs.flatten() {
-            let Ok(files) = std::fs::read_dir(d.path()) else {
+        for root in [
+            package.join("skeletons"),
+            package.join("characters"),
+            package.join("creatures"),
+        ] {
+            let Ok(dirs) = std::fs::read_dir(&root) else {
                 continue;
             };
-            for f in files.flatten() {
-                let p = f.path();
-                if p.to_str()
-                    .is_some_and(|s| s.ends_with(".pack.json") || s.ends_with(".pack.json.gz"))
-                {
-                    out.push(p);
+            collect(dirs, &mut out);
+        }
+        return out;
+
+        fn collect(dirs: std::fs::ReadDir, out: &mut Vec<std::path::PathBuf>) {
+            for d in dirs.flatten() {
+                let Ok(files) = std::fs::read_dir(d.path()) else {
+                    continue;
+                };
+                for f in files.flatten() {
+                    let p = f.path();
+                    if p.to_str()
+                        .is_some_and(|s| s.ends_with(".pack.json") || s.ends_with(".pack.json.gz"))
+                    {
+                        out.push(p);
+                    }
                 }
             }
         }
-        out
     }
 
     /// **THE ADDITIVE-SERDE GUARD.** Every combat field added for the authoring contract is
@@ -1282,6 +1553,167 @@ mod tests {
             reparsed.state_machine.states[0].events[0].combat,
             Some(combat)
         );
+    }
+
+    // ── the clip SOURCE (G5) ──
+
+    /// A pack mixing both sources round-trips: the library state's `clip` stays a BARE NAME
+    /// (the pre-generator contract, byte-for-byte), the generated states carry the object —
+    /// `family` written only when it is not the default — and the re-parse equals the parse.
+    #[test]
+    fn generated_sources_round_trip_and_library_names_stay_bare() {
+        let src = r#"{
+          "format": "flicker.pack", "version": 1,
+          "state_machine": {
+            "initial": "Idle",
+            "states": [
+              { "name": "Idle", "clip": "idle" },
+              { "name": "Walk", "clip": { "gait": "walk" },
+                "transitions": [ { "to": "Idle", "on": "move_stop" } ] },
+              { "name": "Hop", "clip": { "gait": "hop", "family": "hopper" } }
+            ]
+          }
+        }"#;
+        let pack: PackFile = serde_json::from_str(src).unwrap();
+        let states = &pack.state_machine.states;
+        assert_eq!(states[0].clip, ClipSource::from("idle"));
+        assert_eq!(states[0].clip.library(), Some("idle"));
+        assert_eq!(
+            states[1].clip.generated(),
+            Some(GeneratedGait {
+                gait: Gait::Walk,
+                family: GaitFamily::Walker
+            })
+        );
+        assert_eq!(
+            states[2].clip.generated().map(|g| g.family),
+            Some(GaitFamily::Hopper)
+        );
+        assert_eq!(states[1].clip.to_string(), "generated:walk");
+
+        let out = serde_json::to_string_pretty(&pack).unwrap();
+        assert!(
+            out.contains(r#""clip": "idle""#),
+            "a library clip stays a bare name"
+        );
+        assert!(
+            out.contains(r#""gait": "walk""#) && out.contains(r#""gait": "hop""#),
+            "generated gaits are written by name"
+        );
+        assert_eq!(
+            out.matches("\"family\"").count(),
+            1,
+            "the default family is omitted, the hopper's is kept"
+        );
+        let reparsed: PackFile = serde_json::from_str(&out).unwrap();
+        for (a, b) in states.iter().zip(&reparsed.state_machine.states) {
+            assert_eq!(a.clip, b.clip, "{}: source drifted on save", a.name);
+        }
+        assert_eq!(out, serde_json::to_string_pretty(&reparsed).unwrap());
+
+        // THE ADDITIVE GUARD: a library-only pack never acquires the new shape on save.
+        let legacy: PackFile = serde_json::from_str(GRAPH).unwrap();
+        let out = serde_json::to_string_pretty(&legacy).unwrap();
+        assert!(
+            !out.contains("gait") && !out.contains("family"),
+            "a library-only pack must re-serialize without the generated vocabulary"
+        );
+        assert!(legacy
+            .state_machine
+            .states
+            .iter()
+            .all(|s| s.clip.library().is_some()));
+    }
+
+    /// A generated state builds with NO clip in the library and no missing-clip warning: it
+    /// reports its gait, holds [`usize::MAX`] as its clip, and its play-head never advances
+    /// (so `clip_done` never fires). Edges that could never fire on it are warned about at
+    /// build — the contract fails loud, it does not dangle.
+    #[test]
+    fn a_generated_state_builds_without_a_clip_and_never_completes() {
+        let def: PackFile = serde_json::from_str(
+            r#"{ "state_machine": { "initial": "Idle", "states": [
+                { "name": "Idle", "clip": { "gait": "stand" },
+                  "transitions": [ { "to": "Walk", "on": "move" } ] },
+                { "name": "Walk", "clip": { "gait": "walk", "family": "hopper" },
+                  "transitions": [ { "to": "Idle", "on": "move_stop" } ] }
+            ] } }"#,
+        )
+        .unwrap();
+        let mut sm = StateMachine::build(&def.state_machine, &[]).unwrap();
+        assert!(sm.warnings().is_empty(), "{:?}", sm.warnings());
+        assert!(sm.has_graph());
+        assert_eq!(sm.current_clip(), usize::MAX, "no clip to sample");
+        assert_eq!(sm.current_generated().map(|g| g.gait), Some(Gait::Stand));
+        let moving = Inputs {
+            move_: true,
+            ..Default::default()
+        };
+        for _ in 0..10 {
+            let r = sm.tick(&moving);
+            assert_eq!(sm.current_tick(), 0, "a generated head never advances");
+            assert!(r.fired.is_empty());
+        }
+        assert_eq!(sm.current_state_name(), "Walk", "the graph still drives");
+        assert_eq!(
+            sm.current_generated(),
+            Some(GeneratedGait {
+                gait: Gait::Walk,
+                family: GaitFamily::Hopper
+            })
+        );
+
+        // Edges that can never fire on a generated state are named at build.
+        let def: PackFile = serde_json::from_str(
+            r#"{ "state_machine": { "initial": "A", "states": [
+                { "name": "A", "clip": { "gait": "walk" }, "looping": false, "next": "B",
+                  "transitions": [ { "to": "B", "on": "clip_done" } ] },
+                { "name": "B", "clip": { "gait": "stand" } }
+            ] } }"#,
+        )
+        .unwrap();
+        let sm = StateMachine::build(&def.state_machine, &[]).unwrap();
+        assert_eq!(sm.warnings().len(), 1, "{:?}", sm.warnings());
+        assert!(sm.warnings()[0].contains("never completes"));
+    }
+
+    /// An authored name that fails to resolve fails LOUD with a message that names it: an
+    /// unknown gait, an unknown family, a stray key inside the object, or a shape that is
+    /// neither a name nor an object.
+    #[test]
+    fn bad_clip_sources_fail_loud() {
+        let parse = |clip: &str| -> String {
+            serde_json::from_str::<StateDef>(&format!(r#"{{ "name": "X", "clip": {clip} }}"#))
+                .expect_err("must not parse")
+                .to_string()
+        };
+        assert!(parse(r#"{ "gait": "fly2" }"#).contains("fly2"));
+        assert!(parse(r#"{ "gait": "walk", "family": "swimmer" }"#).contains("swimmer"));
+        assert!(parse(r#"{ "gait": "walk", "speed": 3 }"#).contains("speed"));
+        assert!(parse("3").contains("clip name"));
+        assert!(parse(r#"{ "family": "walker" }"#).contains("gait"));
+    }
+
+    /// The `name()` spellings ARE the serde spellings — one vocabulary, gated against drift.
+    #[test]
+    fn gait_names_are_their_authored_spellings() {
+        for g in Gait::ALL {
+            assert_eq!(
+                serde_json::to_string(&g).unwrap(),
+                format!("\"{}\"", g.name())
+            );
+            assert_eq!(
+                serde_json::from_str::<Gait>(&format!("\"{}\"", g.name())).unwrap(),
+                g
+            );
+        }
+        for f in GaitFamily::ALL {
+            assert_eq!(
+                serde_json::to_string(&f).unwrap(),
+                format!("\"{}\"", f.name())
+            );
+        }
+        assert_eq!(GaitFamily::default(), GaitFamily::Walker);
     }
 
     #[test]

@@ -4,12 +4,17 @@
 //! primitive. The README blesses a promotion as exactly this — a plain byte move + one manifest
 //! row. (History/undo is the bench's concern and is not reproduced here.)
 //!
-//!   cargo run -p flicker-content --example promote_asset -- <rel> <class> <name>...
+//!   cargo run -p flicker-content --example promote_asset -- [--root <dir>] <rel> <class> <name>...
 //!   e.g. cargo run -p flicker-content --example promote_asset -- \
 //!          props/environment prop Grass-Tall Grass-Medium Grass-Short
 //!
-//! Safe by construction: a missing staging source or an already-occupied package target aborts
-//! before any move, so a mis-resolved content root cannot damage the tree.
+//! `--root <dir>` aims the tool at a content tree of its own (`set_content_root`), so a real run
+//! can be driven against a temp tree instead of the live `Alpha/content` the compile-time fallback
+//! resolves to. Without it the argv shape is unchanged and the live roots are used, as before.
+//!
+//! Safe by construction: the resolved roots are PRINTED before anything moves, and a missing
+//! staging source or an already-occupied package target aborts before any move, so a mis-resolved
+//! content root cannot damage the tree.
 
 use std::path::{Path, PathBuf};
 
@@ -34,9 +39,15 @@ fn move_tree(src: &Path, dst: &Path) -> Result<()> {
 }
 
 fn main() -> Result<()> {
-    let args: Vec<String> = std::env::args().collect();
+    let mut args: Vec<String> = std::env::args().collect();
+    // Before ANYTHING resolves a root: the content-roots service is a process-local override, so
+    // aiming it has to happen ahead of the first `roots()` call, not after.
+    if args.len() > 2 && args[1] == "--root" {
+        flicker_content::set_content_root(Some(PathBuf::from(&args[2])));
+        args.drain(1..3);
+    }
     if args.len() < 4 {
-        eprintln!("usage: promote_asset <rel> <class> <name>...");
+        eprintln!("usage: promote_asset [--root <dir>] <rel> <class> <name>...");
         std::process::exit(2);
     }
     let rel = &args[1];

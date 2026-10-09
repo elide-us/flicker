@@ -14,6 +14,8 @@ license.workspace = true
 # the-same payload by 5–10× on disk. Storage and contouring proper stay
 # standard-library only.
 [dependencies]
+# The generator↔world frame bridge (`frame`) is a pair of glam matrices.
+glam.workspace = true
 clayengine.workspace = true
 flicker-primitive = { version = "0.1.9", path = "../../content/flicker-primitive" }
 bytemuck.workspace = true

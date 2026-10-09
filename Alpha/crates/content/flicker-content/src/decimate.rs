@@ -378,6 +378,7 @@ impl WeldedMesh {
         }
         let indices: Vec<u32> = (0..vertices.len() as u32).collect();
         RawModel {
+            regions: Vec::new(),
             vertices,
             indices,
             bones: source.bones.clone(),
@@ -417,6 +418,7 @@ mod tests {
         }
         let indices = (0..verts.len() as u32).collect();
         RawModel {
+            regions: Vec::new(),
             vertices: verts,
             indices,
             bones: Vec::new(),
@@ -522,6 +524,7 @@ mod tests {
         }
         let indices = (0..verts.len() as u32).collect();
         RawModel {
+            regions: Vec::new(),
             vertices: verts,
             indices,
             bones: Vec::new(),

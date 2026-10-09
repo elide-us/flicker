@@ -439,7 +439,15 @@ impl Orbit {
         if wheel == 0.0 || !wheel.is_finite() {
             return;
         }
-        self.zoom = (self.zoom * (1.0 - wheel * 0.12)).clamp(0.05, 6.0);
+        self.set_zoom(self.zoom * (1.0 - wheel * 0.12));
+    }
+
+    /// Set the zoom outright — a FRAMING request (a panel focusing on a hand) rather than a wheel
+    /// notch — under the same clamp the wheel lives under, so no caller can invert or escape it.
+    pub fn set_zoom(&mut self, zoom: f32) {
+        if zoom.is_finite() {
+            self.zoom = zoom.clamp(0.05, 6.0);
+        }
     }
 
     /// The eye's offset from the look-at point. Z-up source content: orbit in the XY plane,

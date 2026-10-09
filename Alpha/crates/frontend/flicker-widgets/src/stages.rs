@@ -3129,7 +3129,8 @@ mod tests {
     }
 
     /// The NEW loop, mirrored: `seed` is `ambient` for `mesh.wgsl`/`skinned.wgsl` and
-    /// `Vec3::ZERO` for `mesh_textured.wgsl`'s zero-seeded diffuse accumulator.
+    /// `Vec3::ZERO` for `material.wgsl`'s (the textured pair's path) zero-seeded diffuse
+    /// accumulator.
     fn loop_diffuse(rig: &LightRig, seed: Vec3, n: Vec3, wp: Vec3) -> Vec3 {
         let mut acc = seed;
         for l in rig.lights.iter().take(rig.count as usize) {
@@ -3144,8 +3145,8 @@ mod tests {
     /// TODAY'S closed form, mirrored **exactly as each shader wrote it** — including the
     /// left-associative `+` chain, which is the only thing that can differ, f32 addition
     /// not being associative. `seed` is `Some(ambient)` for `mesh.wgsl`'s
-    /// `scene.ambient.rgb + sun + moon + point`, and `None` for `mesh_textured.wgsl`'s
-    /// bare `(sun_d + moon_d + point_d)` with the ambient added outside.
+    /// `scene.ambient.rgb + sun + moon + point`, and `None` for the material's (once
+    /// `mesh_textured.wgsl`'s) bare `(sun_d + moon_d + point_d)` with the ambient added outside.
     fn closed_diffuse(rig: &LightRig, seed: Option<Vec3>, n: Vec3, wp: Vec3) -> Vec3 {
         let (sun, moon, point) = (&rig.lights[0], &rig.lights[1], &rig.lights[2]);
         let sun_d = sun.color * n.dot(sun.direction).max(0.0);

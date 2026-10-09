@@ -15,7 +15,12 @@ use crate::output::OutputStage;
 /// The instrument's state: a seed, a rack, and an output stage.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TextureRecipe {
-    /// Stable id — the file stem and the key a consumer looks it up by.
+    /// Stable id — the FACTORY-PATCH key (`presets::granite()` is `"granite"`)
+    /// and the identity an unbound scratch recipe carries while it has no slot.
+    ///
+    /// NOT the file stem: a committed bundle is keyed by the bound material's
+    /// SLOT (`materials/<id:03>/<id:03>.texture.json`, plan 30FE7F58 P3), so the
+    /// stem is the slot and a rename never moves a file.
     pub id: String,
     /// Display name.
     pub name: String,

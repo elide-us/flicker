@@ -80,6 +80,10 @@ pub enum AssetClass {
     Prop,
     /// Motion only, to retarget onto the canonical rig; no rig is produced.
     Animation,
+    /// A non-humanoid body — a horse, a rat — that has NO canonical skeleton yet (the creature
+    /// rig families are a future pass): sized and collapsed like a character, then shipped as
+    /// a static bake so it can be looked at, and re-rigged once its family's canon exists.
+    Creature,
 }
 
 impl AssetClass {
@@ -89,6 +93,7 @@ impl AssetClass {
             AssetClass::Skin => "skin",
             AssetClass::Prop => "prop",
             AssetClass::Animation => "animation",
+            AssetClass::Creature => "creature",
         }
     }
 }
@@ -360,6 +365,11 @@ pub enum PackageClass {
     /// recipe is the authored artifact and the maps are its rebuildable output,
     /// so the browser must not present them as the same kind of thing.
     TextureRecipe,
+    /// A SKELETON RECIPE (`<Name>.recipe.json`) — the authored source of a skeleton, living
+    /// in `package/skeletons/<Pattern>/` beside the reference rig of the PATTERN it animates
+    /// on (Aaron 2026-09-08). The rig is derived output and stays a [`Self::Rig`]; the recipe
+    /// is the thing a human edits.
+    SkeletonRecipe,
     /// A prop VARIATION SET (`flicker.propset`, on-disk `<Name>.set.json`) — an
     /// authored grouping of props with pick weights that set-dressing and the
     /// scatter consume. The props it references are baked [`Self::Rig`]s; the
@@ -397,6 +407,7 @@ impl PackageClass {
             Self::Epoch => "epoch",
             Self::Texture => "texture",
             Self::TextureRecipe => "texture_recipe",
+            Self::SkeletonRecipe => "skeleton_recipe",
             Self::PropSet => "propset",
             Self::Font => "font",
             Self::Doc => "doc",
@@ -492,6 +503,9 @@ pub fn classify_package(path: &Path) -> PackageClass {
     if logical.ends_with(".texture.json") {
         return PackageClass::TextureRecipe;
     }
+    if logical.ends_with(".recipe.json") {
+        return PackageClass::SkeletonRecipe;
+    }
     if logical.ends_with(".set.json") {
         return PackageClass::PropSet;
     }
@@ -505,6 +519,35 @@ pub fn classify_package(path: &Path) -> PackageClass {
     classify_package_head(&head)
 }
 
+/// A SKELETON recipe is likewise named by its extension: `<Preset>.recipe.json` beside the
+/// `<Preset>Skeleton` rig it composes to — the authored source, never mistaken for its output.
+#[cfg(test)]
+mod skeleton_recipe_class_tests {
+    use super::*;
+
+    #[test]
+    fn a_skeleton_recipe_is_classified_by_its_extension() {
+        assert_eq!(
+            classify_package(Path::new(
+                "package/skeletons/ToeWalker/Lizardman.recipe.json"
+            )),
+            PackageClass::SkeletonRecipe
+        );
+        assert_eq!(
+            classify_package(Path::new(
+                "package/skeletons/Humanoid/Humanoid.recipe.json.gz"
+            )),
+            PackageClass::SkeletonRecipe
+        );
+        assert_ne!(
+            PackageClass::SkeletonRecipe.id(),
+            PackageClass::TextureRecipe.id(),
+            "two recipes, two style keys"
+        );
+        assert_ne!(PackageClass::SkeletonRecipe.id(), PackageClass::Rig.id());
+    }
+}
+
 /// A recipe is named by its EXTENSION, not sniffed: `<name>.texture.json` is the
 /// same cheap unambiguous path `.pack.json` and `.rbp.json` take, and it costs no
 /// read at all. Pinned because the extension is a contract between the Sablework
@@ -516,20 +559,18 @@ mod texture_recipe_class_tests {
     #[test]
     fn a_recipe_is_classified_by_its_extension() {
         assert_eq!(
-            classify_package(Path::new("staging/materials/Granite/Granite.texture.json")),
+            classify_package(Path::new("staging/materials/010/010.texture.json")),
             PackageClass::TextureRecipe
         );
         // At rest it is gz, and the logical extension still drives the answer.
         assert_eq!(
-            classify_package(Path::new(
-                "staging/materials/Granite/Granite.texture.json.gz"
-            )),
+            classify_package(Path::new("staging/materials/010/010.texture.json.gz")),
             PackageClass::TextureRecipe
         );
         // The maps it produced stay TEXTURES — the recipe is the authored thing,
         // the maps are its output, and the browser must tell them apart.
         assert_eq!(
-            classify_package(Path::new("staging/materials/Granite/Granite_BaseColor.png")),
+            classify_package(Path::new("staging/materials/010/010_BaseColor.png")),
             PackageClass::Texture
         );
         // Ids are what a style lookup keys on, so they must not collide.
@@ -624,6 +665,15 @@ pub fn scan_folder(root: &Path) -> std::io::Result<Scan> {
 fn collect(dir: &Path, out: &mut Vec<Entry>) -> std::io::Result<()> {
     for de in std::fs::read_dir(dir)? {
         let path = de?.path();
+        // A dotfile is the desktop's, never content (`.DS_Store` the moment a folder is browsed
+        // in the Finder): it is neither classified nor reported.
+        if path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.starts_with('.'))
+        {
+            continue;
+        }
         if path.is_dir() {
             collect(&path, out)?;
         } else if path.is_file() {

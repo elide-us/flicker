@@ -1356,8 +1356,19 @@ mod tests {
             use flicker_input_core::ActionSignal;
             use std::path::{Path, PathBuf};
 
-            let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../scenes");
-            let root = root.canonicalize().expect("Alpha/crates/scenes resolves");
+            // Scene crates live one folder per realm under `Alpha/crates/` (plan
+            // DF47A33E, 2026-09-28). Sweep every realm folder that exists, so a new
+            // realm joins the gate by being created, never by being listed here twice.
+            let crates = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../..")
+                .canonicalize()
+                .expect("Alpha/crates resolves");
+            let roots: Vec<PathBuf> = ["devmode", "adventurer", "gamemaster", "dungeonmaker"]
+                .iter()
+                .map(|realm| crates.join(realm))
+                .filter(|p| p.is_dir())
+                .collect();
+            assert!(!roots.is_empty(), "no realm folder under Alpha/crates/");
 
             fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
                 for e in std::fs::read_dir(dir).expect("scene dir reads").flatten() {
@@ -1370,7 +1381,9 @@ mod tests {
                 }
             }
             let mut files = Vec::new();
-            rust_files(&root, &mut files);
+            for root in &roots {
+                rust_files(root, &mut files);
+            }
             files.sort();
             assert!(
                 files.len() > 20,
@@ -1378,11 +1391,11 @@ mod tests {
                 files.len()
             );
             let crate_of = |p: &Path| -> String {
-                p.strip_prefix(&root)
+                p.strip_prefix(&crates)
                     .ok()
                     .and_then(|r| {
                         r.components()
-                            .next()
+                            .nth(1)
                             .map(|c| c.as_os_str().to_string_lossy().into_owned())
                     })
                     .unwrap_or_default()
@@ -1436,7 +1449,7 @@ mod tests {
                 let krate = crate_of(f);
                 let src = std::fs::read_to_string(f).expect("scene source reads");
                 for (n, line) in src.lines().enumerate() {
-                    let at = format!("{}:{}", f.strip_prefix(&root).unwrap().display(), n + 1);
+                    let at = format!("{}:{}", f.strip_prefix(&crates).unwrap().display(), n + 1);
                     if krate != "flicker-controllertester"
                         && (line.contains("input.gamepad(") || line.contains(".gamepad(0)"))
                     {

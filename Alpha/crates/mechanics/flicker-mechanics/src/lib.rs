@@ -14,7 +14,9 @@ pub mod bridge;
 pub mod collision;
 pub mod debug;
 pub mod drop;
+pub mod gait;
 pub mod gizmo;
+pub mod ik;
 
 pub use bridge::{
     autofit_capsules, autofit_capsules_from, role_from_format, shape_from_format,
@@ -25,8 +27,17 @@ pub use collision::{
     Shape, Volume,
 };
 pub use drop::{settle_offset, FallingItem, GRAVITY_CM_S2};
+// `gait::Contact` (a foot's support) stays module-qualified: `collision::Contact` owns the root.
+pub use gait::{
+    BodyFrame, BodySolver, FlapCycle, FlatFloor, FootPlanner, FootState, GaitKind, GaitPattern,
+    HeightFn, Locomotion, LocomotionFamily, SupportKind, SurfaceQuery, Wings,
+};
 pub use gizmo::{
     drag_angle, drag_plane, drag_rotate, drag_scale, drag_scale_uniform, drag_translate, flip,
     flip_matrix, gizmo_segments, pick_handle, pick_handle_among, scale_factors, world_axis, Axis,
     DragDelta, DragState, FlipRefused, GadgetModes, GizmoMode, MIN_SCALE,
+};
+pub use ik::{
+    ccd, limbs_of, plant, subtree, turn_about, turn_subtree, two_bone, two_bone_positions,
+    LimbChain, LimbKind, LimbSide,
 };

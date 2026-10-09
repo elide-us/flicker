@@ -397,7 +397,15 @@ impl Renderer {
                 &wgpu::DeviceDescriptor {
                     label: Some("flicker.device"),
                     required_features: wgpu::Features::empty(),
-                    required_limits: wgpu::Limits::default(),
+                    // The defaults cap a single buffer at 256 MiB, which an ULTRA Meshy mesh
+                    // previewed raw (1.9M triangles, one textured vertex per corner: 278 MB —
+                    // the black-beauty horse, 2026-09-07) blows straight through, and wgpu
+                    // panics on the upload instead of failing the load. Ask for the adapter's
+                    // real ceiling; everything else stays at the portable defaults.
+                    required_limits: wgpu::Limits {
+                        max_buffer_size: adapter.limits().max_buffer_size,
+                        ..wgpu::Limits::default()
+                    },
                     memory_hints: wgpu::MemoryHints::default(),
                 },
                 None,
@@ -451,7 +459,14 @@ impl Renderer {
             surface_format,
             min_uniform_offset_alignment,
         );
-        let skinned = SkinnedMeshPipeline::new(&device, &queue, &frame, &shadow, surface_format);
+        let skinned = SkinnedMeshPipeline::new(
+            &device,
+            &queue,
+            &frame,
+            &shadow,
+            surface_format,
+            mesh_textured.material_layout(),
+        );
         let lines = LinesPipeline::new(
             &device,
             &frame,
@@ -830,6 +845,51 @@ impl Renderer {
             slot
         };
         MeshHandle(id)
+    }
+
+    /// Rewrite an uploaded mesh's VERTICES in place — same count, same indices, new positions
+    /// and normals. One `queue.write_buffer` into the buffer the mesh already owns; no new
+    /// allocation, no handle churn, and the index buffers are untouched, so this is the per-frame
+    /// door for geometry the CPU deforms (the cloth submesh drawn over a GPU-skinned body,
+    /// spec 6C46CAB9) as opposed to [`Renderer::upload_mesh`], which mints a new mesh.
+    ///
+    /// **Fails LOUD**: a count that differs from the upload writes NOTHING and returns `false`
+    /// (with a warning) rather than tearing the geometry — a changed vertex count is a different
+    /// mesh and must be re-uploaded. An unknown handle is likewise `false`.
+    pub fn update_mesh_vertices(&mut self, handle: MeshHandle, vertices: &[MeshVertex]) -> bool {
+        let Some(Some(mesh)) = self.meshes.get(handle.0 as usize) else {
+            tracing::warn!(?handle, "update_mesh_vertices: no such mesh");
+            return false;
+        };
+        if mesh.write_vertices(&self.queue, vertices) {
+            return true;
+        }
+        tracing::warn!(
+            ?handle,
+            count = vertices.len(),
+            "update_mesh_vertices: vertex count differs from the upload — NOTHING written"
+        );
+        false
+    }
+
+    /// [`Renderer::update_mesh_vertices`] for a TEXTURED mesh — the textured twin of a submesh
+    /// the CPU deforms (a skinned body's cloth half, drawn under its material). The same count
+    /// and topology; a mismatch or a freed handle writes NOTHING.
+    pub fn update_textured_mesh_vertices(
+        &mut self,
+        handle: TexturedMeshHandle,
+        vertices: &[TexturedVertex],
+    ) -> bool {
+        if self.mesh_textured.update(&self.queue, handle, vertices) {
+            return true;
+        }
+        tracing::warn!(
+            ?handle,
+            count = vertices.len(),
+            "update_textured_mesh_vertices: no such mesh, or a vertex count that differs from \
+             the upload — NOTHING written"
+        );
+        false
     }
 
     /// Free a previously uploaded mesh, returning its slot to the reuse
@@ -1520,6 +1580,34 @@ impl Renderer {
             models,
             palettes,
             bone_count,
+            None,
+        );
+    }
+
+    /// [`Renderer::draw_skinned_instanced`] under the PBR material path: `texture` as albedo
+    /// with the given `maps` (each `None` slot the pipeline default), shaded exactly as
+    /// [`Renderer::draw_textured_mesh_pbr`] shades a static mesh — the ONE material text
+    /// serves both. The mesh's vertices must carry tangents (see
+    /// [`mesh_tangents`](crate::mesh_tangents)). Same one-mesh-per-frame rule.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_skinned_instanced_pbr(
+        &mut self,
+        mesh: SkinnedMeshHandle,
+        models: &[Mat4],
+        palettes: &[Mat4],
+        bone_count: u32,
+        texture: TextureHandle,
+        maps: PbrMaps,
+    ) {
+        self.note_draw();
+        self.skinned.draw_instanced(
+            &self.device,
+            &self.queue,
+            mesh,
+            models,
+            palettes,
+            bone_count,
+            Some((texture, maps)),
         );
     }
 
@@ -1890,12 +1978,20 @@ impl Renderer {
         };
         let (size, color) = (rt.size, rt.color);
 
+        // Inside an offscreen target, "the screen" IS that target: every 2D draw the sub-scene
+        // queues projects and — crucially — SCISSORS against the target's pixels, not the
+        // window's. Without this, a 2D draw in a small paperdoll/doll pass clamps its scissor
+        // to the window (e.g. 1920x1073) and wgpu rejects it as outside a 346x346 target. The
+        // window size is restored before the main frame's 2D runs.
+        let outer_screen = self.screen;
+        self.screen = size;
         self.begin_frame(); // fresh sub-frame queues
         self.in_pass = true;
         f(self); // the caller queues the sub-scene
         self.in_pass = false;
         if let Err(e) = self.prepare_frame(size) {
             tracing::warn!("render_to_texture: prepare failed: {e:?}");
+            self.screen = outer_screen;
             self.begin_frame();
             return;
         }
@@ -1968,6 +2064,7 @@ impl Renderer {
             }
         }
         self.queue.submit(std::iter::once(encoder.finish()));
+        self.screen = outer_screen; // the window is "the screen" again for the main frame
         self.begin_frame(); // leave the queues clean for the main frame
     }
 
@@ -2079,6 +2176,8 @@ impl Renderer {
         self.mesh.prepare(&self.device, &self.queue);
         self.mesh_textured
             .prepare(&self.device, &self.queue, &self.textures);
+        self.skinned
+            .prepare(&self.device, &self.textures, &self.mesh_textured);
         self.lines.prepare(&self.device, &self.queue);
         self.lines_overlay.prepare(&self.device, &self.queue);
         self.billboard.prepare(&self.device, &self.queue);

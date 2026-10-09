@@ -1,0 +1,41 @@
+[package]
+name = "flicker-modelview"
+version = "0.1.11"
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# MODEL VIEW — the ONE "draw a mesh" scene: a `surface` node in any scene names it
+# (`"scene": "model_view"` + flat `scene_<param>` props) and it is drawn in that panel
+# (Aaron 2026-09-09: a nested surface plays a COMPLETE scene, with its own 2D+3D
+# elements, chrome and input). The Clayworks quad view seats it four times, once per
+# projection; the picture is a `flicker-rigview` panel declared as this scene's ROOT
+# STAGE, and its chrome — the corner label / flip control and the isolate row — is
+# ORDINARY nodes of its own tree, so it draws inside the panel's texture instead of
+# fighting the host's composite (incident 09E5A30F).
+#
+# ONE FILE, EITHER DEPTH (Aaron 2026-09-28: surface is scene is panel): its scene file
+# sits in `content/sensorium/scenes/` like every other. Nested, its host builds it from
+# the manifest's def and reaches it through the TYPED channel (`set_context` in,
+# `isolate()`/`flipped()`/`ray()` out); at root depth, prism-alpha's roster entry (the
+# `scene` factory, no launcher row) builds a full-screen model view from the file alone.
+[lib]
+name = "flicker_modelview"
+path = "src/lib.rs"
+
+[dependencies]
+# Umbrella: render (FrameGraph/Renderer/Rect) + scene (the `Scene` trait) + script
+# (ScriptHost/ValueMap) + ui (the walker, SceneDef, the shared styles loader).
+flicker = { version = "0.1.0", path = "../../core/flicker" }
+# The rig view this scene declares as its root stage — the panel itself.
+flicker-rigview.workspace = true
+# `Arrows` — the line-batch currency the rig view draws (shared with the globe).
+flicker-globe = { version = "0.1.10", path = "../../frontend/flicker-globe" }
+# The shared input event bus: this scene dispatches the frame's signals through its own
+# walker + its rig view, exactly as a top-level scene does.
+flicker-input-core.workspace = true
+flicker-input-router.workspace = true
+glam.workspace = true
+# Resolves the walker's node `style` paths + the scene's own `stages` block.
+serde_json.workspace = true
+tracing.workspace = true

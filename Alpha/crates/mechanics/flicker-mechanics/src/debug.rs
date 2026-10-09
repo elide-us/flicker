@@ -187,9 +187,23 @@ pub fn bone_diamonds(
     globals: &[Mat4],
     waist_frac: f32,
 ) -> Vec<(Vec3, Vec3)> {
+    bone_diamonds_where(world, parents, globals, waist_frac, |_| true)
+}
+
+/// [`bone_diamonds`] for a SUBSET of the bones: only a bone `shown(i)` answers true for draws its
+/// glyph. The topology stays whole (the root-link rule still reads the hidden parent), so an
+/// isolated limb draws exactly the glyphs the full skeleton would give it — an editor showing one
+/// arm, or dimming everything but a hand, draws two of these in two colours.
+pub fn bone_diamonds_where(
+    world: Mat4,
+    parents: &[i32],
+    globals: &[Mat4],
+    waist_frac: f32,
+    shown: impl Fn(usize) -> bool,
+) -> Vec<(Vec3, Vec3)> {
     let mut segs = Vec::with_capacity(parents.len() * 12);
     for (i, &parent) in parents.iter().enumerate() {
-        if parent < 0 {
+        if parent < 0 || !shown(i) {
             continue;
         }
         let head = globals[parent as usize].w_axis.truncate();

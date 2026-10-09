@@ -176,6 +176,25 @@ struct TargetPass<'f> {
     rate: Rate,
     dirty: bool,
     draw: Draw<'f>,
+    /// Draws that run AFTER the composites injected into this target — a sub scene's
+    /// final 2D (its HUD replay), which must land over the nested surfaces it composited
+    /// exactly as the screen's overlays land over the screen composites. Empty for an
+    /// ordinary offscreen pass.
+    after: Vec<Draw<'f>>,
+}
+
+/// A SUB SCENE's frame while its declare scope is open (see [`FrameGraph::sub_scene`]):
+/// the surface target standing in for "the screen", and what the scene declared against
+/// it — its root elements, its overlays, the clear its root stage authored, and whether
+/// any of its content reported dirty. Closing the scope folds it into ONE [`TargetPass`].
+struct SubSceneFrame<'f> {
+    target: RenderTargetHandle,
+    clear: Option<[f64; 4]>,
+    rate: Rate,
+    dirty: bool,
+    base: f32,
+    roots: Vec<Draw<'f>>,
+    overlays: Vec<Draw<'f>>,
 }
 
 /// A swapchain element — a root or an overlay — paired with the layer band it was
@@ -200,6 +219,9 @@ pub struct FrameGraph<'f> {
     /// The layer band the next declared element records — the scene's depth band, stamped
     /// by the manager with [`Self::set_base_layer`] before each scene declares.
     base: f32,
+    /// The open SUB SCENE scopes, innermost last (see [`Self::sub_scene`]). While one is open,
+    /// "the screen" for every declaration means the innermost host's target.
+    sub_scenes: Vec<SubSceneFrame<'f>>,
 }
 
 /// One step of an executed graph, in the order [`FrameGraph::execute`] runs them.
@@ -270,6 +292,7 @@ impl<'f> FrameGraph<'f> {
             rate: Rate::Live,
             dirty: false,
             draw: Box::new(draw),
+            after: Vec::new(),
         });
     }
 
@@ -279,11 +302,79 @@ impl<'f> FrameGraph<'f> {
     /// no composite, so a root element costs no blit. It runs after every offscreen pass
     /// (the shared draw queues are never reset under it) and before the screen composites
     /// (nested surfaces land over it). A scene may declare several; they run in order.
+    ///
+    /// Inside a [`sub_scene`](Self::sub_scene) scope the root surface IS the host's target: the
+    /// element records into that target's pass instead, in the same order.
     pub fn root(&mut self, draw: impl FnOnce(&mut Renderer) + 'f) {
+        if let Some(h) = self.sub_scenes.last_mut() {
+            h.roots.push(Box::new(draw));
+            return;
+        }
         self.roots.push(Element {
             base: self.base,
             draw: Box::new(draw),
         });
+    }
+
+    /// Declare a SUB SCENE: everything `declare` records against "the screen" — its
+    /// [`root`](Self::root) elements, its root [`surface`](Self::surface) stage, its
+    /// [`overlay`](Self::overlay) 2D, and its screen-bound composites — lands in `target`
+    /// instead, as ONE offscreen pass. A nested surface is a complete scene (Aaron
+    /// 2026-09-09): the sub scene declares exactly as it would at the top of the stack
+    /// and never learns it is inside a panel; the HOST then composites `target` wherever
+    /// the walker seated the surface.
+    ///
+    /// Inside the pass the order is the screen's order one level down: the roots in
+    /// declaration order (a root stage's recipe runs as its content), then the composites
+    /// injected into this target (the sub scene's own nested surfaces), then its
+    /// overlays — so its chrome lands over its nested panels exactly as the screen's HUD
+    /// lands over the screen composites. `rate` is the seat's authored liveness (the host
+    /// surface node's); the pass re-renders on the renderer's per-surface clock like any
+    /// other, and a root stage that reports dirty content marks it. The target is cleared
+    /// to the clear its root stage authors, else transparent. Scopes nest: a sub scene
+    /// may host another, and the topo order renders the grandchild first.
+    pub fn sub_scene(
+        &mut self,
+        target: RenderTargetHandle,
+        rate: Rate,
+        declare: impl FnOnce(&mut Self),
+    ) {
+        self.sub_scenes.push(SubSceneFrame {
+            target,
+            clear: None,
+            rate,
+            dirty: false,
+            base: self.base,
+            roots: Vec::new(),
+            overlays: Vec::new(),
+        });
+        declare(self);
+        let Some(frame) = self.sub_scenes.pop() else {
+            return;
+        };
+        let roots = frame.roots;
+        self.passes.push(TargetPass {
+            target: frame.target,
+            clear: frame.clear.unwrap_or(StageDef::CLEAR_UNAUTHORED),
+            base: frame.base,
+            rate: frame.rate,
+            dirty: frame.dirty,
+            draw: Box::new(move |r: &mut Renderer| {
+                for draw in roots {
+                    draw(r);
+                }
+            }),
+            after: frame.overlays,
+        });
+    }
+
+    /// The destination a screen-bound declaration really lands in: the innermost host's
+    /// target while a [`sub_scene`](Self::sub_scene) scope is open, else the screen itself.
+    fn screen_or_host(&self, into: CompositeTarget) -> CompositeTarget {
+        match (into, self.sub_scenes.last()) {
+            (CompositeTarget::Screen, Some(h)) => CompositeTarget::Target(h.target),
+            (into, _) => into,
+        }
     }
 
     /// Declare the screen surface's FINAL 2D — a scene's HUD replay and any immediate 2D
@@ -294,6 +385,10 @@ impl<'f> FrameGraph<'f> {
     /// `render_hud` reads the right [`Renderer::layer`]. Wrapped in a declared pass like a
     /// root. A scene may declare several; they run in order.
     pub fn overlay(&mut self, draw: impl FnOnce(&mut Renderer) + 'f) {
+        if let Some(h) = self.sub_scenes.last_mut() {
+            h.overlays.push(Box::new(draw));
+            return;
+        }
         self.overlays.push(Element {
             base: self.base,
             draw: Box::new(draw),
@@ -378,6 +473,18 @@ impl<'f> FrameGraph<'f> {
                 apply_pass(r, pass, hdr_format, &inputs, &mut content);
             }
         };
+        // A sub scene's ROOT stage: its recipe runs as a root of the host's pass, its
+        // authored clear becomes that target's clear, and its dirty signal marks the pass.
+        // The seat's liveness (the host's `rate`) stands — the stage's own rate is the
+        // screen-level policy the host has already decided for this panel.
+        if matches!(into, CompositeTarget::Screen) {
+            if let Some(h) = self.sub_scenes.last_mut() {
+                h.clear = clear.or(h.clear);
+                h.dirty |= dirty;
+                h.roots.push(Box::new(draw));
+                return;
+            }
+        }
         match into {
             // An offscreen pass carrying the seat's rate — the clock skips its render when
             // the poster / `hz` rule says so, while the composite (declared separately) runs.
@@ -388,6 +495,7 @@ impl<'f> FrameGraph<'f> {
                 rate,
                 dirty,
                 draw: Box::new(draw),
+                after: Vec::new(),
             }),
             // The screen has no target to clear — `end_frame` clears it from
             // `Renderer::clear_color`, so THAT is where a root stage's authored clear
@@ -425,6 +533,7 @@ impl<'f> FrameGraph<'f> {
         frame: Option<PanelFrame>,
         label: Option<Label<'f>>,
     ) {
+        let into = self.screen_or_host(into);
         self.composites.push(Composite::Panel {
             src,
             into,
@@ -449,6 +558,7 @@ impl<'f> FrameGraph<'f> {
         additive: bool,
         tint: [f32; 4],
     ) {
+        let into = self.screen_or_host(into);
         self.composites.push(Composite::Billboard {
             src,
             into,
@@ -475,7 +585,15 @@ impl<'f> FrameGraph<'f> {
             roots,
             overlays,
             base: _,
+            sub_scenes,
         } = self;
+        if !sub_scenes.is_empty() {
+            tracing::warn!(
+                "FrameGraph::execute: {} sub-scene scope(s) never closed — a host declared \
+                 into `sub_scene` without letting the scope return; their content is dropped",
+                sub_scenes.len()
+            );
+        }
         let restore_layer = r.layer();
 
         // Order the offscreen passes: an edge (dst, src) means "target dst composites
@@ -535,6 +653,7 @@ impl<'f> FrameGraph<'f> {
                         rate,
                         dirty,
                         draw,
+                        after,
                         ..
                     }) = passes[i].take()
                     else {
@@ -554,6 +673,10 @@ impl<'f> FrameGraph<'f> {
                             {
                                 emit_composite(r, c);
                             }
+                        }
+                        // A sub scene's final 2D, over the nested surfaces it composited.
+                        for draw in after {
+                            draw(r);
                         }
                     });
                 }
@@ -813,7 +936,122 @@ pub(crate) fn topo_order(targets: &[u32], deps: &[(u32, u32)]) -> (Vec<usize>, b
 
 #[cfg(test)]
 mod tests {
-    use super::{schedule, step_base, topo_order, Step};
+    use super::{
+        schedule, step_base, topo_order, CompositeTarget, FrameGraph, Rate, Rect,
+        RenderTargetHandle, StageDef, StageInputs, Step, Vec2,
+    };
+
+    fn unit_rect() -> Rect {
+        Rect {
+            pos: Vec2::ZERO,
+            size: Vec2::ONE,
+        }
+    }
+
+    #[test]
+    fn a_sub_scene_scope_folds_to_one_pass_whose_overlays_run_after_its_composites() {
+        // A sub scene declares exactly as a top-level one: a root, a screen composite
+        // (one of its own nested surfaces), an overlay (its HUD). Nothing reaches the real
+        // screen: the whole thing is ONE pass into the host's target, the composite is
+        // redirected into that target, and the overlay is the pass's `after` list — run
+        // once the injected composites have landed, so the chrome sits over them.
+        let mut fg = FrameGraph::new();
+        let host = RenderTargetHandle(7);
+        let nested = RenderTargetHandle(8);
+        fg.sub_scene(host, Rate::Live, |fg| {
+            fg.root(|_| {});
+            fg.composite_panel(
+                nested,
+                CompositeTarget::Screen,
+                unit_rect(),
+                0.0,
+                [1.0; 4],
+                None,
+                None,
+            );
+            fg.overlay(|_| {});
+        });
+        assert!(
+            fg.roots.is_empty() && fg.overlays.is_empty(),
+            "a sub scene leaks nothing onto the screen"
+        );
+        assert!(fg.sub_scenes.is_empty(), "the scope closed");
+        assert_eq!(fg.passes.len(), 1);
+        let pass = &fg.passes[0];
+        assert_eq!(pass.target, host);
+        assert_eq!(
+            pass.after.len(),
+            1,
+            "the overlay runs after the injected composites"
+        );
+        assert!(
+            matches!(fg.composites[0].destination(), CompositeTarget::Target(t) if *t == host),
+            "a screen composite inside the scope lands in the host's target"
+        );
+    }
+
+    #[test]
+    fn a_sub_scene_root_stage_clears_the_host_target_and_marks_it_dirty() {
+        // The sub scene's ROOT stage (what a top-level scene would render straight into
+        // the swapchain) becomes the host pass's content: its authored clear is the target's
+        // clear, its dirty signal marks the pass, and the SEAT's liveness (the host's rate)
+        // wins over the stage's own.
+        let mut fg = FrameGraph::new();
+        let host = RenderTargetHandle(3);
+        let stage = StageDef {
+            clear: Some([0.1, 0.2, 0.3, 1.0]),
+            ..Default::default()
+        };
+        let mut inputs = StageInputs::default();
+        inputs.with_dirty(true);
+        fg.sub_scene(host, Rate::Poster, |fg| {
+            fg.surface(CompositeTarget::Screen, &stage, inputs, Rate::Live, |_| {});
+        });
+        let pass = &fg.passes[0];
+        assert_eq!(pass.clear, [0.1, 0.2, 0.3, 1.0]);
+        assert!(pass.dirty);
+        assert_eq!(pass.rate, Rate::Poster);
+        assert!(
+            fg.roots.is_empty(),
+            "the root stage did not become a screen root"
+        );
+    }
+
+    #[test]
+    fn nested_hosting_renders_the_grandchild_before_its_host() {
+        // A hosts B (a scene inside a scene inside a scene). B's pass closes first; the
+        // composite B→A is a dependency the same topo order every offscreen pass obeys.
+        let mut fg = FrameGraph::new();
+        let a = RenderTargetHandle(1);
+        let b = RenderTargetHandle(2);
+        fg.sub_scene(a, Rate::Live, |fg| {
+            fg.sub_scene(b, Rate::Live, |fg| fg.root(|_| {}));
+            fg.composite_panel(
+                b,
+                CompositeTarget::Screen,
+                unit_rect(),
+                0.0,
+                [1.0; 4],
+                None,
+                None,
+            );
+        });
+        assert_eq!(fg.passes.len(), 2);
+        let ids: Vec<u32> = fg.passes.iter().map(|p| p.target.0).collect();
+        let deps: Vec<(u32, u32)> = fg
+            .composites
+            .iter()
+            .filter_map(|c| match c.destination() {
+                CompositeTarget::Target(dst) => Some((dst.0, c.source().0)),
+                CompositeTarget::Screen => None,
+            })
+            .collect();
+        assert_eq!(deps, vec![(1, 2)], "B composites into A, never the screen");
+        let (order, cyclic) = topo_order(&ids, &deps);
+        assert!(!cyclic);
+        let pos = |h: u32| order.iter().position(|&i| ids[i] == h).unwrap();
+        assert!(pos(2) < pos(1), "the grandchild renders before the child");
+    }
 
     #[test]
     fn root_runs_after_every_offscreen_pass_and_before_screen_composites() {

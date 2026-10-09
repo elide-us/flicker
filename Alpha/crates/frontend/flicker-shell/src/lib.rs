@@ -29,15 +29,17 @@
 
 mod display;
 mod shell;
+mod sub_scene;
 mod theme;
 
 pub use display::user_settings_dir;
 pub use shell::{
     builtin_behaviours, current_world_map, input_controls, input_profile, modal_host_of,
-    param_driven_modals, publish_signal_bindings, run, stage_prompt, stage_prompt_closed,
-    take_pending_input, ModalConflict, ModalOption, ModalParams, ModalProgress, ModalText,
-    PauseScene, SceneEntry, SceneFactory, SceneInfo, SharedModal, ShellConfig, MODAL_CONFLICT,
-    REALM_ADVENTURER, REALM_DEVELOPER, REALM_DM, REALM_GAMEMASTER, STAGE_APPLY, STAGE_KEEP,
-    STAGE_REVERT,
+    param_driven_modals, publish_signal_bindings, run, scene_def, stage_prompt,
+    stage_prompt_closed, take_pending_input, ModalConflict, ModalOption, ModalParams,
+    ModalProgress, ModalText, PauseScene, SceneEntry, SceneFactory, SceneInfo, SharedModal,
+    ShellConfig, MODAL_CONFLICT, REALM_ADVENTURER, REALM_DEVELOPER, REALM_DM, REALM_GAMEMASTER,
+    STAGE_APPLY, STAGE_KEEP, STAGE_REVERT,
 };
+pub use sub_scene::SubScene;
 pub use theme::Theme;

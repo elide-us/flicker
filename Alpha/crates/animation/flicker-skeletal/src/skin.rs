@@ -11,7 +11,7 @@
 
 use glam::{Mat3, Mat4, Vec3, Vec4};
 
-use crate::format::{Bone, Mesh};
+use crate::format::{Bone, Mesh, Vertex};
 
 /// Skinning palette: `palette[b] = global[b] * inverse_bind[b]`. Maps a bind-pose
 /// vertex (source space) to its posed position (source space).
@@ -54,33 +54,56 @@ pub fn skin_morphed(mesh: &Mesh, palette: &[Mat4], morph_weights: &[f32]) -> Vec
         .enumerate()
         .map(|(i, v)| {
             let base = morphed.as_ref().map_or(v.p, |p| p[i]);
-            let p = Vec4::new(base[0], base[1], base[2], 1.0);
-            let n = Vec3::from(v.n);
-            let mut pos = Vec3::ZERO;
-            let mut nrm = Vec3::ZERO;
-            for k in 0..4 {
-                let w = v.weights[k];
-                if w == 0.0 {
-                    continue;
-                }
-                let m = palette
-                    .get(v.joints[k] as usize)
-                    .copied()
-                    .unwrap_or(Mat4::IDENTITY);
-                pos += w * (m * p).truncate();
-                nrm += w * (Mat3::from_mat4(m) * n);
-            }
-            let nrm = if nrm.length_squared() > 1e-12 {
-                nrm.normalize()
-            } else {
-                Vec3::Y
-            };
-            SkinnedVertex {
-                position: pos.to_array(),
-                normal: nrm.to_array(),
-            }
+            blend(v, base, palette)
         })
         .collect()
+}
+
+/// 4-influence LBS of a SUBSET of a mesh's vertices — the caller's own extracted list, appended
+/// into `out` after clearing it. The CLOTH SUBMESH's per-frame skin (spec 6C46CAB9): the rest of
+/// the body is skinned on the GPU, so only these few thousand are re-skinned on the CPU.
+///
+/// The buffer is the caller's and is REUSED: `clear` keeps the capacity, so a frame that skins the
+/// same subset again allocates nothing (405F7034). Bit-identical to [`skin`] on those vertices —
+/// both run [`blend`], which is the one implementation, so the split can never change what a
+/// vertex IS.
+pub fn skin_subset(verts: &[Vertex], palette: &[Mat4], out: &mut Vec<SkinnedVertex>) {
+    out.clear();
+    out.reserve(verts.len());
+    for v in verts {
+        out.push(blend(v, v.p, palette));
+    }
+}
+
+/// THE linear-blend step: one vertex's 4 influences applied to `base` (its bind position, already
+/// morphed if it was) and its normal. Every skinning door in the crate goes through this, so a
+/// subset skin can never drift from the whole-mesh one.
+fn blend(v: &Vertex, base: [f32; 3], palette: &[Mat4]) -> SkinnedVertex {
+    let p = Vec4::new(base[0], base[1], base[2], 1.0);
+    let n = Vec3::from(v.n);
+    let mut pos = Vec3::ZERO;
+    let mut nrm = Vec3::ZERO;
+    for k in 0..4 {
+        let w = v.weights[k];
+        if w == 0.0 {
+            continue;
+        }
+        let m = palette
+            .get(v.joints[k] as usize)
+            .copied()
+            .unwrap_or(Mat4::IDENTITY);
+        pos += w * (m * p).truncate();
+        nrm += w * (Mat3::from_mat4(m) * n);
+    }
+    let nrm = if nrm.length_squared() > 1e-12 {
+        nrm.normalize()
+    } else {
+        Vec3::Y
+    };
+    SkinnedVertex {
+        position: pos.to_array(),
+        normal: nrm.to_array(),
+    }
 }
 
 /// Blend the mesh's morph targets into a fresh copy of the bind vertex positions, weighted by
@@ -106,9 +129,9 @@ pub fn apply_morphs(mesh: &Mesh, morph_weights: &[f32]) -> Vec<[f32; 3]> {
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_morphs, skin, skin_morphed};
+    use super::{apply_morphs, skin, skin_morphed, skin_subset, SkinnedVertex};
     use crate::format::{Mesh, Morph, MorphDelta, Vertex};
-    use glam::Mat4;
+    use glam::{Mat4, Vec3};
 
     fn vert(p: [f32; 3]) -> Vertex {
         Vertex {
@@ -118,6 +141,50 @@ mod tests {
             joints: [0, 0, 0, 0],
             weights: [1.0, 0.0, 0.0, 0.0],
         }
+    }
+
+    /// THE subset gate (spec 6C46CAB9): skinning only the cloth submesh's source vertices must be
+    /// BIT-EQUAL to the full-mesh skin read at the same indices — the split may change what is
+    /// uploaded, never what a vertex is. Also: a second call into the same buffer must not grow it
+    /// (the per-frame path allocates nothing).
+    #[test]
+    fn skin_subset_is_bit_equal_to_the_full_skin_on_those_vertices() {
+        let mut mesh = Mesh {
+            vertices: (0..12)
+                .map(|i| {
+                    let mut v = vert([i as f32, 0.5 * i as f32, -(i as f32)]);
+                    v.n = Vec3::new(1.0, 2.0, 3.0 + i as f32).normalize().to_array();
+                    v.joints = [0, 1, 2, 0];
+                    v.weights = [0.5, 0.3, 0.2, 0.0];
+                    v
+                })
+                .collect(),
+            ..Default::default()
+        };
+        mesh.indices = (0..12).collect();
+        let palette = [
+            Mat4::from_translation(Vec3::new(3.0, -1.0, 2.0)),
+            Mat4::from_rotation_z(0.7) * Mat4::from_scale(Vec3::splat(1.3)),
+            Mat4::from_rotation_x(-0.4),
+        ];
+        let full = skin(&mesh, &palette);
+        let which: Vec<u32> = vec![11, 0, 5, 7, 2];
+        let picked: Vec<Vertex> = which
+            .iter()
+            .map(|&i| mesh.vertices[i as usize].clone())
+            .collect();
+        let mut out: Vec<SkinnedVertex> = Vec::new();
+        skin_subset(&picked, &palette, &mut out);
+        assert_eq!(out.len(), which.len());
+        for (o, &i) in out.iter().zip(which.iter()) {
+            assert_eq!(o.position, full[i as usize].position, "vertex {i} position");
+            assert_eq!(o.normal, full[i as usize].normal, "vertex {i} normal");
+        }
+        let cap = out.capacity();
+        skin_subset(&picked, &palette, &mut out);
+        assert_eq!(out.capacity(), cap, "the reused buffer must not reallocate");
+        skin_subset(&[], &palette, &mut out);
+        assert!(out.is_empty());
     }
 
     #[test]

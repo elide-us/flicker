@@ -1,34 +1,52 @@
-//! CLI: retarget a directory of Motifect BVH clips onto a target `flicker.rig` skeleton, emitting
-//! both variants under `<out_dir>/{In-Place,RootMotion}/`. The in-app port of `tools/retarget_bvh.py`.
+//! CLI: retarget a directory tree of clip sources — Motifect BVH files, or `flicker.rig` clip
+//! documents authored on another skeleton (the recovered Katanami library) — onto a target
+//! `flicker.rig` skeleton, emitting both variants under `<out_dir>/{In-Place,RootMotion}/`.
+//! The in-app port of `tools/retarget_bvh.py`.
 //!
-//!   cargo run -p flicker-content --example retarget_clips -- <bvh_dir> <skeleton.json> <out_dir>
+//!   cargo run -p flicker-content --example retarget_clips -- <source_dir> <skeleton.json> <out_dir>
 //!
-//! e.g. re-bake the locomotion library onto HumanBaseA's flat bind:
+//! Sources are found recursively (`.bvh`, `.json`, `.json.gz`) and baked in sorted path order, so
+//! a source library laid out as `clips/{In-Place,RootMotion}/…` lets its RootMotion clip win the
+//! stem the two trees share. e.g. bake the Katanami library onto the canon:
 //!   cargo run -p flicker-content --example retarget_clips -- \
-//!     "Alpha/content/source/Motifect/Motifect_locomotion_complete_v1_0/BVH" \
-//!     Alpha/content/package/characters/HumanBaseA/HumanBaseA.json \
-//!     Alpha/content/package/characters/HumanBaseA/clips/locomotion
+//!     ../PrismContentSource/Katanami/clips \
+//!     Alpha/content/package/skeletons/Humanoid/Humanoid.json \
+//!     Alpha/content/package/retarget/clips/katanami
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+fn collect(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(dir)? {
+        let p = entry?.path();
+        if p.is_dir() {
+            collect(&p, out)?;
+        } else if p
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.ends_with(".bvh") || n.ends_with(".json") || n.ends_with(".json.gz"))
+        {
+            out.push(p);
+        }
+    }
+    Ok(())
+}
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 4 {
-        eprintln!("usage: retarget_clips <bvh_dir> <skeleton.json> <out_dir>");
+        eprintln!("usage: retarget_clips <source_dir> <skeleton.json> <out_dir>");
         std::process::exit(2);
     }
-    let (bvh_dir, skeleton, out_dir) = (
+    let (source_dir, skeleton, out_dir) = (
         Path::new(&args[1]),
         Path::new(&args[2]),
         Path::new(&args[3]),
     );
+    let mut entries = Vec::new();
+    collect(source_dir, &mut entries)?;
+    entries.sort();
     let mut ok = 0usize;
     let mut fail = 0usize;
-    let mut entries: Vec<_> = std::fs::read_dir(bvh_dir)?
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.extension().map(|e| e == "bvh").unwrap_or(false))
-        .collect();
-    entries.sort();
     for p in &entries {
         match flicker_content::retarget::emit_variants(p, skeleton, out_dir) {
             Ok(_) => ok += 1,

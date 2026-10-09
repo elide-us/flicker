@@ -6,8 +6,8 @@
 // up by `@builtin(instance_index)`, skins position + normal from that instance's
 // palette (4-influence linear blend), applies the model transform, then the
 // camera. The fragment is a simple Lambert over neutral steel, driven by the frame's
-// LIGHT LIST — this slice proves the skinning + instancing path; texturing/PBR is a
-// later slice (reuse the material path from mesh_textured.wgsl).
+// LIGHT LIST. The textured, PBR-lit twin is skinned_textured.wgsl (the same vertex stage
+// over material.wgsl's path).
 //
 // Storage buffers are read in the VERTEX stage — requires the adapter's
 // VERTEX_STORAGE downlevel capability (native Metal / Vulkan / D3D12 have it;
@@ -45,6 +45,8 @@ struct VertexIn {
     @location(2) uv: vec2<f32>,
     @location(3) joints: vec4<u32>,
     @location(4) weights: vec4<f32>,
+    // The bind-pose tangent, carried for skinned_textured.wgsl; the flat shade reads none.
+    @location(5) tangent: vec4<f32>,
     @builtin(instance_index) instance: u32,
 };
 

@@ -68,6 +68,21 @@ const UPWELL_PER_SEAM: u32 = 12;
 /// were being eroded away before they can exist"; the pinch COUNT stays his
 /// dozen-per-seam, the AMOUNT carries the throughput.
 const UPWELL_INJECT: f32 = 0.10;
+/// **THE RESONANT PINCH** (resonance slice 1, 2026-10-07): the amount a pinch
+/// inserts is the calibrated quantum times the molten heat under the vent,
+/// read against the heat a TYPICAL vent stands on when the crust derives it
+/// — so the calibrated throughput Aaron cranked twice is what a typical vent
+/// pours, a junction or plume core pours more, and a stretch the beating
+/// field has cooled under pours less (and a vent the field has all but left
+/// pours almost nothing until the crust re-derives it away). Vents are
+/// admitted at the crust's 0.66 floor and the cores reach 1.0; the vent
+/// population's mean sits near this reference (gated). The count of pinches,
+/// the vent pick and the melt floor are untouched — the experiment is the
+/// temporally coherent SOURCE STRENGTH, nothing else.
+const INJECT_HEAT_REF: f32 = 0.8;
+/// The multiplier's ceiling — the heat field clamps at 1, so this is simply
+/// `1 / INJECT_HEAT_REF`: a white-hot core pours five quarters of the quantum.
+const INJECT_HEAT_MAX: f32 = 1.25;
 /// **THE DECOMPRESSION FLOOR** — the share of every injected quantum that
 /// is always FRESH mantle melt. The rest is drawn back out of the
 /// subduction well, so once the collisions have sunk something the vents
@@ -2806,7 +2821,10 @@ impl Evolution {
                         let vi = rng.usize(..vents.len());
                         let t = vents[vi] as usize;
                         let hard = self.vent_hardness(vi);
-                        let inject = UPWELL_INJECT;
+                        // The resonant pinch: the quantum scaled by the heat
+                        // the beating field puts under this vent right now.
+                        let inject = UPWELL_INJECT
+                            * (seams.heat(vents[vi]) / INJECT_HEAT_REF).min(INJECT_HEAT_MAX);
                         // THE FOUNTAIN PAYS FROM THE WELL: the pinch's rate
                         // is untouched, but above the decompression floor
                         // this rock is what the collisions sank coming back
@@ -4421,7 +4439,10 @@ impl Evolution {
 
     /// **RESTORE a captured planet** — the inverse of [`Self::capture`]. The
     /// caller rebuilds the static context from the file's recipe FIRST
-    /// (`HexMap::new(recipe.freq)`, `SeamField::new(map, cells, spots, seed)`);
+    /// (`HexMap::new(recipe.freq)`, `SeamField::new(map, cells, spots, seed)`,
+    /// then `seams.at_tick(map, era.ticks)` — the molten field is closed-form
+    /// in time, so the recipe plus the era's tick stands it exactly where the
+    /// capture left it — and the crust derived on THAT field);
     /// this checks the handed context actually matches the recipe (loud,
     /// never a silent mis-restore), resets onto it — re-deriving every seeded
     /// field — then overwrites the durable ledger from the file. The restored
@@ -4566,6 +4587,38 @@ mod tests {
         let crust = CrustField::derive(&map, &seams);
         let plates = PlateField::new(&map, 12, 42);
         (map, seams, crust, plates)
+    }
+
+    /// **The resonant pinch is CALIBRATED, not a throughput change** (resonance
+    /// slice 1): over the vent population at tick zero the heat multiplier's
+    /// mean sits near 1 for several rolls, so a typical vent pours Aaron's
+    /// calibrated quantum; and the multiplier is bounded above by the ceiling
+    /// and below by zero at every vent, however the field beats.
+    #[test]
+    fn the_resonant_pinch_pours_the_calibrated_quantum_on_a_typical_vent() {
+        let map = HexMap::new(MIN_FREQ);
+        for seed in [7u64, 42, 1234, 777] {
+            let mut seams = SeamField::new(&map, 12, 8, seed);
+            let crust = CrustField::derive(&map, &seams);
+            let mult =
+                |s: &SeamField, v: TileId| (s.heat(v) / INJECT_HEAT_REF).min(INJECT_HEAT_MAX);
+            let mean = crust.vents().iter().map(|v| mult(&seams, *v)).sum::<f32>()
+                / crust.vents().len().max(1) as f32;
+            assert!(
+                (0.85..=1.2).contains(&mean),
+                "seed {seed}: the vent population's mean multiplier is {mean}"
+            );
+            for tick in [0u64, 500, 2900] {
+                seams.at_tick(&map, tick);
+                for v in crust.vents() {
+                    let m = mult(&seams, *v);
+                    assert!(
+                        (0.0..=INJECT_HEAT_MAX).contains(&m),
+                        "vent {v} at {tick}: {m}"
+                    );
+                }
+            }
+        }
     }
 
     /// **The planet epoch is a COMPLETE capture** — the format's one
@@ -6741,7 +6794,7 @@ mod tests {
                 let sea = e.resolve_sea();
                 e.tick(&map, &seams, &crust, sea);
                 if k % 12 == 0 {
-                    seams.drift(&map, 0.06);
+                    seams.at_tick(&map, e.ticks());
                     crust = CrustField::derive(&map, &seams);
                     e.derive_motion(&map, &seams);
                 }
@@ -8480,7 +8533,7 @@ mod tests {
                 let sea = e.resolve_sea();
                 e.tick(&map, &seams, &crust, sea);
                 if k % 12 == 0 {
-                    seams.drift(&map, 0.06);
+                    seams.at_tick(&map, e.ticks());
                     crust = CrustField::derive(&map, &seams);
                     e.derive_motion(&map, &seams);
                 }

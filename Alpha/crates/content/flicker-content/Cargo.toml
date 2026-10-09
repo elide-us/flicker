@@ -24,9 +24,19 @@ flicker-skeletal.workspace = true
 # THE shared compression routine (flicker-core::compression): the gz-at-rest read/write
 # seam + gzip itself. `package` re-exports it; `content-tool gzify` converts through it.
 flicker-core.workspace = true
+# The material BUNDLE (`bundle`) — P3's promotable unit — is keyed by the catalog's SLOT ID, so the
+# seam that spells its path needs the id↔folder-segment codec that owns that id. flicker-materials
+# is a serde-only leaf (serde/serde_json/thiserror, no path deps), so this edge costs no closure.
+flicker-materials.workspace = true
 # The store-only package container writer (`content-tool pack` → package.flk).
 # No compression features compiled in — entries are Stored; the tree is already gz-at-rest.
 zip.workspace = true
+
+# The examples are the HEADLESS half of the pipeline (`import_folder`), and the stages they drive
+# fail loud through `tracing::warn!` (4BB12A75). Without a subscriber those warnings go nowhere, so
+# a headless import of a body the trunk alignment could not measure looked exactly like a good one.
+[dev-dependencies]
+tracing-subscriber.workspace = true
 
 # The offline package-content tool (gzify / pack / verify).
 [[bin]]
