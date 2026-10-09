@@ -1,0 +1,15 @@
+{
+  "trunk": {
+    "orientation": "Biped",
+    "head": true,
+    "arms": [
+      "Bat"
+    ],
+    "legs": [
+      "Plantigrade"
+    ],
+    "tails": [],
+    "mounts": [],
+    "scale": 1.0
+  }
+}

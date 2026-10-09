@@ -1,0 +1,43 @@
+{
+  "trunk": {
+    "orientation": "Quadruped",
+    "head": false,
+    "arms": [
+      "Ungulate"
+    ],
+    "legs": [
+      {
+        "Digitigrade": {
+          "heel": 0.25
+        }
+      }
+    ],
+    "tails": [
+      {
+        "Long": {
+          "bones": 8
+        }
+      }
+    ],
+    "mounts": [
+      {
+        "socket": "Neck",
+        "trunk": {
+          "orientation": "Biped",
+          "head": true,
+          "arms": [
+            "Humanoid",
+            "Bird"
+          ],
+          "legs": [],
+          "tails": [],
+          "mounts": [],
+          "scale": 0.75,
+          "length": 0.65
+        }
+      }
+    ],
+    "scale": 1.0,
+    "length": 0.65
+  }
+}

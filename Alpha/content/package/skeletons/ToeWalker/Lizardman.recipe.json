@@ -1,0 +1,29 @@
+{
+  "trunk": {
+    "orientation": "Biped",
+    "head": true,
+    "arms": [
+      "Hanging"
+    ],
+    "legs": [
+      {
+        "ToeWalker": {
+          "heel": 0.15,
+          "setback": 0.075,
+          "toe": 0.0,
+          "thigh": 0.19,
+          "calf": 0.2
+        }
+      }
+    ],
+    "tails": [
+      {
+        "Long": {
+          "bones": 8
+        }
+      }
+    ],
+    "mounts": [],
+    "scale": 1.0
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "trunk": {
+    "orientation": "Biped",
+    "head": true,
+    "arms": [
+      "Bird"
+    ],
+    "legs": [
+      {
+        "Bird": {
+          "heel": 0.22
+        }
+      }
+    ],
+    "tails": [
+      {
+        "Long": {
+          "bones": 4
+        }
+      }
+    ],
+    "mounts": [],
+    "scale": 1.0
+  }
+}

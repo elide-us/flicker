@@ -1,0 +1,23 @@
+{
+  "trunk": {
+    "orientation": "Quadruped",
+    "head": true,
+    "proboscis": 8,
+    "arms": [
+      "Ungulate"
+    ],
+    "legs": [
+      "Unguligrade"
+    ],
+    "tails": [
+      {
+        "ShortHair": {
+          "bones": 6
+        }
+      }
+    ],
+    "mounts": [],
+    "scale": 1.0,
+    "length": 0.65
+  }
+}
