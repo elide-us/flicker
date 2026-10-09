@@ -75,6 +75,20 @@
           { "component": "button", "id": "ctt_tab_radial", "action": "ctx_radial", "label": "$ctt_ctx_radial", "style_bind": "ctx_radial_style", "grow": 1.0, "size_class": "sm", "tab_group": "ctt_tabs", "nav_ordinal": 3 },
           { "component": "button", "id": "ctt_tab_textentry", "action": "ctx_textentry", "label": "$ctt_ctx_textentry", "style_bind": "ctx_textentry_style", "grow": 1.0, "size_class": "sm", "tab_group": "ctt_tabs", "nav_ordinal": 4 }
         ]
+      },
+      {
+        "component": "row",
+        "id": "ctt_body",
+        "anchor": "top_left",
+        "offset": [740, 86],
+        "width": 220,
+        "size": 28,
+        "gap": 6,
+        "align": "center",
+        "children": [
+          { "component": "button", "id": "ctt_body_prev", "action": "body_prev", "label": "$ctt_body_prev", "grow": 1.0, "size_class": "sm", "tab_group": "ctt_body", "nav_ordinal": 1 },
+          { "component": "button", "id": "ctt_body_next", "action": "body_next", "label": "$ctt_body_next", "grow": 1.0, "size_class": "sm", "tab_group": "ctt_body", "nav_ordinal": 2 }
+        ]
       }
     ]
   }

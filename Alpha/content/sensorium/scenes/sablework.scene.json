@@ -759,7 +759,7 @@
             "children": [
               { "component": "text", "text": "$sw_size", "text_size": 12, "font": "label", "color": "sablework.col.label", "size": 40 },
               { "component": "button", "id": "bake_size", "action": "bake_size", "label_bind": "size_label", "style": "sablework.button", "size": 90, "size_class": "md", "tab_group": "sw_footer", "nav_ordinal": 1 },
-              { "component": "button", "id": "commit", "action": "commit", "label": "$sw_commit", "style": "sablework.button", "size": 110, "size_class": "md", "tab_group": "sw_footer", "nav_ordinal": 2 },
+              { "component": "button", "id": "commit", "action": "commit", "label": "$sw_commit", "enabled_bind": "material_bound", "style": "sablework.button", "size": 110, "size_class": "md", "tab_group": "sw_footer", "nav_ordinal": 2 },
               { "component": "text", "text_bind": "commit_status", "text_size": 12, "font": "label", "color": "sablework.col.value", "grow": 1.0 },
               { "component": "text", "text_bind": "bake_info", "text_size": 12, "font": "label", "color": "sablework.col.dim", "size": 180 }
             ]

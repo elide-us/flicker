@@ -1,0 +1,154 @@
+{
+  "_comment": "MODEL VIEW — the ONE draw-a-mesh scene. A `surface` node in any scene names it (`scene`: `model_view` on the node) and this scene is drawn in that panel — the quad view names it four times, once per projection; the same file at root depth is a full-screen model view. This file says what the panel draws, never where it sits. Its picture is the rig view declared as this scene's ROOT STAGE (stages.rig); its chrome — the corner view label (which is also the FLIP control) and the ISOLATE row — are ORDINARY nodes of this tree, so they draw INSIDE the panel's own texture and can never be covered by the enclosing scene's composite sprite (incident 09E5A30F). `params` are the per-instance knobs: a surface that names this scene authors them as `scene_<name>` props (`scene_projection`, `scene_label`, `scene_chrome`); the block below carries the two whose default is a CONSTANT. `chrome` is deliberately absent: an isolate row only means anything on an orthographic panel, so its default is DERIVED from `projection` (ortho = on) in the behaviour — one representation, not a constant here that would silently outrank it.",
+  "behaviour": "model_view",
+  "params": {
+    "projection": "persp",
+    "label": true
+  },
+  "tree": {
+    "component": "surface",
+    "id": "model_view",
+    "children": [
+      {
+        "component": "stack",
+        "width_frac": 1.0,
+        "height_frac": 1.0,
+        "children": [
+          {
+            "component": "button",
+            "id": "mv_flip",
+            "action": "flip",
+            "label_bind": "view_label",
+            "visible_bind": "label_on",
+            "variant": "secondary",
+            "size_class": "sm",
+            "size": 74,
+            "anchor": "top_left",
+            "offset": [6, 6],
+            "tab_group": "model_view",
+            "nav_ordinal": 1
+          },
+          {
+            "component": "row",
+            "id": "mv_isolate",
+            "visible_bind": "chrome_on",
+            "style": "panel",
+            "anchor": "bottom",
+            "width_frac": 1.0,
+            "height": 26,
+            "pad": 6,
+            "gap": 8,
+            "children": [
+              {
+                "component": "checkbox",
+                "id": "mv_limb",
+                "bind": "limb",
+                "style": "checkbox",
+                "size": 62,
+                "box": 16,
+                "label_x": 22,
+                "label_size": 11,
+                "label": "$ap_limb",
+                "tab_group": "model_view",
+                "nav_ordinal": 2
+              },
+              {
+                "component": "checkbox",
+                "id": "mv_cull",
+                "bind": "cull",
+                "style": "checkbox",
+                "size": 62,
+                "box": 16,
+                "label_x": 22,
+                "label_size": 11,
+                "label": "$ap_cull",
+                "tab_group": "model_view",
+                "nav_ordinal": 3
+              },
+              {
+                "component": "slider",
+                "id": "mv_cull_at",
+                "bind": "cull_at",
+                "style": "slider",
+                "slider_h": 8,
+                "min": 0,
+                "max": 1,
+                "step": 0.01,
+                "decimals": 2,
+                "grow": 1.0,
+                "tab_group": "model_view",
+                "nav_ordinal": 4
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "stages": {
+    "rig": {
+      "lighting": "studio",
+      "clear": "$stage_grey",
+      "attachments": {
+        "hdr": {
+          "format": "rgba16f"
+        },
+        "color": {
+          "format": "surface"
+        },
+        "depth": {
+          "format": "depth32"
+        }
+      },
+      "passes": [
+        {
+          "pass": "scene",
+          "writes": ["hdr", "depth"]
+        },
+        {
+          "pass": "tonemap_grade"
+        }
+      ]
+    }
+  },
+  "styles": {
+    "panel": {
+      "resting": {
+        "fill": "$panel_bg",
+        "border": "$edge2",
+        "border_w": 1,
+        "radius": 3
+      },
+      "focused": {
+        "fill": "$panel_bg",
+        "border": "$sap_border",
+        "border_w": 2,
+        "radius": 3
+      },
+      "empty": "$dim",
+      "stat_label": "$dim",
+      "stat_value": "$ink_bright"
+    },
+    "checkbox": {
+      "box": "$stone2",
+      "check": "$sig_green",
+      "border": "$edge4",
+      "pad": 3
+    },
+    "slider": {
+      "track": "$well",
+      "fill": "$sap_base",
+      "fill_hi": "$sap_border",
+      "handle": "$sap_border",
+      "handle_w": 14,
+      "border": "$edge4",
+      "border_w": 1,
+      "focus_track": "$well",
+      "focus_fill": "$sap_hover",
+      "focus_label": "$rune_glow_hi",
+      "value_color": "$dim",
+      "label_size": 13,
+      "value_size": 12
+    }
+  }
+}

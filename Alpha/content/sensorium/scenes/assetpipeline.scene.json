@@ -1,5 +1,5 @@
 {
-  "_comment": "Clayworks Bench \u2014 the content workbench (FBX/BVH \u2192 staging). Rebuilt 2026-09-03 in the Populous shape: one paged_menu (page rail hidden) whose tab rail is the WORKFLOW's steps; a three-panel body (facts \u00b7 view \u00b7 controls) whose slices assetpipeline.lua's arrange() lights by (workflow, step); the standard nav_footer. The unsaved-work prompt is the SHARED choice_dialog modal the shell hosts (scenes/shared/), pushed over this scene \u2014 not an inline subtree. Every control is a catalog component with its standard props; the only styles are the shared blocks; the view surfaces are authored stages.",
+  "_comment": "Clayworks Bench \u2014 the content workbench (FBX/BVH \u2192 staging). Rebuilt 2026-09-03 in the Populous shape: one paged_menu (page rail hidden) whose tab rail is the WORKFLOW's steps; a three-panel body (facts \u00b7 view \u00b7 controls) whose slices assetpipeline.lua's arrange() lights by (workflow, step); the standard nav_footer. The unsaved-work prompt is the SHARED choice_dialog modal the shell hosts (scenes/shared/), pushed over this scene \u2014 not an inline subtree. Every control is a catalog component with its standard props; the only styles are the shared blocks; each view surface HOSTS the `model_view` scene (ruling EBDB3518 \u2014 a nested surface is a complete scene: its corner label and isolate row are its own chrome, drawn inside its own target, and its `rig` stage is its own file\u2019s).",
   "behaviour": "assetpipeline",
   "params": {},
   "tree": {
@@ -124,6 +124,50 @@
                         "component": "option",
                         "label": "$wf_step_review",
                         "value": 2
+                      }
+                    ],
+                    "tab_active": "paged_menu.tab_active",
+                    "tab_idle": "paged_menu.tab_idle"
+                  },
+                  {
+                    "component": "pill_toggle",
+                    "id": "ap_steps_creature",
+                    "bind": "tab",
+                    "style": "paged_menu.tab_track",
+                    "size": 640,
+                    "visible_bind": "shown_wf_creature",
+                    "next_action": "step_next",
+                    "prev_action": "step_prev",
+                    "children": [
+                      {
+                        "component": "option",
+                        "label": "$ap_step_source",
+                        "value": 0
+                      },
+                      {
+                        "component": "option",
+                        "label": "$wf_step_prep",
+                        "value": 1
+                      },
+                      {
+                        "component": "option",
+                        "label": "$wf_step_rig",
+                        "value": 2
+                      },
+                      {
+                        "component": "option",
+                        "label": "$wf_step_preview",
+                        "value": 3
+                      },
+                      {
+                        "component": "option",
+                        "label": "$wf_step_attach",
+                        "value": 4
+                      },
+                      {
+                        "component": "option",
+                        "label": "$wf_step_review",
+                        "value": 5
                       }
                     ],
                     "tab_active": "paged_menu.tab_active",
@@ -379,28 +423,32 @@
                                       {
                                         "component": "surface",
                                         "id": "ap_view_persp",
-                                        "source": "rig_persp",
+                                        "scene": "model_view",
+                                        "scene_projection": "persp",
                                         "style": "rtt_holder",
                                         "grow": 1.0
                                       },
                                       {
                                         "component": "surface",
                                         "id": "ap_view_top",
-                                        "source": "rig_top",
+                                        "scene": "model_view",
+                                        "scene_projection": "top",
                                         "style": "rtt_holder",
                                         "grow": 1.0
                                       },
                                       {
                                         "component": "surface",
                                         "id": "ap_view_side",
-                                        "source": "rig_side",
+                                        "scene": "model_view",
+                                        "scene_projection": "side",
                                         "style": "rtt_holder",
                                         "grow": 1.0
                                       },
                                       {
                                         "component": "surface",
                                         "id": "ap_view_front",
-                                        "source": "rig_front",
+                                        "scene": "model_view",
+                                        "scene_projection": "front",
                                         "style": "rtt_holder",
                                         "grow": 1.0
                                       }
@@ -416,7 +464,10 @@
                                   {
                                     "component": "surface",
                                     "id": "ap_view_bake",
-                                    "source": "rig_bake",
+                                    "scene": "model_view",
+                                    "scene_projection": "persp",
+                                    "scene_chrome": false,
+                                    "scene_label": false,
                                     "style": "rtt_holder",
                                     "grow": 1.0
                                   }
@@ -435,14 +486,20 @@
                                       {
                                         "component": "surface",
                                         "id": "ap_view_root",
-                                        "source": "clip_root",
+                                        "scene": "model_view",
+                                        "scene_projection": "persp",
+                                        "scene_chrome": false,
+                                        "scene_label": false,
                                         "style": "rtt_holder",
                                         "grow": 1.0
                                       },
                                       {
                                         "component": "surface",
                                         "id": "ap_view_place",
-                                        "source": "clip_place",
+                                        "scene": "model_view",
+                                        "scene_projection": "persp",
+                                        "scene_chrome": false,
+                                        "scene_label": false,
                                         "style": "rtt_holder",
                                         "grow": 1.0
                                       }
@@ -500,13 +557,23 @@
                                   },
                                   {
                                     "component": "button",
+                                    "id": "import_creature",
+                                    "action": "import_creature",
+                                    "label": "$ap_creature",
+                                    "variant": "secondary",
+                                    "size_class": "lg",
+                                    "tab_group": "ap_controls",
+                                    "nav_ordinal": 2
+                                  },
+                                  {
+                                    "component": "button",
                                     "id": "import_accessory",
                                     "action": "import_accessory",
                                     "label": "$ap_accessory",
                                     "variant": "secondary",
                                     "size_class": "lg",
                                     "tab_group": "ap_controls",
-                                    "nav_ordinal": 2
+                                    "nav_ordinal": 3
                                   },
                                   {
                                     "component": "button",
@@ -516,7 +583,7 @@
                                     "variant": "secondary",
                                     "size_class": "lg",
                                     "tab_group": "ap_controls",
-                                    "nav_ordinal": 3
+                                    "nav_ordinal": 4
                                   },
                                   {
                                     "component": "button",
@@ -526,7 +593,7 @@
                                     "variant": "secondary",
                                     "size_class": "lg",
                                     "tab_group": "ap_controls",
-                                    "nav_ordinal": 4
+                                    "nav_ordinal": 5
                                   },
                                   {
                                     "component": "checkbox",
@@ -601,17 +668,35 @@
                                     "color": "panel.stat_label"
                                   },
                                   {
-                                    "component": "slider",
-                                    "id": "stature_cm",
-                                    "bind": "stature_cm",
-                                    "style": "slider",
-                                    "size": 40,
-                                    "label": "$ap_height_cm",
-                                    "min": 40,
-                                    "max": 200,
-                                    "step": 1,
-                                    "tab_group": "ap_controls",
-                                    "nav_ordinal": 1
+                                    "component": "row",
+                                    "size": 34,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text_field",
+                                        "id": "stature_cm",
+                                        "bind": "stature_cm",
+                                        "kind": "digits",
+                                        "max_len": 3,
+                                        "style": "settings.controls.field",
+                                        "grow": 1.0,
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 1,
+                                        "height": 30
+                                      },
+                                      {
+                                        "component": "button",
+                                        "id": "prep_stature_apply",
+                                        "action": "prep_stature_apply",
+                                        "label": "$ap_decimate_apply",
+                                        "variant": "primary",
+                                        "size_class": "md",
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 2,
+                                        "size": 80
+                                      }
+                                    ],
+                                    "align": "center"
                                   },
                                   {
                                     "component": "text",
@@ -619,6 +704,525 @@
                                     "size": 18,
                                     "text_size": 12,
                                     "font": "label"
+                                  },
+                                  {
+                                    "component": "text",
+                                    "text": "$ap_facing",
+                                    "text_size": 11,
+                                    "font": "label",
+                                    "color": "panel.stat_label"
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 34,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "button",
+                                        "id": "prep_facing_turn",
+                                        "action": "prep_facing_turn",
+                                        "label": "$ap_facing_turn",
+                                        "variant": "secondary",
+                                        "size_class": "md",
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 3,
+                                        "grow": 1.0,
+                                        "height": 30
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "prep_facing",
+                                        "size": 60,
+                                        "text_size": 12,
+                                        "align": "center",
+                                        "color": "panel.stat_value"
+                                      }
+                                    ],
+                                    "align": "center"
+                                  },
+                                  {
+                                    "component": "text",
+                                    "text": "$ap_stance",
+                                    "text_size": 11,
+                                    "font": "label",
+                                    "color": "panel.stat_label"
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 26,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "radio",
+                                        "id": "stance_auto",
+                                        "value": "auto",
+                                        "bind": "stance_source",
+                                        "label": "$ap_stance_auto",
+                                        "size": 24,
+                                        "box": 15,
+                                        "grow": 1.0,
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 25
+                                      },
+                                      {
+                                        "component": "radio",
+                                        "id": "stance_left",
+                                        "value": "left",
+                                        "bind": "stance_source",
+                                        "label": "$ap_stance_left",
+                                        "size": 24,
+                                        "box": 15,
+                                        "grow": 1.0,
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 26
+                                      },
+                                      {
+                                        "component": "radio",
+                                        "id": "stance_right",
+                                        "value": "right",
+                                        "bind": "stance_source",
+                                        "label": "$ap_stance_right",
+                                        "size": 24,
+                                        "box": 15,
+                                        "grow": 1.0,
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 27
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "text",
+                                    "text": "$ap_mirror_keep",
+                                    "text_size": 11,
+                                    "font": "label",
+                                    "color": "panel.stat_label"
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 26,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "radio",
+                                        "id": "mirror_off",
+                                        "value": "off",
+                                        "bind": "mirror_keep",
+                                        "label": "$ap_mirror_off",
+                                        "size": 24,
+                                        "box": 15,
+                                        "grow": 1.0,
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 28
+                                      },
+                                      {
+                                        "component": "radio",
+                                        "id": "mirror_left",
+                                        "value": "left",
+                                        "bind": "mirror_keep",
+                                        "label": "$ap_mirror_left",
+                                        "size": 24,
+                                        "box": 15,
+                                        "grow": 1.0,
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 29
+                                      },
+                                      {
+                                        "component": "radio",
+                                        "id": "mirror_right",
+                                        "value": "right",
+                                        "bind": "mirror_keep",
+                                        "label": "$ap_mirror_right",
+                                        "size": 24,
+                                        "box": 15,
+                                        "grow": 1.0,
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 30
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "checkbox",
+                                    "id": "face_forward",
+                                    "bind": "face_forward",
+                                    "style": "checkbox",
+                                    "size": 22,
+                                    "label": "$ap_face_forward",
+                                    "tab_group": "ap_controls",
+                                    "nav_ordinal": 31
+                                  },
+                                  {
+                                    "component": "text",
+                                    "text": "$ap_skeleton",
+                                    "text_size": 11,
+                                    "font": "label",
+                                    "color": "panel.stat_label"
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 34,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "button",
+                                        "id": "skeleton_prev",
+                                        "action": "skeleton_prev",
+                                        "label": "$ap_skeleton_prev",
+                                        "variant": "secondary",
+                                        "size_class": "md",
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 2,
+                                        "size": 44
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "skeleton_name",
+                                        "grow": 1.0,
+                                        "text_size": 12,
+                                        "font": "label"
+                                      },
+                                      {
+                                        "component": "button",
+                                        "id": "skeleton_next",
+                                        "action": "skeleton_next",
+                                        "label": "$ap_skeleton_next",
+                                        "variant": "secondary",
+                                        "size_class": "md",
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 3,
+                                        "size": 44
+                                      }
+                                    ],
+                                    "align": "center"
+                                  },
+                                  {
+                                    "component": "text",
+                                    "text_bind": "skeleton_summary",
+                                    "wrap": true,
+                                    "size": 30,
+                                    "text_size": 11,
+                                    "font": "label",
+                                    "color": "panel.stat_label"
+                                  },
+                                  {
+                                    "component": "text",
+                                    "text": "$ap_modules",
+                                    "text_size": 11,
+                                    "font": "label",
+                                    "color": "panel.stat_label"
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 26,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "radio",
+                                        "id": "legs_flat",
+                                        "value": "flat",
+                                        "bind": "legs",
+                                        "label": "$ap_legs_flat",
+                                        "size": 24,
+                                        "box": 15,
+                                        "grow": 1.0,
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 7
+                                      },
+                                      {
+                                        "component": "radio",
+                                        "id": "legs_heeled",
+                                        "value": "heeled",
+                                        "bind": "legs",
+                                        "label": "$ap_legs_heeled",
+                                        "size": 24,
+                                        "box": 15,
+                                        "grow": 1.0,
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 8
+                                      },
+                                      {
+                                        "component": "radio",
+                                        "id": "legs_toewalker",
+                                        "value": "toewalker",
+                                        "bind": "legs",
+                                        "label": "$ap_legs_toe",
+                                        "size": 24,
+                                        "box": 15,
+                                        "grow": 1.0,
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 9
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 26,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "radio",
+                                        "id": "legs_hooves",
+                                        "value": "hooves",
+                                        "bind": "legs",
+                                        "label": "$ap_legs_hooves",
+                                        "size": 24,
+                                        "box": 15,
+                                        "grow": 1.0,
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 20
+                                      },
+                                      {
+                                        "component": "radio",
+                                        "id": "legs_bird",
+                                        "value": "bird",
+                                        "bind": "legs",
+                                        "label": "$ap_legs_bird",
+                                        "size": 24,
+                                        "box": 15,
+                                        "grow": 1.0,
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 22
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 30,
+                                    "gap": 8,
+                                    "align": "center",
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$ap_heel_pct",
+                                        "grow": 1.0,
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label"
+                                      },
+                                      {
+                                        "component": "text_field",
+                                        "id": "heel_pct",
+                                        "bind": "heel_pct",
+                                        "kind": "digits",
+                                        "max_len": 2,
+                                        "style": "settings.controls.field",
+                                        "size": 64,
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 10,
+                                        "height": 30
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 26,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "radio",
+                                        "id": "arms_humanoid",
+                                        "value": "humanoid",
+                                        "bind": "arms",
+                                        "label": "$ap_arms_humanoid",
+                                        "size": 24,
+                                        "box": 15,
+                                        "grow": 1.0,
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 11
+                                      },
+                                      {
+                                        "component": "radio",
+                                        "id": "arms_hanging",
+                                        "value": "hanging",
+                                        "bind": "arms",
+                                        "label": "$ap_arms_hanging",
+                                        "size": 24,
+                                        "box": 15,
+                                        "grow": 1.0,
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 12
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 26,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "radio",
+                                        "id": "arms_foreleg",
+                                        "value": "foreleg",
+                                        "bind": "arms",
+                                        "label": "$ap_arms_foreleg",
+                                        "size": 24,
+                                        "box": 15,
+                                        "grow": 1.0,
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 21
+                                      },
+                                      {
+                                        "component": "radio",
+                                        "id": "arms_bird",
+                                        "value": "bird",
+                                        "bind": "arms",
+                                        "label": "$ap_arms_bird",
+                                        "size": 24,
+                                        "box": 15,
+                                        "grow": 1.0,
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 23
+                                      },
+                                      {
+                                        "component": "radio",
+                                        "id": "arms_bat",
+                                        "value": "bat",
+                                        "bind": "arms",
+                                        "label": "$ap_arms_bat",
+                                        "size": 24,
+                                        "box": 15,
+                                        "grow": 1.0,
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 24
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 26,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "radio",
+                                        "id": "tail_none",
+                                        "value": "none",
+                                        "bind": "tail",
+                                        "label": "$ap_tail_none",
+                                        "size": 24,
+                                        "box": 15,
+                                        "grow": 1.0,
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 13
+                                      },
+                                      {
+                                        "component": "radio",
+                                        "id": "tail_short",
+                                        "value": "short",
+                                        "bind": "tail",
+                                        "label": "$ap_tail_short",
+                                        "size": 24,
+                                        "box": 15,
+                                        "grow": 1.0,
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 14
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 26,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "radio",
+                                        "id": "tail_hair",
+                                        "value": "hair",
+                                        "bind": "tail",
+                                        "label": "$ap_tail_hair",
+                                        "size": 24,
+                                        "box": 15,
+                                        "grow": 1.0,
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 15
+                                      },
+                                      {
+                                        "component": "radio",
+                                        "id": "tail_long",
+                                        "value": "long",
+                                        "bind": "tail",
+                                        "label": "$ap_tail_long",
+                                        "size": 24,
+                                        "box": 15,
+                                        "grow": 1.0,
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 16
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 30,
+                                    "gap": 8,
+                                    "align": "center",
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$ap_tail_bones",
+                                        "grow": 1.0,
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label"
+                                      },
+                                      {
+                                        "component": "text_field",
+                                        "id": "tail_bones",
+                                        "bind": "tail_bones",
+                                        "kind": "digits",
+                                        "max_len": 2,
+                                        "style": "settings.controls.field",
+                                        "size": 64,
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 17,
+                                        "height": 30
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "checkbox",
+                                    "id": "head_on",
+                                    "bind": "head_on",
+                                    "style": "checkbox",
+                                    "size": 22,
+                                    "label": "$ap_head_on",
+                                    "tab_group": "ap_controls",
+                                    "nav_ordinal": 18
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 30,
+                                    "gap": 8,
+                                    "align": "center",
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$ap_proboscis_bones",
+                                        "grow": 1.0,
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label"
+                                      },
+                                      {
+                                        "component": "text_field",
+                                        "id": "proboscis_bones",
+                                        "bind": "proboscis_bones",
+                                        "kind": "digits",
+                                        "max_len": 2,
+                                        "style": "settings.controls.field",
+                                        "size": 64,
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 32,
+                                        "height": 30
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "checkbox",
+                                    "id": "quadruped",
+                                    "bind": "quadruped",
+                                    "style": "checkbox",
+                                    "size": 22,
+                                    "label": "$ap_quadruped",
+                                    "tab_group": "ap_controls",
+                                    "nav_ordinal": 19
                                   },
                                   {
                                     "component": "text",
@@ -641,7 +1245,7 @@
                                         "style": "settings.controls.field",
                                         "grow": 1.0,
                                         "tab_group": "ap_controls",
-                                        "nav_ordinal": 2,
+                                        "nav_ordinal": 4,
                                         "height": 30
                                       },
                                       {
@@ -652,7 +1256,7 @@
                                         "variant": "secondary",
                                         "size_class": "md",
                                         "tab_group": "ap_controls",
-                                        "nav_ordinal": 3,
+                                        "nav_ordinal": 5,
                                         "size": 80
                                       },
                                       {
@@ -663,7 +1267,7 @@
                                         "variant": "primary",
                                         "size_class": "md",
                                         "tab_group": "ap_controls",
-                                        "nav_ordinal": 4,
+                                        "nav_ordinal": 6,
                                         "size": 80
                                       }
                                     ],
@@ -685,6 +1289,85 @@
                                 "grow": 1.0,
                                 "visible_bind": "shown_t_rig",
                                 "children": [
+                                  {
+                                    "component": "text",
+                                    "id": "marker_place",
+                                    "text_bind": "marker_place",
+                                    "wrap": true,
+                                    "size": 34,
+                                    "text_size": 12,
+                                    "font": "label"
+                                  },
+                                  {
+                                    "component": "text",
+                                    "id": "marker_match",
+                                    "text_bind": "marker_match",
+                                    "wrap": true,
+                                    "size": 30,
+                                    "text_size": 11,
+                                    "font": "label",
+                                    "color": "panel.stat_label"
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 34,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "button",
+                                        "id": "marker_next",
+                                        "action": "marker_next",
+                                        "label": "$ap_marker_accept",
+                                        "variant": "primary",
+                                        "size_class": "md",
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 35,
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "button",
+                                        "id": "marker_back",
+                                        "action": "marker_back",
+                                        "label": "$ap_marker_back",
+                                        "variant": "secondary",
+                                        "size_class": "md",
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 36,
+                                        "grow": 1.0
+                                      }
+                                    ],
+                                    "align": "center"
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 34,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "button",
+                                        "id": "marker_skip",
+                                        "action": "marker_skip",
+                                        "label": "$ap_marker_skip",
+                                        "variant": "secondary",
+                                        "size_class": "md",
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 37,
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "button",
+                                        "id": "marker_infer",
+                                        "action": "marker_infer",
+                                        "label": "$ap_marker_infer",
+                                        "variant": "secondary",
+                                        "size_class": "md",
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 38,
+                                        "grow": 1.0
+                                      }
+                                    ],
+                                    "align": "center"
+                                  },
                                   {
                                     "component": "text",
                                     "text": "$ap_bone_map",
@@ -839,13 +1522,63 @@
                                   },
                                   {
                                     "component": "checkbox",
+                                    "id": "auto_depth",
+                                    "bind": "auto_depth",
+                                    "style": "checkbox",
+                                    "size": 22,
+                                    "label": "$ap_auto_depth",
+                                    "tab_group": "ap_controls",
+                                    "nav_ordinal": 11
+                                  },
+                                  {
+                                    "component": "checkbox",
                                     "id": "mirror",
                                     "bind": "mirror",
                                     "style": "checkbox",
                                     "size": 22,
                                     "label": "$ap_mirror_joints",
                                     "tab_group": "ap_controls",
-                                    "nav_ordinal": 11
+                                    "nav_ordinal": 12
+                                  },
+                                  {
+                                    "component": "checkbox",
+                                    "id": "solo",
+                                    "bind": "solo",
+                                    "style": "checkbox",
+                                    "size": 22,
+                                    "label": "$ap_solo",
+                                    "tab_group": "ap_controls",
+                                    "nav_ordinal": 13
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 34,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "button",
+                                        "id": "mirror_to_twin",
+                                        "action": "mirror_to_twin",
+                                        "label": "$ap_mirror_to_twin",
+                                        "variant": "secondary",
+                                        "size_class": "md",
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 14,
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "button",
+                                        "id": "frame_sel",
+                                        "action": "frame_sel",
+                                        "label": "$ap_frame_sel",
+                                        "variant": "secondary",
+                                        "size_class": "md",
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 15,
+                                        "grow": 1.0
+                                      }
+                                    ],
+                                    "align": "center"
                                   },
                                   {
                                     "component": "row",
@@ -860,7 +1593,7 @@
                                         "variant": "secondary",
                                         "size_class": "md",
                                         "tab_group": "ap_controls",
-                                        "nav_ordinal": 12,
+                                        "nav_ordinal": 16,
                                         "grow": 1.0
                                       },
                                       {
@@ -871,7 +1604,7 @@
                                         "variant": "secondary",
                                         "size_class": "md",
                                         "tab_group": "ap_controls",
-                                        "nav_ordinal": 13,
+                                        "nav_ordinal": 17,
                                         "grow": 1.0
                                       }
                                     ],
@@ -892,7 +1625,7 @@
                                     "size": 22,
                                     "label": "$ap_skeleton",
                                     "tab_group": "ap_controls",
-                                    "nav_ordinal": 14
+                                    "nav_ordinal": 18
                                   },
                                   {
                                     "component": "checkbox",
@@ -902,7 +1635,7 @@
                                     "size": 22,
                                     "label": "$ap_reference_body",
                                     "tab_group": "ap_controls",
-                                    "nav_ordinal": 15
+                                    "nav_ordinal": 19
                                   },
                                   {
                                     "component": "checkbox",
@@ -912,7 +1645,7 @@
                                     "size": 22,
                                     "label": "$ap_collision",
                                     "tab_group": "ap_controls",
-                                    "nav_ordinal": 16
+                                    "nav_ordinal": 20
                                   },
                                   {
                                     "component": "checkbox",
@@ -922,7 +1655,17 @@
                                     "size": 22,
                                     "label": "$ap_wireframe",
                                     "tab_group": "ap_controls",
-                                    "nav_ordinal": 17
+                                    "nav_ordinal": 21
+                                  },
+                                  {
+                                    "component": "checkbox",
+                                    "id": "backdrop_dark",
+                                    "bind": "backdrop_dark",
+                                    "style": "checkbox",
+                                    "size": 22,
+                                    "label": "$ap_backdrop_dark",
+                                    "tab_group": "ap_controls",
+                                    "nav_ordinal": 22
                                   }
                                 ]
                               },
@@ -1187,6 +1930,23 @@
                                     "size": 48,
                                     "text_size": 12,
                                     "font": "label"
+                                  },
+                                  {
+                                    "component": "text",
+                                    "text": "$ap_display",
+                                    "text_size": 11,
+                                    "font": "label",
+                                    "color": "panel.stat_label"
+                                  },
+                                  {
+                                    "component": "checkbox",
+                                    "id": "show_pbr",
+                                    "bind": "show_pbr",
+                                    "style": "checkbox",
+                                    "size": 22,
+                                    "label": "$ap_pbr",
+                                    "tab_group": "ap_controls",
+                                    "nav_ordinal": 39
                                   }
                                 ]
                               },
@@ -1368,6 +2128,15 @@
                                     ]
                                   },
                                   {
+                                    "component": "text",
+                                    "id": "commit_note",
+                                    "text_bind": "commit_note",
+                                    "size": 20,
+                                    "text_size": 12,
+                                    "font": "label",
+                                    "color": "panel.stat_label"
+                                  },
+                                  {
                                     "component": "stack",
                                     "grow": 1.0
                                   },
@@ -1381,6 +2150,245 @@
                                     "tab_group": "ap_controls",
                                     "nav_ordinal": 1,
                                     "visible_bind": "has_committed"
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "cell",
+                                "gap": 8,
+                                "size": 320,
+                                "visible_bind": "shown_regions",
+                                "children": [
+                                  {
+                                    "component": "text",
+                                    "text": "$ap_regions",
+                                    "text_size": 11,
+                                    "font": "label",
+                                    "color": "panel.stat_label"
+                                  },
+                                  {
+                                    "component": "list",
+                                    "id": "ap_regions",
+                                    "bind": "ap_regions_scroll",
+                                    "style": "settings.content.scrollbar",
+                                    "rows_from": "ap_regions",
+                                    "grow": 1.0,
+                                    "pad": 4,
+                                    "children": [
+                                      {
+                                        "component": "radio",
+                                        "id": "ap_regions_{row}",
+                                        "bind": "region_sel",
+                                        "value": "{id}",
+                                        "size": 24,
+                                        "box": 15,
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 23,
+                                        "label_bind": "ap_regions_{row}_label"
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 34,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "button",
+                                        "id": "region_tag_prev",
+                                        "action": "region_tag_prev",
+                                        "label": "$ap_skeleton_prev",
+                                        "variant": "secondary",
+                                        "size_class": "md",
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 24,
+                                        "size": 44
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "region_tag",
+                                        "grow": 1.0,
+                                        "text_size": 12,
+                                        "font": "label"
+                                      },
+                                      {
+                                        "component": "button",
+                                        "id": "region_tag_next",
+                                        "action": "region_tag_next",
+                                        "label": "$ap_skeleton_next",
+                                        "variant": "secondary",
+                                        "size_class": "md",
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 25,
+                                        "size": 44
+                                      }
+                                    ],
+                                    "align": "center"
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 34,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "button",
+                                        "id": "region_bone_prev",
+                                        "action": "region_bone_prev",
+                                        "label": "$ap_skeleton_prev",
+                                        "variant": "secondary",
+                                        "size_class": "md",
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 26,
+                                        "size": 44
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "region_bone",
+                                        "grow": 1.0,
+                                        "text_size": 12,
+                                        "font": "label"
+                                      },
+                                      {
+                                        "component": "button",
+                                        "id": "region_bone_next",
+                                        "action": "region_bone_next",
+                                        "label": "$ap_skeleton_next",
+                                        "variant": "secondary",
+                                        "size_class": "md",
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 27,
+                                        "size": 44
+                                      }
+                                    ],
+                                    "align": "center"
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 34,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$ap_region_chains",
+                                        "grow": 1.0,
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label"
+                                      },
+                                      {
+                                        "component": "text_field",
+                                        "id": "region_chains",
+                                        "bind": "region_chains",
+                                        "kind": "digits",
+                                        "max_len": 2,
+                                        "style": "settings.controls.field",
+                                        "size": 64,
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 28,
+                                        "height": 30
+                                      }
+                                    ],
+                                    "align": "center"
+                                  },
+                                  {
+                                    "component": "slider",
+                                    "id": "region_stiffness",
+                                    "bind": "region_stiffness",
+                                    "style": "slider",
+                                    "size": 40,
+                                    "label": "$ap_region_stiffness",
+                                    "min": 0,
+                                    "max": 0.1,
+                                    "step": 0.001,
+                                    "tab_group": "ap_controls",
+                                    "nav_ordinal": 29
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 34,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "button",
+                                        "id": "region_split",
+                                        "action": "region_split",
+                                        "label": "$ap_region_split",
+                                        "variant": "secondary",
+                                        "size_class": "md",
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 30,
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "button",
+                                        "id": "region_grow",
+                                        "action": "region_grow",
+                                        "label": "$ap_region_grow",
+                                        "variant": "secondary",
+                                        "size_class": "md",
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 31,
+                                        "grow": 1.0
+                                      }
+                                    ],
+                                    "align": "center"
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 34,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "button",
+                                        "id": "region_culled",
+                                        "action": "region_culled",
+                                        "label": "$ap_region_culled",
+                                        "variant": "secondary",
+                                        "size_class": "md",
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 32,
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "button",
+                                        "id": "region_remove",
+                                        "action": "region_remove",
+                                        "label": "$ap_region_remove",
+                                        "variant": "secondary",
+                                        "size_class": "md",
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 33,
+                                        "grow": 1.0
+                                      }
+                                    ],
+                                    "align": "center"
+                                  },
+                                  {
+                                    "component": "text",
+                                    "text": "$ap_hang_cm",
+                                    "text_size": 11,
+                                    "font": "label",
+                                    "color": "panel.stat_label"
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 34,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text_field",
+                                        "id": "hang_cm",
+                                        "bind": "hang_cm",
+                                        "kind": "digits",
+                                        "max_len": 2,
+                                        "style": "settings.controls.field",
+                                        "grow": 1.0,
+                                        "tab_group": "ap_controls",
+                                        "nav_ordinal": 34,
+                                        "height": 30
+                                      }
+                                    ],
+                                    "align": "center"
                                   }
                                 ]
                               }
@@ -1478,198 +2486,6 @@
     ]
   },
   "exits": {},
-  "stages": {
-    "rig_persp": {
-      "lighting": "studio",
-      "clear": "$stage_void",
-      "attachments": {
-        "hdr": {
-          "format": "rgba16f"
-        },
-        "color": {
-          "format": "surface"
-        },
-        "depth": {
-          "format": "depth32"
-        }
-      },
-      "passes": [
-        {
-          "pass": "scene",
-          "writes": [
-            "hdr",
-            "depth"
-          ]
-        },
-        {
-          "pass": "tonemap_grade"
-        }
-      ],
-      "_comment": "The Clayworks rig view \u2014 four `surface` panels in a grid, each its own stage (perspective orbit + top/side/front orthos), lit by the studio rig; the RigView filler draws the mesh, skeleton, gizmo and collision into the `scene` pass and the HDR resolve keeps all four panels' colours agreeing. `clear` is transparent so the holder chrome shows through."
-    },
-    "rig_top": {
-      "lighting": "studio",
-      "clear": "$stage_void",
-      "attachments": {
-        "hdr": {
-          "format": "rgba16f"
-        },
-        "color": {
-          "format": "surface"
-        },
-        "depth": {
-          "format": "depth32"
-        }
-      },
-      "passes": [
-        {
-          "pass": "scene",
-          "writes": [
-            "hdr",
-            "depth"
-          ]
-        },
-        {
-          "pass": "tonemap_grade"
-        }
-      ]
-    },
-    "rig_side": {
-      "lighting": "studio",
-      "clear": "$stage_void",
-      "attachments": {
-        "hdr": {
-          "format": "rgba16f"
-        },
-        "color": {
-          "format": "surface"
-        },
-        "depth": {
-          "format": "depth32"
-        }
-      },
-      "passes": [
-        {
-          "pass": "scene",
-          "writes": [
-            "hdr",
-            "depth"
-          ]
-        },
-        {
-          "pass": "tonemap_grade"
-        }
-      ]
-    },
-    "rig_front": {
-      "lighting": "studio",
-      "clear": "$stage_void",
-      "attachments": {
-        "hdr": {
-          "format": "rgba16f"
-        },
-        "color": {
-          "format": "surface"
-        },
-        "depth": {
-          "format": "depth32"
-        }
-      },
-      "passes": [
-        {
-          "pass": "scene",
-          "writes": [
-            "hdr",
-            "depth"
-          ]
-        },
-        {
-          "pass": "tonemap_grade"
-        }
-      ]
-    },
-    "rig_bake": {
-      "lighting": "studio",
-      "clear": "$stage_void",
-      "attachments": {
-        "hdr": {
-          "format": "rgba16f"
-        },
-        "color": {
-          "format": "surface"
-        },
-        "depth": {
-          "format": "depth32"
-        }
-      },
-      "passes": [
-        {
-          "pass": "scene",
-          "writes": [
-            "hdr",
-            "depth"
-          ]
-        },
-        {
-          "pass": "tonemap_grade"
-        }
-      ]
-    },
-    "clip_root": {
-      "lighting": "studio",
-      "clear": "$stage_void",
-      "attachments": {
-        "hdr": {
-          "format": "rgba16f"
-        },
-        "color": {
-          "format": "surface"
-        },
-        "depth": {
-          "format": "depth32"
-        }
-      },
-      "passes": [
-        {
-          "pass": "scene",
-          "writes": [
-            "hdr",
-            "depth"
-          ]
-        },
-        {
-          "pass": "tonemap_grade"
-        }
-      ]
-    },
-    "clip_place": {
-      "lighting": "studio",
-      "clear": "$stage_void",
-      "attachments": {
-        "hdr": {
-          "format": "rgba16f"
-        },
-        "color": {
-          "format": "surface"
-        },
-        "depth": {
-          "format": "depth32"
-        }
-      },
-      "passes": [
-        {
-          "pass": "scene",
-          "writes": [
-            "hdr",
-            "depth"
-          ]
-        },
-        {
-          "pass": "tonemap_grade"
-        }
-      ]
-    }
-  },
   "styles": {
     "window": {
       "radius": 4,

@@ -210,7 +210,8 @@
         "font": "$muted",
         "doc": "$faint",
         "unknown": "$danger_text",
-        "texture_recipe": "$sig_green"
+        "texture_recipe": "$sig_green",
+        "skeleton_recipe": "$sig_blue"
       }
     }
   },

@@ -52,6 +52,14 @@ hands to Lua), and write a small Lua file that owns the scene's **logic**: it
 receives the raw runtime variables the engine publishes and returns the derived
 values the components display.
 
+A scene is a **panel**. Its root node is a `surface`, and a `surface` node
+anywhere in a tree may name another scene (`"scene": "model_view"`) — that
+scene is then drawn in that panel, whole: its own tree, its own Lua, its own
+input. Panels nest as far as you like, so a workbench is a surface holding a
+flow of panels, one of which is a grid of four surfaces that each name the same
+`model_view` scene with a different projection. Surface, scene, panel: one
+thing, three words.
+
 Colors never appear in your files as numbers: every color is a `$token`
 reference into the one palette (`ui_theme.json` → `theme.tokens`). The engine
 resolves tokens at load, merges your scene's style blocks over the shared
@@ -319,11 +327,13 @@ problem is reported by name — at build time through the gates below, at runtim
 as a warning with the same words. A bad value still degrades to its default: a
 malformed stage costs the authored look, never the picture.
 
-**The `surface` node** (where a stage lands):
+**The `surface` node** (where a stage — or a whole scene — lands):
 
 | Prop | Meaning |
 |---|---|
 | `source` | the `stages.<name>` to render here. Optional — a surface the behaviour fills itself authors none. A name with no stage warns loudly and the slot is still reserved. |
+| `scene` | the SCENE this panel draws — any `scenes/<id>.scene.json`, by id, instead of a `source`. A scene file is a panel: it never knows whether it is the root of the screen or seated in another scene's `surface`, and the same file works at either depth. The host builds it from the manifest's def (`flicker_shell::scene_def`) and seats it (`flicker_shell::SubScene`); a name the manifest lacks fails loud there. |
+| `scene_<param>` | that scene's per-instance knobs, flat: `"scene_projection": "top"` reaches the scene as `projection`. This is what lets ONE scene file serve all four quad-view panels. |
 | `layout` | `single` (default) / `pair` / `quad` — how many camera panes the behaviour tiles. An unknown name warns and the slot is skipped. |
 | `inset` | pixels inset from the node's rect (may also sit in the shared panel style). |
 | `rate` | `live` / `poster` / `dirty` / `{"hz": N}` — read by the same parser a stage's `rate` uses, so node and stage spell it identically. |

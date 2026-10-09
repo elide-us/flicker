@@ -21,12 +21,13 @@ local STEPS = {
   character = { "source", "prep", "rig", "preview", "attach", "review" },
   prop      = { "source", "mount", "review" },
   animation = { "source", "clip", "review" },
+  creature  = { "source", "prep", "rig", "preview", "attach", "review" },
 }
 
 -- Which centre view a step shows: the four-panel rig view while a body is being
 -- prepared or rigged, the bake view on preview, the two-clip pair on the clip step.
 local VIEW = {
-  prep = "quad", rig = "quad", mount = "quad", preview = "bake", clip = "clip",
+  prep = "quad", rig = "quad", mount = "quad", preview = "bake", attach = "quad", clip = "clip",
 }
 
 -- WHAT THE 3D GADGET MAY DO, per step. This is the gadget's per-surface gate (direction
@@ -48,10 +49,17 @@ function M.arrange()
   local steps = STEPS[wf] or STEPS.character
   local step = steps[tab + 1] or steps[1]
   local view = VIEW[step] or "none"
+  -- The Source step previews whatever was just opened (Aaron 2026-09-07: "I click the button
+  -- on the first page to select an asset to import. I see a preview of it."); before a
+  -- folder is open it keeps the empty-view prompt.
+  if step == "source" and Model and Model.has_source then
+    view = "quad"
+  end
   local out = {
     ["shown_wf_character"] = { on = (wf == "character") },
     ["shown_wf_prop"]      = { on = (wf == "prop") },
     ["shown_wf_animation"] = { on = (wf == "animation") },
+    ["shown_wf_creature"]  = { on = (wf == "creature") },
     ["shown_view_quad"]    = { on = (view == "quad") },
     ["shown_view_bake"]    = { on = (view == "bake") },
     ["shown_view_clip"]    = { on = (view == "clip") },
