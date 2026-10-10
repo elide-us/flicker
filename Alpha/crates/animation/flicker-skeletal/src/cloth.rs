@@ -1214,16 +1214,21 @@ mod tests {
             sim.update(&palette, 1.0 / 60.0, &mut skinned);
         }
         let per_frame = t0.elapsed().as_secs_f64() * 1000.0 / FRAMES as f64;
+        let floor = machine_floor_ms();
         eprintln!(
-            "cloth budget: {} regions / {} chains / {} bound verts = {:.4} ms per frame",
+            "cloth budget: {} regions / {} chains / {} bound verts = {:.4} ms per frame; the \
+             machine floor {:.4} ms; {:.2} floors",
             REGIONS,
             REGIONS * CHAINS,
             verts.len(),
-            per_frame
+            per_frame,
+            floor,
+            per_frame / floor
         );
         assert!(
-            per_frame < 1.0,
-            "a duster-sized cloth must cost well under a millisecond, measured {per_frame:.4} ms"
+            per_frame < COMB_BUDGET_FLOORS * floor,
+            "a duster-sized cloth must cost under {COMB_BUDGET_FLOORS} machine floors \
+             ({floor:.4} ms each), measured {per_frame:.4} ms"
         );
     }
 
@@ -1232,6 +1237,47 @@ mod tests {
     /// A `rows` × `cols` panel lying flat in the xy plane (z = 0), `s` apart, two triangles a
     /// quad: row 0 is the BODY beside the panel (not a member), every other row the `Cloth`
     /// region, so row 1 is the seam. Returns the cloth, its vertices and its triangles.
+    /// THE MACHINE'S OWN SPEED, for the budget gates: the milliseconds this core takes to run a
+    /// projection-shaped bare loop — the arithmetic of one distance constraint (two positions, a
+    /// difference, a length, a correction applied both ways) over [`FLOOR_PROJECTIONS`] pairs
+    /// held in cache. A frame budget read in FLOORS instead of milliseconds holds a shared CI
+    /// runner at half a desk's speed to the same EFFICIENCY, not the same wall clock (the
+    /// skirt gate, 2.2 ms on the desk it was written at, read 5.1 ms on the macOS runner and
+    /// failed, 2026-10-09). The least of [`FLOOR_PROBES`] runs, so a scheduler hiccup during a
+    /// probe cannot shrink the floor. 0.30 ms on the desk it was written at (1.5 ns a
+    /// projection). Measured and PRINTED beside the frame it budgets.
+    const FLOOR_PROJECTIONS: usize = 200_000;
+    const FLOOR_PROBES: usize = 5;
+    fn machine_floor_ms() -> f64 {
+        const PAIRS: usize = 1000;
+        let mut a: Vec<Vec3> = (0..PAIRS)
+            .map(|i| Vec3::new(i as f32 * 0.01, 0.0, 0.0))
+            .collect();
+        let mut b: Vec<Vec3> = a.iter().map(|p| *p + Vec3::new(0.3, 1.1, 0.0)).collect();
+        let mut least = f64::INFINITY;
+        for _ in 0..FLOOR_PROBES {
+            let t0 = std::time::Instant::now();
+            for _ in 0..FLOOR_PROJECTIONS / PAIRS {
+                for i in 0..PAIRS {
+                    let d = b[i] - a[i];
+                    let len = d.length();
+                    let corr = d * (0.5 * (len - 1.0) / len.max(1e-6));
+                    a[i] += corr;
+                    b[i] -= corr;
+                }
+            }
+            least = least.min(t0.elapsed().as_secs_f64() * 1000.0);
+            std::hint::black_box((&a, &b));
+        }
+        least
+    }
+
+    /// A duster's comb (ten regions of three five-segment chains over 4 000 bound vertices) and a
+    /// skirt's sheet, each in machine floors: 0.18 and 8.4 when written, held to the same
+    /// headroom the millisecond gates had (1 ms over 0.055; 4 ms over 2.2).
+    const COMB_BUDGET_FLOORS: f64 = 3.0;
+    const SHEET_BUDGET_FLOORS: f64 = 15.0;
+
     fn panel(rows: usize, cols: usize, s: f32, stiffness: f32) -> (Cloth, Vec<Vertex>, Vec<u32>) {
         let mut verts = Vec::new();
         for i in 0..rows {
@@ -1485,8 +1531,9 @@ mod tests {
 
     /// THE BUDGET: a skirt's worth of sheet — 60 × 80 particles, ~14 000 stretch and ~14 000
     /// bending constraints over 8 passes, 220 000 projections a frame — costs a few milliseconds
-    /// of one core (2.2 ms at this profile's opt-level 1 when written: ~10 ns a projection, some
-    /// twenty times the comb per vertex — the price of a real sheet). Must stay under four.
+    /// of one core (2.2–2.5 ms at this profile's opt-level 1 when written: ~11 ns a projection,
+    /// some twenty times the comb per vertex — the price of a real sheet). Read in MACHINE
+    /// FLOORS ([`machine_floor_ms`]): 8.4 when written, must stay under [`SHEET_BUDGET_FLOORS`].
     /// Measured and PRINTED.
     #[test]
     fn a_skirt_sized_sheet_costs_a_few_milliseconds_per_frame() {
@@ -1502,16 +1549,21 @@ mod tests {
             sim.update(&palette, 1.0 / 60.0, &mut skinned);
         }
         let per_frame = t0.elapsed().as_secs_f64() * 1000.0 / FRAMES as f64;
+        let floor = machine_floor_ms();
         eprintln!(
-            "sheet budget: {} particles, {} stretch + {} bend constraints = {:.4} ms per frame",
+            "sheet budget: {} particles, {} stretch + {} bend constraints = {:.4} ms per frame; \
+             the machine floor {:.4} ms; {:.2} floors",
             sim.sheets[0].pos.len(),
             sim.sheets[0].stretch.len(),
             sim.sheets[0].bend.len(),
-            per_frame
+            per_frame,
+            floor,
+            per_frame / floor
         );
         assert!(
-            per_frame < 4.0,
-            "a skirt-sized sheet must cost under four milliseconds, measured {per_frame:.4} ms"
+            per_frame < SHEET_BUDGET_FLOORS * floor,
+            "a skirt-sized sheet must cost under {SHEET_BUDGET_FLOORS} machine floors \
+             ({floor:.4} ms each), measured {per_frame:.4} ms"
         );
     }
 
