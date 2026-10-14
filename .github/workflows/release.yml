@@ -87,7 +87,7 @@ jobs:
         run: |
           target/release/content-tool pack Alpha/content/package dist/package.flk
           target/release/content-tool verify dist/package.flk Alpha/content/package
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: package-flk
           path: dist/package.flk
@@ -190,7 +190,7 @@ jobs:
       - name: Portable zip
         shell: pwsh
         run: Compress-Archive -Path dist\stage\* -DestinationPath dist\prism-alpha-v$env:VERSION-x86_64-pc-windows-msvc.zip
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-artifacts
           path: |
@@ -284,7 +284,7 @@ jobs:
         run: |
           ditto -c -k --keepParent dist/PrismAlpha.app \
             "dist/prism-alpha-v$VERSION-aarch64-apple-darwin.app.zip"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: macos-artifacts
           path: |
@@ -353,7 +353,7 @@ jobs:
           echo "Depends: $(dpkg-deb -f "$DEB" Depends)"
       - name: Portable tar.gz
         run: tar -C dist/stage -czf "dist/prism-alpha-v$VERSION-x86_64-unknown-linux-gnu.tar.gz" .
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: linux-artifacts
           path: |
