@@ -48,7 +48,7 @@
                 "box": 16,
                 "label_x": 22,
                 "label_size": 11,
-                "label": "$ap_limb",
+                "label": "$mb_limb",
                 "tab_group": "model_view",
                 "nav_ordinal": 2
               },
@@ -61,7 +61,7 @@
                 "box": 16,
                 "label_x": 22,
                 "label_size": 11,
-                "label": "$ap_cull",
+                "label": "$mb_cull",
                 "tab_group": "model_view",
                 "nav_ordinal": 3
               },

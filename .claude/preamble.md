@@ -9,3 +9,7 @@ entries. "Where's the spec / doc / rule for X?" resolves to an MCP entry, never 
 if not, surface a question to the operator.
 **Store durable knowledge only in MCP** (`memory_store` + `memory_link_add` — linked
 entries, not prose). Never write `docs/*.md` or any local `.md` design/memory file.
+**Memory titles are NAMES, not claims — hard cap 256 chars, aim under 100.** A title is a
+short noun phrase a search list can scan; the sentence, date, attribution, qualifiers and
+detail go in `body`/`tags`. Write the body first, then title it. Over the cap the DB rejects
+the row and the whole call is wasted. Same for `source` (128) and `tags` (512).

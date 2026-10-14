@@ -41,7 +41,7 @@ use flicker_skeletal::format::{
 pub const STATURE: f32 = 170.0;
 
 /// The canonical bone-count — derived from the one topology table below, and the
-/// single number every consumer (the Clayworks requirements, the loader tests)
+/// single number every consumer (the MeshBench requirements, the loader tests)
 /// reads. 67 since 2026-08-04: `neck_02` joined the chain (Aaron: "at least one
 /// more so it can be SIX SEVEN").
 pub const CANON_BONES: usize = TOPOLOGY.len();
@@ -1100,7 +1100,7 @@ pub fn module_id(kind: &str, prefix: &str) -> String {
 /// A named recipe on disk — `package/skeletons/<Pattern>/<Name>.recipe.json`, the authored
 /// SOURCE in the folder of the PATTERN it animates on, beside that pattern's reference rig
 /// (Aaron 2026-09-08: the recipes live with the skeleton rigs, in their own root) — what the
-/// Clayworks Prep step steps through.
+/// MeshBench Prep step steps through.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Preset {
     pub name: String,

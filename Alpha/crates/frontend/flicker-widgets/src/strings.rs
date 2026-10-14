@@ -226,7 +226,7 @@ mod tests {
             m.set("hint", "BONE MAP");
             m.set("status", format!("Blocked: {}", err));
             m.set("caption", "Reference body");
-            m.set("title", strings::resolve("$ap_bone_map").into_owned());
+            m.set("title", strings::resolve("$mb_bone_map").into_owned());
             m.set("nav_video_style", "settings.nav.active");
             m.set("mode", "walk");
             m.set("value", format!("{:.2}", v));

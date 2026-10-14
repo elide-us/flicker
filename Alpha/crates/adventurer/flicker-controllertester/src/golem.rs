@@ -17,7 +17,7 @@
 //! `skin::palette` → `skin::skin` → one upload per frame (freed next frame), exactly the
 //! paperdoll's path for one live character. The body draws in its OWN SKIN when the rig
 //! ships its maps (Aaron 2026-09-07: "I'd like to see the golem skinned as well") — the
-//! textured PBR path the Clayworks preview uses, tangents built per frame from the
+//! textured PBR path the MeshBench preview uses, tangents built per frame from the
 //! skinned corners — and falls back to flat clay when it has none.
 //!
 //! A CREATURE — a body on the Quadruped, Bird or Bat pattern (Aaron 2026-09-08: the tester
@@ -163,7 +163,7 @@ fn clip_dirs() -> [PathBuf; 2] {
 const GAMEPLAY_BASE: usize = 3;
 
 /// The flat clay tint — the fallback for a body that ships no base-colour map (the same
-/// recessive reference-body reading the Clayworks viewport gives an untextured golem).
+/// recessive reference-body reading the MeshBench viewport gives an untextured golem).
 const CLAY: [f32; 4] = [0.62, 0.66, 0.74, 1.0];
 
 /// The body's decoded maps, loaded once from the rig's material on the first drawn frame.

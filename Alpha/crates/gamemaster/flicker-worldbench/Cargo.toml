@@ -1,0 +1,32 @@
+[package]
+name = "flicker-worldbench"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# WorldBench V5 — planet generation's fifth generation: the hex world shaped by
+# RESONANCE FIELDS. A GAME MASTER scene beside Populous (V4), which it does not
+# touch: same bench frame (header rails, panel | RTT | panel, nav footer), a new
+# world. The fields themselves live in flicker-worldengine (`resonance`) so any
+# scene can reach them; what is here is the screen.
+[lib]
+name = "flicker_worldbench"
+path = "src/lib.rs"
+
+[dependencies]
+# The shared hex-globe view: mesh builder + graticule + orbit camera + the
+# offscreen viewport pass.
+flicker-globe = { version = "0.1.10", path = "../../frontend/flicker-globe" }
+flicker = { version = "0.1.0", path = "../../core/flicker" }
+flicker-shell.workspace = true
+# Input event bus — the shared resolve → route seam.
+flicker-input-core.workspace = true
+flicker-input-router.workspace = true
+tracing.workspace = true
+# The seed the bench rolls a new wave from — the one random source.
+fastrand.workspace = true
+# THE PLANET: the hex map and the V5 resonance fields.
+flicker-worldengine.workspace = true
+# The scene holds the loaded `ui_theme.json` styles as a JSON value.
+serde_json.workspace = true

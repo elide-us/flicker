@@ -360,7 +360,7 @@ pub enum PackageClass {
     Epoch,
     /// A texture map.
     Texture,
-    /// A Sablework texture RECIPE (`<name>.texture.json`) — the synthesizer
+    /// A MaterialBench texture RECIPE (`<name>.texture.json`) — the synthesizer
     /// settings a map set was baked from. Distinct from [`Self::Texture`]: the
     /// recipe is the authored artifact and the maps are its rebuildable output,
     /// so the browser must not present them as the same kind of thing.
@@ -383,7 +383,7 @@ pub enum PackageClass {
     /// A README / licence riding along in the tree.
     Doc,
     /// The package's own promotion ledger (`package/manifest.json`) — the record of
-    /// promotion intent the Quartermaster writes ([`crate::manifest`]). First lands in a
+    /// promotion intent the PackageBench writes ([`crate::manifest`]). First lands in a
     /// live tree with the first real promotion (2026-08-20), so the every-file-classifies
     /// gate must know it.
     Manifest,
@@ -550,7 +550,7 @@ mod skeleton_recipe_class_tests {
 
 /// A recipe is named by its EXTENSION, not sniffed: `<name>.texture.json` is the
 /// same cheap unambiguous path `.pack.json` and `.rbp.json` take, and it costs no
-/// read at all. Pinned because the extension is a contract between the Sablework
+/// read at all. Pinned because the extension is a contract between the MaterialBench
 /// bench (which writes it) and the Content Manager (which names it).
 #[cfg(test)]
 mod texture_recipe_class_tests {

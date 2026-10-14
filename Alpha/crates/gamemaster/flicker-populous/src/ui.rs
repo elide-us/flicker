@@ -88,7 +88,7 @@ pub const SHOW_RIVERS_BIND: &str = "pop_show_rivers";
 /// **The nav footer's COMMIT** — the bench's OUTPUT action: pause the era,
 /// close any open procedure cycle, capture the planet into a v2 `.epoch`
 /// and write it under `staging/worlds/` (bench → staging → the Content
-/// Manager promotes — the sablework flow). Shown on the EVOLVE tab alone,
+/// Manager promotes — the materialbench flow). Shown on the EVOLVE tab alone,
 /// where the footer's Next would otherwise stand.
 pub const COMMIT_ACTION: &str = "pop_commit";
 /// The commit's result line, pre-formatted by the scene: the staged file's

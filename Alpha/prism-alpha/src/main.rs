@@ -44,6 +44,15 @@ fn roster() -> Vec<SceneEntry> {
                 "A hex map of a world — every tile its own index, and a dial from 23k to 144k tiles. Nothing else, yet.",
                 "Clay 0.1 · Bench · hex map",
             )),
+        SceneEntry::new("worldbench", "WorldBench V5", "primary", flicker_worldbench::scene)
+            .with_realm(REALM_GAMEMASTER)
+            .with_info(SceneInfo::new(
+                "WorldBench V5",
+                "Authoring",
+                "World Map",
+                "Planet generation's fifth generation: the hex world shaped by resonance fields. The first expression is a full-planet wave — six pentagons crest, six trough — under a sea whose level you dial.",
+                "Clay 0.1 · Bench · resonance",
+            )),
         SceneEntry::new("csgtest", "CSG Test Scene", "primary", flicker_csgtest::scene)
             .with_realm(REALM_GAMEMASTER)
             .with_info(SceneInfo::new(
@@ -53,19 +62,19 @@ fn roster() -> Vec<SceneEntry> {
                 "The baked wave-field cluster set under a flat one-light stage — fly the 3×3 field and toggle the quad / corner-vector / navmesh debug overlays. The QEF mesher + vector-stretch test bed.",
                 "Clay 0.1 · Test · voxel field",
             )),
-        SceneEntry::new("assetpipeline", "Clayworks Bench", "primary", flicker_assetpipeline::scene)
+        SceneEntry::new("meshbench", "MeshBench", "primary", flicker_meshbench::scene)
             .with_realm(REALM_DEVELOPER)
             .with_info(SceneInfo::new(
-                "Clayworks Bench",
+                "MeshBench",
                 "Editor",
                 "Assets / Import",
                 "The asset-import wizard: open a folder of raw sources, conform its skeleton to the canon in the 2×2 editor, author attach points, and export the baked rig into staging.",
                 "Clay 0.1 · Bench · asset pipeline",
             )),
-        SceneEntry::new("quartermaster", "Quartermaster Bench", "primary", flicker_quartermaster::scene)
+        SceneEntry::new("packagebench", "PackageBench", "primary", flicker_packagebench::scene)
             .with_realm(REALM_DEVELOPER)
             .with_info(SceneInfo::new(
-                "Quartermaster Bench",
+                "PackageBench",
                 "Manager",
                 "Content / Files",
                 "The content air-traffic controller: review what landed in staging and promote it into the package, then rearrange the trees — move-only, every mutation one undo.",
@@ -85,19 +94,19 @@ fn roster() -> Vec<SceneEntry> {
             "One live copy of every Rust widget component with all features on — a nav rail of bookmarks over a card per control. The UI test scene.",
             "Clay 0.1 · Bench · UI catalog",
         )),
-        SceneEntry::new("sablework", "Sablework Bench", "primary", flicker_sablework::scene)
+        SceneEntry::new("materialbench", "MaterialBench", "primary", flicker_materialbench::scene)
             .with_realm(REALM_DEVELOPER)
             .with_info(SceneInfo::new(
-                "Sablework Bench",
+                "MaterialBench",
                 "Synthesizer",
                 "Materials / Textures",
                 "The texture synthesizer console — six noise voices into a tiled swatch, an output stage, and a lit turntable; Commit bakes the material into staging.",
                 "Clay 0.1 · Bench · texture synth",
             )),
-        SceneEntry::new("loomforge", "Loomforge Bench", "primary", flicker_loomforge::scene)
+        SceneEntry::new("packbench", "PackBench", "primary", flicker_packbench::scene)
             .with_realm(REALM_DEVELOPER)
             .with_info(SceneInfo::new(
-                "Loomforge Bench",
+                "PackBench",
                 "Editor",
                 "Animation / Packs",
                 "The pack authoring editor — a node-graph state machine over live-animating dolls, a pack browser, and the TAE combat-window timeline; Save writes the flicker.pack back.",
@@ -216,21 +225,22 @@ mod tests {
         };
         assert_eq!(
             realm_ids(REALM_GAMEMASTER),
-            ["populous", "csgtest"],
-            "Populous authors the world; the CSG Test Scene is the voxel mesher / \
-             vector-stretch test bed (God Mode and the Epoch Simulation are retired)"
+            ["populous", "worldbench", "csgtest"],
+            "Populous (V4) authors the world and WorldBench V5 shapes it by resonance \
+             fields; the CSG Test Scene is the voxel mesher / vector-stretch test bed \
+             (God Mode and the Epoch Simulation are retired)"
         );
         assert_eq!(
             realm_ids(REALM_DEVELOPER),
             [
-                "assetpipeline",
-                "quartermaster",
+                "meshbench",
+                "packagebench",
                 "componentcatalog",
-                "sablework",
-                "loomforge"
+                "materialbench",
+                "packbench"
             ],
-            "Clayworks leads the Developer benches (QA menu-order ruling), with the \
-             Quartermaster beside it, then the Component Catalog + Sablework + Loomforge"
+            "MeshBench leads the Developer benches (QA menu-order ruling), with the \
+             PackageBench beside it, then the Component Catalog + MaterialBench + PackBench"
         );
         assert_eq!(
             realm_ids(REALM_ADVENTURER),

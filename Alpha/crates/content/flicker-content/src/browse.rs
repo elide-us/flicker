@@ -1,7 +1,7 @@
 //! **The content-tree BROWSING model** — a directory listing, a folder tree, a
 //! breadcrumb and the root ceiling, with no UI in sight.
 //!
-//! Lifted out of the Quartermaster (its `fs_model.rs`): shared functionality lives in
+//! Lifted out of the PackageBench (its `fs_model.rs`): shared functionality lives in
 //! an ENGINE crate (rule `8B511B67`), and this is the engine crate that already owns
 //! the roots service, the at-rest `.gz` seam and the package classifier — so a browsing
 //! surface speaks the same names as every loader with nothing restated. The bench
@@ -10,14 +10,14 @@
 //! Scope note: the interactive-breadcrumb (name + jump target) and free-roots-ceiling
 //! halves went out with the in-engine `file_browser` modal Aaron reverted on
 //! 2026-09-04 (ruling `AAD0DC4B` — file selection is the OS dialog through `rfd`).
-//! What is here is what the Quartermaster consumes; nothing is kept warm for a
+//! What is here is what the PackageBench consumes; nothing is kept warm for a
 //! consumer that no longer exists.
 //!
 //! Everything here is pure `std` + this crate's own classifier, so the whole
 //! navigation model is testable without a window: a test walks a scratch tree and
 //! asserts what the panes would show.
 //!
-//! ROOTS are a SLICE, not a struct: the Quartermaster browses `package` + `staging`,
+//! ROOTS are a SLICE, not a struct: the PackageBench browses `package` + `staging`,
 //! and the ceiling rule ([`parent_within_roots`]) reads whatever slice it is handed —
 //! navigation never climbs out of the trees it was given.
 

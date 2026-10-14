@@ -1,7 +1,7 @@
 //! **The rig view** — the shared surface filler that draws a skeleton (and whatever
 //! meshes hang on it) into a `surface` slot the walker reserved.
 //!
-//! One instance per PANEL: Clayworks' view is a flow container of four `surface`
+//! One instance per PANEL: MeshBench's view is a flow container of four `surface`
 //! nodes (perspective + the three orthographic projections), each seated from its own
 //! slot and lit by its own `stages.<source>` block, so a panel is authored exactly like
 //! a globe's viewport. The filler contract mirrors [`flicker_globe::GlobeWorld`]:
@@ -18,7 +18,7 @@
 //! KBM only for now (Aaron 2026-09-03): left-drag orbits the perspective panel, right-drag
 //! pans, the wheel zooms; the pad's look signals reach the perspective panel through the
 //! pump's continuous queries. An ORTHOGRAPHIC panel pans on the RIGHT button ONLY (Aaron
-//! 2026-09-07): its left button is the consumer's — Clayworks drags the selected joint
+//! 2026-09-07): its left button is the consumer's — MeshBench drags the selected joint
 //! with it — so a left press can never wander the view.
 //!
 //! AN ORTHOGRAPHIC PANEL CAN VIEW FROM EITHER SIDE (TOP↔BOTTOM, LEFT↔RIGHT, FRONT↔BACK):

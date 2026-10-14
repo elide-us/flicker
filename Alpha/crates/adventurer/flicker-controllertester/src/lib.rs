@@ -935,7 +935,7 @@ impl Scene for ControllerTester {
         let margin = 18.0;
 
         // ── layout: physical column LEFT · the GOLEM STAGE centre · the bus RIGHT —
-        // the Sablework arrangement: side rails framing a centre viewport. ──
+        // the MaterialBench arrangement: side rails framing a centre viewport. ──
         let panel_w = (size.x * 0.30).clamp(240.0, 400.0);
         let panel_x = size.x - panel_w - margin;
         let content_top = TAB_Y + TAB_H + 12.0;
@@ -981,7 +981,7 @@ impl Scene for ControllerTester {
             // bands (below) because a `FrameGraph::root` element fills the window and cannot be
             // clipped to a rect. The structural fix is a nested `surface` node in
             // `controllertester.scene.json` + a `SurfaceSlot` seat, i.e. the scene joins the
-            // reserve-and-fill seam like populous/sablework — a scene-migration slice, not a
+            // reserve-and-fill seam like populous/materialbench — a scene-migration slice, not a
             // renderer one. Until then the bands are LEGACY and are the only reason the scene's
             // chrome order matters.
             //

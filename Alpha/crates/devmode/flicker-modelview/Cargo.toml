@@ -8,7 +8,7 @@ publish = false
 # MODEL VIEW — the ONE "draw a mesh" scene: a `surface` node in any scene names it
 # (`"scene": "model_view"` + flat `scene_<param>` props) and it is drawn in that panel
 # (Aaron 2026-09-09: a nested surface plays a COMPLETE scene, with its own 2D+3D
-# elements, chrome and input). The Clayworks quad view seats it four times, once per
+# elements, chrome and input). The MeshBench quad view seats it four times, once per
 # projection; the picture is a `flicker-rigview` panel declared as this scene's ROOT
 # STAGE, and its chrome — the corner label / flip control and the isolate row — is
 # ORDINARY nodes of its own tree, so it draws inside the panel's texture instead of

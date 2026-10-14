@@ -1594,7 +1594,7 @@
                 ]
               },
               {
-                "_comment": "NAV FOOTER (the sablework/catalog band): the bench's flow controls in one right-aligned cluster. MENU fires the same `pause_open` the screen's on_menu does; BACK/NEXT fire the tab rail's own step names (`tab_prev`/`tab_next`), so the visible rail steps itself exactly as the shoulder intents already do. On the final EVOLVE tab, NEXT yields its place to COMMIT (arrange() gates the swap on `shown_ft_next`/`shown_ft_commit`): the era's world is captured as a v2 .epoch into staging/worlds/ for the Content Manager to promote. The status text carries the commit's result line. The one legend entry is the APPLY hint (Aaron 2026-09-04, Confirm = apply): it shows only while a dial holds a pad-staged value (`ui_staged`, published by the bench from the walker), so the pad hints the paged_menu's gutters already carry are not copied here.",
+                "_comment": "NAV FOOTER (the materialbench/catalog band): the bench's flow controls in one right-aligned cluster. MENU fires the same `pause_open` the screen's on_menu does; BACK/NEXT fire the tab rail's own step names (`tab_prev`/`tab_next`), so the visible rail steps itself exactly as the shoulder intents already do. On the final EVOLVE tab, NEXT yields its place to COMMIT (arrange() gates the swap on `shown_ft_next`/`shown_ft_commit`): the era's world is captured as a v2 .epoch into staging/worlds/ for the Content Manager to promote. The status text carries the commit's result line. The one legend entry is the APPLY hint (Aaron 2026-09-04, Confirm = apply): it shows only while a dial holds a pad-staged value (`ui_staged`, published by the bench from the walker), so the pad hints the paged_menu's gutters already carry are not copied here.",
                 "component": "nav_footer",
                 "id": "pop_nav",
                 "style": "nav_footer.frame",
@@ -2008,7 +2008,7 @@
       }
     },
     "nav_footer": {
-      "_comment": "Bench nav rail band (the sablework/catalog block, same values). `frame` = the node's own slab; `rule` (top hairline) + `label` (legend ink) resolve as the component's defaults.",
+      "_comment": "Bench nav rail band (the materialbench/catalog block, same values). `frame` = the node's own slab; `rule` (top hairline) + `label` (legend ink) resolve as the component's defaults.",
       "frame": {
         "fill_top": "$surface_top",
         "fill_bot": "$stage_void",
@@ -2022,7 +2022,7 @@
       "label": "$dim"
     },
     "rtt_holder": {
-      "_comment": "The framed RTT HOLDER every bench's rtt/viewport slot styles against \u2014 the shared chrome for an offscreen-view slot (replaced the per-scene assetpipeline holder block, same values).",
+      "_comment": "The framed RTT HOLDER every bench's rtt/viewport slot styles against \u2014 the shared chrome for an offscreen-view slot (replaced the per-scene meshbench holder block, same values).",
       "fill_top": "$well_top",
       "fill_bot": "$well_bot",
       "border": "$edge2",

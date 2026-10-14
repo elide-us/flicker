@@ -686,7 +686,7 @@ fn build_clip_json(
 }
 
 /// One source clip retargeted onto a skeleton, BOTH variants built in memory — the seam the
-/// Clayworks clip preview samples before anything is committed to disk. Each value is
+/// MeshBench clip preview samples before anything is committed to disk. Each value is
 /// a complete `flicker.rig` clip JSON (target skeleton embedded, 60 Hz canon).
 pub struct ClipVariants {
     /// The source's stem — the clip's name, and the emitted file stem.

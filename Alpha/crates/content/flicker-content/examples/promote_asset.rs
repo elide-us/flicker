@@ -1,4 +1,4 @@
-//! Headless PROMOTE — the same on-disk effect as the Quartermaster bench's `promote_selected`:
+//! Headless PROMOTE — the same on-disk effect as the PackageBench's `promote_selected`:
 //! move an asset folder from `staging/<rel>/<name>` to the mirrored `package/<rel>/<name>` and
 //! append the package manifest row through the canonical [`flicker_content::manifest::append`]
 //! primitive. The README blesses a promotion as exactly this — a plain byte move + one manifest

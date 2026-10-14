@@ -94,7 +94,7 @@ pub struct Camera {
 impl Camera {
     /// World-to-camera view matrix.
     pub fn view(&self) -> Mat4 {
-        Mat4::look_at_rh(self.position, self.target, self.up)
+        glam::camera::rh::view::look_at_mat4(self.position, self.target, self.up)
     }
 
     /// Camera-to-clip projection matrix. `aspect` is `width / height`. Orthographic when
@@ -104,9 +104,16 @@ impl Camera {
             Some(height) => {
                 let half_h = height * 0.5;
                 let half_w = half_h * aspect;
-                Mat4::orthographic_rh(-half_w, half_w, -half_h, half_h, self.near, self.far)
+                glam::camera::rh::proj::directx::orthographic(
+                    -half_w, half_w, -half_h, half_h, self.near, self.far,
+                )
             }
-            None => Mat4::perspective_rh(self.fov_y_radians, aspect, self.near, self.far),
+            None => glam::camera::rh::proj::directx::perspective(
+                self.fov_y_radians,
+                aspect,
+                self.near,
+                self.far,
+            ),
         }
     }
 

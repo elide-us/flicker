@@ -26,7 +26,7 @@ pub const RESERVED_EXOTIC_FIRST: MaterialId = 248;
 /// The folder segment a material's *bundle* lives under: the slot id as a
 /// zero-padded three-digit decimal (`10` → `"010"`).
 ///
-/// WHY fixed width: the Quartermaster's review queue sorts a tier's children by
+/// WHY fixed width: the PackageBench's review queue sorts a tier's children by
 /// path (`fs_model.rs` `kids.sort()`), so a variable-width decimal would order
 /// `10` before `9`. Three digits make that plain lexical sort NUMERIC for free
 /// across the whole `0..=255` space, with no comparator anywhere.

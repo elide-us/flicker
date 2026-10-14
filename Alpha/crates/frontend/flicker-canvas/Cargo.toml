@@ -6,7 +6,7 @@ license.workspace = true
 publish = false
 
 # flicker-canvas — the two 2D EDITOR SURFACE FILLERS: a node-graph canvas and a lane
-# timeline. Both were written once inside the Loomforge bench (its `canvas.rs` /
+# timeline. Both were written once inside the PackBench (its `canvas.rs` /
 # `tae.rs` plus the edge builder in its `lib.rs`) and are needed again by the Dungeon
 # Maker's tech tree and the Game Master's event timelines, so they live here rather
 # than in a scene (rule 8B511B67: shared functionality in engine crates, scene Rust

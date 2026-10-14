@@ -612,7 +612,7 @@ impl ViewportFiller {
     }
 
     /// The same over a BENCH-AUTHORED view set — its own corner labels / ortho sides (the
-    /// Clayworks clip pair labels its panels ROOT MOTION / IN PLACE). The node's `layout` still
+    /// MeshBench clip pair labels its panels ROOT MOTION / IN PLACE). The node's `layout` still
     /// sizes the reserved slot; which views fill it is the behaviour's.
     pub fn with_views(renderer: &mut Renderer, views: &'static [QuadView], cols: usize) -> Self {
         Self {

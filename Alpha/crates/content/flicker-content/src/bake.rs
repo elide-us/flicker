@@ -3654,7 +3654,7 @@ pub fn write_rig(
 }
 
 /// The six attach points every CHARACTER ships with, in rail order — `(id, canonical bone)`.
-/// The ids are what gameplay binds to (a weapon mounts by attach point, 99E083C9): the Clayworks
+/// The ids are what gameplay binds to (a weapon mounts by attach point, 99E083C9): the MeshBench
 /// Attach stage labels and tunes them; the headless import ships them untuned. ONE table — the
 /// bench composes its rail from it.
 pub const DEFAULT_MOUNTS: [(&str, &str); 6] = [

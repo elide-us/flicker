@@ -15,7 +15,7 @@
 //! sprites, then text — the composite is a sprite at the chrome's layer).
 //!
 //! ## The shape
-//! Thin, in the Populous/Clayworks shape: the tree is DATA (`scenes/model_view.scene.json`),
+//! Thin, in the Populous/MeshBench shape: the tree is DATA (`scenes/model_view.scene.json`),
 //! the pair script (`scripts/model_view.lua`) gates the two chrome slices and writes the
 //! label's caption, [`ui`] holds the roster, and this file does four things a frame —
 //! publish the Model, walk the tree, dispatch the frame's signals through the walker and the
@@ -642,7 +642,7 @@ mod tests {
     }
 
     /// THE CHROME IS LAID OUT INSIDE THE PANEL, WITH REAL EXTENT (the containment invariant
-    /// this scene inherited from Clayworks, 380BDCC8 — where it could not be honoured,
+    /// this scene inherited from MeshBench, 380BDCC8 — where it could not be honoured,
     /// because the chrome lived in the host's tree under the panel's composite).
     ///
     /// At a 300-square quad cell every control resolves to a box that is visible, hittable
@@ -732,7 +732,7 @@ mod tests {
     #[test]
     fn a_held_camera_keeps_the_pointer_but_does_not_orbit() {
         let drag = SurfacePointer {
-            id: "ap_view_persp".into(),
+            id: "mb_view_persp".into(),
             root: true,
             cursor: Vec2::new(150.0, 150.0),
             local: Vec2::new(150.0, 150.0),

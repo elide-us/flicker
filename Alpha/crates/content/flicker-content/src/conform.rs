@@ -823,7 +823,7 @@ pub fn default_reference() -> std::path::PathBuf {
 }
 
 /// RIG A RAW (skeleton-less) MESH — the boneless character path, ONE sequence shared by the
-/// Clayworks conform stage and the headless import ([`crate::import_folder`]): size the mesh to
+/// MeshBench conform stage and the headless import ([`crate::import_folder`]): size the mesh to
 /// `stature_cm`, rough-fit the authored canon's limbs to it (torso untouched), then skin. The skin
 /// is baked TWICE on purpose: a rough pass first, so the hip fit reads flesh by OWNERSHIP — a bare
 /// Z-band at hip height catches the A-posed hands (they hang there), but the weight test excludes

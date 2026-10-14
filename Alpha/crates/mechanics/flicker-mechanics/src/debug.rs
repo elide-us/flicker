@@ -215,7 +215,7 @@ pub fn bone_diamonds_where(
         }
         // A bone hanging directly off a ground ROOT (the root → pelvis link) draws as a single
         // line, not a diamond glyph — it is the ground offset, not a deforming bone (Aaron
-        // 2026-08-22, Clayworks rig view).
+        // 2026-08-22, MeshBench rig view).
         if parents[parent as usize] < 0 {
             segs.push((world.transform_point3(head), world.transform_point3(tail)));
             continue;

@@ -2,7 +2,7 @@
 //!
 //! # The UI is DATA
 //!
-//! Following the Quartermaster (rule E5AFBBAB): this scene owns no HUD Lua and
+//! Following the PackageBench (rule E5AFBBAB): this scene owns no HUD Lua and
 //! composes nothing. [`crate::ui`] instances the `default_page` proto and calls
 //! `expand` at its end — the single seam, so the scene and every gate walk the
 //! same tree.
@@ -1705,7 +1705,7 @@ impl PopulousBench {
         // Confirm commits them; the footer's "Press {Confirm} to apply" legend entry
         // lights on this flag, read straight off the walker. The legend's affordance is
         // device-adaptive, so the bench publishes the Confirm binding + device exactly as
-        // Clayworks does for its footer.
+        // MeshBench does for its footer.
         m.set("ui_staged", self.ui_state.staged_any());
         flicker_shell::publish_signal_bindings(
             &mut m,
@@ -2157,7 +2157,7 @@ impl PopulousBench {
     /// **COMMIT the planet** — capture the world into a v2 `.epoch`
     /// ([`flicker_worldengine::PlanetEpoch`]) and write it under
     /// `<staging_root>/worlds/`. An ingest bench writes to `staging/` and
-    /// STOPS (the sablework contract): nothing is visible to the running
+    /// STOPS (the materialbench contract): nothing is visible to the running
     /// game until the Content Manager reviews and promotes it.
     ///
     /// The era pauses and any queued leap stands down first — a committed
@@ -2865,7 +2865,7 @@ mod tests {
         for n in &all {
             if let Some(Value::Text(s)) = n.props.get("style") {
                 assert!(
-                    !s.contains("sablework") && !s.contains("assetpipeline"),
+                    !s.contains("materialbench") && !s.contains("meshbench"),
                     "`{s}` is another bench's palette"
                 );
             }
@@ -3679,7 +3679,7 @@ mod tests {
     /// v2 `.epoch` lands under `<staging>/worlds/` that the format's own
     /// loader validates. The result line is the staged path; a failure would
     /// land the error on the same bind — never silence. Touches ONLY the
-    /// staging root it was given (the sablework rule: an ingest bench writes
+    /// staging root it was given (the materialbench rule: an ingest bench writes
     /// to staging and stops).
     ///
     /// The footer's own wiring rides the tree: NEXT/COMMIT are gated

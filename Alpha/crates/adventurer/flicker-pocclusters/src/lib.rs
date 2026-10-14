@@ -629,7 +629,7 @@ impl GameScene {
     /// `cursor` on a viewport of pixel size `viewport`.
     ///
     /// Camera basis built to **match** the renderer's view matrix
-    /// (`glam::Mat4::look_at_rh` in [`flicker_render::Camera::view`]):
+    /// (`glam::camera::rh::view::look_at_mat4` in [`flicker_render::Camera::view`]):
     ///   * `r = f.cross(Y)` — same as `look_at_rh`'s internal right
     ///     vector (`forward × up`). For the scene's yaw-0/face-+Z
     ///     pose this resolves to `(-1, 0, 0)`, which means world `+X`
@@ -1563,7 +1563,7 @@ impl GameScene {
         // (localization stays stringtable-resolved engine-side); the PAIR SCRIPT
         // (pocclusters.lua) derives the display strings — the five-line split.
         // Pre-formatted values remain only where a readout IS one formatted
-        // value (the celestial fmt_* clock/phase/month strings, the sablework-
+        // value (the celestial fmt_* clock/phase/month strings, the materialbench-
         // sanctioned shape).
         let walk_mode = self.locomotion_walk;
         let mode_tag = strings::resolve(if walk_mode {

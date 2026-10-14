@@ -2,8 +2,8 @@
 //!
 //! A nested `surface` node names a stage SOURCE; this module turns the authored block
 //! (lighting preset · clear · camera · layers · attachments · passes · rate) into the
-//! typed definition every filler consumes. It replaced three private parsers (the loomforge doll rig, the globe, the
-//! Sablework lit sample) that each knew a third of the vocabulary and rejected the rest —
+//! typed definition every filler consumes. It replaced three private parsers (the packbench doll rig, the globe, the
+//! MaterialBench lit sample) that each knew a third of the vocabulary and rejected the rest —
 //! a `graticule` in a doll stage or a `ring` on a globe was a warning in one reader and
 //! silence in another, and the globe's copy dropped the sky palette on the floor. One
 //! vocabulary, one reader, one set of defaults.
@@ -2878,7 +2878,7 @@ mod tests {
             "solarbirth_sky",
             "pocclusters_world",
             "populous_globe",
-            "sablework_lit",
+            "materialbench_lit",
             "portrait",
         ] {
             assert!(

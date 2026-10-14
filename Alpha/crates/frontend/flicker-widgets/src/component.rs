@@ -1050,7 +1050,7 @@ struct Placed<'a> {
     /// Stable identity for the retained [`DrawCache`] — this node's `id` when it has
     /// one, else its structural path (parent key ⊕ kind ⊕ sibling index). Structural
     /// rather than positional so it survives a tree REBUILT from scratch each frame
-    /// (flicker-loomforge and the chat panel do exactly that).
+    /// (flicker-packbench and the chat panel do exactly that).
     key: u64,
     /// This node is a FLOW CONTAINER whose content overflows its box, and this is the
     /// content height + applied offset it was laid out with (see [`ScrollBox`]).
@@ -1454,7 +1454,7 @@ pub fn run_ui(
         }
         // Miss: draw for real and rebuild the entry. The read-key list is recomputed
         // here rather than reused because a tree rebuilt from scratch each frame (the
-        // Loomforge bench, the chat panel) may hand this identity different props.
+        // PackBench, the chat panel) may hand this identity different props.
         let read_keys = read_keys_of(p.node);
         let fp = node_fingerprint(
             p,
@@ -1749,11 +1749,28 @@ pub fn run_ui(
             let cur = results
                 .number(bind)
                 .or_else(|| model.number(bind))
-                .unwrap_or(0.0);
+                .unwrap_or(0.0)
+                .round()
+                .clamp(0.0, len - 1.0);
             // CLAMP at the ends — next stops on the last entry, prev on the first; a
             // linear rail must NOT wrap (right→leftmost / left→rightmost is an
-            // unexpected-UX anti-pattern, Aaron 2026-08-12).
-            results.set(bind.to_string(), (cur + dir).clamp(0.0, len - 1.0));
+            // unexpected-UX anti-pattern, Aaron 2026-08-12). DISABLED options (a child's
+            // `enabled_bind` reading off) are skipped: the step lands on the next enabled
+            // entry in its direction and stays put when none remains — the same clamp,
+            // over the enabled entries.
+            let mut want = cur;
+            let mut probe = cur;
+            loop {
+                probe += dir;
+                if probe < 0.0 || probe > len - 1.0 {
+                    break;
+                }
+                if option_enabled(&p.node.children[probe as usize], &results, model) {
+                    want = probe;
+                    break;
+                }
+            }
+            results.set(bind.to_string(), want);
         }
     }
 
@@ -3114,6 +3131,16 @@ fn enabled(node: &UiNode, model: &ValueMap) -> bool {
         Some(k) => model.is_on(k),
         None => true,
     }
+}
+
+/// Whether an option strip's CHILD may be selected: its `enabled_bind`, this frame's
+/// results over the model, absent = enabled — the per-option twin of [`enabled`], read by
+/// the strip's own stepping so a step never lands on a dimmed entry.
+fn option_enabled(child: &UiNode, results: &ValueMap, model: &ValueMap) -> bool {
+    child
+        .enabled_bind
+        .as_deref()
+        .is_none_or(|k| eff_bool(results, model, k))
 }
 
 // ── Hit-test ─────────────────────────────────────────────────────────────────
@@ -4478,6 +4505,17 @@ fn component_props(
                         m.insert("label".to_string(), Json::String(s.clone()));
                     }
                 }
+                // An option may be DISABLED by the Model, exactly like a control's
+                // `enabled_bind`: the strip draws it dimmed, a click on it selects
+                // nothing, and the rail's own stepping skips it — so a bench's FIELDS
+                // checklist can gate which tabs exist without a second rail
+                // (WorldBench V5, 2026-10-13). Absent = enabled.
+                if let Some(k) = c.enabled_bind.as_deref() {
+                    m.insert(
+                        "enabled".to_string(),
+                        Json::Bool(eff_bool(results, model, k)),
+                    );
+                }
                 // A child's `action` is a STRUCT field (never in `props`), so cross it
                 // explicitly: a control that owns its rows (context_menu) sees which are
                 // actionable. Firing stays the walker's job — the verdict names the row
@@ -4926,7 +4964,7 @@ fn draw_panel(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
 /// The **sprite** — THE image component (Aaron 2026-08-14: splash was only ever a
 /// sprite with behaviour, and behaviour is what the Lua seam configures — ONE
 /// component). A bare `tex` blits the engine texture into the node's whole rect,
-/// tinted white × `alpha` — the menu's Muse plate, the sablework swatch. Three
+/// tinted white × `alpha` — the menu's Muse plate, the materialbench swatch. Three
 /// OPTIONAL features turn the same node into a presenter (the intro logos):
 ///
 /// - `backdrop` — a dotted style path painted as a full-rect slate under the
@@ -6225,8 +6263,13 @@ fn draw_pill_toggle(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
                 0.0,
             );
         }
+        // A DISABLED option (its `enabled` folded from the child's `enabled_bind`)
+        // dims below idle: `disabled_label`, falling to the faint ink.
+        let disabled = jopt(child, "enabled").and_then(|v| v.as_bool()) == Some(false);
         let lc = if active {
             first_color(s, &["active_label"], INK)
+        } else if disabled {
+            first_color(s, &["disabled_label"], FAINT)
         } else {
             first_color(s, &["label"], DIM)
         };
@@ -6267,6 +6310,10 @@ fn hit_pill_toggle(m: Vec2, r: Rect, props: &Json, click: bool) -> HitVerdict {
     let pad = jnum(s, "pad", 3.0);
     for (i, child) in kids.iter().enumerate() {
         if !pill_cell(well, pad, kids.len(), i).contains(m) {
+            continue;
+        }
+        // A DISABLED segment claims the pointer (no pick-through) and selects nothing.
+        if jopt(child, "enabled").and_then(|v| v.as_bool()) == Some(false) {
             continue;
         }
         // A segment's value is its INDEX — a number. Anything else is an authoring
@@ -10274,6 +10321,8 @@ const BRONZE_DIM: [f32; 4] = [0.431, 0.353, 0.204, 1.0];
 const FLASH_LIT: [f32; 4] = [0.616, 0.722, 1.0, 1.0];
 /// Dimmed ink — secondary/meta copy and the bottom rune pair. Mirrors `$ink_dim`.
 const DIM: [f32; 4] = [0.561, 0.541, 0.49, 1.0];
+/// The faint ink a DISABLED option strip segment falls to (the `faint` token's value).
+const FAINT: [f32; 4] = [0.361, 0.341, 0.286, 1.0];
 /// The sunken stone a switch rests in — a toggle's OFF track. Mirrors `$stone1`
 /// (`settings.controls.toggle.off_bg` is the authored source; this is the floor).
 const STONE: [f32; 4] = [0.055, 0.063, 0.086, 1.0];
@@ -11602,7 +11651,7 @@ mod tests {
         // the stringtable guard: a concurrent test's `load_str` mid-test would bump the
         // generation and force spurious redraws (an order-dependent flake).
         let _g = crate::strings::test_guard();
-        // Loomforge and the chat panel rebuild their whole `UiNode` tree every frame, so
+        // PackBench and the chat panel rebuild their whole `UiNode` tree every frame, so
         // cache identity has to be structural, not the address of a retained node.
         let model = ValueMap::new().with("flag", true);
         let input = input_at(-9.0, -9.0, false);
@@ -13216,6 +13265,105 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// **A DISABLED option is unclickable and the rail's step skips it** (WorldBench V5's
+    /// FIELDS checklist gates tabs this way): with the middle option's `enabled_bind` off,
+    /// a click on it writes nothing (while still claiming the pointer), `next` from the
+    /// first lands on the LAST, `prev` from the last lands on the FIRST, and a step whose
+    /// only remaining entries are disabled stays put.
+    #[test]
+    fn a_disabled_pill_option_is_unclickable_and_the_step_skips_it() {
+        let opt = |value: f64| prop(node("option"), "value", Value::Number(value));
+        let mut mid = opt(1.0);
+        mid.enabled_bind = Some("heat_on".into());
+        let mut pill = node("pill_toggle");
+        pill.id = "pt".into();
+        pill.bind = Some("tab".into());
+        pill.width = Some(180.0);
+        pill.height = Some(30.0);
+        pill.anchor = Some(UiAnchor::TopLeft);
+        pill = prop(pill, "next_action", Value::Text("tab_next".into()));
+        pill = prop(pill, "prev_action", Value::Text("tab_prev".into()));
+        pill.children = vec![opt(0.0), mid, opt(2.0)];
+        let mut page = node("surface");
+        page.children = vec![pill];
+        let styles = serde_json::json!({});
+
+        // Click the middle cell (x 90) with heat_on false: claims, selects nothing.
+        let model = ValueMap::new().with("tab", 0.0).with("heat_on", false);
+        let mut state = UiState::new();
+        let f = run_ui(
+            &page,
+            &model,
+            &styles,
+            &input_at(90.0, 15.0, true),
+            &mut state,
+        );
+        assert_eq!(
+            f.results.number("tab"),
+            Some(0.0),
+            "a disabled segment selects nothing"
+        );
+        assert!(f.results.is_on("hud_hit"), "…but still claims the pointer");
+        // Enabled, the same click selects it (a fresh press: the button is released
+        // between the two frames, so the second is a new click edge, not a hold).
+        let on = ValueMap::new().with("tab", 0.0).with("heat_on", true);
+        run_ui(
+            &page,
+            &on,
+            &styles,
+            &input_at(90.0, 15.0, false),
+            &mut state,
+        );
+        let f = run_ui(&page, &on, &styles, &input_at(90.0, 15.0, true), &mut state);
+        assert_eq!(
+            f.results.number("tab"),
+            Some(1.0),
+            "an enabled segment selects"
+        );
+
+        // Stepping skips the disabled middle: 0 →next→ 2, 2 →prev→ 0.
+        state.push_step("tab_next");
+        let f = run_ui(
+            &page,
+            &model,
+            &styles,
+            &input_at(-9.0, -9.0, false),
+            &mut state,
+        );
+        assert_eq!(
+            f.results.number("tab"),
+            Some(2.0),
+            "next skips the disabled entry"
+        );
+        let at2 = model.clone().with("tab", 2.0);
+        state.push_step("tab_prev");
+        let f = run_ui(
+            &page,
+            &at2,
+            &styles,
+            &input_at(-9.0, -9.0, false),
+            &mut state,
+        );
+        assert_eq!(f.results.number("tab"), Some(0.0), "prev skips it too");
+        // Only disabled entries ahead: the step stays put.
+        let mut last = opt(2.0);
+        last.enabled_bind = Some("heat_on".into());
+        page.children[0].children[2] = last;
+        state.push_step("tab_next");
+        let f = run_ui(
+            &page,
+            &model,
+            &styles,
+            &input_at(-9.0, -9.0, false),
+            &mut state,
+        );
+        assert_eq!(
+            f.results.number("tab"),
+            Some(0.0),
+            "nothing enabled ahead: stays"
+        );
     }
 
     #[test]

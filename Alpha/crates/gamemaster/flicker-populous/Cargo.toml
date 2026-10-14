@@ -34,7 +34,7 @@ fastrand.workspace = true
 # bench drives, and the `.epoch` v2 format Commit captures the world into.
 flicker-worldengine.workspace = true
 # The staging root the committed planet lands under (bench → staging/ →
-# Content Manager promotes → package/, the sablework pattern).
+# Content Manager promotes → package/, the materialbench pattern).
 flicker-content.workspace = true
 # The scene holds the loaded `ui_theme.json` styles as a JSON value.
 serde_json.workspace = true

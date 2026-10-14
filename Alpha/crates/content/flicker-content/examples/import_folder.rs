@@ -12,7 +12,7 @@
 //! on (`flicker_content::default_facing_quarters`).
 //!
 //! A source that arrives rigged takes the vendor-rig path as before. A RAW mesh (no skeleton —
-//! the ultra Meshy generations) needs the Clayworks Prep numbers: `--stature` (defaults to the
+//! the ultra Meshy generations) needs the MeshBench Prep numbers: `--stature` (defaults to the
 //! canon's 170 cm) and `--tris` (the triangle target; omitted = keep the source count).
 //! e.g. rig the ultra golem into staging:
 //!   cargo run -p flicker-content --example import_folder -- \

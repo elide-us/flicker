@@ -1,9 +1,9 @@
 //! IK SOLVERS + THE LIMB MODEL — G1 of the gait generator / IK solver design (37704D6B, Aaron's
 //! ruling CD36B9BE): pure glam math over a skeleton's WORLD frames (`globals`, parents preceding
-//! children), renderer- and signal-agnostic the way the gizmo math is, so the Clayworks bench, the
+//! children), renderer- and signal-agnostic the way the gizmo math is, so the MeshBench, the
 //! runtime driver and the tests bend chains with ONE set of solvers.
 //!
-//! - [`ccd`] is the Clayworks rig-step reach test, MOVED here (2026-09-08) — an extraction, not a
+//! - [`ccd`] is the MeshBench rig-step reach test, MOVED here (2026-09-08) — an extraction, not a
 //!   copy: every bone of a chain turns about its own position so the end joint reaches a target,
 //!   carrying its subtree.
 //! - [`two_bone`] is the analytic limb solver every leg and foreleg uses: root → mid → end, the
@@ -537,7 +537,7 @@ mod tests {
         assert!(miss > 5.0, "20 cm past a straight leg: {miss} cm off");
     }
 
-    /// The CCD (Clayworks' reach test, moved here) brings the end within tolerance on a
+    /// The CCD (MeshBench's reach test, moved here) brings the end within tolerance on a
     /// reachable target and reports a miss otherwise, never moving the chain's own pivots.
     #[test]
     fn ccd_reaches_within_tolerance() {

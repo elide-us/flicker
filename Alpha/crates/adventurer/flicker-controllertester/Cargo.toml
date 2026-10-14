@@ -34,6 +34,6 @@ flicker-mechanics.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 # Decodes the golem's PNG maps (base colour / normal / roughness / metallic) for the textured
-# stage draw — the same decoder the Clayworks preview uses.
+# stage draw — the same decoder the MeshBench preview uses.
 image.workspace = true
 tracing.workspace = true

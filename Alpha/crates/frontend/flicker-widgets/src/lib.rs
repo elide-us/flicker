@@ -1262,6 +1262,7 @@ mod tests {
                 ("BRONZE_DIM", "bronze_dim"),
                 ("FLASH_LIT", "rune_glow_hi"),
                 ("DIM", "dim"),
+                ("FAINT", "faint"),
                 ("STONE", "stone1"),
                 ("WELL", "well"),
                 ("STONE_BTN", "stone_btn"),
@@ -1436,7 +1437,7 @@ mod tests {
             const CAMERAS_NOT_THE_GLOBES: [&str; 1] = ["flicker-solarbirth"];
 
             // The scenes that still declare a walker-owned signal. EMPTY as of the
-            // template-tier removal (2026-08-12): quartermaster / godmode / assetpipeline
+            // template-tier removal (2026-08-12): packagebench / godmode / meshbench
             // each folded one in from their template-built UI; stubbing those benches off
             // templates removed the declarations, so the gate now enforces ZERO. A NEW name
             // here means a scene stole a walker signal (violation F1) — migrate it, don't

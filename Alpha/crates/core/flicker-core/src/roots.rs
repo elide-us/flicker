@@ -20,8 +20,8 @@
 //!
 //! # The two roots that matter for the content pipeline
 //!
-//! - [`ContentRoots::staging`] — where the ingest benches (Clayworks,
-//!   Loomforge, the retargeter) WRITE their processed output. Not shipped, not
+//! - [`ContentRoots::staging`] — where the ingest benches (MeshBench,
+//!   PackBench, the retargeter) WRITE their processed output. Not shipped, not
 //!   read by the running game.
 //! - [`ContentRoots::package`] — the runtime read set. Content only arrives
 //!   here by PROMOTION from staging (the Content Manager's job), never by a

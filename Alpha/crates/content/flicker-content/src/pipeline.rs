@@ -24,7 +24,7 @@ use crate::fbx::parse_fbx;
 use crate::rig::rename_to_canonical;
 use crate::scan::{scan_folder, Kind};
 
-/// How to prepare a RAW (skeleton-less) mesh before rigging it — the Clayworks Prep step's two
+/// How to prepare a RAW (skeleton-less) mesh before rigging it — the MeshBench Prep step's two
 /// numbers: the real-world stature to size the mesh to, and the triangle count to collapse it to
 /// (`None` = keep the source count). A mesh that arrives rigged is game-ready and skips Prep, so
 /// this is ignored for it.
@@ -87,7 +87,7 @@ pub struct ImportSummary {
 ///
 /// A mesh that arrives WITH a skeleton takes the vendor-rig path (rename → conform → bake). A RAW
 /// mesh (no skeleton — the ultra Meshy generations) takes the boneless path exactly as the
-/// Clayworks character rail runs it: Prep (collapse to `raw.target_tris`, size to
+/// MeshBench character rail runs it: Prep (collapse to `raw.target_tris`, size to
 /// `raw.stature_cm`) → [`rig_raw_mesh`] → the canonical-frame gate Commit applies → bake; it
 /// needs `raw`, and says so rather than guessing a stature. Either way the character ships the
 /// six untuned [`default_mounts`], as the bench's Attach stage would.

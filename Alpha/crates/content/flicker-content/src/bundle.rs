@@ -10,8 +10,8 @@
 //! different root, so promoting a bundle stays what a promotion has always been
 //! here: a byte move plus one manifest row. That is why every entry point in
 //! this module takes the root as an argument rather than asking the roots
-//! service — the writer (Sablework's commit, against the staging root) and the
-//! reader (the Quartermaster and, later, the engine, against the package root)
+//! service — the writer (MaterialBench's commit, against the staging root) and the
+//! reader (the PackageBench and, later, the engine, against the package root)
 //! spell one path through one seam.
 //!
 //! What this module deliberately does NOT do yet: it hands back PATHS, it does
@@ -93,7 +93,7 @@ impl MaterialBundle {
     /// The recipe's text, read through the gz-at-rest seam by its LOGICAL path.
     ///
     /// Here rather than at every call site so the `.gz` twin stays a fact of
-    /// this seam and not of the Quartermaster, which only wants to parse it.
+    /// this seam and not of the PackageBench, which only wants to parse it.
     pub fn recipe_text(&self) -> Result<String> {
         package::read_text(&self.recipe)
             .with_context(|| format!("reading material recipe {}", self.recipe.display()))

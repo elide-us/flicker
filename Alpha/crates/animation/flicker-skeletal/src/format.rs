@@ -40,7 +40,7 @@ pub struct RigFile {
     #[serde(default)]
     pub attach: Attach,
     /// The CHARACTER's authored attach POINTS — where props mount onto THIS rig (grip /
-    /// holster / scabbard / belt …), the Clayworks Attach stage's output. The inverse of
+    /// holster / scabbard / belt …), the MeshBench Attach stage's output. The inverse of
     /// [`RigFile::attach`]: that is how a piece hangs on a body, these are where a body
     /// offers to hang pieces. Empty for props / garments / clips; serde-default keeps
     /// older files loading.
@@ -911,7 +911,7 @@ pub fn load_dir(dir: &Path) -> Result<Model> {
 
 /// One rig file's embedded skeleton decoded to the runtime [`Bone`] set (contract-space
 /// matrices converted). The shared seam between [`load_dirs`] and in-memory consumers —
-/// the Clayworks clip preview builds a playable rig straight from the retargeter's
+/// the MeshBench clip preview builds a playable rig straight from the retargeter's
 /// output value, no disk round-trip.
 pub fn rig_bones(file: &RigFile) -> Vec<Bone> {
     file.skeleton

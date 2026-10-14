@@ -30,3 +30,6 @@ fastrand.workspace = true
 # The world-defining constants — the planet size model (TILE_MI, diameter) and
 # the standard frequency the map opens at.
 clayengine.workspace = true
+# The headless shape evaluator (`resonance_eval`) writes its de-projected
+# contour map as PNG.
+image.workspace = true

@@ -15,7 +15,7 @@
 //!
 //! The walk is the ground truth for what ships: every regular file under the
 //! package dir (dot-files skipped). `package/manifest.json.gz` — the
-//! Quartermaster's promotion ledger — is packed as ordinary content like
+//! PackageBench's promotion ledger — is packed as ordinary content like
 //! everything else; it is provenance, never the index.
 
 use std::fs::File;

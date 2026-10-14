@@ -1229,7 +1229,7 @@ mod tests {
     /// SILENTLY — the walker cannot warn (the lookup simply misses), so a card
     /// that claims to demo styling through a dead path is a lie nobody sees. The
     /// day it was written this gate caught five dead paths in the catalog and the
-    /// sablework root slab.
+    /// materialbench root slab.
     /// **Every focus-group member carries an `id`** (incident A0D3CE6A, Populous
     /// 2026-09-04): the walker makes a node focusable only when BOTH `tab_group` and
     /// `id` are non-empty, so a button that authors a group and an ordinal but no id is
