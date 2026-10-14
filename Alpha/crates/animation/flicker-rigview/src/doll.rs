@@ -22,16 +22,25 @@
 use std::sync::Arc;
 
 use flicker::render::{
-    grid_segments, ring_segments, FrameGraph, MeshIndices, Rate, Rect, Renderer, SkinnedMeshHandle,
-    SkinnedVertex, StageCamera, StageLayer,
+    grid_segments, mesh_tangents, mesh_tangents_into, ring_segments, FrameGraph, MeshHandle,
+    MeshIndices, MeshVertex, PbrMaps, Rate, Rect, Renderer, SkinnedMeshHandle, SkinnedVertex,
+    StageCamera, StageLayer, TextureHandle, TexturedMeshHandle, TexturedVertex,
 };
 use flicker::ui::SurfaceSlot;
 use flicker_globe::Arrows;
-use flicker_skeletal::format::{Model, Vertex};
+use flicker_mechanics::collision::{penetration, Shape};
+use flicker_skeletal::cloth::{ClothSim, SETTLE_STEPS};
+use flicker_skeletal::format::{Bone, Collision, Mesh as RigMesh, Model, RegionTag, Vertex};
+use flicker_skeletal::skin::SkinnedVertex as CpuVertex;
 use flicker_skeletal::{pose, skin};
 use glam::{Mat4, Vec2, Vec3};
 
 use crate::{Draw, Projection, RigView};
+
+/// The cloth submesh's material word: the direct-RGB escape (bit 31) carrying the SAME neutral
+/// steel the skinned shader hard-codes as its base, so the CPU half and the GPU half of one body
+/// shade alike instead of reading as two materials.
+const CLOTH_MATERIAL: u32 = 0x8000_0000 | 140 | (145 << 8) | (158 << 16);
 
 /// The stage layer kinds a doll draws. A source authoring anything else is named once,
 /// at construction, rather than drawing nothing in silence.
@@ -42,6 +51,434 @@ pub const DOLL_LAYERS: &[&str] = &["skinned", "ring", "grid"];
 /// a page of dolls off the GPU, so spending half the budget by default would defeat it.
 pub const LIVE_HZ: f32 = 30.0;
 
+/// **A rig's drawable body** — the GPU-skinned mesh, plus the CLOTH SUBMESH the CPU deforms over
+/// it when the rig carries cloth regions with binds (spec 6C46CAB9).
+///
+/// The GPU skins from a bone palette; it cannot run a PBD chain. So the body is PARTITIONED once,
+/// here, at upload: every triangle touching a chain-bound vertex becomes a cloth submesh with its
+/// own plain vertex buffer, and the rest stays the GPU-skinned mesh exactly as before (the same
+/// vertex buffer, a filtered index list — no re-index, no double draw). Per frame the cloth half
+/// is CPU-skinned, stepped, pushed out of the body's capsules, renormalised and written back into
+/// its buffer in place; both halves draw under the same world matrix in the same draw item.
+///
+/// **This is the ONE skinned-mesh upload door.** A caller left on `upload_skinned_mesh` would draw
+/// the cloth rigidly and never know (rule 98232A50).
+pub struct SkinnedBody {
+    mesh: Option<SkinnedMeshHandle>,
+    cloth: Option<ClothPart>,
+}
+
+/// The cloth submesh's GPU handles — the flat mesh the steel view draws and its TEXTURED twin
+/// (the same vertices with their UVs and tangents) the body's material draws — and the CPU state
+/// that feeds both.
+struct ClothPart {
+    mesh: MeshHandle,
+    textured: TexturedMeshHandle,
+    cpu: ClothCpu,
+}
+
+/// The CPU half: the submesh's simulation and every buffer a frame needs — allocated once here so
+/// a frame allocates NOTHING (405F7034). Deliberately free of any GPU handle, so the whole
+/// per-frame cloth path is exercisable headless.
+struct ClothCpu {
+    sim: ClothSim,
+    /// The submesh's BIND vertices, already compacted out of the source mesh — so the per-frame
+    /// skin reads a contiguous few thousand and the body's whole vertex list is never walked.
+    bind: Vec<Vertex>,
+    /// The submesh's own triangle list, in LOCAL indices.
+    tris: Vec<u32>,
+    /// Reused per frame: the CPU skin of `src`, the area-weighted normals, the GPU vertices (flat
+    /// and textured, the latter's tangents re-read off the draped triangles into `tangents` over
+    /// `scratch`), and the capsules posed into world space.
+    skinned: Vec<CpuVertex>,
+    normals: Vec<Vec3>,
+    verts: Vec<MeshVertex>,
+    textured: Vec<TexturedVertex>,
+    tangents: Vec<[f32; 4]>,
+    scratch: Vec<Vec3>,
+    caps: Vec<Shape>,
+}
+
+impl SkinnedBody {
+    /// Upload `mesh` for `bones`, splitting off a cloth submesh when the rig carries one, and
+    /// SETTLE that cloth at the rest pose so the first frame is already draped. `collision` is the
+    /// rig's own volume list — its capsules are the body the cloth cannot pass through.
+    pub fn upload(
+        r: &mut Renderer,
+        mesh: &RigMesh,
+        bones: &[Bone],
+        collision: &Collision,
+    ) -> SkinnedBody {
+        if mesh.vertices.is_empty() {
+            return SkinnedBody {
+                mesh: None,
+                cloth: None,
+            };
+        }
+        // The converter emits a non-deduped sequential list when indices are absent.
+        let all: Vec<u32> = if mesh.indices.is_empty() {
+            (0..mesh.vertices.len() as u32).collect()
+        } else {
+            mesh.indices.clone()
+        };
+        let split = split_cloth(mesh, &all);
+        let rigid = split.as_ref().map_or(&all, |s| &s.rigid);
+        // The bind-pose tangents over the WHOLE body (cloth triangles included — a vertex on
+        // the seam is shared), for the material path's normal map.
+        let tangents = mesh_tangents(
+            mesh.vertices.len(),
+            |i| mesh.vertices[i].p,
+            |i| mesh.vertices[i].n,
+            |i| mesh.vertices[i].uv,
+            &all,
+        );
+        let verts: Vec<SkinnedVertex> = mesh
+            .vertices
+            .iter()
+            .zip(&tangents)
+            .map(|(v, &tangent)| SkinnedVertex {
+                position: v.p,
+                normal: v.n,
+                uv: v.uv,
+                joints: v.joints,
+                weights: v.weights,
+                tangent,
+            })
+            .collect();
+        let handle =
+            (!rigid.is_empty()).then(|| r.upload_skinned_mesh(&verts, MeshIndices::U32(rigid)));
+        let cloth = split.map(|s| {
+            let local: Vec<Vertex> = s
+                .src
+                .iter()
+                .map(|&i| mesh.vertices[i as usize].clone())
+                .collect();
+            let mut sim = ClothSim::build(&s.cloth, &local, &s.tris, bones);
+            sim.set_capsules(&collision.volumes, bones);
+            let n = local.len();
+            let verts: Vec<MeshVertex> = local
+                .iter()
+                .map(|v| MeshVertex {
+                    position: v.p,
+                    normal: v.n,
+                    material: CLOTH_MATERIAL,
+                })
+                .collect();
+            let handle = r.upload_mesh(&verts, MeshIndices::U32(&s.tris));
+            // The textured twin opens on the bind vertices; every frame rewrites it.
+            let textured: Vec<TexturedVertex> = local
+                .iter()
+                .map(|v| TexturedVertex {
+                    position: v.p,
+                    normal: v.n,
+                    uv: v.uv,
+                    tangent: [1.0, 0.0, 0.0, 1.0],
+                })
+                .collect();
+            let twin = r.upload_textured_mesh(&textured, MeshIndices::U32(&s.tris));
+            let mut cpu = ClothCpu {
+                sim,
+                bind: local,
+                tris: s.tris,
+                skinned: Vec::with_capacity(n),
+                normals: Vec::with_capacity(n),
+                verts,
+                textured,
+                tangents: Vec::with_capacity(n),
+                scratch: Vec::with_capacity(2 * n),
+                caps: Vec::with_capacity(collision.volumes.len()),
+            };
+            // Settle at the REST pose: a poster is one frame, so it must open already draped.
+            let rest: Vec<Mat4> = bones.iter().map(|b| b.local).collect();
+            let palette = skin::palette(bones, &pose::global_transforms(bones, &rest));
+            cpu.simulate(&palette, None);
+            r.update_mesh_vertices(handle, &cpu.verts);
+            r.update_textured_mesh_vertices(twin, &cpu.textured);
+            tracing::info!(
+                cloth_verts = cpu.bind.len(),
+                cloth_tris = cpu.tris.len() / 3,
+                capsules = cpu.sim.capsules().len(),
+                "body: cloth submesh split off the GPU skin"
+            );
+            ClothPart {
+                mesh: handle,
+                textured: twin,
+                cpu,
+            }
+        });
+        SkinnedBody {
+            mesh: handle,
+            cloth,
+        }
+    }
+
+    /// Whether this body carries a CPU cloth half at all — a plain rigid body does not, and every
+    /// per-frame cost below is skipped for it.
+    pub fn has_cloth(&self) -> bool {
+        self.cloth.is_some()
+    }
+
+    /// Step the cloth to this pose and rewrite its vertex buffer. `dt` is the surface's own delta;
+    /// `None` SETTLES (the poster path — a settled poster's consecutive uploads are identical, so
+    /// a still image never shimmers). A body with no cloth does nothing at all.
+    pub fn pose(&mut self, r: &mut Renderer, palette: &[Mat4], dt: Option<f32>) {
+        let Some(part) = self.cloth.as_mut() else {
+            return;
+        };
+        part.cpu.simulate(palette, dt);
+        r.update_mesh_vertices(part.mesh, &part.cpu.verts);
+        r.update_textured_mesh_vertices(part.textured, &part.cpu.textured);
+    }
+
+    /// The ONE draw item for this body: the GPU-skinned half posed by `palette`, carrying the CPU
+    /// cloth half under the SAME world matrix. A body that is nothing but cloth draws as a plain
+    /// mesh; an empty body draws nothing. The neutral steel; [`Self::draw_with`] takes a material.
+    pub fn draw(&self, world: Mat4, palette: Vec<Mat4>, bone_count: u32) -> Option<Draw> {
+        self.draw_with(world, palette, bone_count, None)
+    }
+
+    /// [`Self::draw`] with the skinned half shaded through `material` (albedo + PBR maps) when
+    /// one is given — the same PBR path a textured mesh takes.
+    pub fn draw_with(
+        &self,
+        world: Mat4,
+        palette: Vec<Mat4>,
+        bone_count: u32,
+        material: Option<(TextureHandle, PbrMaps)>,
+    ) -> Option<Draw> {
+        let cloth = self.cloth.as_ref().map(|c| c.mesh);
+        let cloth_textured = self.cloth.as_ref().map(|c| c.textured);
+        match self.mesh {
+            Some(mesh) => Some(Draw::Skinned {
+                mesh,
+                world,
+                palette,
+                bone_count,
+                cloth,
+                cloth_textured,
+                material,
+            }),
+            None => cloth.map(|mesh| Draw::Mesh {
+                mesh,
+                world,
+                options: Default::default(),
+            }),
+        }
+    }
+
+    /// Give both meshes back (scene `exit`). Taken, so a second teardown is a no-op.
+    pub fn free(&mut self, r: &mut Renderer) {
+        if let Some(m) = self.mesh.take() {
+            r.free_skinned_mesh(m);
+        }
+        if let Some(c) = self.cloth.take() {
+            r.free_mesh(c.mesh);
+            r.free_textured_mesh(c.textured);
+        }
+    }
+}
+
+impl ClothCpu {
+    /// THE per-frame cloth path, CPU side: skin only the submesh's source vertices → step the
+    /// chains → push their free nodes out of the body capsules → place the bound vertices on them
+    /// → area-weighted normals off the submesh's own triangles → the GPU vertex list. Every buffer
+    /// is reused, so this allocates nothing.
+    fn simulate(&mut self, palette: &[Mat4], dt: Option<f32>) {
+        skin::skin_subset(&self.bind, palette, &mut self.skinned);
+        match dt {
+            Some(dt) => self.sim.step(palette, dt),
+            // A poster settles: N steps, ONE placement. `SETTLE_STEPS` is the same relaxation
+            // `ClothSim::build` uses, so the drape a still image opens on is the chain's own.
+            None => {
+                for _ in 0..SETTLE_STEPS {
+                    self.sim.step(palette, 1.0 / 60.0);
+                }
+            }
+        }
+        push_out_of_body(&mut self.sim, palette, &mut self.caps);
+        self.sim.place(&mut self.skinned);
+        // Area-weighted normals off the DRAPED triangles: the bind normal rotated by one chain
+        // segment is right for a tube and wrong for a sheet that has folded.
+        self.normals.clear();
+        self.normals.resize(self.skinned.len(), Vec3::ZERO);
+        for t in self.tris.as_chunks::<3>().0 {
+            let (a, b, c) = (t[0] as usize, t[1] as usize, t[2] as usize);
+            let (Some(pa), Some(pb), Some(pc)) = (
+                self.skinned.get(a),
+                self.skinned.get(b),
+                self.skinned.get(c),
+            ) else {
+                continue;
+            };
+            let (pa, pb, pc) = (
+                Vec3::from(pa.position),
+                Vec3::from(pb.position),
+                Vec3::from(pc.position),
+            );
+            // Un-normalised: its length IS twice the triangle's area, which is the weight.
+            let n = (pb - pa).cross(pc - pa);
+            for i in [a, b, c] {
+                self.normals[i] += n;
+            }
+        }
+        self.verts.clear();
+        for (i, sv) in self.skinned.iter().enumerate() {
+            let skinned = Vec3::from(sv.normal);
+            let mut n = self.normals[i];
+            // A degenerate fan (or a winding the source flipped) falls back to the skinned normal
+            // rather than shading the panel black.
+            if n.length_squared() < 1e-12 {
+                n = skinned;
+            } else if n.dot(skinned) < 0.0 {
+                n = -n;
+            }
+            self.verts.push(MeshVertex {
+                position: sv.position,
+                normal: n.normalize_or_zero().to_array(),
+                material: CLOTH_MATERIAL,
+            });
+        }
+        // The textured twin: the same draped positions and normals, the bind UVs, and tangents
+        // re-read off the draped triangles (a sheet that folded has new ones) into reused buffers.
+        mesh_tangents_into(
+            self.verts.len(),
+            |i| self.verts[i].position,
+            |i| self.verts[i].normal,
+            |i| self.bind[i].uv,
+            &self.tris,
+            &mut self.scratch,
+            &mut self.tangents,
+        );
+        self.textured.clear();
+        self.textured
+            .extend(self.verts.iter().zip(&self.bind).zip(&self.tangents).map(
+                |((v, b), &tangent)| TexturedVertex {
+                    position: v.position,
+                    normal: v.normal,
+                    uv: b.uv,
+                    tangent,
+                },
+            ));
+    }
+}
+
+/// Pose the rig's body capsules by the palette into the reused `caps` buffer, then push every
+/// free chain node out of all of them. The overlap test is `flicker-mechanics`' — the one capsule
+/// test in the tree — and it is reached from HERE rather than from `flicker-skeletal::cloth`
+/// because mechanics depends on skeletal, so the other direction is a dependency cycle.
+fn push_out_of_body(sim: &mut ClothSim, palette: &[Mat4], caps: &mut Vec<Shape>) {
+    caps.clear();
+    for c in sim.capsules() {
+        if let Some(m) = palette.get(c.bone) {
+            caps.push(
+                Shape::Capsule {
+                    a: c.a,
+                    b: c.b,
+                    radius: c.radius,
+                }
+                .transformed(*m),
+            );
+        }
+    }
+    if caps.is_empty() {
+        return;
+    }
+    let posed = &*caps;
+    sim.push_free_nodes(|mut p| {
+        for s in posed {
+            let probe = Shape::Sphere {
+                center: p,
+                radius: 0.0,
+            };
+            if let Some(c) = penetration(&probe, s) {
+                p += c.normal * c.depth;
+            }
+        }
+        p
+    });
+}
+
+/// The partition of a rig's triangles by whether they touch a cloth-BOUND vertex.
+struct Split {
+    /// The GPU-skinned half: the original index list minus the cloth triangles (the vertex buffer
+    /// is unchanged, so these still index the source vertices).
+    rigid: Vec<u32>,
+    /// Source vertex index per cloth-submesh vertex.
+    src: Vec<u32>,
+    /// The cloth submesh's triangle list, re-indexed into `src`.
+    tris: Vec<u32>,
+    /// The rig's cloth with every bind's `v` remapped to the submesh's local index.
+    cloth: flicker_skeletal::format::Cloth,
+}
+
+/// Split `mesh`'s triangles: any triangle with a corner the cloth MOVES — bound to a chain, or a
+/// member of a `Cloth` region that runs as a sheet (ruling 82EDC071) — goes to the CLOTH submesh,
+/// everything else stays GPU-skinned. `None` when the rig moves no vertex (the ordinary body) or
+/// when its moved vertices are in no triangle.
+fn split_cloth(mesh: &RigMesh, indices: &[u32]) -> Option<Split> {
+    let mut bound = vec![false; mesh.vertices.len()];
+    let mut any = false;
+    for r in &mesh.cloth.regions {
+        let sheet = r.tag == RegionTag::Cloth && r.chain_count > 0;
+        let moved = r
+            .binds
+            .iter()
+            .map(|b| b.v)
+            .chain(sheet.then_some(&r.verts).into_iter().flatten().copied());
+        for v in moved {
+            if let Some(f) = bound.get_mut(v as usize) {
+                *f = true;
+                any = true;
+            }
+        }
+    }
+    if !any {
+        return None;
+    }
+    let mut rigid = Vec::with_capacity(indices.len());
+    let mut src = Vec::new();
+    let mut tris = Vec::new();
+    let mut local = vec![u32::MAX; mesh.vertices.len()];
+    for t in indices.as_chunks::<3>().0 {
+        if !t.iter().any(|&i| bound.get(i as usize).is_some_and(|b| *b)) {
+            rigid.extend_from_slice(t);
+            continue;
+        }
+        for &i in t {
+            let slot = &mut local[i as usize];
+            if *slot == u32::MAX {
+                *slot = src.len() as u32;
+                src.push(i);
+            }
+            tris.push(*slot);
+        }
+    }
+    if tris.is_empty() {
+        return None;
+    }
+    // The sim runs over the SUBMESH, so its binds and its members must speak the submesh's
+    // indices. A vertex no triangle reached is dropped — nothing would draw it.
+    let mut cloth = mesh.cloth.clone();
+    for r in &mut cloth.regions {
+        r.binds.retain_mut(|b| {
+            let l = local.get(b.v as usize).copied().unwrap_or(u32::MAX);
+            b.v = l;
+            l != u32::MAX
+        });
+        r.verts.retain_mut(|v| {
+            let l = local.get(*v as usize).copied().unwrap_or(u32::MAX);
+            *v = l;
+            l != u32::MAX
+        });
+    }
+    Some(Split {
+        rigid,
+        src,
+        tris,
+        cloth,
+    })
+}
+
 /// The ONE rig a screenful of dolls shares: the uploaded skinned mesh plus the model it
 /// poses from. Behind an [`Arc`] because a page carries a dozen dolls and the GPU skins
 /// every instance from its own bone palette — one mesh, one skeleton, N poses.
@@ -50,7 +487,7 @@ pub const LIVE_HZ: f32 = 30.0;
 /// scene exit, exactly as a behaviour owns the handles it hands [`RigView::set_draws`].
 pub struct DollRig {
     model: Arc<Model>,
-    mesh: Option<SkinnedMeshHandle>,
+    body: SkinnedBody,
     /// Rest-pose ground offset. `Model::world` centres the rig on the origin, but the
     /// authored cameras (`target_y`) and rings (`y: 0`) are metric with the feet on the
     /// floor, so the doll is dropped onto it before it is drawn.
@@ -65,40 +502,20 @@ impl DollRig {
         let ground = ground_transform(model.world, &model.mesh.vertices);
         if model.mesh.vertices.is_empty() {
             tracing::warn!("doll: the rig has no mesh — its dolls will be empty");
-            return Self {
-                model,
-                mesh: None,
-                ground,
-            };
         }
-        let verts: Vec<SkinnedVertex> = model
-            .mesh
-            .vertices
-            .iter()
-            .map(|v| SkinnedVertex {
-                position: v.p,
-                normal: v.n,
-                uv: v.uv,
-                joints: v.joints,
-                weights: v.weights,
-            })
-            .collect();
-        // The converter emits a non-deduped sequential list when indices are absent.
-        let indices: Vec<u32> = if model.mesh.indices.is_empty() {
-            (0..verts.len() as u32).collect()
-        } else {
-            model.mesh.indices.clone()
-        };
-        let mesh = r.upload_skinned_mesh(&verts, MeshIndices::U32(&indices));
+        // THE one skinned-upload door: it splits off the cloth submesh when the rig carries one
+        // and settles its drape at the rest pose (6C46CAB9).
+        let body = SkinnedBody::upload(r, &model.mesh, &model.bones, &model.collision);
         tracing::info!(
             bones = model.bones.len(),
-            verts = verts.len(),
+            verts = model.mesh.vertices.len(),
             clips = model.clips.len(),
+            cloth = body.has_cloth(),
             "doll: rig uploaded"
         );
         Self {
             model,
-            mesh: Some(mesh),
+            body,
             ground,
         }
     }
@@ -142,9 +559,7 @@ impl DollRig {
 
     /// Give the mesh back (scene `exit`). Taken, so a second teardown is a no-op.
     pub fn free(&mut self, r: &mut Renderer) {
-        if let Some(m) = self.mesh.take() {
-            r.free_skinned_mesh(m);
-        }
+        self.body.free(r);
     }
 
     /// Give the SHARED rig's mesh back through the last handle on it. Release every
@@ -160,13 +575,15 @@ impl DollRig {
         }
     }
 
+    /// This rig's draw item at `clip`/`time`.
+    ///
+    /// The cloth half is the SETTLED rest drape: a `DollRig` is shared behind an `Arc` by every
+    /// doll on the page, so no doll can step a simulation of its own without a second copy of the
+    /// rig — and a page of dolls is exactly what the sharing exists to make affordable. The bench
+    /// preview, which owns its body outright, steps its cloth per frame.
     fn draw(&self, clip: Option<usize>, time: f32) -> Option<Draw> {
-        Some(Draw::Skinned {
-            mesh: self.mesh?,
-            world: self.ground,
-            palette: self.palette(clip, time),
-            bone_count: self.bone_count(),
-        })
+        self.body
+            .draw(self.ground, self.palette(clip, time), self.bone_count())
     }
 }
 
@@ -511,15 +928,471 @@ mod tests {
                 attach: Default::default(),
                 collision: Default::default(),
             }),
-            mesh: None,
+            body: SkinnedBody {
+                mesh: None,
+                cloth: None,
+            },
             ground: Mat4::IDENTITY,
         })
+    }
+
+    /// A cloth region hung from bone 0: `chains` HORIZONTAL hangs along +x, `span` apart on y,
+    /// with one probe vertex sitting on each at `(10, y, 0)` — `k = 2`, `f = 0`. Horizontal so
+    /// gravity has somewhere to drape them to, exactly as `cloth.rs`' own drape gate does. Plus
+    /// two purely RIGID triangles far away, which must never enter the cloth submesh.
+    fn sleeve_mesh(chains: usize, span: f32) -> Mesh {
+        use flicker_skeletal::format::{Cloth, ClothBind, ClothChain, ClothParams, ClothRegion};
+        let mut vertices: Vec<Vertex> = Vec::new();
+        let mut indices: Vec<u32> = Vec::new();
+        let mut binds: Vec<ClothBind> = Vec::new();
+        for c in 0..chains {
+            let y = span * c as f32;
+            // A triangle per probe: the probe plus two companions beside it on the same chain.
+            let base = vertices.len() as u32;
+            for (j, off) in [0.0_f32, 0.3, -0.3].iter().enumerate() {
+                let mut v = vert(0.0);
+                v.p = [10.0 + off, y, j as f32 * 0.1];
+                vertices.push(v);
+            }
+            indices.extend_from_slice(&[base, base + 1, base + 2]);
+            binds.push(ClothBind {
+                v: base,
+                c: c as u32,
+                k: 2,
+                f: 0.0,
+            });
+        }
+        for t in 0..2 {
+            let base = vertices.len() as u32;
+            for j in 0..3 {
+                let mut v = vert(0.0);
+                v.p = [100.0 + t as f32, j as f32, 0.0];
+                vertices.push(v);
+            }
+            indices.extend_from_slice(&[base, base + 1, base + 2]);
+        }
+        Mesh {
+            vertices,
+            indices,
+            cloth: Cloth {
+                regions: vec![ClothRegion {
+                    name: "sleeve".into(),
+                    anchor_bone: "root".into(),
+                    tag: RegionTag::Hair,
+                    verts: Vec::new(),
+                    chain_count: chains as u32,
+                    params: ClothParams {
+                        gravity: [0.0, 0.0, -600.0],
+                        stiffness: 0.005,
+                        damping: 0.9,
+                        iterations: 8,
+                        max_dt: 1.0 / 30.0,
+                    },
+                    chains: (0..chains)
+                        .map(|c| ClothChain {
+                            anchor: [0.0, span * c as f32, 0.0],
+                            dir: [1.0, 0.0, 0.0],
+                            seg_len: 5.0,
+                            segments: 4,
+                        })
+                        .collect::<Vec<ClothChain>>(),
+                    binds,
+                }],
+            },
+            ..Default::default()
+        }
+    }
+
+    /// Build the CPU half of a body straight off a mesh — the whole per-frame cloth path with no
+    /// GPU in it.
+    fn cpu_of(mesh: &Mesh, bones: &[Bone], collision: &Collision) -> ClothCpu {
+        let s = split_cloth(mesh, &mesh.indices).expect("the mesh carries cloth");
+        let bind: Vec<Vertex> = s
+            .src
+            .iter()
+            .map(|&i| mesh.vertices[i as usize].clone())
+            .collect();
+        let mut sim = ClothSim::build(&s.cloth, &bind, &s.tris, bones);
+        sim.set_capsules(&collision.volumes, bones);
+        let n = bind.len();
+        ClothCpu {
+            sim,
+            bind,
+            tris: s.tris,
+            skinned: Vec::with_capacity(n),
+            normals: Vec::with_capacity(n),
+            verts: Vec::with_capacity(n),
+            textured: Vec::with_capacity(n),
+            tangents: Vec::with_capacity(n),
+            scratch: Vec::with_capacity(2 * n),
+            caps: Vec::with_capacity(collision.volumes.len()),
+        }
+    }
+
+    /// THE SPLIT GATE (spec 6C46CAB9): every triangle touching a chain-bound vertex goes to the
+    /// CLOTH submesh and none of the purely rigid ones do; the rigid half keeps its own indices
+    /// into the unchanged vertex buffer; and a mesh with no binds does not split at all.
+    #[test]
+    fn the_split_takes_every_bound_triangle_and_no_rigid_one() {
+        let mesh = sleeve_mesh(2, 20.0);
+        let split = split_cloth(&mesh, &mesh.indices).expect("two bound triangles");
+        assert_eq!(split.tris.len(), 6, "two cloth triangles, re-indexed");
+        assert_eq!(split.src.len(), 6, "their six distinct source vertices");
+        assert_eq!(split.rigid.len(), 6, "the two rigid triangles stay skinned");
+        // Every bound vertex is in the cloth submesh; no rigid-only vertex is.
+        let bound: Vec<u32> = mesh.cloth.regions[0].binds.iter().map(|b| b.v).collect();
+        for v in &bound {
+            assert!(split.src.contains(v), "bound vertex {v} must be cloth");
+        }
+        for i in &split.rigid {
+            assert!(
+                !bound.contains(i),
+                "a rigid triangle touches no bound vertex"
+            );
+        }
+        // The sim now speaks the SUBMESH's indices, not the mesh's.
+        for (b, v) in mesh.cloth.regions[0]
+            .binds
+            .iter()
+            .zip(split.cloth.regions[0].binds.iter())
+        {
+            assert_eq!(split.src[v.v as usize], b.v, "the bind was re-indexed");
+        }
+        let mut plain = mesh.clone();
+        plain.cloth = Default::default();
+        assert!(
+            split_cloth(&plain, &plain.indices).is_none(),
+            "an ordinary body does not split"
+        );
+    }
+
+    /// A synthetic sleeve, driven for two seconds off a swinging bone, DRAPES: its cloth vertices
+    /// end below where the rigid skin would have put them, while the rigid half of the same body
+    /// is untouched (it never enters the cloth submesh at all).
+    #[test]
+    fn a_swung_sleeve_drapes_below_its_rigid_skin() {
+        let mesh = sleeve_mesh(1, 20.0);
+        let bones = [bone("root")];
+        let mut cpu = cpu_of(&mesh, &bones, &Collision::default());
+        let palette = [Mat4::from_translation(Vec3::new(30.0, 0.0, 0.0))];
+        let rigid = skin::skin(&mesh, &palette);
+        for _ in 0..120 {
+            cpu.simulate(&palette, Some(1.0 / 60.0));
+        }
+        let bound = mesh.cloth.regions[0].binds[0].v as usize;
+        let local = cpu.bind.iter().position(|v| v.p == mesh.vertices[bound].p);
+        let drift = cpu.verts[local.expect("the bound vertex is in the submesh")].position;
+        assert!(
+            drift[2] < rigid[bound].position[2] - 1.0,
+            "the cloth must hang BELOW its rigid skin: {} vs {}",
+            drift[2],
+            rigid[bound].position[2]
+        );
+        // The rigid half never entered the submesh, so nothing here can have moved it.
+        let split = split_cloth(&mesh, &mesh.indices).unwrap();
+        for i in &split.rigid {
+            assert_eq!(
+                rigid[*i as usize].position,
+                skin::skin(&mesh, &palette)[*i as usize].position
+            );
+        }
+    }
+
+    /// THE CAPSULE GATE: a chain node hanging inside a body capsule is pushed out to its surface
+    /// by `push_out_of_body`, which is the one place `flicker_mechanics::collision` is consulted.
+    #[test]
+    fn a_chain_node_inside_a_capsule_is_pushed_out() {
+        use flicker_skeletal::format::{CollisionRole, CollisionShape, CollisionVolume};
+        const R: f32 = 8.0;
+        let (a, b) = (Vec3::new(0.0, -6.0, 0.0), Vec3::new(20.0, -6.0, 0.0));
+        let mesh = sleeve_mesh(1, 20.0);
+        let bones = [bone("root")];
+        let collision = Collision {
+            volumes: vec![CollisionVolume {
+                name: "thigh".into(),
+                bone: "root".into(),
+                shape: CollisionShape::Capsule {
+                    a: a.to_array(),
+                    b: b.to_array(),
+                    radius: R,
+                },
+                role: CollisionRole::Physics,
+            }],
+        };
+        let mut cpu = cpu_of(&mesh, &bones, &collision);
+        let palette = [Mat4::IDENTITY];
+        // Distance from a point to the capsule's axis segment.
+        let to_axis = |p: Vec3| {
+            let ab = b - a;
+            let t = ((p - a).dot(ab) / ab.dot(ab)).clamp(0.0, 1.0);
+            (p - (a + ab * t)).length()
+        };
+        cpu.sim.step(&palette, 1.0 / 60.0);
+        let mut inside = 0;
+        cpu.sim.push_free_nodes(|p| {
+            if to_axis(p) < R {
+                inside += 1;
+            }
+            p
+        });
+        assert!(inside > 0, "the hang must start inside the capsule");
+        push_out_of_body(&mut cpu.sim, &palette, &mut cpu.caps);
+        assert_eq!(cpu.caps.len(), 1, "the capsule was posed by its bone");
+        cpu.sim.push_free_nodes(|p| {
+            assert!(
+                to_axis(p) >= R - 1e-3,
+                "every free node must end on or outside the capsule, got {p} at {}",
+                to_axis(p)
+            );
+            p
+        });
+    }
+
+    /// A `Cloth` panel sewn along one row of a body: rows × cols in the xy plane, row 0 the
+    /// body (untagged), the rest the region, no chains laid — the SHEET solver's input.
+    fn panel_mesh(rows: usize, cols: usize, s: f32) -> Mesh {
+        use flicker_skeletal::format::{Cloth, ClothParams, ClothRegion};
+        let mut vertices: Vec<Vertex> = Vec::new();
+        for i in 0..rows {
+            for j in 0..cols {
+                let mut v = vert(0.0);
+                v.p = [j as f32 * s, i as f32 * s, 0.0];
+                vertices.push(v);
+            }
+        }
+        let at = |i: usize, j: usize| (i * cols + j) as u32;
+        let mut indices = Vec::new();
+        for i in 0..rows - 1 {
+            for j in 0..cols - 1 {
+                indices.extend_from_slice(&[at(i, j), at(i, j + 1), at(i + 1, j)]);
+                indices.extend_from_slice(&[at(i, j + 1), at(i + 1, j + 1), at(i + 1, j)]);
+            }
+        }
+        Mesh {
+            vertices,
+            indices,
+            cloth: Cloth {
+                regions: vec![ClothRegion {
+                    name: "hem".into(),
+                    anchor_bone: "root".into(),
+                    tag: RegionTag::Cloth,
+                    verts: (cols as u32..(rows * cols) as u32).collect(),
+                    chain_count: 1,
+                    params: ClothParams::default(),
+                    chains: Vec::new(),
+                    binds: Vec::new(),
+                }],
+            },
+            ..Default::default()
+        }
+    }
+
+    /// THE SHEET ON THE RUNTIME PATH (ruling 82EDC071): a `Cloth` panel splits off by its
+    /// MEMBERSHIP (no chains laid), hangs below its rigid skin from its seam, leaves the body row
+    /// exactly where the skin put it, and its free vertices clear a body capsule under it through
+    /// the one capsule test the runtime owns.
+    #[test]
+    fn a_cloth_panel_hangs_from_its_seam_and_clears_the_body() {
+        use flicker_skeletal::format::{CollisionRole, CollisionShape, CollisionVolume};
+        let (rows, cols, s) = (8, 5, 5.0);
+        let mesh = panel_mesh(rows, cols, s);
+        let bones = [bone("root")];
+        const R: f32 = 6.0;
+        let (a, b) = (Vec3::new(-10.0, 0.0, -12.0), Vec3::new(40.0, 0.0, -12.0));
+        let collision = Collision {
+            volumes: vec![CollisionVolume {
+                name: "thigh".into(),
+                bone: "root".into(),
+                shape: CollisionShape::Capsule {
+                    a: a.to_array(),
+                    b: b.to_array(),
+                    radius: R,
+                },
+                role: CollisionRole::Physics,
+            }],
+        };
+        let mut cpu = cpu_of(&mesh, &bones, &collision);
+        let palette = [Mat4::IDENTITY];
+        for _ in 0..180 {
+            cpu.simulate(&palette, Some(1.0 / 60.0));
+        }
+        let rigid = skin::skin(&mesh, &palette);
+        let local = |v: usize| {
+            cpu.bind
+                .iter()
+                .position(|b| b.p == mesh.vertices[v].p)
+                .expect("the panel is in the submesh")
+        };
+        for j in 0..cols {
+            assert_eq!(
+                cpu.verts[local(j)].position,
+                rigid[j].position,
+                "the body row is the skin's"
+            );
+            let far = cpu.verts[local((rows - 1) * cols + j)].position;
+            assert!(
+                far[2] < rigid[(rows - 1) * cols + j].position[2] - 10.0,
+                "the far row hangs below its rigid skin: {far:?}"
+            );
+        }
+        let to_axis = |p: Vec3| {
+            let ab = b - a;
+            let t = ((p - a).dot(ab) / ab.dot(ab)).clamp(0.0, 1.0);
+            (p - (a + ab * t)).length()
+        };
+        cpu.sim.push_free_nodes(|p| {
+            assert!(
+                to_axis(p) >= R - 1e-3,
+                "every free vertex ends on or outside the capsule, got {p} at {}",
+                to_axis(p)
+            );
+            p
+        });
+    }
+
+    /// THE SHEET ON A REAL REGION (ruling 82EDC071; rule CE0451CE — measure on real data before
+    /// reporting): `FLICKER_RIG_DIR=<rig folder> FLICKER_REGION=<region name> … --ignored
+    /// --nocapture`. Loads the rig, re-tags that region `Cloth` so it runs as a SHEET over its
+    /// real triangles, settles it on the rest pose and steps it for two seconds under the rig's
+    /// own capsules, and PRINTS what a real panel costs and does: members and constraints, the
+    /// milliseconds a frame, how far its vertices hang below the rigid skin, the worst edge
+    /// strain, and that everything stayed finite.
+    #[test]
+    #[ignore]
+    fn diagnose_the_sheet_on_a_real_region() {
+        let Ok(dir) = std::env::var("FLICKER_RIG_DIR") else {
+            eprintln!("skipping: FLICKER_RIG_DIR not set");
+            return;
+        };
+        let want = std::env::var("FLICKER_REGION").unwrap_or_default();
+        let model =
+            flicker_skeletal::format::load_dir(std::path::Path::new(&dir)).expect("the rig loads");
+        let mut mesh = model.mesh.clone();
+        let mut named = false;
+        for r in &mut mesh.cloth.regions {
+            if r.name == want {
+                r.tag = RegionTag::Cloth;
+                r.chain_count = r.chain_count.max(1);
+                named = true;
+            } else {
+                // Every other region out of the way: this is the one panel's reading.
+                r.chain_count = 0;
+                r.binds.clear();
+            }
+        }
+        assert!(named, "no region named {want:?} in {dir}");
+        let bones = &model.bones;
+        // `FLICKER_NO_CAPSULES=1` runs the panel with no body to collide with — the reading of
+        // the sheet alone, against the one with the rig's capsules.
+        let none = Collision::default();
+        let collision = if std::env::var("FLICKER_NO_CAPSULES").is_ok() {
+            &none
+        } else {
+            &model.collision
+        };
+        let t0 = std::time::Instant::now();
+        let mut cpu = cpu_of(&mesh, bones, collision);
+        let built = t0.elapsed().as_secs_f64() * 1000.0;
+        let rest: Vec<Mat4> = bones.iter().map(|b| b.local).collect();
+        let palette = skin::palette(bones, &pose::global_transforms(bones, &rest));
+        let mut rigid: Vec<CpuVertex> = Vec::new();
+        skin::skin_subset(&cpu.bind, &palette, &mut rigid);
+        cpu.simulate(&palette, None);
+        const FRAMES: usize = 120;
+        let t1 = std::time::Instant::now();
+        for _ in 0..FRAMES {
+            cpu.simulate(&palette, Some(1.0 / 60.0));
+        }
+        let per_frame = t1.elapsed().as_secs_f64() * 1000.0 / FRAMES as f64;
+        let (mut finite, mut below, mut moved, mut worst_drop) = (true, 0usize, 0usize, 0.0f32);
+        for (v, r) in cpu.verts.iter().zip(&rigid) {
+            let (p, q) = (Vec3::from(v.position), Vec3::from(r.position));
+            finite &= p.is_finite();
+            let d = q.z - p.z;
+            if (p - q).length() > 0.1 {
+                moved += 1;
+            }
+            if d > 0.1 {
+                below += 1;
+            }
+            worst_drop = worst_drop.max(d);
+        }
+        // Strain over the edges with a real length (a 600k soup has hairline edges whose
+        // relative stretch means nothing), and the worst ABSOLUTE stretch over every edge.
+        let (mut strain, mut stretch) = (0.0f32, 0.0f32);
+        let split = split_cloth(&mesh, &mesh.indices).expect("the panel splits");
+        let members: std::collections::HashSet<u32> = mesh
+            .cloth
+            .regions
+            .iter()
+            .find(|r| r.name == want)
+            .map(|r| r.verts.iter().copied().collect())
+            .unwrap_or_default();
+        let mut worst_edges: Vec<(f32, usize, usize, f32, f32)> = Vec::new();
+        for t in cpu.tris.as_chunks::<3>().0 {
+            for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                let (a, b) = (a as usize, b as usize);
+                let rest = Vec3::from(cpu.bind[a].p).distance(Vec3::from(cpu.bind[b].p));
+                let now =
+                    Vec3::from(cpu.verts[a].position).distance(Vec3::from(cpu.verts[b].position));
+                stretch = stretch.max((now - rest).abs());
+                if rest >= 0.5 {
+                    strain = strain.max((now - rest).abs() / rest);
+                    worst_edges.push(((now - rest).abs() / rest, a, b, rest, now));
+                }
+            }
+        }
+        worst_edges.sort_by(|x, y| y.0.total_cmp(&x.0));
+        for &(st, a, b, rest, now) in worst_edges.iter().take(5) {
+            let m = |l: usize| members.contains(&split.src[l]);
+            eprintln!(
+                "  worst edge {a}-{b}: strain {:.0} % rest {rest:.2} now {now:.2} | member {} {} | bind {:?} {:?} | now {:?} {:?}",
+                st * 100.0, m(a), m(b), cpu.bind[a].p, cpu.bind[b].p, cpu.verts[a].position, cpu.verts[b].position
+            );
+        }
+        eprintln!(
+            "SHEET {want}: submesh {} verts / {} tris, built in {built:.1} ms, {per_frame:.3} ms a frame; \
+             {moved} vertices moved off the rigid skin, {below} hang below it, the deepest by \
+             {worst_drop:.1} cm; worst edge strain {:.1} % (edges over 5 mm), worst stretch \
+             {stretch:.2} cm; finite {finite}; capsules {}",
+            cpu.bind.len(),
+            cpu.tris.len() / 3,
+            strain * 100.0,
+            cpu.sim.capsules().len()
+        );
+        eprintln!("  {}", cpu.sim.sheet_report());
+        assert!(finite, "a real sheet stays finite");
+    }
+
+    /// A poster SETTLES: two consecutive settles of the same pose write byte-identical vertices,
+    /// so a still surface never shimmers when its clock marks it dirty.
+    #[test]
+    fn two_consecutive_poster_settles_write_the_same_vertices() {
+        let mesh = sleeve_mesh(2, 20.0);
+        let bones = [bone("root")];
+        let mut cpu = cpu_of(&mesh, &bones, &Collision::default());
+        let palette = [Mat4::from_translation(Vec3::new(4.0, 0.0, 0.0))];
+        cpu.simulate(&palette, None);
+        let first = cpu.verts.clone();
+        cpu.simulate(&palette, None);
+        for (a, b) in first.iter().zip(cpu.verts.iter()) {
+            // A settled chain is CONVERGED, not frozen: the gate is that the creep is invisible.
+            let d = (Vec3::from(a.position) - Vec3::from(b.position)).length();
+            assert!(d < 1e-3, "a settled poster must not move, drifted {d}");
+        }
+        assert!(
+            first.iter().all(|v| v.material == CLOTH_MATERIAL),
+            "the cloth half must shade like the skinned half"
+        );
     }
 
     fn seat(w: f32, h: f32) -> SurfaceSlot {
         SurfaceSlot {
             id: "d".into(),
             source: "doll_test".into(),
+            // A doll fills a card, not a sub scene: it names none and carries no params.
+            scene: String::new(),
+            params: Default::default(),
             x: 0.0,
             y: 0.0,
             w,

@@ -2,7 +2,7 @@
 //!
 //! Pure glam — every function returns `(Vec3, Vec3, [f32;4])` coloured line segments (or takes/returns
 //! rays as `(origin, dir)` tuples), so any editor can draw it through its own line pipeline and reuse
-//! the picking math. NO renderer / assetpipeline / source-model types enter here: the gizmo operates on
+//! the picking math. NO renderer / meshbench / source-model types enter here: the gizmo operates on
 //! a plain `origin` + `basis` (world axes as `Mat3` columns), so it works on ANY conformed rig.
 //!
 //! All four gadget manipulations are here (gadget direction F28531B5 — ONE reusable 3D gadget):
@@ -46,7 +46,7 @@ pub const MIN_SCALE: f32 = 1e-3;
 ///
 /// The gadget's FOURTH mode, Flip, is not here: a flip is a discrete op ([`flip`]), not a sweep, and
 /// it is gated by [`GadgetModes::FLIP`] rather than selected as a drag. (It also cannot be added to
-/// this enum today without breaking Clayworks, which matches it exhaustively — see the deadend
+/// this enum today without breaking MeshBench, which matches it exhaustively — see the deadend
 /// banked with this slice.)
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum GizmoMode {
@@ -410,7 +410,7 @@ fn ring_miss(o: Vec3, d: Vec3, center: Vec3, n: Vec3, radius: f32) -> f32 {
 /// (the projection is ill-conditioned) — the caller holds the previous value that frame.
 ///
 /// The result is a WORLD delta; the caller converts world → parent-local before writing
-/// `BoneOffset.t` (that conversion, and the units, are the assetpipeline seam's job, not the core's).
+/// `BoneOffset.t` (that conversion, and the units, are the meshbench seam's job, not the core's).
 pub fn drag_translate(
     axis: Axis,
     basis: Mat3,

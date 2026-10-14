@@ -28,19 +28,25 @@ members = [
     "Alpha/crates/content/flicker-texture",
     "Alpha/crates/mechanics/flicker-mechanics",
     "Alpha/crates/world/flicker-voxel",
+    # Audio engine cluster — synthesis, sequencing, playback (the music bench's engine).
+    "Alpha/crates/audio/flicker-audio",
     # Game-package libraries (reusable client scenes hosted by prism-alpha).
-    "Alpha/crates/scenes/flicker-clicktrainer",
-    "Alpha/crates/scenes/flicker-componentcatalog",
-    "Alpha/crates/scenes/flicker-controllertester",
+    "Alpha/crates/adventurer/flicker-clicktrainer",
+    "Alpha/crates/devmode/flicker-componentcatalog",
+    "Alpha/crates/adventurer/flicker-controllertester",
     "Alpha/crates/frontend/flicker-globe",
-    "Alpha/crates/scenes/flicker-solarbirth",
-    "Alpha/crates/scenes/flicker-loomforge",
-    "Alpha/crates/scenes/flicker-assetpipeline",
-    "Alpha/crates/scenes/flicker-pocclusters",
-    "Alpha/crates/scenes/flicker-csgtest",
-    "Alpha/crates/scenes/flicker-populous",
-    "Alpha/crates/scenes/flicker-quartermaster",
-    "Alpha/crates/scenes/flicker-sablework",
+    "Alpha/crates/adventurer/flicker-solarbirth",
+    "Alpha/crates/devmode/flicker-packbench",
+    "Alpha/crates/devmode/flicker-meshbench",
+    # The ONE "draw a mesh" scene a surface node names (`model_view`); the quad view seats it four times.
+    "Alpha/crates/devmode/flicker-modelview",
+    "Alpha/crates/adventurer/flicker-pocclusters",
+    "Alpha/crates/gamemaster/flicker-csgtest",
+    "Alpha/crates/gamemaster/flicker-populous",
+    # WorldBench V5 — planet generation's fifth generation (resonance fields); Populous is V4.
+    "Alpha/crates/gamemaster/flicker-worldbench",
+    "Alpha/crates/devmode/flicker-packagebench",
+    "Alpha/crates/devmode/flicker-materialbench",
     # The Prism-Alpha client (the app that hosts the scenes).
     "Alpha/prism-alpha",
     # World-sim / standalone POC crates — root crates/.
@@ -77,7 +83,7 @@ winit = "0.30.13"
 pollster = "0.4.0"
 
 # Math
-glam = { version = "0.29.3", features = ["bytemuck", "serde"] }
+glam = { version = "0.33.11", features = ["bytemuck", "serde"] }
 bytemuck = { version = "1.25.2", features = ["derive"] }
 
 # Scripting
@@ -99,7 +105,7 @@ serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
 # Compression — gzip for cluster bakes, wire packets, asset blobs.
 # `rust_backend` keeps it pure-Rust (no zlib system dep); fine for our
 # 5–100 KB chunks and small enough binary impact.
-flate2 = { version = "1.1.9", default-features = false, features = ["rust_backend"] }
+flate2 = { version = "1.1.10", default-features = false, features = ["rust_backend"] }
 
 # The store-only content package container (package.flk). default-features=false
 # strips every compression backend — the crate CANNOT deflate, which mechanically
@@ -114,7 +120,7 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 
 # Error handling
-thiserror = "2.0.20"
+thiserror = "2.0.21"
 anyhow = "1.0.104"
 
 # Image loading (for textures)
@@ -125,6 +131,14 @@ glyphon = "0.6.0"
 
 # Small, dependency-free RNG used by example games.
 fastrand = "2.5.0"
+
+# Audio — fundsp is the DSP/synthesis graph, kept lean (no symphonia file
+# decoding, no FFT convolver: default-features off). hound writes the offline
+# WAV renders. cpal is the device stream, optional behind flicker-audio's
+# `playback` feature so headless builds, tests and CI need no OS audio stack.
+fundsp = { version = "0.23.0", default-features = false, features = ["std"] }
+hound = "3.5.1"
+cpal = "0.18.2"
 
 # Internal cross-crate deps
 clayengine = { version = "0.1.10", path = "Alpha/crates/core/clayengine" }
@@ -157,7 +171,7 @@ flicker-greed = { version = "0.1.0", path = "crates/flicker-greed" }
 flicker-shell = { version = "0.1.10", path = "Alpha/crates/frontend/flicker-shell" }
 flicker-widgets = { version = "0.1.10", path = "Alpha/crates/frontend/flicker-widgets" }
 # The two 2D editor surface fillers (node-graph canvas + lane timeline), extracted
-# from Loomforge so the DM tech tree and the GM event timelines share one copy.
+# from PackBench so the DM tech tree and the GM event timelines share one copy.
 flicker-canvas = { version = "0.1.10", path = "Alpha/crates/frontend/flicker-canvas" }
 flicker-flight = { version = "0.1.0", path = "Alpha/crates/animation/flicker-flight" }
 flicker-voxel = { version = "0.1.10", path = "Alpha/crates/world/flicker-voxel" }
@@ -169,7 +183,7 @@ flicker-rigview = { version = "0.1.10", path = "Alpha/crates/animation/flicker-r
 flicker-mechanics = { version = "0.1.10", path = "Alpha/crates/mechanics/flicker-mechanics" }
 # in-app content pipeline (folder scan → FBX parse → canonical rig → bake).
 flicker-content = { version = "0.1.10", path = "Alpha/crates/content/flicker-content" }
-flicker-assetpipeline = { version = "0.1.10", path = "Alpha/crates/scenes/flicker-assetpipeline" }
+flicker-meshbench = { version = "0.1.11", path = "Alpha/crates/devmode/flicker-meshbench" }
 # Native open-folder dialog for the Asset Pipeline editor's Load step.
 rfd = "0.15.4"
 # Shared GPU-free planet-layout model (the orrery) — the roster + orbits both the

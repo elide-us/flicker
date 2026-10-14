@@ -240,7 +240,7 @@ impl Tables {
     /// and Air (id 0, never drawn) — stay LOUD-WRONG MAGENTA, matching the
     /// renderer's boot palette, so a voxel carrying an undefined id renders
     /// visibly "missing" instead of silently plausible. Colours are the
-    /// catalog's placeholder `color` rows until Sablework-defined textures
+    /// catalog's placeholder `color` rows until MaterialBench-defined textures
     /// land per slot.
     pub fn render_palette(&self) -> [[f32; 4]; 256] {
         let mut colors = [[1.0, 0.0, 1.0, 1.0]; 256];

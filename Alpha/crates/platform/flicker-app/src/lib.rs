@@ -49,6 +49,10 @@ pub struct FrameInput<'a> {
     /// / [`held`](Self::held) instead of owning a resolver. `None` under the plain
     /// [`run`] (no pump) — the queries then read as zero, matching the empty event set.
     cont: Option<(&'a ContextualBindings, &'a GamepadConfig)>,
+    /// The SURFACE this input addresses, in pixels — `None` for the screen (a top-level
+    /// scene reads the renderer's size), `Some(size)` for a SUB SCENE, whose surface
+    /// is the panel it was seated in (see [`Self::for_surface`]).
+    viewport: Option<flicker_render::Vec2>,
 }
 
 impl<'a> FrameInput<'a> {
@@ -64,7 +68,30 @@ impl<'a> FrameInput<'a> {
             events,
             route,
             cont,
+            viewport: None,
         }
+    }
+
+    /// The input as a SUB SCENE sees it — the same frame, addressed at ONE nested
+    /// surface (Aaron 2026-09-09: a nested surface is a complete scene; input reaches it
+    /// by intent). `viewport` is the surface's size, the scene's whole screen; the
+    /// discrete `events` reach it only while `focused` (the live-scene barrier's "nested
+    /// surfaces require focus", A8C9F02B §4d) — the route scratch and the continuous
+    /// queries are shared, so a sub-scene camera still reads its axes and a sub-scene text
+    /// field still owns the keyboard once its context is pushed.
+    pub fn for_surface(&mut self, viewport: flicker_render::Vec2, focused: bool) -> FrameInput<'_> {
+        FrameInput {
+            events: if focused { self.events } else { &[] },
+            route: &mut *self.route,
+            cont: self.cont,
+            viewport: Some(viewport),
+        }
+    }
+
+    /// The size of the surface this input addresses: the sub-scene panel's, or `fallback`
+    /// (the renderer's window size) for a top-level scene.
+    pub fn viewport_or(&self, fallback: flicker_render::Vec2) -> flicker_render::Vec2 {
+        self.viewport.unwrap_or(fallback)
     }
 
     /// Analog deflection of `signal` in the active context, 0..1 — the stick-rate /

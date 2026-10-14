@@ -537,13 +537,14 @@ mod tests {
     /// unproject / plane-intersect / horizon-clamp drifts, water stops reaching the horizon.
     #[test]
     fn the_projected_grid_maps_screen_to_the_sea_plane() {
-        // The camera the pipeline builds: `perspective_rh · look_at_rh` (wgpu z∈[0,1]). Placed
+        // The camera the pipeline builds: `directx::perspective · look_at_mat4` (wgpu z∈[0,1]). Placed
         // above the sea, looking down and forward at it.
         let eye = Vec3::new(384.0, 220.0, 384.0);
         let target = Vec3::new(384.0, 120.0, 760.0);
         let aspect = 16.0 / 9.0;
-        let view = Mat4::look_at_rh(eye, target, Vec3::Y);
-        let proj = Mat4::perspective_rh(60f32.to_radians(), aspect, 0.5, 5000.0);
+        let view = glam::camera::rh::view::look_at_mat4(eye, target, Vec3::Y);
+        let proj =
+            glam::camera::rh::proj::directx::perspective(60f32.to_radians(), aspect, 0.5, 5000.0);
         let vp = proj * view;
         let inv = vp.inverse();
         let sea = 120.0;

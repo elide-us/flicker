@@ -1,0 +1,26 @@
+{
+  "trunk": {
+    "orientation": "Quadruped",
+    "head": true,
+    "arms": [
+      "Ungulate"
+    ],
+    "legs": [
+      {
+        "Digitigrade": {
+          "heel": 0.28
+        }
+      }
+    ],
+    "tails": [
+      {
+        "Long": {
+          "bones": 6
+        }
+      }
+    ],
+    "mounts": [],
+    "scale": 1.0,
+    "length": 0.62
+  }
+}

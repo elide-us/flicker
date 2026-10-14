@@ -1,0 +1,22 @@
+{
+  "trunk": {
+    "orientation": "Quadruped",
+    "head": true,
+    "arms": [
+      "Ungulate"
+    ],
+    "legs": [
+      "Unguligrade"
+    ],
+    "tails": [
+      {
+        "Long": {
+          "bones": 6
+        }
+      }
+    ],
+    "mounts": [],
+    "scale": 1.0,
+    "length": 0.65
+  }
+}

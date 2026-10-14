@@ -473,7 +473,7 @@ impl<C: MapContent> WorldMap<C> {
         // A map is flown, so it changes whenever it is looked at — no dirty channel to
         // publish; its seat's authored rate is the whole liveness story.
         let inputs = StageInputs::default();
-        view.render_pass(r, fg, seat, base_layer, stage, inputs, move |r| {
+        view.render_pass(r, fg, seat, base_layer, stage, inputs, None, move |r| {
             r.set_camera(&camera);
             for dx in &offsets {
                 let m = Mat4::from_translation(Vec3::new(*dx, 0.0, 0.0));
@@ -1216,6 +1216,8 @@ mod tests {
         let slot = flicker::ui::SurfaceSlot {
             id: "map".into(),
             source: String::new(),
+            scene: String::new(),
+            params: Default::default(),
             x: 0.0,
             y: 0.0,
             w: 900.0,

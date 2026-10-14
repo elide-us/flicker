@@ -439,7 +439,15 @@ impl Orbit {
         if wheel == 0.0 || !wheel.is_finite() {
             return;
         }
-        self.zoom = (self.zoom * (1.0 - wheel * 0.12)).clamp(0.05, 6.0);
+        self.set_zoom(self.zoom * (1.0 - wheel * 0.12));
+    }
+
+    /// Set the zoom outright — a FRAMING request (a panel focusing on a hand) rather than a wheel
+    /// notch — under the same clamp the wheel lives under, so no caller can invert or escape it.
+    pub fn set_zoom(&mut self, zoom: f32) {
+        if zoom.is_finite() {
+            self.zoom = zoom.clamp(0.05, 6.0);
+        }
     }
 
     /// The eye's offset from the look-at point. Z-up source content: orbit in the XY plane,
@@ -604,7 +612,7 @@ impl ViewportFiller {
     }
 
     /// The same over a BENCH-AUTHORED view set — its own corner labels / ortho sides (the
-    /// Clayworks clip pair labels its panels ROOT MOTION / IN PLACE). The node's `layout` still
+    /// MeshBench clip pair labels its panels ROOT MOTION / IN PLACE). The node's `layout` still
     /// sizes the reserved slot; which views fill it is the behaviour's.
     pub fn with_views(renderer: &mut Renderer, views: &'static [QuadView], cols: usize) -> Self {
         Self {

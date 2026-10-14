@@ -679,6 +679,12 @@ fn manifest() -> Rc<SceneManifest> {
     })
 }
 
+/// The authored def for scene `id` — what a scene that seats another scene in one of its
+/// `surface` nodes builds it from; the very def `Transition::Goto{id}` would build.
+pub fn scene_def(id: &str) -> Option<SceneDef> {
+    manifest().get(id).cloned()
+}
+
 /// Builds the Rust scene for one loaded scene file — the BEHAVIOUR half of the
 /// split. `None` means the file named a behaviour that cannot be built (a missing
 /// param), which the caller reports.

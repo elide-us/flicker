@@ -19,6 +19,16 @@
 //! The seeds are random, the metric is geometry, and the seams are wherever the
 //! seeds' boundaries fall. The editorial controls are counts and the re-roll —
 //! how many cells, how many plumes, and which world — never a position.
+//!
+//! **The field is a function of TIME as well as position** (resonance slice 1,
+//! 2026-10-07): the along-seam intensity and width are sums of waves, and
+//! every wave carries its OWN temporal frequency, so the components drift into
+//! and out of constructive and destructive interference over geological time
+//! — a seam stretch runs hot for an epoch, cools, and a different stretch
+//! lights. Closed-form in `(position, tick, seed)`: phase = φ0 + ω·t, nothing
+//! accumulates, nothing is serialized — the recipe plus the tick IS the field
+//! state, which is what lets any later tier evaluate the field without
+//! replaying the planet. Correlated history, not prettier randomness.
 
 use glam::Vec3;
 
@@ -108,14 +118,47 @@ const WIDTH_SPAN: f32 = 1.05;
 /// The variation stream's offset off the one roll.
 const VARY_STREAM: u64 = 0xA24B_AED4_963E_E407;
 
+// ── the TEMPORAL structure (resonance slice 1, 2026-10-07): each wave's own
+// period, in era ticks. Chosen DELIBERATELY across three geological
+// timescales — long coherent epochs, intermediate cycles, short pulses — and
+// pairwise distinct so no two components phase-lock; never random per wave
+// (temporal white noise disguised as sinusoids is the failure mode). The
+// bands sit beside the climate's own oscillator (ICE_AGE_PERIODS 830/2210) so
+// geology and climate beat against each other rather than in step. ──
+/// The intensity waves' periods, parallel to the `VARY_WAVES` draw order (the
+/// four mid-wavelength waves, then the three short): two on the long band,
+/// three intermediate, two short.
+const VARY_PERIODS: [f32; 7] = [3400.0, 2800.0, 1100.0, 850.0, 700.0, 310.0, 230.0];
+/// The width waves' periods — one per band.
+const WIDTH_PERIODS: [f32; 3] = [3100.0, 950.0, 270.0];
+
 /// How the two boundary reads mix into one heat value: the seam line itself
 /// carries this share, and the triple-junction read carries the rest — so an
 /// ordinary seam tops out ORANGE on the shared ramp while the meeting points
 /// push toward white-hot: the volcanic points of the bubble map.
 const SEAM_WEIGHT: f32 = 0.62;
 
+/// One component of a scalar wave field over the sphere, evaluated at a tick:
+/// `amp · sin(freq · (p·axis) + phase + omega · t)`. `omega` is the component's
+/// OWN temporal frequency — the thing that makes the field resonate rather
+/// than slide.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Wave {
+    axis: Vec3,
+    amp: f32,
+    freq: f32,
+    phase: f32,
+    omega: f32,
+}
+
+impl Wave {
+    fn at(&self, p: Vec3, t: f32) -> f32 {
+        self.amp * (self.freq * p.dot(self.axis) + self.phase + self.omega * t).sin()
+    }
+}
+
 /// **The molten heat field.** N convection-cell seeds and the per-tile heat
-/// their boundaries induce, over one [`HexMap`] tiling.
+/// their boundaries induce, over one [`HexMap`] tiling, at one era tick.
 pub struct SeamField {
     /// How many convection cells were asked for, clamped to the offered range.
     cells: u32,
@@ -129,14 +172,19 @@ pub struct SeamField {
     /// The hot-spot centres: unit directions, an independent stream of the
     /// same roll.
     spot_dirs: Vec<Vec3>,
-    /// The rifts: each a sampled arc branching off a seam, `(point, peak)` per
-    /// sample with the peak tapering to zero at the dead end. DATA for the
-    /// coming motion layer as much as heat for this one.
+    /// The rifts: each a sampled arc branching off a seam, `(point, envelope)`
+    /// per sample — the fade ENVELOPE, `RIFT_ROOT_PEAK` at the root tapering
+    /// to zero at the dead end. The live peak is the envelope times the
+    /// intensity field at the current tick (applied in `derive_heat`), so a
+    /// rift dives and rises with the band it split from. The geometry is
+    /// static DATA for the motion layer; only its heat breathes.
     rifts: Vec<Vec<(Vec3, f32)>>,
-    /// The along-seam variation field's scalar waves `(axis, amp, freq, phase)`
-    /// — intensity — and the band-width field's.
-    vary_waves: Vec<(Vec3, f32, f32, f32)>,
-    width_waves: Vec<(Vec3, f32, f32, f32)>,
+    /// The along-seam variation field's waves — intensity — and the band-width
+    /// field's.
+    vary_waves: Vec<Wave>,
+    width_waves: Vec<Wave>,
+    /// The era tick `heat` was derived at — the field's one time coordinate.
+    tick: u64,
     /// Per-tile heat, `0..1` — cool bubble interiors at 0, seams hot, triple
     /// junctions hotter, spot cores hottest. Indexed by `TileId` like every
     /// per-tile layer.
@@ -145,7 +193,7 @@ pub struct SeamField {
 
 impl SeamField {
     /// Roll a field of `cells` seeds and `spots` plumes with `seed` and derive
-    /// the heat for every tile of `map`.
+    /// the heat for every tile of `map` at tick zero.
     pub fn new(map: &HexMap, cells: u32, spots: u32, seed: u64) -> Self {
         let mut field = Self {
             cells: cells.clamp(MIN_CELLS, MAX_CELLS),
@@ -156,10 +204,16 @@ impl SeamField {
             rifts: Vec::new(),
             vary_waves: Vec::new(),
             width_waves: Vec::new(),
+            tick: 0,
             heat: Vec::new(),
         };
         field.rebuild(map);
         field
+    }
+
+    /// The era tick the heat stands at.
+    pub fn tick(&self) -> u64 {
+        self.tick
     }
 
     /// How many convection cells the field was rolled with.
@@ -177,9 +231,10 @@ impl SeamField {
         &self.spot_dirs
     }
 
-    /// The rifts — each an arc of `(point, peak)` samples branching off a
-    /// seam and tapering to nothing. The coming motion layer reads these; the
-    /// heat map already shows them.
+    /// The rifts — each an arc of `(point, envelope)` samples branching off a
+    /// seam and tapering to nothing; the heat they carry at a tick is the
+    /// envelope times the intensity field there. The coming motion layer reads
+    /// these; the heat map already shows them.
     pub fn rifts(&self) -> &[Vec<(Vec3, f32)>] {
         &self.rifts
     }
@@ -229,28 +284,31 @@ impl SeamField {
         self.rebuild(map);
     }
 
-    /// A saturating scalar wave field: the raw sum clamped into [−1, 1].
-    fn wave_raw(waves: &[(Vec3, f32, f32, f32)], p: Vec3) -> f32 {
+    /// A saturating scalar wave field at tick `t`: the raw sum clamped into
+    /// [−1, 1]. The clamp is what keeps the source BOUNDED however the
+    /// components align.
+    fn wave_raw(waves: &[Wave], p: Vec3, t: f32) -> f32 {
         waves
             .iter()
-            .map(|(axis, amp, freq, phase)| amp * (freq * p.dot(*axis) + phase).sin())
+            .map(|w| w.at(p, t))
             .sum::<f32>()
             .clamp(-1.0, 1.0)
     }
 
-    /// The along-seam INTENSITY at `p`: [`DIVE_FLOOR`]..[`RISE_CEIL`]. A seam
-    /// crossing a low stretch dives under cooler material; a high stretch
-    /// bunches and runs hotter than the plain line.
-    fn vary(&self, p: Vec3) -> f32 {
-        let raw = Self::wave_raw(&self.vary_waves, p);
+    /// The along-seam INTENSITY at `p` and tick `t`: [`DIVE_FLOOR`]..
+    /// [`RISE_CEIL`]. A seam crossing a low stretch dives under cooler
+    /// material; a high stretch bunches and runs hotter than the plain line —
+    /// and which stretches are which changes as the components beat.
+    fn vary(&self, p: Vec3, t: f32) -> f32 {
+        let raw = Self::wave_raw(&self.vary_waves, p, t);
         let mid = (DIVE_FLOOR + RISE_CEIL) * 0.5;
         mid + (RISE_CEIL - DIVE_FLOOR) * 0.5 * raw
     }
 
-    /// The band-WIDTH factor at `p`: the glow pinches to a thread and swells
-    /// to a broad band along the same run.
-    fn band_width(&self, p: Vec3) -> f32 {
-        WIDTH_MIN + WIDTH_SPAN * (0.5 + 0.5 * Self::wave_raw(&self.width_waves, p))
+    /// The band-WIDTH factor at `p` and tick `t`: the glow pinches to a thread
+    /// and swells to a broad band along the same run.
+    fn band_width(&self, p: Vec3, t: f32) -> f32 {
+        WIDTH_MIN + WIDTH_SPAN * (0.5 + 0.5 * Self::wave_raw(&self.width_waves, p, t))
     }
 
     /// The map was rebuilt (a new size) — derive the heat for the new tiling
@@ -294,25 +352,29 @@ impl SeamField {
         };
         self.vary_waves.clear();
         let wave_total: usize = VARY_WAVES.iter().map(|(c, _, _)| c).sum();
+        debug_assert_eq!(wave_total, VARY_PERIODS.len(), "one period per wave");
+        let omega = |period: f32| std::f32::consts::TAU / period;
         for (count, fmin, fspan) in VARY_WAVES {
             for _ in 0..count {
-                self.vary_waves.push((
-                    unit(&mut vr),
-                    VARY_SWING * (0.5 + vr.f32()) * 2.0 / wave_total as f32,
-                    fmin + vr.f32() * fspan,
-                    vr.f32() * std::f32::consts::TAU,
-                ));
+                let k = self.vary_waves.len();
+                self.vary_waves.push(Wave {
+                    axis: unit(&mut vr),
+                    amp: VARY_SWING * (0.5 + vr.f32()) * 2.0 / wave_total as f32,
+                    freq: fmin + vr.f32() * fspan,
+                    phase: vr.f32() * std::f32::consts::TAU,
+                    omega: omega(VARY_PERIODS[k]),
+                });
             }
         }
         let (wcount, wfmin, wfspan) = WIDTH_WAVES;
+        debug_assert_eq!(wcount, WIDTH_PERIODS.len(), "one period per wave");
         self.width_waves = (0..wcount)
-            .map(|_| {
-                (
-                    unit(&mut vr),
-                    (0.5 + vr.f32()) * 2.0 / wcount as f32,
-                    wfmin + vr.f32() * wfspan,
-                    vr.f32() * std::f32::consts::TAU,
-                )
+            .map(|k| Wave {
+                axis: unit(&mut vr),
+                amp: (0.5 + vr.f32()) * 2.0 / wcount as f32,
+                freq: wfmin + vr.f32() * wfspan,
+                phase: vr.f32() * std::f32::consts::TAU,
+                omega: omega(WIDTH_PERIODS[k]),
             })
             .collect();
 
@@ -382,12 +444,12 @@ impl SeamField {
                 let mut samples = Vec::with_capacity(RIFT_SAMPLES);
                 let mut t = t;
                 for k in 0..RIFT_SAMPLES {
-                    // The peak fades along the arc — hot where it left the
-                    // seam, NOTHING at the dead end — and RIDES the same
-                    // intensity field as its parent seam, so a rift dives and
-                    // rises with the band it split from.
+                    // The ENVELOPE fades along the arc — hot where it left the
+                    // seam, NOTHING at the dead end. The live heat rides the
+                    // intensity field at the current tick (`derive_heat`), so
+                    // a rift dives and rises with the band it split from.
                     let frac = k as f32 / (RIFT_SAMPLES - 1) as f32;
-                    samples.push((p, RIFT_ROOT_PEAK * (1.0 - frac) * self.vary(p).min(1.0)));
+                    samples.push((p, RIFT_ROOT_PEAK * (1.0 - frac)));
                     // March the geodesic, then curve the heading a little.
                     let (sn, cs) = step.sin_cos();
                     let np = (p * cs + t * sn).normalize_or_zero();
@@ -405,26 +467,27 @@ impl SeamField {
 
     /// **The slow geological drift** (Aaron 2026-08-25: upwelling seams and
     /// volcanic dots SHIFT over much longer timelines — seams grow and
-    /// shrink, volcanoes go dormant, new ones form). Advances the intensity
-    /// and width fields' phases a little and re-derives the heat: the bands
-    /// breathe, their hot stretches migrate — and a crust re-derive on the
-    /// drifted field is what retires old vents and lights new ones. Seeds,
-    /// spots and rift geometry stand still: the pattern drifts, the world
-    /// does not re-roll.
-    pub fn drift(&mut self, map: &HexMap, amount: f32) {
-        for w in &mut self.vary_waves {
-            w.3 += amount;
+    /// shrink, volcanoes go dormant, new ones form). Stands the field at era
+    /// `tick` and re-derives the heat: every wave's phase is `φ0 + ω·tick`,
+    /// so the bands breathe, their hot stretches migrate, and the components
+    /// beat against each other — and a crust re-derive on the moved field is
+    /// what retires old vents and lights new ones. Seeds, spots and rift
+    /// geometry stand still: the pattern evolves, the world does not re-roll.
+    /// Closed-form: the same `(seed, tick)` is the same field whether reached
+    /// in one call or a thousand. A no-op at the current tick.
+    pub fn at_tick(&mut self, map: &HexMap, tick: u64) {
+        if tick == self.tick && !self.heat.is_empty() {
+            return;
         }
-        for w in &mut self.width_waves {
-            w.3 += amount * 0.6;
-        }
+        self.tick = tick;
         self.derive_heat(map);
     }
 
-    /// Recompute the heat over the CURRENT geometry and wave phases — the
-    /// tail of [`rebuild`](Self::rebuild), callable on its own so a phase
-    /// [`drift`](Self::drift) re-derives without re-rolling anything.
+    /// Recompute the heat over the CURRENT geometry at the current tick — the
+    /// tail of [`rebuild`](Self::rebuild), callable on its own so
+    /// [`at_tick`](Self::at_tick) re-derives without re-rolling anything.
     fn derive_heat(&mut self, map: &HexMap) {
+        let t = self.tick as f32;
         let cell_radius = (4.0 * std::f32::consts::PI / self.cells as f32).sqrt() * 0.5;
         let band = SEAM_BAND * cell_radius;
         let rift_band = RIFT_BAND_FRAC * cell_radius;
@@ -453,7 +516,7 @@ impl SeamField {
                 // The band is a LIVING one: its width and its intensity both
                 // vary along the run — it bunches, stretches, rises, and
                 // DIVES under cooler material where the intensity bottoms out.
-                let band_local = band * self.band_width(*d);
+                let band_local = band * self.band_width(*d, t);
                 let seam = 1.0 - ((d2 - d1) / band_local).clamp(0.0, 1.0);
                 let junction = if d3 < f32::MAX {
                     1.0 - ((d3 - d1) / band_local).clamp(0.0, 1.0)
@@ -461,7 +524,7 @@ impl SeamField {
                     0.0 // two cells have no triple junction
                 };
                 let boundary =
-                    (SEAM_WEIGHT * seam + (1.0 - SEAM_WEIGHT) * junction) * self.vary(*d);
+                    (SEAM_WEIGHT * seam + (1.0 - SEAM_WEIGHT) * junction) * self.vary(*d, t);
                 // A plume burns wherever it is: a white-hot gaussian core that
                 // falls off over SPOT_RADIUS. The tile reads the HOTTEST source
                 // over it — heat sources do not stack past the hottest one.
@@ -473,14 +536,17 @@ impl SeamField {
                         SPOT_PEAK * (-a * a).exp()
                     })
                     .fold(0.0f32, f32::max);
-                // A rift is a narrow crack: its samples' peaks, laterally
-                // faded — hottest at the seam it left, dead at its far end.
+                // A rift is a narrow crack: its samples' envelopes times the
+                // band's intensity at this tick, laterally faded — hottest at
+                // the seam it left, dead at its far end, born cool on a dived
+                // stretch.
                 let mut rift = 0.0f32;
                 for arc in &self.rifts {
-                    for (sp, peak) in arc {
+                    for (sp, envelope) in arc {
                         let dot = d.dot(*sp);
                         if dot > rift_near {
                             let a = dot.clamp(-1.0, 1.0).acos() / rift_band;
+                            let peak = envelope * self.vary(*sp, t).min(1.0);
                             rift = rift.max(peak * (-a * a).exp());
                         }
                     }
@@ -613,19 +679,19 @@ mod tests {
                 "rift {r}'s root stands on a seam: Δ={}",
                 dists[1] - dists[0]
             );
-            // The root's peak is the fade envelope TIMES the band's local
-            // intensity — a rift born on a dived stretch is born cool.
+            // The stored value is the fade ENVELOPE: the root peak at the
+            // root, falling to nothing at the tip. The live heat is this times
+            // the band's intensity at the tick — a rift born on a dived
+            // stretch is born cool (checked on the map below).
             assert!(
-                (0.0..=RIFT_ROOT_PEAK + 1e-6).contains(&first_peak),
-                "rift {r}'s root peak sits inside the envelope: {first_peak}"
+                (first_peak - RIFT_ROOT_PEAK).abs() < 1e-6,
+                "rift {r}'s root carries the full envelope: {first_peak}"
             );
-            // The fade ENVELOPE holds at every sample (the intensity may rise
-            // and dive along the arc, but never above the fading ceiling)…
-            for (k, (_, peak)) in arc.iter().enumerate() {
+            for (k, (_, env)) in arc.iter().enumerate() {
                 let frac = k as f32 / (RIFT_SAMPLES - 1) as f32;
                 assert!(
-                    *peak <= RIFT_ROOT_PEAK * (1.0 - frac) + 1e-6,
-                    "rift {r} sample {k} breaks the fade envelope"
+                    (*env - RIFT_ROOT_PEAK * (1.0 - frac)).abs() < 1e-6,
+                    "rift {r} sample {k} is the fade envelope"
                 );
             }
             assert_eq!(arc[RIFT_SAMPLES - 1].1, 0.0, "…to nothing at the tip");
@@ -638,11 +704,13 @@ mod tests {
             );
         }
         // Not every rift is born on a dive: at least one carries real root
-        // heat (which of the six land on hot stretches is the roll's call).
+        // heat at tick zero (which land on hot stretches is the roll's call)
+        // — the envelope times the band's intensity where the root stands.
+        let root_heat = |a: &Vec<(Vec3, f32)>| a[0].1 * field.vary(a[0].0, 0.0).min(1.0);
         assert!(
-            field.rifts().iter().any(|a| a[0].1 >= 0.25),
+            field.rifts().iter().any(|a| root_heat(a) >= 0.25),
             "some rift leaves the seam hot: peaks {:?}",
-            field.rifts().iter().map(|a| a[0].1).collect::<Vec<_>>()
+            field.rifts().iter().map(root_heat).collect::<Vec<_>>()
         );
         // Determinism + spot independence: the same roll grows the same
         // rifts, and the spots dial (its own stream) moves none of them.
@@ -731,10 +799,10 @@ mod tests {
 
     /// **The drift breathes the field without re-rolling the world** (Aaron
     /// 2026-08-25: seams slowly grow and shrink, volcanoes go dormant and
-    /// new ones form, over much longer timelines). After a drift: the heat
-    /// moved but stays in range; the seeds, spots and rift arcs stand
+    /// new ones form, over much longer timelines). Stood at a later tick: the
+    /// heat moved but stays in range; the seeds, spots and rift arcs stand
     /// exactly still; the change is SLOW (most tiles barely move); and the
-    /// crust re-derived on the drifted field retires some vents and lights
+    /// crust re-derived on the moved field retires some vents and lights
     /// others while keeping a stable core — dormancy and birth, not a
     /// re-roll.
     #[test]
@@ -753,9 +821,13 @@ mod tests {
             .copied()
             .collect();
 
-        for _ in 0..6 {
-            field.drift(&map, 0.06);
-        }
+        // ONE drift cadence of the bench (12 ticks): the breath the window
+        // takes between two vent re-derives. (Measured 2026-10-07 over three
+        // rolls: 74–85% of vents survive a cadence, ~50% survive three — the
+        // crust's greedy derive relocates vents far across the map on small
+        // heat shifts; banked as the open hysteresis item.)
+        field.at_tick(&map, 12);
+        assert_eq!(field.tick(), 12);
         assert_ne!(field.heats(), &heats0[..], "the field breathed");
         assert!(field.heats().iter().all(|h| (0.0..=1.0).contains(h)));
         assert_eq!(field.seeds, seeds0, "the cells stand still");
@@ -787,10 +859,181 @@ mod tests {
             "some volcano went dormant or was born"
         );
         assert!(
-            kept * 3 >= vents0.len(),
-            "…while a stable core persists: kept {kept} of {}",
+            kept * 3 >= vents0.len() * 2,
+            "…while a stable core persists over a cadence: kept {kept} of {}",
             vents0.len()
         );
+    }
+
+    /// **The components have INDEPENDENT temporal frequencies, deliberately
+    /// spread** (resonance slice 1): every wave's ω is distinct (no two
+    /// components phase-lock), the periods span better than a decade (long
+    /// epochs to short pulses), and none is temporal white noise — each is a
+    /// fixed period, the same at every roll.
+    #[test]
+    fn the_waves_carry_distinct_periods_across_a_decade() {
+        let map = HexMap::new(MIN_FREQ);
+        let field = SeamField::new(&map, DEFAULT_CELLS, DEFAULT_SPOTS, 42);
+        let other = SeamField::new(&map, DEFAULT_CELLS, DEFAULT_SPOTS, 7);
+        let periods: Vec<f32> = field
+            .vary_waves
+            .iter()
+            .chain(&field.width_waves)
+            .map(|w| std::f32::consts::TAU / w.omega)
+            .collect();
+        assert_eq!(periods.len(), VARY_PERIODS.len() + WIDTH_PERIODS.len());
+        for (i, a) in periods.iter().enumerate() {
+            for b in &periods[i + 1..] {
+                assert!(
+                    (a - b).abs() > 1.0,
+                    "two components share a period: {a} vs {b}"
+                );
+            }
+        }
+        let lo = periods.iter().copied().fold(f32::MAX, f32::min);
+        let hi = periods.iter().copied().fold(0.0f32, f32::max);
+        assert!(hi / lo > 10.0, "the periods span a decade: {lo}..{hi}");
+        // The periods are the DESIGN, not the roll: another world beats on
+        // the same timescales (its axes and phases differ, its clocks do not).
+        for (a, b) in field.vary_waves.iter().zip(&other.vary_waves) {
+            assert_eq!(a.omega, b.omega);
+            assert_ne!(a.axis, b.axis);
+        }
+    }
+
+    /// **The components INTERFERE: the field is not a sliding pattern.** At a
+    /// fixed on-seam tile the heat over time is a beat, not a single tone —
+    /// its swing over one window differs from its swing over another (a lone
+    /// sinusoid, or a shared phase advance, repeats the same swing every
+    /// cycle). And the whole field is BOUNDED at every tick however the
+    /// components align.
+    #[test]
+    fn the_components_beat_and_the_field_stays_bounded() {
+        let map = HexMap::new(MIN_FREQ);
+        let mut field = SeamField::new(&map, DEFAULT_CELLS, 0, 42);
+        // An on-line tile: the two nearest seeds near-equidistant.
+        let on_line = map
+            .tiles()
+            .find(|t| {
+                let d = map.direction(*t);
+                let mut dd: Vec<f32> = field
+                    .seeds
+                    .iter()
+                    .map(|sd| d.dot(*sd).clamp(-1.0, 1.0).acos())
+                    .collect();
+                dd.sort_by(f32::total_cmp);
+                dd[1] - dd[0] < 0.01
+            })
+            .expect("a seam tile exists");
+        const WINDOW: u64 = 700;
+        let mut swings = Vec::new();
+        for w in 0..4u64 {
+            let (mut lo, mut hi) = (f32::MAX, f32::MIN);
+            for k in 0..WINDOW / 10 {
+                field.at_tick(&map, w * WINDOW + k * 10);
+                assert!(field.heats().iter().all(|h| (0.0..=1.0).contains(h)));
+                let h = field.heat(on_line);
+                lo = lo.min(h);
+                hi = hi.max(h);
+            }
+            swings.push(hi - lo);
+        }
+        let smin = swings.iter().copied().fold(f32::MAX, f32::min);
+        let smax = swings.iter().copied().fold(0.0f32, f32::max);
+        assert!(
+            smax - smin > 0.05,
+            "the swing changes window to window (a beat): {swings:?}"
+        );
+    }
+
+    /// **Temporal coherence: correlated history, not noise.** One tick on,
+    /// the field is nearly the same everywhere (the median change is a
+    /// whisker); the long band on, it has genuinely moved — and the same
+    /// `(seed, tick)` is the same field whether stood up fresh or walked to,
+    /// because nothing accumulates (closed-form replay).
+    #[test]
+    fn the_field_is_coherent_in_time_and_replays_closed_form() {
+        let map = HexMap::new(MIN_FREQ);
+        let mut walked = SeamField::new(&map, DEFAULT_CELLS, DEFAULT_SPOTS, 42);
+        let at0 = walked.heats().to_vec();
+        walked.at_tick(&map, 1);
+        let mut d1: Vec<f32> = walked
+            .heats()
+            .iter()
+            .zip(&at0)
+            .map(|(a, b)| (a - b).abs())
+            .collect();
+        d1.sort_by(f32::total_cmp);
+        assert!(
+            d1[d1.len() / 2] < 1e-3 && d1[d1.len() - 1] < 0.05,
+            "one tick is a whisker: median {} max {}",
+            d1[d1.len() / 2],
+            d1[d1.len() - 1]
+        );
+        for k in 2..=1700u64 {
+            if k % 97 == 0 || k == 1700 {
+                walked.at_tick(&map, k);
+            }
+        }
+        let far: Vec<f32> = walked
+            .heats()
+            .iter()
+            .zip(&at0)
+            .map(|(a, b)| (a - b).abs())
+            .collect();
+        let moved = far.iter().filter(|d| **d > 0.1).count();
+        assert!(
+            moved > map.len() / 50,
+            "the long band moves the field: {moved} tiles changed by >0.1"
+        );
+        let mut fresh = SeamField::new(&map, DEFAULT_CELLS, DEFAULT_SPOTS, 42);
+        fresh.at_tick(&map, 1700);
+        assert_eq!(
+            fresh.heats(),
+            walked.heats(),
+            "same (seed, tick), same field"
+        );
+        // Standing at the current tick again derives nothing new.
+        let before = walked.heats().to_vec();
+        walked.at_tick(&map, 1700);
+        assert_eq!(walked.heats(), &before[..]);
+    }
+
+    /// **No topology boundary is a geological boundary.** The twelve
+    /// pentagons read the same global field as every hex: a pentagon's heat
+    /// sits inside the span of its neighbours' heats at least as often as a
+    /// hex tile's does (the field indexes by DIRECTION, never by side count),
+    /// at tick zero and after the components have beaten.
+    #[test]
+    fn pentagons_read_the_same_field_as_the_hexes() {
+        let map = HexMap::new(MIN_FREQ);
+        let mut field = SeamField::new(&map, DEFAULT_CELLS, DEFAULT_SPOTS, 42);
+        for tick in [0u64, 1234] {
+            field.at_tick(&map, tick);
+            let jump = |t: u32| {
+                let nb = map.neighbours(t);
+                let mean = nb.iter().map(|n| field.heat(*n)).sum::<f32>() / nb.len() as f32;
+                (field.heat(t) - mean).abs()
+            };
+            let (mut pent, mut pent_n) = (0.0f32, 0usize);
+            let mut hex_jumps: Vec<f32> = Vec::new();
+            for t in map.tiles() {
+                if map.neighbours(t).len() == 5 {
+                    pent += jump(t);
+                    pent_n += 1;
+                } else {
+                    hex_jumps.push(jump(t));
+                }
+            }
+            assert_eq!(pent_n, 12);
+            hex_jumps.sort_by(f32::total_cmp);
+            let p90 = hex_jumps[hex_jumps.len() * 9 / 10];
+            assert!(
+                pent / 12.0 <= p90.max(0.02),
+                "tick {tick}: pentagons jump {} vs the hexes' p90 {p90}",
+                pent / 12.0
+            );
+        }
     }
 
     /// **A hot spot is a white-hot core, seam or no seam.** The tile nearest a

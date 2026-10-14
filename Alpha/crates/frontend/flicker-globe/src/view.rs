@@ -22,7 +22,7 @@
 //! does not copy it — a forked RTT pass is two places for a target to leak.
 
 use flicker::render::{
-    Camera, CompositeTarget, FrameGraph, MeshDrawOptions, MeshHandle, Rate, Rect,
+    Camera, CompositeTarget, FrameGraph, Label, MeshDrawOptions, MeshHandle, Rate, Rect,
     RenderTargetHandle, Renderer, StageDef, StageInputs,
 };
 
@@ -117,6 +117,7 @@ impl GlobeView {
             base_layer,
             stage,
             StageInputs::default(),
+            None,
             Self::draw_pass(camera, meshes, arrows),
         );
     }
@@ -131,7 +132,9 @@ impl GlobeView {
     /// [`StageInputs::with_dirty`], the signal a [`Rate::Dirty`] seat re-renders on. A
     /// filler whose image only changes on an edit (a still doll) is a poster the rest of
     /// the time, and this is the only channel that can tell the clock otherwise.
-    // Seven arguments and one closure, each an independent fact about ONE declared pass.
+    /// `label` is the panel's CORNER LABEL, drawn by the composite over the image — the
+    /// quad view's "TOP / LEFT / FRONT" (a filler that has none passes `None`).
+    // Eight arguments and one closure, each an independent fact about ONE declared pass.
     #[allow(clippy::too_many_arguments)]
     pub fn render_pass<'f>(
         &mut self,
@@ -141,6 +144,7 @@ impl GlobeView {
         base_layer: f32,
         stage: &StageDef,
         inputs: StageInputs,
+        label: Option<Label<'f>>,
         draw: impl FnOnce(&mut Renderer) + 'f,
     ) {
         let rect = seat.rect;
@@ -178,7 +182,7 @@ impl GlobeView {
             base_layer + seat.layer,
             seat.tint,
             None,
-            None,
+            label,
         );
     }
 

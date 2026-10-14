@@ -163,6 +163,45 @@ pub trait Scene {
     }
 }
 
+/// A boxed scene is a scene — so a roster-resolved `Box<dyn Scene>` can be a SUB SCENE
+/// (driven by another scene inside one of its surfaces) through the same generic
+/// wrapper a concrete scene type uses, with no second code path.
+impl Scene for Box<dyn Scene> {
+    fn enter(&mut self, renderer: &mut Renderer) {
+        (**self).enter(renderer);
+    }
+    fn update(
+        &mut self,
+        dt: Duration,
+        input: &InputState,
+        signals: &mut SceneInput,
+        renderer: &Renderer,
+    ) -> Transition {
+        (**self).update(dt, input, signals, renderer)
+    }
+    fn input_context(&self) -> Option<InputContext> {
+        (**self).input_context()
+    }
+    fn pointer_captured(&self) -> bool {
+        (**self).pointer_captured()
+    }
+    fn render<'f>(&'f mut self, renderer: &mut Renderer, fg: &mut FrameGraph<'f>) {
+        (**self).render(renderer, fg);
+    }
+    fn exit(&mut self, renderer: &mut Renderer) {
+        (**self).exit(renderer);
+    }
+    fn is_overlay(&self) -> bool {
+        (**self).is_overlay()
+    }
+    fn modal_closed(&mut self, modal: &str, result: &str, payload: Option<&str>) {
+        (**self).modal_closed(modal, result, payload);
+    }
+    fn route(&self, result: &str) -> Option<Transition> {
+        (**self).route(result)
+    }
+}
+
 /// A stack reshape requested by a scene's [`update`](Scene::update).
 pub enum Transition {
     /// Stay on the current scene.

@@ -1,0 +1,255 @@
+//! **The bench's roster, as data.**
+//!
+//! What the surface CONTAINS — its pages and tabs — as a small data roster the
+//! scene reads for COUNTS and dispatch, plus the stable id / bind / action names
+//! shared by the static component tree (`populous.scene.json`), the Model, and the
+//! dispatcher so the three cannot drift apart.
+//!
+//! This module no longer BUILDS the tree. The surface is authored as data in
+//! `populous.scene.json` (a root `stack` → `paged_menu` → a `row` of the three
+//! panes) and its per-tab slices are lit by `populous.lua`'s
+//! `arrange()`. The former `ui::build` Rust tree builder — and its `Holds` /
+//! `PaneRow` pane vocabulary and template-name constants — were retired once that
+//! static tree landed and was verified in-window; only the DATA the scene still
+//! reads lives on.
+
+/// The three panes' ids — each is ALSO its `tab_group` in the static tree, which is
+/// what makes it a panel for the walker's panel cursor (the left stick cycles these).
+/// ONE three-pane arrangement, shared by every page and tab: a page owns its VIEW —
+/// the gated slices inside each pane — never a second set of panes.
+pub const LEFT_PANE: &str = "pop_left";
+pub const VIEW_PANE: &str = "pop_view";
+pub const RIGHT_PANE: &str = "pop_right";
+/// The viewport node — the `rtt` whose rect the walker reserves and the scene fills
+/// with the globe (`VIEW_PANE` + the `_rtt` slot-id suffix).
+pub const VIEW_SLOT: &str = "pop_view_rtt";
+/// The `stages.<source>` block the globe is authored by — the default light source
+/// and backdrop the world is seen under.
+pub const STAGE_SOURCE: &str = "populous_globe";
+/// The HEX page's viewport node — the centre pane's second gated `surface`, where
+/// the centre cell's column stack stands (molten below, bedrock above, more to come).
+pub const HEX_SLOT: &str = "pop_hex_rtt";
+/// The stage the hex-stack view is lit by. Authors NO shells and no graticule:
+/// the column is published data, alone under the stage's light.
+pub const HEX_STAGE_SOURCE: &str = "populous_hex";
+
+/// THE WORLD MAP MODAL (contract FF8A575D) — the shared flat-map component in a
+/// centred popup. The modal's `surface` node: the walker reserves its rect only
+/// while the modal's slice is lit, and the scene seats the [`flicker_globe::WorldMap`]
+/// into it.
+pub const MAP_SLOT: &str = "pop_map_rtt";
+/// The `stages.<source>` block the flat map is authored by — seam ink, tile base
+/// + inset, the graticule and the light, exactly as the globe's stage authors it.
+pub const MAP_STAGE_SOURCE: &str = "populous_map";
+/// The nav footer's MAP button — toggles the modal.
+pub const MAP_TOGGLE_ACTION: &str = "pop_map_toggle";
+/// The modal's own Close button.
+pub const MAP_CLOSE_ACTION: &str = "pop_map_close";
+/// The modal's runtime flag, published on the Model; `populous.lua`'s
+/// `arrange()` reads it and lights the `shown_map` slice.
+pub const MAP_OPEN_BIND: &str = "map_open";
+
+/// The size dial's two-way bind — the frequency the map is rebuilt at. Stated once
+/// so the tree, the Model and the dispatcher cannot drift apart.
+pub const FREQ_BIND: &str = "pop_freq";
+/// The three readout binds: the scene publishes a PRE-FORMATTED string on each and
+/// the `stat_row` proto shows it. A number never reaches a node.
+pub const HEXES_BIND: &str = "pop_hexes";
+pub const DIAMETER_BIND: &str = "pop_diameter";
+pub const TILE_BIND: &str = "pop_tile";
+/// The seams tab's re-roll action: a new random set of convection cells.
+pub const SEAMS_ACTION: &str = "pop_seams_randomize";
+/// The seams tab's cell-count dial — how many convection cells the molten heat
+/// field is rolled with (two-way bind, like the size dial).
+pub const CELLS_BIND: &str = "pop_cells";
+/// The seams tab's hot-spot dial — how many mantle plumes the field rolls.
+pub const SPOTS_BIND: &str = "pop_spots";
+/// The evolve tab's run controls (Aaron 2026-08-29, the tick-contract ruling):
+/// PLAY/PAUSE runs ticks flat-out with NO baking — the bake lands once, on
+/// pause; TICK plays exactly one complete procedure cycle then bakes; STEP
+/// plays ONE procedure then bakes; RESET returns to the bare shell. Any run
+/// button clicked while a stepped tick stands open first completes that tick.
+pub const EVOLVE_RUN_ACTION: &str = "pop_evolve_run";
+pub const EVOLVE_TICK_ACTION: &str = "pop_evolve_tick";
+pub const EVOLVE_STEP_ACTION: &str = "pop_evolve_step";
+pub const EVOLVE_RESET_ACTION: &str = "pop_evolve_reset";
+/// PLAY-N: run exactly the typed number of ticks (no baking, progress barred,
+/// one bake at arrival). The count rides the field bind below; 1200 default.
+pub const EVOLVE_ROLL_ACTION: &str = "pop_evolve_roll";
+/// The PLAY-N count field — a `text_field` two-way bind; the scene sanitizes
+/// to digits and falls back to 1200 when unparseable.
+pub const TICK_COUNT_BIND: &str = "pop_tick_count";
+/// The world view's three fluid LENSES (display only, never a reset): the
+/// atmosphere decks, the ocean bands, and the river films each toggle off so
+/// the ground can be read bare. A change rebakes the shown view once.
+pub const SHOW_AIR_BIND: &str = "pop_show_air";
+pub const SHOW_WATER_BIND: &str = "pop_show_water";
+pub const SHOW_RIVERS_BIND: &str = "pop_show_rivers";
+/// **The nav footer's COMMIT** — the bench's OUTPUT action: pause the era,
+/// close any open procedure cycle, capture the planet into a v2 `.epoch`
+/// and write it under `staging/worlds/` (bench → staging → the Content
+/// Manager promotes — the materialbench flow). Shown on the EVOLVE tab alone,
+/// where the footer's Next would otherwise stand.
+pub const COMMIT_ACTION: &str = "pop_commit";
+/// The commit's result line, pre-formatted by the scene: the staged file's
+/// path on success, the error on failure — never silent either way.
+pub const COMMIT_STATUS_BIND: &str = "pop_commit_status";
+/// The evolve tab's readouts: ticks run, and layers formed — pre-formatted
+/// strings the scene publishes.
+pub const TICKS_BIND: &str = "pop_ticks";
+/// The evolve tab's PROCEDURE label — which pipeline phase the next engine
+/// step runs; the tick counts once per completed cycle of them.
+pub const PHASE_BIND: &str = "pop_phase";
+/// **THE CLIMATE HISTORY** — the readouts panel's `surface` node, under the
+/// climate gauge: the walker reserves its rect and the scene seats the shared
+/// [`Plot`](flicker::ui::Plot) filler on it (a sparkline of the era's
+/// temperature). Reserved only while the EVOLVE slice is lit, so an unseated
+/// plot on every other tab costs nothing.
+pub const TEMP_PLOT_SLOT: &str = "pop_temp_plot";
+/// The evolve tab's water-coverage dial — percent of the surface flooded.
+/// The LIVE water-coverage READOUT (Aaron 2026-08-27: the godmode-style
+/// gauge, right panel, never interactive): a 0..1 fraction the
+/// resource_gauge fills by, beside its pre-formatted percent text.
+pub const WATER_BIND: &str = "pop_water";
+pub const WATER_VAL_BIND: &str = "pop_water_val";
+/// The climate gauge — the ice-age runner's live temperature, published every
+/// frame (the knob MOVES with the glacials); a user write sets the baseline.
+/// The LIVE climate READOUT (0..1 fraction + percent text) — display only;
+/// the ice-age runner owns the number, the baseline stays the era default.
+pub const TEMP_BIND: &str = "pop_temp";
+pub const TEMP_VAL_BIND: &str = "pop_temp_val";
+/// The water TARGET dial — the coverage share the in-fall pursues. Its
+/// sibling `WATER_BIND` is the live gauge beside it (display, never a
+/// control).
+pub const WATER_TARGET_BIND: &str = "pop_water_target";
+/// The GREEN TARGET dial — the share of standing land the flora should
+/// hold; the stock's thirst adapts until the greening meets it.
+pub const VEG_TARGET_BIND: &str = "pop_veg_target";
+/// The MEASURED green share — the right-pane readout gauge beside water and
+/// climate (Aaron 2026-08-28: the dial asked 70% and the eye couldn't check
+/// it): a 0..1 fraction plus a pre-formatted percent, display only — the
+/// truth the target dial is steering toward.
+pub const GREEN_BIND: &str = "pop_green";
+pub const GREEN_VAL_BIND: &str = "pop_green_val";
+/// The material census TABLE — a fixed roster of two-column rows (material |
+/// hex count), most-common first; unused rows publish empty strings and
+/// vanish. The last row overflows as "+K" with the remaining hexes summed.
+pub const CENSUS_ROWS: usize = 18;
+/// The row binds: `pop_census_n{i}` (the material label) and
+/// `pop_census_c{i}` (its count), authored in the tree for every row index.
+pub fn census_name_bind(i: usize) -> String {
+    format!("pop_census_n{i}")
+}
+pub fn census_count_bind(i: usize) -> String {
+    format!("pop_census_c{i}")
+}
+/// The evolve tab's motion-arrows checkbox — show each plate's Euler velocity.
+pub const ARROWS_BIND: &str = "pop_arrows";
+pub const STRATA_BIND: &str = "pop_strata";
+
+/// THE HEX INSPECTOR (Aaron 2026-08-27): the focused column itemized on the
+/// hex page — LEFT pane the MATERIAL layers top-down (sediment … deep
+/// crust), RIGHT pane the fluids standing on and over it (atmosphere,
+/// stream, ice, sea, lava). Labels are tree tokens; every value is a bind
+/// the scene pre-formats ("—" is the empty value; heights ride tile-width
+/// units, grades ride ×N.NN).
+pub const HEX_SED_BIND: &str = "pop_hex_sed";
+pub const HEX_ROCK_BIND: &str = "pop_hex_rock";
+pub const HEX_L4_BIND: &str = "pop_hex_l4";
+pub const HEX_L3_BIND: &str = "pop_hex_l3";
+pub const HEX_VEIN_BIND: &str = "pop_hex_vein";
+pub const HEX_BASE_BIND: &str = "pop_hex_base";
+pub const HEX_BEDROCK_BIND: &str = "pop_hex_bedrock";
+pub const HEX_MOIST_BIND: &str = "pop_hex_moist";
+pub const HEX_RAIN_BIND: &str = "pop_hex_rain";
+pub const HEX_RIVER_BIND: &str = "pop_hex_river";
+pub const HEX_ICE_BIND: &str = "pop_hex_ice";
+pub const HEX_WATER_BIND: &str = "pop_hex_water";
+pub const HEX_WTEMP_BIND: &str = "pop_hex_wtemp";
+pub const HEX_HEAT_BIND: &str = "pop_hex_heat";
+/// The two rosters — what the tree authors and the model publishes; the
+/// drift gate walks these so the sides cannot part.
+pub const HEX_MAT_BINDS: [&str; 7] = [
+    HEX_SED_BIND,
+    HEX_ROCK_BIND,
+    HEX_L4_BIND,
+    HEX_L3_BIND,
+    HEX_VEIN_BIND,
+    HEX_BASE_BIND,
+    HEX_BEDROCK_BIND,
+];
+pub const HEX_FLUID_BINDS: [&str; 7] = [
+    HEX_MOIST_BIND,
+    HEX_RAIN_BIND,
+    HEX_RIVER_BIND,
+    HEX_ICE_BIND,
+    HEX_WATER_BIND,
+    HEX_WTEMP_BIND,
+    HEX_HEAT_BIND,
+];
+
+/// Model keys the rails bind to. The `paged_menu` proto names these as its
+/// `@page_bind` / `@tab_bind` / `@tabs_shown` defaults; stated once here so the
+/// tree, the Model and the dispatcher cannot drift apart.
+pub const PAGE_BIND: &str = "page";
+pub const TAB_BIND: &str = "tab";
+pub const TABS_SHOWN: &str = "paged_tabs_shown";
+
+/// One section tab within a page.
+pub struct Tab {
+    pub id: &'static str,
+    /// Stringtable token — never raw English (rule: every UI string localized).
+    pub label: &'static str,
+}
+
+/// One top-level page: what the page rail shows, and the tabs it contains.
+pub struct Page {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub tabs: &'static [Tab],
+}
+
+/// **The bench's page/tab roster.** Two pages — the WORLD (the globe, with its
+/// MAP, SEAMS, CRUST and EVOLVE tabs) and the HEX stack (the centre cell's column
+/// inspected up close, layer by layer). The scene reads only COUNTS from this (the
+/// rail bounds + the dispatch clamp); each tab's actual panes are authored in
+/// `populous.scene.json` and gated by `arrange()`. The code that reads this
+/// never learns the counts, so the next page or tab costs exactly one row here.
+pub static PAGES: &[Page] = &[
+    Page {
+        id: "world",
+        label: "$pop_page_world",
+        tabs: &[
+            Tab {
+                id: "map",
+                label: "$pop_tab_map",
+            },
+            Tab {
+                id: "seams",
+                label: "$pop_tab_seams",
+            },
+            Tab {
+                id: "crust",
+                label: "$pop_tab_crust",
+            },
+            Tab {
+                id: "evolve",
+                label: "$pop_tab_evolve",
+            },
+        ],
+    },
+    Page {
+        id: "hex",
+        label: "$pop_page_hex",
+        tabs: &[Tab {
+            id: "stack",
+            label: "$pop_tab_stack",
+        }],
+    },
+];
+
+/// The page at `sel`, clamped — the roster is the authority on what exists, so an
+/// out-of-range selection reads as the last page rather than panicking.
+pub fn page(sel: usize) -> &'static Page {
+    &PAGES[sel.min(PAGES.len() - 1)]
+}

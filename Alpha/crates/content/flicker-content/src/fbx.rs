@@ -10,6 +10,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::{bail, Context, Result};
+use flicker_skeletal::format::ClothRegion;
 use glam::{Mat4, Vec3};
 
 /// One parsed vertex (per triangle-corner; the mesh is emitted non-deduped with sequential indices,
@@ -42,11 +43,38 @@ pub struct RawBone {
 }
 
 /// The raw parsed model — one mesh + the skeleton, in the FBX's native space.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct RawModel {
     pub vertices: Vec<RawVertex>,
     pub indices: Vec<u32>,
     pub bones: Vec<RawBone>,
+    /// The mesh's TAGGED REGIONS (spec 0A81088E) — a garment's hanging panels, a mane, a tail's
+    /// fall. Empty for a plain body: untagged vertices ARE the body. Carried on the model because
+    /// three passes read the same membership — the skin bake pins them, the flesh field masks
+    /// them out, and [`crate::bake::bake_rig`] writes them into the rig's `mesh.cloth`.
+    pub regions: Vec<ClothRegion>,
+}
+
+/// Weld the mesh's corners by POSITION — one vertex per triangle CORNER is the convention
+/// [`parse_fbx`] emits, so one point on the skin appears many times over and adjacency read
+/// through vertex indices finds none. Returns each vertex's weld id and the welded positions.
+/// THE door for anything that needs the mesh's connectivity, or one answer per point (the skin
+/// bake scores each position once; the region split walks the triangle graph).
+pub(crate) fn weld_by_position(verts: &[RawVertex]) -> (Vec<u32>, Vec<Vec3>) {
+    let mut of: HashMap<[i64; 3], u32> = HashMap::new();
+    let mut corner = Vec::with_capacity(verts.len());
+    let mut positions = Vec::new();
+    for v in verts {
+        let q = |f: f32| (f as f64 * 1000.0).round() as i64;
+        let id = *of
+            .entry([q(v.p[0]), q(v.p[1]), q(v.p[2])])
+            .or_insert_with(|| {
+                positions.push(Vec3::from_array(v.p));
+                (positions.len() - 1) as u32
+            });
+        corner.push(id);
+    }
+    (corner, positions)
 }
 
 /// A quarter-turn (90°) about a world axis, as an EXACT integer matrix.
@@ -181,6 +209,7 @@ pub fn parse_fbx(path: &Path) -> Result<RawModel> {
     }
     let indices = (0..vertices.len() as u32).collect();
     Ok(RawModel {
+        regions: Vec::new(),
         vertices,
         indices,
         bones,
@@ -562,6 +591,7 @@ mod tests {
         ];
         // A Y-UP asset: its "up" runs along +Y, which is how a lot of vendor content arrives.
         let mut m = RawModel {
+            regions: Vec::new(),
             vertices: vec![RawVertex {
                 p: [0.0, 170.0, 0.0],
                 n: [0.0, 1.0, 0.0],

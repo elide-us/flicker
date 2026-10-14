@@ -6,7 +6,7 @@
 //! on, how it is framed, and an ordered list of content layers. The node says WHERE it
 //! lands, and `FrameGraph` decides WHEN. [`StageDef`] is that WHAT as one typed value,
 //! compiled from JSON by the ONE stage compiler in `flicker-widgets` (`stages.rs`) and
-//! consumed by every filler — the loomforge doll rig, the globe, the Sablework lit sample.
+//! consumed by every filler — the packbench doll rig, the globe, the MaterialBench lit sample.
 //! (The three private parsers it replaced each knew a third of the vocabulary and
 //! warned-and-skipped the rest.)
 //!
@@ -110,7 +110,7 @@ pub enum StageLayer {
     },
     /// The shared reference frame over a globe at this fraction of its radius.
     Graticule { radius_scale: f32 },
-    /// The material sample — the lit body the Sablework bench dresses in its six maps.
+    /// The material sample — the lit body the MaterialBench dresses in its six maps.
     Material,
 }
 

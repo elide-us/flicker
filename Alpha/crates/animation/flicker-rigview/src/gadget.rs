@@ -9,7 +9,7 @@
 //! arrive as resolved tokens in a [`GadgetStyle`] the CONSUMER fills (rule 790872EE: no rgba
 //! literals in engine code).
 //!
-//! ONE gadget serves a scene's whole panel set — Clayworks' quad view is four `surface` panels and
+//! ONE gadget serves a scene's whole panel set — MeshBench's quad view is four `surface` panels and
 //! at most one of them may be dragging. The panel's [`Projection`] is therefore a per-CALL argument,
 //! not construction state: the same gadget draws different handle sets into different panels.
 //!
@@ -17,7 +17,7 @@
 //! Translate / Rotate / Scale are the three continuous drags of [`GizmoMode`]; FLIP is discrete and
 //! is NOT a drag mode — it is gated by [`GadgetModes::FLIP`] and applied by [`Gadget::flip`], which
 //! goes through the guarded [`flicker_mechanics::flip`] with the consumer's own validator. (A
-//! `GizmoMode::Flip` variant cannot land until Clayworks' exhaustive match moves with it — deadend
+//! `GizmoMode::Flip` variant cannot land until MeshBench's exhaustive match moves with it — deadend
 //! 7F44380D; do not re-attempt it from here.)
 //!
 //! ## Mode availability is AUTHORED, and the filler never reads the Model
@@ -36,7 +36,7 @@
 //! Modify machine, drawn.
 //!
 //! ## The consumer sweep this absorbs
-//! Clayworks' `Alpha/crates/scenes/flicker-assetpipeline/src/gizmo.rs` (its `decide` / `nearest_joint`
+//! MeshBench's `Alpha/crates/devmode/flicker-meshbench/src/gizmo.rs` (its `decide` / `nearest_joint`
 //! / `Gizmo::interact` deform+reposition loop) becomes a `Gadget` plus a few lines applying each
 //! [`GadgetDelta`] to its `Document`, and `compose.rs`'s private `handles()` (compose.rs:186-195)
 //! plus its `GIZMO_ARROW_FRAC` (compose.rs:42) and the gizmo module's `PICK_TOL_FRAC` (gizmo.rs:22)
@@ -51,11 +51,11 @@ use glam::{Mat3, Mat4, Quat, Vec3};
 
 use crate::Projection;
 
-/// Handle length as a fraction of the framed subject's radius — Clayworks' `GIZMO_ARROW_FRAC`
-/// (`flicker-assetpipeline/src/compose.rs:42`), absorbed so the bench keeps no copy.
+/// Handle length as a fraction of the framed subject's radius — MeshBench's `GIZMO_ARROW_FRAC`
+/// (`flicker-meshbench/src/compose.rs:42`), absorbed so the bench keeps no copy.
 const HANDLE_FRAC: f32 = 0.18;
-/// Pick tolerance as a fraction of the handle length — Clayworks' `PICK_TOL_FRAC`
-/// (`flicker-assetpipeline/src/gizmo.rs:22`), absorbed with it.
+/// Pick tolerance as a fraction of the handle length — MeshBench's `PICK_TOL_FRAC`
+/// (`flicker-meshbench/src/gizmo.rs:22`), absorbed with it.
 const PICK_TOL_FRAC: f32 = 0.35;
 /// A handle within this cosine of the panel's depth axis is edge-on: it projects to a point, so it
 /// is neither drawn nor pickable there (~8°, which tolerates a rotated feature basis).
@@ -87,8 +87,8 @@ impl From<DragDelta> for GadgetDelta {
     }
 }
 
-/// What a press decides. Absorbs the shape of Clayworks' `decide` table
-/// (`flicker-assetpipeline/src/gizmo.rs:46-54`) with the gadget's HANDLES where that table had the
+/// What a press decides. Absorbs the shape of MeshBench's `decide` table
+/// (`flicker-meshbench/src/gizmo.rs:46-54`) with the gadget's HANDLES where that table had the
 /// bench's joints.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Press {
@@ -243,6 +243,14 @@ impl Gadget {
         self.mode
     }
 
+    /// Has the live drag actually MOVED anything yet — the Locked → Modifying edge the handles
+    /// draw, and the one question a consumer must ask before it commits anything ON RELEASE: a
+    /// press that travelled nowhere (or never cleared a snap step) applied no delta, so it must
+    /// place nothing. False whenever no drag is live.
+    pub fn moved(&self) -> bool {
+        self.moved
+    }
+
     pub fn pivot(&self) -> Vec3 {
         self.pivot
     }
@@ -314,7 +322,7 @@ impl Gadget {
     /// LOCK. Begin a drag from the press ray, snapping in the mode's own currency (distance for
     /// Translate, DEGREES for Rotate, ratio for Scale; `None` is continuous). Returns whether the
     /// press was the gadget's — a consumer withholds that frame's pointer from the panel's camera
-    /// when it was, exactly as Clayworks' `interact` returns the panel it consumed. A press while a
+    /// when it was, exactly as MeshBench's `interact` returns the panel it consumed. A press while a
     /// drag is already live is refused: one gadget, one drag.
     pub fn begin(&mut self, projection: Projection, ray: (Vec3, Vec3), snap: Option<f32>) -> bool {
         if self.drag.is_some() {
@@ -329,6 +337,22 @@ impl Gadget {
         self.moved = false;
         self.drag = Some(DragState::begin(
             self.mode, axis, self.basis, self.pivot, ray, snap,
+        ));
+        true
+    }
+
+    /// LOCK the FREE form directly, consulting no handle — the consumer's own press policy where a
+    /// panel's every press is the view-plane drag (MeshBench's orthographic panels, Aaron
+    /// 2026-09-07: a press beside the joint must never lock an axis). Refused while a drag is live
+    /// or the mode is gated off, exactly as [`Self::begin`] is.
+    pub fn begin_free(&mut self, ray: (Vec3, Vec3), snap: Option<f32>) -> bool {
+        if self.drag.is_some() || !self.modes.allows(self.mode) {
+            return false;
+        }
+        self.hover = None;
+        self.moved = false;
+        self.drag = Some(DragState::begin(
+            self.mode, None, self.basis, self.pivot, ray, snap,
         ));
         true
     }
@@ -356,8 +380,8 @@ impl Gadget {
     /// hover and any refusal clear too.
     ///
     /// Nothing is un-applied here. A surface that must revert holds its own restore value across
-    /// the drag and writes it back — Clayworks' deform test does exactly that (`DragMode::Deform {
-    /// restore }`, `flicker-assetpipeline/src/gizmo.rs:117-119`), and that is document business,
+    /// the drag and writes it back — MeshBench's deform test does exactly that (`DragMode::Deform {
+    /// restore }`, `flicker-meshbench/src/gizmo.rs:117-119`), and that is document business,
     /// which an engine crate has no business knowing.
     pub fn cancel(&mut self) {
         self.drag = None;
@@ -478,7 +502,7 @@ fn hidden_by(depth: Option<Vec3>, basis: Mat3, axis: Axis) -> bool {
 }
 
 /// The axis a mechanics segment belongs to. [`gizmo_segments`] tags every segment with its own
-/// axis' colour, which is how the gadget (and Clayworks' `compose::handles`, compose.rs:189-193)
+/// axis' colour, which is how the gadget (and MeshBench's `compose::handles`, compose.rs:189-193)
 /// groups them; asking with `hover: None` means every tag is a base colour, so the match is total.
 /// The test `every_segment_of_every_mode_carries_its_axis` is the gate over that channel.
 fn axis_of(tag: [f32; 4]) -> Option<Axis> {

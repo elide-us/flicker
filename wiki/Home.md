@@ -61,16 +61,16 @@ Engine benches, tools, and reference scenes.
 
 - **Component Catalog** *(Reference)* — One live copy of every UI widget with all features
   on: a nav rail of bookmarks over a card per control. The UI test scene.
-- **Quartermaster Bench** *(Content manager)* — The content air-traffic controller: review
+- **PackageBench** *(Content manager)* — The content air-traffic controller: review
   what landed in staging and promote it into the package, then rearrange the trees.
   Move-only; every change is a single undo.
-- **Sablework Bench** *(Texture synth)* — The texture synthesizer console: six noise voices
+- **MaterialBench** *(Texture synth)* — The texture synthesizer console: six noise voices
   mixed into a tiled swatch, an output stage, and a lit turntable preview. **Commit** bakes
   the material into staging.
-- **Clayworks Bench** *(Asset pipeline)* — The asset-pipeline editor: a step-by-step wizard
+- **MeshBench** *(Asset pipeline)* — The asset-pipeline editor: a step-by-step wizard
   that ingests external props, garments, and rigs, previews the retargeted animation clip,
   and **Commit**s the result into staging.
-- **Loomforge Bench** *(Animation)* — The animation-authoring editor: a four-tab bench —
+- **PackBench** *(Animation)* — The animation-authoring editor: a four-tab bench —
   State Machine, Pack Browser, Creature Composer, and TAE Editor — that edits a creature
   pack and writes it back.
 

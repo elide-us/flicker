@@ -61,6 +61,8 @@ pub mod epochfile;
 pub mod evolve;
 pub mod map;
 pub mod plates;
+pub mod recipe;
+pub mod resonance;
 pub mod seams;
 
 // ── THE FROZEN v1 TOOLBOX ──────────────────────────────────────────────────
@@ -81,6 +83,17 @@ pub use evolve::{
 };
 pub use map::{diameter_mi, HexMap, TileId, DEFAULT_FREQ, MAX_FREQ, MIN_FREQ, TILE_MI};
 pub use plates::{PlateField, DEFAULT_PLATES, MAX_PLATES, MIN_PLATES};
+// Planet generation V5 — the field recipe (the stack as data, composed the one
+// way, measured, de-projected) and the resonance field family.
+pub use recipe::{
+    compose, metrics, plateau, render_equirect, ridge, score, CoastBandRecipe, Composed,
+    HarmonicRecipe, HeatRecipe, MaskRecipe, Metrics, Recipe, RidgeRecipe, WaveRecipe,
+};
+pub use resonance::{
+    land_share, sea_level, HarmonicWave, PlanetWave, VolcanoShape, Volcanoes, WaveMask,
+    BASE_WAVELENGTH, DEFAULT_AXES, DEFAULT_LOBE, FLOOD_MARGIN, MAX_AXES, MAX_LOBE, MIN_AXES,
+    MIN_LOBE, SEA_CREST_PERCENT,
+};
 pub use seams::{
     SeamField, DEFAULT_CELLS, DEFAULT_SPOTS, MAX_CELLS, MAX_SPOTS, MIN_CELLS, MIN_SPOTS,
 };

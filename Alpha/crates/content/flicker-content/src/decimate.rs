@@ -2,7 +2,7 @@
 //! edge-collapse that takes the mesh down to an ABSOLUTE triangle target.
 //!
 //! Design rulings:
-//!   * (Aaron, 2026-09-03) the target is a **triangle COUNT**, typed on the Clayworks Prep step
+//!   * (Aaron, 2026-09-03) the target is a **triangle COUNT**, typed on the MeshBench Prep step
 //!     and applied on a button — not a percent of the source. Percent was never precise
 //!     enough; the per-race counts vary and are made consistent by hand. This supersedes the
 //!     2026-08-22 percent-of-source ruling (100% → 50% in 5% buckets, one pass snapshotting
@@ -378,6 +378,7 @@ impl WeldedMesh {
         }
         let indices: Vec<u32> = (0..vertices.len() as u32).collect();
         RawModel {
+            regions: Vec::new(),
             vertices,
             indices,
             bones: source.bones.clone(),
@@ -417,6 +418,7 @@ mod tests {
         }
         let indices = (0..verts.len() as u32).collect();
         RawModel {
+            regions: Vec::new(),
             vertices: verts,
             indices,
             bones: Vec::new(),
@@ -522,6 +524,7 @@ mod tests {
         }
         let indices = (0..verts.len() as u32).collect();
         RawModel {
+            regions: Vec::new(),
             vertices: verts,
             indices,
             bones: Vec::new(),

@@ -396,7 +396,7 @@ impl From<String> for Value {
 /// (engine → script, [`ScriptHost::set_model`]) and the outbound **results**
 /// (script → engine, returned by [`ScriptHost::update`]). Names are defined by
 /// whichever side fills it; the other side queries the names it cares about.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ValueMap {
     map: HashMap<String, Value>,
 }

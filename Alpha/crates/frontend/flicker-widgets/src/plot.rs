@@ -748,6 +748,8 @@ mod tests {
         let slot = SurfaceSlot {
             id: "probe".into(),
             source: String::new(),
+            scene: String::new(),
+            params: Default::default(),
             x: 4.0,
             y: 8.0,
             w: 160.0,

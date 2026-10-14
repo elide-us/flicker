@@ -50,7 +50,7 @@ impl MapKind {
 
     /// The content standard's map-role name — the `<Asset>_<Map>` filename
     /// suffix (`Alpha/content/README.md`). These are the names the rest of the
-    /// tree already uses (`GolemBase_Low_BaseColor.png`), so a Sablework bake
+    /// tree already uses (`GolemBase_Low_BaseColor.png`), so a MaterialBench bake
     /// drops into the package tree looking like everything else.
     pub fn role(self) -> &'static str {
         match self {

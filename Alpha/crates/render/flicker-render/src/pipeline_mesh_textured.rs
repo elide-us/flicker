@@ -40,6 +40,19 @@ use crate::pipeline_mesh::{compose_lit, FrameBindGroup, DEPTH_FORMAT};
 use crate::pipeline_shadow::ShadowBind;
 use crate::texture::{LoadedTexture, TextureHandle};
 
+/// THE ONE PBR MATERIAL TEXT — the combined material bind group (group 2) and `shade_material`,
+/// the fragment path every textured surface shades through: this pipeline's
+/// `mesh_textured.wgsl` and the skinned pipeline's `skinned_textured.wgsl`. Shared the way the
+/// frame prelude is (see [`compose_lit`]): one text, prepended at module build, never a copy
+/// pasted into each shader.
+pub const MATERIAL: &str = include_str!("shaders/material.wgsl");
+
+/// Compose a textured shader's full source: the frame prelude, then [`MATERIAL`], then the
+/// body (its own vertex stage, per-draw bindings and shadow bind, calling `shade_material`).
+pub fn compose_material(body: &str) -> String {
+    compose_lit(&format!("{MATERIAL}\n{body}"))
+}
+
 /// Vertex for the textured mesh pipeline: position + normal + UV + tangent. Deformed
 /// positions/normals (e.g. CPU-skinned) are re-uploaded; UVs are static. The tangent
 /// (`xyz` + handedness `w`) builds the TBN for tangent-space normal mapping — the
@@ -129,6 +142,86 @@ pub fn build_textured_verts(
         }
     }
     out
+}
+
+/// Per-vertex tangents for an INDEXED mesh (`xyz` + handedness `w`) — the basis a tangent-space
+/// normal map needs on a body the GPU skins. Every triangle's `dP/dUV` tangent and bitangent are
+/// accumulated onto its three corners; each vertex's sum is then orthonormalized against its
+/// normal (Gram-Schmidt) and signed by whether the accumulated bitangent agrees with `N×T`. A
+/// vertex no triangle reaches, or whose UVs are degenerate everywhere, gets an arbitrary finite
+/// basis (the shader re-orthonormalizes anyway). [`build_textured_verts`] is the non-indexed
+/// sibling (one tangent per triangle); this one shares vertices across triangles, so a skinned
+/// body's tangents are as smooth as its normals.
+pub fn mesh_tangents(
+    count: usize,
+    pos: impl Fn(usize) -> [f32; 3],
+    nrm: impl Fn(usize) -> [f32; 3],
+    uv: impl Fn(usize) -> [f32; 2],
+    indices: &[u32],
+) -> Vec<[f32; 4]> {
+    let mut out = Vec::new();
+    mesh_tangents_into(count, pos, nrm, uv, indices, &mut Vec::new(), &mut out);
+    out
+}
+
+/// [`mesh_tangents`] into REUSED buffers, for a mesh the CPU deforms every frame (a skinned
+/// body's cloth half): `scratch` is the per-vertex tangent + bitangent sums (`2 * count`), `out`
+/// the tangents, both resized in place — a frame allocates nothing once they have their size.
+pub fn mesh_tangents_into(
+    count: usize,
+    pos: impl Fn(usize) -> [f32; 3],
+    nrm: impl Fn(usize) -> [f32; 3],
+    uv: impl Fn(usize) -> [f32; 2],
+    indices: &[u32],
+    scratch: &mut Vec<Vec3>,
+    out: &mut Vec<[f32; 4]>,
+) {
+    scratch.clear();
+    scratch.resize(2 * count, Vec3::ZERO);
+    let (tan, bit) = scratch.split_at_mut(count);
+    for &[i0, i1, i2] in indices.as_chunks::<3>().0 {
+        let (i0, i1, i2) = (i0 as usize, i1 as usize, i2 as usize);
+        if i0 >= count || i1 >= count || i2 >= count {
+            continue;
+        }
+        let (p0, p1, p2) = (
+            Vec3::from(pos(i0)),
+            Vec3::from(pos(i1)),
+            Vec3::from(pos(i2)),
+        );
+        let (uv0, uv1, uv2) = (Vec2::from(uv(i0)), Vec2::from(uv(i1)), Vec2::from(uv(i2)));
+        let (e1, e2) = (p1 - p0, p2 - p0);
+        let (d1, d2) = (uv1 - uv0, uv2 - uv0);
+        let det = d1.x * d2.y - d2.x * d1.y;
+        if det.abs() <= 1e-12 {
+            continue;
+        }
+        let r = 1.0 / det;
+        let t = (e1 * d2.y - e2 * d1.y) * r;
+        let b = (e2 * d1.x - e1 * d2.x) * r;
+        for i in [i0, i1, i2] {
+            tan[i] += t;
+            bit[i] += b;
+        }
+    }
+    out.clear();
+    out.extend((0..count).map(|i| {
+        let n = Vec3::from(nrm(i)).normalize_or_zero();
+        let t = tan[i] - n * n.dot(tan[i]);
+        let t = if t.length_squared() > 1e-12 {
+            t.normalize()
+        } else {
+            // Any direction across the normal.
+            let a = if n.x.abs() < 0.9 { Vec3::X } else { Vec3::Y };
+            (a - n * n.dot(a)).normalize_or_zero()
+        };
+        let w = if n.cross(t).dot(bit[i]) < 0.0 {
+            -1.0
+        } else {
+            1.0
+        };
+        [t.x, t.y, t.z, w]
+    }));
 }
 
 /// Optional PBR map handles for one textured-mesh draw. Any `None` slot samples the
@@ -238,7 +331,7 @@ impl TexturedMeshPipeline {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("flicker.mesh_textured.shader"),
             source: wgpu::ShaderSource::Wgsl(
-                compose_lit(include_str!("shaders/mesh_textured.wgsl")).into(),
+                compose_material(include_str!("shaders/mesh_textured.wgsl")).into(),
             ),
         });
 
@@ -445,10 +538,12 @@ impl TexturedMeshPipeline {
         vertices: &[TexturedVertex],
         indices: MeshIndices<'_>,
     ) -> TexturedMeshHandle {
+        // COPY_DST: a CPU-deformed submesh (a skinned body's cloth half under its material) is
+        // rewritten in place every frame through [`Self::update`].
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("flicker.mesh_textured.vbo"),
             contents: bytemuck::cast_slice(vertices),
-            usage: wgpu::BufferUsages::VERTEX,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         });
         let (index_buffer, index_count, index_format) = match indices {
             MeshIndices::U16(idx) => (
@@ -485,6 +580,27 @@ impl TexturedMeshPipeline {
             slot
         };
         TexturedMeshHandle(id)
+    }
+
+    /// Rewrite an uploaded mesh's vertices in place — the same count, the same topology, new
+    /// positions / normals / tangents (the textured twin of `LoadedMesh::write_vertices`). `false`
+    /// (and NOTHING written) when the handle is gone or the count differs: a mesh whose vertex
+    /// count changed is a different mesh and must be re-uploaded (spec 6C46CAB9).
+    pub fn update(
+        &self,
+        queue: &wgpu::Queue,
+        handle: TexturedMeshHandle,
+        vertices: &[TexturedVertex],
+    ) -> bool {
+        let Some(Some(mesh)) = self.meshes.get(handle.0 as usize) else {
+            return false;
+        };
+        let bytes: &[u8] = bytemuck::cast_slice(vertices);
+        if bytes.len() as u64 != mesh.vertex_buffer.size() {
+            return false;
+        }
+        queue.write_buffer(&mesh.vertex_buffer, 0, bytes);
+        true
     }
 
     /// Free a previously uploaded mesh, returning its slot to the pool.
@@ -563,60 +679,54 @@ impl TexturedMeshPipeline {
         queue.write_buffer(&self.per_draw_buf, 0, &staging);
 
         // Build one combined material bind group per draw. A missing albedo (bad handle)
-        // yields an empty bind group so `render` can skip that draw.
+        // yields a fully-default group so the indices stay aligned; `render` skips draws
+        // whose mesh is gone.
         self.frame_material_bgs.reserve(self.queued.len());
         for draw in &self.queued {
-            let Some(albedo_view) = view_for(textures, draw.texture) else {
-                // Push a placeholder default group; render skips draws whose mesh/tex is
-                // gone, but we must keep index alignment, so bind a fully-default group.
-                self.frame_material_bgs.push(self.make_material_bg(
-                    device,
-                    &self.default_white_view,
-                    &self.default_normal_view,
-                    &self.default_white_view,
-                    &self.default_black_view,
-                    &self.default_white_view,
-                    &self.default_black_view,
-                ));
-                continue;
-            };
-            let normal_view = draw
-                .maps
-                .normal
-                .and_then(|h| view_for(textures, h))
-                .unwrap_or(&self.default_normal_view);
-            let rough_view = draw
-                .maps
-                .roughness
-                .and_then(|h| view_for(textures, h))
-                .unwrap_or(&self.default_white_view);
-            let metal_view = draw
-                .maps
-                .metalness
-                .and_then(|h| view_for(textures, h))
-                .unwrap_or(&self.default_black_view);
-            let ao_view = draw
-                .maps
-                .ao
-                .and_then(|h| view_for(textures, h))
-                .unwrap_or(&self.default_white_view);
-            // Black default: a draw that names no emit map glows nowhere.
-            let emit_view = draw
-                .maps
-                .emit
-                .and_then(|h| view_for(textures, h))
-                .unwrap_or(&self.default_black_view);
-            let bg = self.make_material_bg(
-                device,
-                albedo_view,
-                normal_view,
-                rough_view,
-                metal_view,
-                ao_view,
-                emit_view,
-            );
+            let bg = self
+                .material_bind_group(device, textures, draw.texture, draw.maps)
+                .unwrap_or_else(|| {
+                    self.make_material_bg(
+                        device,
+                        &self.default_white_view,
+                        &self.default_normal_view,
+                        &self.default_white_view,
+                        &self.default_black_view,
+                        &self.default_white_view,
+                        &self.default_black_view,
+                    )
+                });
             self.frame_material_bgs.push(bg);
         }
+    }
+
+    /// The combined material layout (group 2) — the skinned pipeline's textured twin binds a
+    /// material of this SAME shape, so one `shade_material` serves both.
+    pub(crate) fn material_layout(&self) -> &wgpu::BindGroupLayout {
+        &self.material_bgl
+    }
+
+    /// One combined material bind group: `texture` as albedo, the `maps` resolved to their
+    /// views, every omitted map to the pipeline's 1×1 default (flat normal / rough=1 /
+    /// metal=0 / ao=1 / no emit). `None` when the albedo handle is gone.
+    pub(crate) fn material_bind_group(
+        &self,
+        device: &wgpu::Device,
+        textures: &[Option<LoadedTexture>],
+        texture: TextureHandle,
+        maps: PbrMaps,
+    ) -> Option<wgpu::BindGroup> {
+        let albedo = view_for(textures, texture)?;
+        Some(self.make_material_bg(
+            device,
+            albedo,
+            map_view(textures, maps.normal, &self.default_normal_view),
+            map_view(textures, maps.roughness, &self.default_white_view),
+            map_view(textures, maps.metalness, &self.default_black_view),
+            map_view(textures, maps.ao, &self.default_white_view),
+            // Black default: a draw that names no emit map glows nowhere.
+            map_view(textures, maps.emit, &self.default_black_view),
+        ))
     }
 
     /// Build one combined material bind group (6 texture views + the shared sampler).
@@ -707,6 +817,17 @@ impl TexturedMeshPipeline {
     }
 }
 
+/// A map's view, or `default` when the draw names none (or names a freed handle).
+fn map_view<'a>(
+    textures: &'a [Option<LoadedTexture>],
+    handle: Option<TextureHandle>,
+    default: &'a wgpu::TextureView,
+) -> &'a wgpu::TextureView {
+    handle
+        .and_then(|h| view_for(textures, h))
+        .unwrap_or(default)
+}
+
 /// Look up a texture's view in the renderer's store.
 fn view_for(
     textures: &[Option<LoadedTexture>],
@@ -782,6 +903,158 @@ fn round_up_to_alignment(value: u32, alignment: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **GATE — the PBR material is ONE text.** `mesh_textured.wgsl` and
+    /// `skinned_textured.wgsl` both shade through `material.wgsl`'s `shade_material` —
+    /// prepended at module build like the frame prelude — and neither body carries a light
+    /// loop or a material binding of its own (a second copy would compile fine and quietly
+    /// re-fork the shading).
+    #[test]
+    fn the_material_is_one_text() {
+        for fact in [
+            "@group(2) @binding(0) var albedo_tex",
+            "@group(2) @binding(6) var mat_sampler",
+            "fn light_contrib(",
+            "fn shade_material(",
+            "for (var i = 0u; i < scene.counts.x; i = i + 1u) {",
+        ] {
+            assert!(
+                MATERIAL.contains(fact),
+                "material.wgsl must carry `{fact}` — it is the ONE text every textured \
+                 shader shares"
+            );
+        }
+        for (file, body) in [
+            (
+                "mesh_textured.wgsl",
+                include_str!("shaders/mesh_textured.wgsl"),
+            ),
+            (
+                "skinned_textured.wgsl",
+                include_str!("shaders/skinned_textured.wgsl"),
+            ),
+        ] {
+            assert!(
+                body.contains("shade_material("),
+                "{file} shades through `shade_material`"
+            );
+            for dup in [
+                "scene.lights[",
+                "textureSample(",
+                "albedo_tex",
+                "fn light_contrib(",
+            ] {
+                assert!(
+                    !body.contains(dup),
+                    "{file} carries `{dup}` — it must inherit the material from the ONE \
+                     shared material.wgsl, not paste a second copy"
+                );
+            }
+        }
+        let composed = compose_material("X");
+        assert!(
+            composed.ends_with('X')
+                && composed.contains("fn shade_material(")
+                && composed.contains("fn light_sample("),
+            "compose_material prepends the prelude and the material to the body"
+        );
+    }
+
+    /// Indexed tangents follow the UV gradient, sit across the normal, and carry the
+    /// handedness of a mirrored island.
+    #[test]
+    fn indexed_tangents_follow_the_uv_gradient_and_keep_handedness() {
+        // A unit quad in XY (normal +Z) shared by two triangles; u runs along +x.
+        let pos = [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+        ];
+        let uv = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+        let idx = [0, 1, 2, 0, 2, 3];
+        let t = mesh_tangents(4, |i| pos[i], |_| [0.0, 0.0, 1.0], |i| uv[i], &idx);
+        for v in &t {
+            assert!(
+                (v[0] - 1.0).abs() < 1e-5 && v[1].abs() < 1e-5 && v[2].abs() < 1e-5,
+                "the tangent runs along u: {v:?}"
+            );
+            assert_eq!(v[3], 1.0, "a right-handed island");
+        }
+        // The same quad with u MIRRORED: the tangent flips and so does the handedness.
+        let muv = [[1.0, 0.0], [0.0, 0.0], [0.0, 1.0], [1.0, 1.0]];
+        let m = mesh_tangents(4, |i| pos[i], |_| [0.0, 0.0, 1.0], |i| muv[i], &idx);
+        for v in &m {
+            assert!(
+                (v[0] + 1.0).abs() < 1e-5,
+                "the tangent runs along -x: {v:?}"
+            );
+            assert_eq!(v[3], -1.0, "a mirrored island is left-handed");
+        }
+        // A vertex no triangle reaches still gets a finite, unit basis across its normal.
+        let lone = mesh_tangents(1, |_| [0.0; 3], |_| [0.0, 0.0, 1.0], |_| [0.0; 2], &[]);
+        let l = Vec3::new(lone[0][0], lone[0][1], lone[0][2]);
+        assert!(
+            (l.length() - 1.0).abs() < 1e-5 && l.z.abs() < 1e-5,
+            "{lone:?}"
+        );
+    }
+
+    /// IN-PLACE VERTEX REWRITE on the textured store (spec 6C46CAB9): the same count rewrites
+    /// through a buffer the upload made writable; any other count writes NOTHING. Under a
+    /// validation scope, so a buffer uploaded without `COPY_DST` would fail here. Skipped with no
+    /// GPU adapter.
+    #[test]
+    fn a_textured_vertex_rewrite_takes_the_same_count_and_refuses_any_other() {
+        let Some((device, queue)) =
+            crate::pipeline_mesh::tests::test_device("flicker.mesh_textured_test.rewrite")
+        else {
+            return;
+        };
+        device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let align = device.limits().min_uniform_buffer_offset_alignment;
+        let frame = FrameBindGroup::new(&device);
+        let shadow = ShadowBind::new(&device);
+        let mut pipeline = TexturedMeshPipeline::new(
+            &device,
+            &queue,
+            &frame,
+            &shadow,
+            wgpu::TextureFormat::Rgba8UnormSrgb,
+            align,
+        );
+        let v = |x: f32| TexturedVertex {
+            position: [x, 0.0, 0.0],
+            normal: [0.0, 0.0, 1.0],
+            uv: [0.0, 0.0],
+            tangent: [1.0, 0.0, 0.0, 1.0],
+        };
+        let mesh = pipeline.upload(
+            &device,
+            &[v(0.0), v(1.0), v(2.0)],
+            MeshIndices::U32(&[0, 1, 2]),
+        );
+        assert!(
+            pipeline.update(&queue, mesh, &[v(9.0), v(8.0), v(7.0)]),
+            "the same count rewrites in place"
+        );
+        assert!(
+            !pipeline.update(&queue, mesh, &[v(0.0), v(1.0)]),
+            "a shorter list is a DIFFERENT mesh — nothing may be written"
+        );
+        assert!(
+            !pipeline.update(&queue, mesh, &[v(0.0), v(1.0), v(2.0), v(3.0)]),
+            "a longer list is a DIFFERENT mesh — nothing may be written"
+        );
+        pipeline.free(mesh);
+        assert!(
+            !pipeline.update(&queue, mesh, &[v(0.0), v(1.0), v(2.0)]),
+            "a freed mesh takes nothing"
+        );
+        device.poll(wgpu::Maintain::Wait);
+        let err = pollster::block_on(device.pop_error_scope());
+        assert!(err.is_none(), "the rewrite failed validation: {err:?}");
+    }
 
     /// Building the pipeline compiles `mesh_textured.wgsl` and validates it against
     /// the bind-group layouts. Skips cleanly with no GPU adapter.

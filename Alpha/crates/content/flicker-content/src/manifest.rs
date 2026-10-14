@@ -2,7 +2,7 @@
 //!
 //! Ruled 2026-08-02 (Content Manager redesign): the manifest is **not an index**. An
 //! index is an observation, rebuilt by scanning; the manifest is authored BY the act
-//! of promoting — one row per promote, appended by the Quartermaster. Undoing a
+//! of promoting — one row per promote, appended by the PackageBench. Undoing a
 //! promote removes its row: the manifest never claims something staging took back.
 //! `content-tool pack` packs it as ordinary content (provenance riding along in the
 //! shipped package) — the packer's index comes from walking the TREE, never from here.

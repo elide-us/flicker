@@ -1,7 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   Prism Alpha MSI (WiX v5). Built by .github/workflows/release.yml:
-    wix build packaging/windows/prism-alpha.wxs -d Version=X.Y.Z -d StageDir=<staged layout> -o out.msi
+    wix build packaging/windows/prism-alpha.wxs -d Version=X.Y.Z -d StageDir=<staged layout> -o "Prism-Alpha.msi"
+
+  The output file name is FIXED (Prism-Alpha.msi, set once as MSI_NAME in the
+  workflow) so every release publishes the same installer name; the version lives in
+  the MSI's ProductVersion (Apps & Features) and in the Start Menu shortcut's name.
+  Hyphens, not spaces: GitHub rewrites spaces in release asset names to dots, which
+  would break checksum verification by file name.
 
   The `Files` wildcard harvests the ENTIRE staged tree (exe + content.json +
   content\package.flk + loose sensorium/data files) at build time — adding a
@@ -34,7 +40,7 @@
     <StandardDirectory Id="ProgramMenuFolder">
       <Component Id="StartMenuShortcut" Guid="DBB3F440-AC42-40B0-A083-6C2F560A0B19">
         <Shortcut Id="PrismAlphaShortcut"
-                  Name="Prism Alpha"
+                  Name="Prism Alpha v$(var.Version)"
                   Target="[INSTALLFOLDER]prism-alpha.exe"
                   WorkingDirectory="INSTALLFOLDER" />
         <RegistryValue Root="HKCU" Key="Software\Elideus\PrismAlpha"

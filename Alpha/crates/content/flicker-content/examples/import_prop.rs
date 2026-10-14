@@ -1,4 +1,4 @@
-//! CLI wrapper around the in-app PROP bake — the same `parse_fbx` + `write_prop` the Clayworks
+//! CLI wrapper around the in-app PROP bake — the same `parse_fbx` + `write_prop` the MeshBench
 //! bench Commit calls for a boneless static prop. The character analog is `import_folder`.
 //!
 //!   cargo run -p flicker-content --example import_prop -- <source.fbx> <out_dir> <AssetName>

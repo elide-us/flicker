@@ -304,6 +304,19 @@ impl LoadedMesh {
     pub(crate) fn tri_index_format(&self) -> wgpu::IndexFormat {
         self.triangle_index_format
     }
+
+    /// Rewrite the vertex buffer in place — the same count, the same topology, new positions and
+    /// normals. `false` (and NOTHING written) when the count differs: a mesh whose vertex count
+    /// changed is a different mesh and must be re-uploaded, so a silent partial write would show
+    /// as torn geometry with no error (spec 6C46CAB9).
+    pub(crate) fn write_vertices(&self, queue: &wgpu::Queue, vertices: &[MeshVertex]) -> bool {
+        let bytes: &[u8] = bytemuck::cast_slice(vertices);
+        if bytes.len() as u64 != self.vertex_buffer.size() {
+            return false;
+        }
+        queue.write_buffer(&self.vertex_buffer, 0, bytes);
+        true
+    }
 }
 
 /// One queued draw call for the current frame.
@@ -532,7 +545,10 @@ impl MeshPipeline {
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("flicker.mesh.vbo"),
             contents: bytemuck::cast_slice(vertices),
-            usage: wgpu::BufferUsages::VERTEX,
+            // COPY_DST so a mesh whose vertices move every frame without changing TOPOLOGY can be
+            // rewritten in place (`LoadedMesh::write_vertices`) instead of re-uploaded: the CPU
+            // cloth submesh over a GPU-skinned body (spec 6C46CAB9).
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         });
 
         // Triangle index buffer — exactly what the caller submitted.
@@ -833,17 +849,31 @@ pub fn create_depth_view(
 pub(crate) mod tests {
     use super::*;
 
-    /// The three LIT shaders as this crate SHIPS them — the same text
-    /// `create_shader_module` is handed at pipeline build. Reading the real channel is
+    /// The three texts that carry a LIGHT LOOP, as this crate SHIPS them — the same text
+    /// `create_shader_module` is handed at pipeline build (the textured pair shades through
+    /// `material.wgsl`, prepended to each like the prelude). Reading the real channel is
     /// the whole point: a gate over a Rust re-derivation certifies the mirror, never the
     /// source. (`lines.wgsl` is deliberately absent — it reads no light.)
     const LIT_SHADERS: [(&str, &str); 3] = [
+        ("mesh.wgsl", include_str!("shaders/mesh.wgsl")),
+        ("material.wgsl", crate::pipeline_mesh_textured::MATERIAL),
+        ("skinned.wgsl", include_str!("shaders/skinned.wgsl")),
+    ];
+
+    /// Every BODY shader composed over the prelude: the lit three plus the two textured
+    /// bodies that shade through `material.wgsl`.
+    const BODY_SHADERS: [(&str, &str); 5] = [
         ("mesh.wgsl", include_str!("shaders/mesh.wgsl")),
         (
             "mesh_textured.wgsl",
             include_str!("shaders/mesh_textured.wgsl"),
         ),
         ("skinned.wgsl", include_str!("shaders/skinned.wgsl")),
+        (
+            "skinned_textured.wgsl",
+            include_str!("shaders/skinned_textured.wgsl"),
+        ),
+        ("material.wgsl", crate::pipeline_mesh_textured::MATERIAL),
     ];
 
     /// One shipped shader's source by file name.
@@ -887,7 +917,8 @@ pub(crate) mod tests {
     fn the_lit_shaders_ship_the_light_loop_the_mirrors_assert() {
         // ── THE SEEDS AND THE SPELLING ── f32 addition is not associative, so the seed
         // and the association ARE the pixels: `mesh`/`skinned` seed the accumulator with
-        // `scene.ambient.rgb`, `mesh_textured` seeds diffuse AND spec with zero.
+        // `scene.ambient.rgb`, the material (mesh_textured's and skinned_textured's path)
+        // seeds diffuse AND spec with zero.
         // The `* vis` tail is the S6 shadow multiply: `vis` is 1.0 exactly for every light
         // but the shadowed one (and for every surface with `enabled = 0`), so `t * 1.0 == t`
         // keeps these sums bit-identical to the unshadowed loop the CPU mirror asserts.
@@ -901,7 +932,7 @@ pub(crate) mod tests {
                 ],
             ),
             (
-                "mesh_textured.wgsl",
+                "material.wgsl",
                 &[
                     "var direct = vec3<f32>(0.0);",
                     "var spec = vec3<f32>(0.0);",
@@ -943,14 +974,14 @@ pub(crate) mod tests {
             }
         }
 
-        // ── THE AMBIENT STAYS OUTSIDE mesh_textured's LOOP ── its ONE mention of
+        // ── THE AMBIENT STAYS OUTSIDE THE MATERIAL's LOOP ── its ONE mention of
         // `scene.ambient` comes AFTER the accumulation, which is what keeps that sum's
         // order (and so its exact f32 result) the zero-seeded one the mirror asserts.
-        let textured = shader("mesh_textured.wgsl");
+        let textured = shader("material.wgsl");
         assert_eq!(
             textured.matches("scene.ambient").count(),
             1,
-            "mesh_textured.wgsl must apply the ambient in exactly ONE place"
+            "material.wgsl must apply the ambient in exactly ONE place"
         );
         let ambient_at = textured
             .find("let ambient = scene.ambient.rgb * ao;")
@@ -960,8 +991,8 @@ pub(crate) mod tests {
             .expect("the diffuse accumulation");
         assert!(
             ambient_at > accum_at,
-            "mesh_textured.wgsl must apply the ambient AFTER the light loop, never seed \
-             the accumulator with it"
+            "material.wgsl must apply the ambient AFTER the light loop, never seed the \
+             accumulator with it"
         );
 
         // ── THE SHADER HALF OF THE UNIFORM CONTRACT ── field ORDER, in the ONE shared
@@ -1029,7 +1060,7 @@ pub(crate) mod tests {
         // `struct Scene`/`light_sample`/`shadow_factor`, the dedup would be a lie (two
         // sources of truth that happen to agree today). The bodies keep only their OWN
         // `@group` bindings + entry points.
-        for (file, wgsl) in LIT_SHADERS {
+        for (file, wgsl) in BODY_SHADERS {
             for dup in [
                 "struct Light {",
                 "struct Scene {",
@@ -1054,6 +1085,70 @@ pub(crate) mod tests {
             !compose_lit("// body").is_empty() && compose_lit("X").ends_with('X'),
             "compose_lit prepends the prelude to the body"
         );
+    }
+
+    /// IN-PLACE VERTEX REWRITE (spec 6C46CAB9): a mesh whose vertices move every frame without
+    /// changing topology is rewritten through its own buffer — and a count that does not match the
+    /// upload writes NOTHING rather than tearing the geometry. Skipped with no GPU adapter.
+    #[test]
+    fn a_vertex_rewrite_takes_the_same_count_and_refuses_any_other() {
+        let Some((device, queue)) = test_device("mesh.write_vertices") else {
+            return;
+        };
+        let v = |x: f32| MeshVertex {
+            position: [x, 0.0, 0.0],
+            normal: [0.0, 0.0, 1.0],
+            material: 0,
+        };
+        let idx = |data: &[u32]| {
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: None,
+                contents: bytemuck::cast_slice(data),
+                usage: wgpu::BufferUsages::INDEX,
+            })
+        };
+        let mesh = LoadedMesh {
+            vertex_buffer: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: None,
+                contents: bytemuck::cast_slice(&[v(0.0), v(1.0), v(2.0)]),
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            }),
+            triangle_index_buffer: idx(&[0, 1, 2]),
+            triangle_index_count: 3,
+            triangle_index_format: wgpu::IndexFormat::Uint32,
+            edge_index_buffer: idx(&[0, 1]),
+            edge_index_count: 2,
+            edge_index_format: wgpu::IndexFormat::Uint32,
+        };
+        assert!(
+            mesh.write_vertices(&queue, &[v(9.0), v(8.0), v(7.0)]),
+            "the same count rewrites in place"
+        );
+        assert!(
+            !mesh.write_vertices(&queue, &[v(0.0), v(1.0)]),
+            "a shorter list is a DIFFERENT mesh — nothing may be written"
+        );
+        assert!(
+            !mesh.write_vertices(&queue, &[v(0.0), v(1.0), v(2.0), v(3.0)]),
+            "a longer list is a DIFFERENT mesh — nothing may be written"
+        );
+    }
+
+    /// Source-scanning gates live under `gates` (the workspace rule the widgets crate enforces).
+    mod gates {
+        /// …and the real upload must ASK for that capability: a vertex buffer without `COPY_DST` makes
+        /// every rewrite a validation error, which is the whole reason the flag is there.
+        #[test]
+        fn the_mesh_upload_asks_for_a_writable_vertex_buffer() {
+            let src = include_str!("pipeline_mesh.rs").replace("\r\n", "\n");
+            let at = src
+                .find("flicker.mesh.vbo")
+                .expect("the vertex buffer is labelled");
+            assert!(
+                src[at..(at + 800).min(src.len())].contains("BufferUsages::COPY_DST"),
+                "the mesh vertex buffer must be created COPY_DST or `write_vertices` cannot run"
+            );
+        }
     }
 
     /// A headless device, or `None` on a machine without a GPU adapter.
@@ -1130,11 +1225,16 @@ pub(crate) mod tests {
         let frame = FrameBindGroup::new(&device);
         let shadow = crate::pipeline_shadow::ShadowBind::new(&device);
         let _mesh = MeshPipeline::new(&device, &frame, &shadow, fmt, align);
-        let _textured = crate::pipeline_mesh_textured::TexturedMeshPipeline::new(
+        let textured = crate::pipeline_mesh_textured::TexturedMeshPipeline::new(
             &device, &queue, &frame, &shadow, fmt, align,
         );
         let _skinned = crate::pipeline_skinned::SkinnedMeshPipeline::new(
-            &device, &queue, &frame, &shadow, fmt,
+            &device,
+            &queue,
+            &frame,
+            &shadow,
+            fmt,
+            textured.material_layout(),
         );
         let _lines = crate::pipeline_lines::LinesPipeline::new(
             &device,

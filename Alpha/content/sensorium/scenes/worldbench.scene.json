@@ -1,0 +1,2596 @@
+{
+  "_comment": "WorldBench V5 SCENE DEFINITION — planet generation's fifth generation (resonance fields), beside Populous (V4), which it does not touch. Same bench frame: window stack → paged_menu (page rail + per-page tab rail) → panel | RTT | panel → nav footer. The behaviour (`worldbench`) parses this tree once, worldbench.lua's arrange() lights the selected slice, the globe draws in the centre pane.",
+  "behaviour": "worldbench",
+  "params": {},
+  "tree": {
+    "component": "surface",
+    "id": "worldbench",
+    "on_menu": "pause_open",
+    "on_page_next": "page_next",
+    "on_page_prev": "page_prev",
+    "on_tab_next": "tab_next",
+    "on_tab_prev": "tab_prev",
+    "children": [
+      {
+        "component": "stack",
+        "style": "window",
+        "runes": true,
+        "anchor": "top_left",
+        "width_frac": 1.0,
+        "height_frac": 1.0,
+        "children": [
+          {
+            "component": "cell",
+            "anchor": "top_left",
+            "width_frac": 1.0,
+            "height_frac": 1.0,
+            "pad": 30,
+            "gap": 12,
+            "children": [
+              {
+                "component": "paged_menu",
+                "style": "paged_menu.frame",
+                "pad": 40,
+                "grow": 1.0,
+                "children": [
+                  {
+                    "component": "tabs",
+                    "id": "paged_pages",
+                    "bind": "page",
+                    "next_action": "page_next",
+                    "prev_action": "page_prev",
+                    "grow": 1.0,
+                    "gap": 8,
+                    "tab_active": "paged_menu.page_active",
+                    "tab_idle": "paged_menu.page_idle",
+                    "children": [
+                      {
+                        "component": "option",
+                        "value": 0,
+                        "label": "$wb_page_world"
+                      }
+                    ]
+                  },
+                  {
+                    "_comment": "One tab per FIELD with controls; each option's `enabled_bind` is its field's tab-enabled key published from the FIELDS tree — a disabled field's tab dims, takes no click, and the rail's step skips it.",
+                    "component": "pill_toggle",
+                    "id": "paged_tabs",
+                    "visible_bind": "shown_page0",
+                    "bind": "tab",
+                    "next_action": "tab_next",
+                    "prev_action": "tab_prev",
+                    "size": 720,
+                    "style": "paged_menu.tab_track",
+                    "tab_active": "paged_menu.tab_active",
+                    "tab_idle": "paged_menu.tab_idle",
+                    "children": [
+                      {
+                        "component": "option",
+                        "value": 0,
+                        "label": "$wb_tab_wave",
+                        "enabled_bind": "wb_tab_wave_on"
+                      },
+                      {
+                        "component": "option",
+                        "value": 1,
+                        "label": "$wb_tab_ridge",
+                        "enabled_bind": "wb_tab_ridge_on"
+                      },
+                      {
+                        "component": "option",
+                        "value": 2,
+                        "label": "$wb_tab_w89",
+                        "enabled_bind": "wb_tab_w89_on"
+                      },
+                      {
+                        "component": "option",
+                        "value": 3,
+                        "label": "$wb_tab_w13",
+                        "enabled_bind": "wb_tab_w13_on"
+                      },
+                      {
+                        "component": "option",
+                        "value": 4,
+                        "label": "$wb_tab_w15",
+                        "enabled_bind": "wb_tab_w15_on"
+                      },
+                      {
+                        "component": "option",
+                        "value": 5,
+                        "label": "$wb_tab_coast",
+                        "enabled_bind": "wb_tab_coast_on"
+                      },
+                      {
+                        "component": "option",
+                        "value": 6,
+                        "label": "$wb_tab_heat",
+                        "enabled_bind": "wb_tab_heat_on"
+                      },
+                      {
+                        "component": "option",
+                        "value": 7,
+                        "label": "$wb_tab_emit",
+                        "enabled_bind": "wb_tab_emit_on"
+                      }
+                    ]
+                  },
+                  {
+                    "component": "cell",
+                    "style": "window",
+                    "grow": 1.0,
+                    "pad": 30,
+                    "children": [
+                      {
+                        "component": "row",
+                        "grow": 1.0,
+                        "gap": 10,
+                        "children": [
+                          {
+                            "_comment": "LEFT PANE — the selected field's dials, one gated slice per tab. Every dial stages pad steps until Confirm.",
+                            "component": "panel",
+                            "id": "wb_left",
+                            "style": "panel",
+                            "nav_ordinal": 1,
+                            "pad": 10,
+                            "grow": 0.7,
+                            "children": [
+                              {
+                                "component": "cell",
+                                "visible_bind": "shown_p0_t0",
+                                "grow": 1.0,
+                                "gap": 10,
+                                "children": [
+                                  {
+                                    "component": "row",
+                                    "grow": 1.0,
+                                    "gap": 10,
+                                    "children": [
+                                      {
+                                        "component": "slider",
+                                        "id": "wb_sea",
+                                        "style": "slider",
+                                        "bind": "wb_sea",
+                                        "apply": "confirm",
+                                        "label": "$wb_sea",
+                                        "vertical": true,
+                                        "min": 0,
+                                        "max": 100,
+                                        "step": 1,
+                                        "step_coarse": 10,
+                                        "decimals": 0,
+                                        "slider_h": 10,
+                                        "value_w": 44,
+                                        "grow": 1.0,
+                                        "tab_group": "wb_left",
+                                        "nav_ordinal": 1
+                                      },
+                                      {
+                                        "component": "slider",
+                                        "id": "wb_amp",
+                                        "style": "slider",
+                                        "bind": "wb_amp",
+                                        "apply": "confirm",
+                                        "label": "$wb_amp",
+                                        "vertical": true,
+                                        "min": 0,
+                                        "max": 8,
+                                        "step": 1,
+                                        "step_coarse": 2,
+                                        "decimals": 0,
+                                        "slider_h": 10,
+                                        "value_w": 44,
+                                        "grow": 1.0,
+                                        "tab_group": "wb_left",
+                                        "nav_ordinal": 2
+                                      },
+                                      {
+                                        "component": "slider",
+                                        "id": "wb_lobe",
+                                        "style": "slider",
+                                        "bind": "wb_lobe",
+                                        "apply": "confirm",
+                                        "label": "$wb_lobe",
+                                        "vertical": true,
+                                        "min": 20,
+                                        "max": 140,
+                                        "step": 1,
+                                        "step_coarse": 20,
+                                        "decimals": 0,
+                                        "slider_h": 10,
+                                        "value_w": 44,
+                                        "grow": 1.0,
+                                        "tab_group": "wb_left",
+                                        "nav_ordinal": 3
+                                      },
+                                      {
+                                        "component": "slider",
+                                        "id": "wb_plateau",
+                                        "style": "slider",
+                                        "bind": "wb_plateau",
+                                        "apply": "confirm",
+                                        "label": "$wb_plateau",
+                                        "vertical": true,
+                                        "min": 3,
+                                        "max": 20,
+                                        "step": 1,
+                                        "step_coarse": 5,
+                                        "decimals": 0,
+                                        "slider_h": 10,
+                                        "value_w": 44,
+                                        "grow": 1.0,
+                                        "tab_group": "wb_left",
+                                        "nav_ordinal": 4
+                                      },
+                                      {
+                                        "component": "slider",
+                                        "id": "wb_mask_seed",
+                                        "style": "slider",
+                                        "bind": "wb_mask_seed",
+                                        "apply": "confirm",
+                                        "label": "$wb_mask_seed",
+                                        "vertical": true,
+                                        "min": 0,
+                                        "max": 99,
+                                        "step": 1,
+                                        "step_coarse": 10,
+                                        "decimals": 0,
+                                        "slider_h": 10,
+                                        "value_w": 44,
+                                        "grow": 1.0,
+                                        "tab_group": "wb_left",
+                                        "nav_ordinal": 5
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "button",
+                                    "id": "wb_randomize",
+                                    "action": "wb_randomize",
+                                    "tab_group": "wb_left",
+                                    "nav_ordinal": 6,
+                                    "size_class": "md",
+                                    "label": "$wb_randomize"
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "cell",
+                                "visible_bind": "shown_p0_t1",
+                                "grow": 1.0,
+                                "gap": 10,
+                                "children": [
+                                  {
+                                    "component": "row",
+                                    "grow": 1.0,
+                                    "gap": 10,
+                                    "children": [
+                                      {
+                                        "component": "slider",
+                                        "id": "wb_ridge_level",
+                                        "style": "slider",
+                                        "bind": "wb_ridge_level",
+                                        "apply": "confirm",
+                                        "label": "$wb_level",
+                                        "vertical": true,
+                                        "min": -50,
+                                        "max": 80,
+                                        "step": 1,
+                                        "step_coarse": 10,
+                                        "decimals": 0,
+                                        "slider_h": 10,
+                                        "value_w": 44,
+                                        "grow": 1.0,
+                                        "tab_group": "wb_left",
+                                        "nav_ordinal": 1
+                                      },
+                                      {
+                                        "component": "slider",
+                                        "id": "wb_ridge_width",
+                                        "style": "slider",
+                                        "bind": "wb_ridge_width",
+                                        "apply": "confirm",
+                                        "label": "$wb_width",
+                                        "vertical": true,
+                                        "min": 2,
+                                        "max": 40,
+                                        "step": 1,
+                                        "step_coarse": 5,
+                                        "decimals": 0,
+                                        "slider_h": 10,
+                                        "value_w": 44,
+                                        "grow": 1.0,
+                                        "tab_group": "wb_left",
+                                        "nav_ordinal": 2
+                                      },
+                                      {
+                                        "component": "slider",
+                                        "id": "wb_ridge_height",
+                                        "style": "slider",
+                                        "bind": "wb_ridge_height",
+                                        "apply": "confirm",
+                                        "label": "$wb_height",
+                                        "vertical": true,
+                                        "min": 0,
+                                        "max": 12,
+                                        "step": 1,
+                                        "step_coarse": 2,
+                                        "decimals": 0,
+                                        "slider_h": 10,
+                                        "value_w": 44,
+                                        "grow": 1.0,
+                                        "tab_group": "wb_left",
+                                        "nav_ordinal": 3
+                                      }
+                                    ]
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "cell",
+                                "visible_bind": "shown_p0_t2",
+                                "grow": 1.0,
+                                "gap": 10,
+                                "children": [
+                                  {
+                                    "component": "row",
+                                    "grow": 1.0,
+                                    "gap": 10,
+                                    "children": [
+                                      {
+                                        "component": "slider",
+                                        "id": "wb_amp_w89",
+                                        "style": "slider",
+                                        "bind": "wb_amp_w89",
+                                        "apply": "confirm",
+                                        "label": "$wb_amp",
+                                        "vertical": true,
+                                        "min": 0,
+                                        "max": 60,
+                                        "step": 1,
+                                        "step_coarse": 10,
+                                        "decimals": 0,
+                                        "slider_h": 10,
+                                        "value_w": 44,
+                                        "grow": 1.0,
+                                        "tab_group": "wb_left",
+                                        "nav_ordinal": 1
+                                      },
+                                      {
+                                        "component": "slider",
+                                        "id": "wb_ratio_w89",
+                                        "style": "slider",
+                                        "bind": "wb_ratio_w89",
+                                        "apply": "confirm",
+                                        "label": "$wb_ratio",
+                                        "vertical": true,
+                                        "min": 5,
+                                        "max": 1600,
+                                        "step": 1,
+                                        "step_coarse": 50,
+                                        "decimals": 0,
+                                        "slider_h": 10,
+                                        "value_w": 44,
+                                        "grow": 1.0,
+                                        "tab_group": "wb_left",
+                                        "nav_ordinal": 2
+                                      },
+                                      {
+                                        "component": "slider",
+                                        "id": "wb_axes_w89",
+                                        "style": "slider",
+                                        "bind": "wb_axes_w89",
+                                        "apply": "confirm",
+                                        "label": "$wb_waves",
+                                        "vertical": true,
+                                        "min": 1,
+                                        "max": 6,
+                                        "step": 1,
+                                        "step_coarse": 1,
+                                        "decimals": 0,
+                                        "slider_h": 10,
+                                        "value_w": 44,
+                                        "grow": 1.0,
+                                        "tab_group": "wb_left",
+                                        "nav_ordinal": 3
+                                      },
+                                      {
+                                        "component": "slider",
+                                        "id": "wb_mseed_w89",
+                                        "style": "slider",
+                                        "bind": "wb_mseed_w89",
+                                        "apply": "confirm",
+                                        "label": "$wb_mask_seed",
+                                        "vertical": true,
+                                        "min": 0,
+                                        "max": 99,
+                                        "step": 1,
+                                        "step_coarse": 10,
+                                        "decimals": 0,
+                                        "slider_h": 10,
+                                        "value_w": 44,
+                                        "grow": 1.0,
+                                        "tab_group": "wb_left",
+                                        "nav_ordinal": 4
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "button",
+                                    "id": "wb_reroll_w89",
+                                    "action": "wb_reroll_w89",
+                                    "tab_group": "wb_left",
+                                    "nav_ordinal": 5,
+                                    "size_class": "md",
+                                    "label": "$wb_randomize"
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "cell",
+                                "visible_bind": "shown_p0_t3",
+                                "grow": 1.0,
+                                "gap": 10,
+                                "children": [
+                                  {
+                                    "component": "row",
+                                    "grow": 1.0,
+                                    "gap": 10,
+                                    "children": [
+                                      {
+                                        "component": "slider",
+                                        "id": "wb_amp_w13",
+                                        "style": "slider",
+                                        "bind": "wb_amp_w13",
+                                        "apply": "confirm",
+                                        "label": "$wb_amp",
+                                        "vertical": true,
+                                        "min": 0,
+                                        "max": 20,
+                                        "step": 1,
+                                        "step_coarse": 5,
+                                        "decimals": 0,
+                                        "slider_h": 10,
+                                        "value_w": 44,
+                                        "grow": 1.0,
+                                        "tab_group": "wb_left",
+                                        "nav_ordinal": 1
+                                      },
+                                      {
+                                        "component": "slider",
+                                        "id": "wb_ratio_w13",
+                                        "style": "slider",
+                                        "bind": "wb_ratio_w13",
+                                        "apply": "confirm",
+                                        "label": "$wb_ratio",
+                                        "vertical": true,
+                                        "min": 5,
+                                        "max": 1600,
+                                        "step": 1,
+                                        "step_coarse": 50,
+                                        "decimals": 0,
+                                        "slider_h": 10,
+                                        "value_w": 44,
+                                        "grow": 1.0,
+                                        "tab_group": "wb_left",
+                                        "nav_ordinal": 2
+                                      },
+                                      {
+                                        "component": "slider",
+                                        "id": "wb_axes_w13",
+                                        "style": "slider",
+                                        "bind": "wb_axes_w13",
+                                        "apply": "confirm",
+                                        "label": "$wb_waves",
+                                        "vertical": true,
+                                        "min": 1,
+                                        "max": 6,
+                                        "step": 1,
+                                        "step_coarse": 1,
+                                        "decimals": 0,
+                                        "slider_h": 10,
+                                        "value_w": 44,
+                                        "grow": 1.0,
+                                        "tab_group": "wb_left",
+                                        "nav_ordinal": 3
+                                      },
+                                      {
+                                        "component": "slider",
+                                        "id": "wb_mseed_w13",
+                                        "style": "slider",
+                                        "bind": "wb_mseed_w13",
+                                        "apply": "confirm",
+                                        "label": "$wb_mask_seed",
+                                        "vertical": true,
+                                        "min": 0,
+                                        "max": 99,
+                                        "step": 1,
+                                        "step_coarse": 10,
+                                        "decimals": 0,
+                                        "slider_h": 10,
+                                        "value_w": 44,
+                                        "grow": 1.0,
+                                        "tab_group": "wb_left",
+                                        "nav_ordinal": 4
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "button",
+                                    "id": "wb_reroll_w13",
+                                    "action": "wb_reroll_w13",
+                                    "tab_group": "wb_left",
+                                    "nav_ordinal": 5,
+                                    "size_class": "md",
+                                    "label": "$wb_randomize"
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "cell",
+                                "visible_bind": "shown_p0_t4",
+                                "grow": 1.0,
+                                "gap": 10,
+                                "children": [
+                                  {
+                                    "component": "row",
+                                    "grow": 1.0,
+                                    "gap": 10,
+                                    "children": [
+                                      {
+                                        "component": "slider",
+                                        "id": "wb_amp_w15",
+                                        "style": "slider",
+                                        "bind": "wb_amp_w15",
+                                        "apply": "confirm",
+                                        "label": "$wb_amp",
+                                        "vertical": true,
+                                        "min": 0,
+                                        "max": 20,
+                                        "step": 1,
+                                        "step_coarse": 5,
+                                        "decimals": 0,
+                                        "slider_h": 10,
+                                        "value_w": 44,
+                                        "grow": 1.0,
+                                        "tab_group": "wb_left",
+                                        "nav_ordinal": 1
+                                      },
+                                      {
+                                        "component": "slider",
+                                        "id": "wb_ratio_w15",
+                                        "style": "slider",
+                                        "bind": "wb_ratio_w15",
+                                        "apply": "confirm",
+                                        "label": "$wb_ratio",
+                                        "vertical": true,
+                                        "min": 5,
+                                        "max": 1600,
+                                        "step": 1,
+                                        "step_coarse": 50,
+                                        "decimals": 0,
+                                        "slider_h": 10,
+                                        "value_w": 44,
+                                        "grow": 1.0,
+                                        "tab_group": "wb_left",
+                                        "nav_ordinal": 2
+                                      },
+                                      {
+                                        "component": "slider",
+                                        "id": "wb_axes_w15",
+                                        "style": "slider",
+                                        "bind": "wb_axes_w15",
+                                        "apply": "confirm",
+                                        "label": "$wb_waves",
+                                        "vertical": true,
+                                        "min": 1,
+                                        "max": 6,
+                                        "step": 1,
+                                        "step_coarse": 1,
+                                        "decimals": 0,
+                                        "slider_h": 10,
+                                        "value_w": 44,
+                                        "grow": 1.0,
+                                        "tab_group": "wb_left",
+                                        "nav_ordinal": 3
+                                      },
+                                      {
+                                        "component": "slider",
+                                        "id": "wb_mseed_w15",
+                                        "style": "slider",
+                                        "bind": "wb_mseed_w15",
+                                        "apply": "confirm",
+                                        "label": "$wb_mask_seed",
+                                        "vertical": true,
+                                        "min": 0,
+                                        "max": 99,
+                                        "step": 1,
+                                        "step_coarse": 10,
+                                        "decimals": 0,
+                                        "slider_h": 10,
+                                        "value_w": 44,
+                                        "grow": 1.0,
+                                        "tab_group": "wb_left",
+                                        "nav_ordinal": 4
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "button",
+                                    "id": "wb_reroll_w15",
+                                    "action": "wb_reroll_w15",
+                                    "tab_group": "wb_left",
+                                    "nav_ordinal": 5,
+                                    "size_class": "md",
+                                    "label": "$wb_randomize"
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "cell",
+                                "visible_bind": "shown_p0_t5",
+                                "grow": 1.0,
+                                "gap": 10,
+                                "children": [
+                                  {
+                                    "component": "row",
+                                    "grow": 1.0,
+                                    "gap": 10,
+                                    "children": [
+                                      {
+                                        "component": "slider",
+                                        "id": "wb_coast_level",
+                                        "style": "slider",
+                                        "bind": "wb_coast_level",
+                                        "apply": "confirm",
+                                        "label": "$wb_level",
+                                        "vertical": true,
+                                        "min": 0,
+                                        "max": 20,
+                                        "step": 1,
+                                        "step_coarse": 5,
+                                        "decimals": 0,
+                                        "slider_h": 10,
+                                        "value_w": 44,
+                                        "grow": 1.0,
+                                        "tab_group": "wb_left",
+                                        "nav_ordinal": 1
+                                      },
+                                      {
+                                        "component": "slider",
+                                        "id": "wb_coast_width",
+                                        "style": "slider",
+                                        "bind": "wb_coast_width",
+                                        "apply": "confirm",
+                                        "label": "$wb_width",
+                                        "vertical": true,
+                                        "min": 1,
+                                        "max": 20,
+                                        "step": 1,
+                                        "step_coarse": 5,
+                                        "decimals": 0,
+                                        "slider_h": 10,
+                                        "value_w": 44,
+                                        "grow": 1.0,
+                                        "tab_group": "wb_left",
+                                        "nav_ordinal": 2
+                                      },
+                                      {
+                                        "component": "slider",
+                                        "id": "wb_coast_height",
+                                        "style": "slider",
+                                        "bind": "wb_coast_height",
+                                        "apply": "confirm",
+                                        "label": "$wb_height",
+                                        "vertical": true,
+                                        "min": 0,
+                                        "max": 60,
+                                        "step": 1,
+                                        "step_coarse": 10,
+                                        "decimals": 0,
+                                        "slider_h": 10,
+                                        "value_w": 44,
+                                        "grow": 1.0,
+                                        "tab_group": "wb_left",
+                                        "nav_ordinal": 3
+                                      }
+                                    ]
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "cell",
+                                "visible_bind": "shown_p0_t6",
+                                "grow": 1.0,
+                                "gap": 10,
+                                "children": [
+                                  {
+                                    "component": "row",
+                                    "grow": 1.0,
+                                    "gap": 10,
+                                    "children": [
+                                      {
+                                        "component": "slider",
+                                        "id": "wb_cells",
+                                        "style": "slider",
+                                        "bind": "wb_cells",
+                                        "apply": "confirm",
+                                        "label": "$wb_cells",
+                                        "vertical": true,
+                                        "min": 2,
+                                        "max": 12,
+                                        "step": 1,
+                                        "step_coarse": 2,
+                                        "decimals": 0,
+                                        "slider_h": 10,
+                                        "value_w": 44,
+                                        "grow": 1.0,
+                                        "tab_group": "wb_left",
+                                        "nav_ordinal": 1
+                                      },
+                                      {
+                                        "component": "slider",
+                                        "id": "wb_spots",
+                                        "style": "slider",
+                                        "bind": "wb_spots",
+                                        "apply": "confirm",
+                                        "label": "$wb_spots",
+                                        "vertical": true,
+                                        "min": 0,
+                                        "max": 12,
+                                        "step": 1,
+                                        "step_coarse": 2,
+                                        "decimals": 0,
+                                        "slider_h": 10,
+                                        "value_w": 44,
+                                        "grow": 1.0,
+                                        "tab_group": "wb_left",
+                                        "nav_ordinal": 2
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "button",
+                                    "id": "wb_randomize_seams",
+                                    "action": "wb_randomize_seams",
+                                    "tab_group": "wb_left",
+                                    "nav_ordinal": 3,
+                                    "size_class": "md",
+                                    "label": "$wb_randomize_seams"
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "cell",
+                                "visible_bind": "shown_p0_t7",
+                                "grow": 1.0,
+                                "gap": 10,
+                                "children": [
+                                  {
+                                    "component": "row",
+                                    "grow": 1.0,
+                                    "gap": 10,
+                                    "children": [
+                                      {
+                                        "component": "slider",
+                                        "id": "wb_radius",
+                                        "style": "slider",
+                                        "bind": "wb_radius",
+                                        "apply": "confirm",
+                                        "label": "$wb_radius",
+                                        "vertical": true,
+                                        "min": 2,
+                                        "max": 16,
+                                        "step": 1,
+                                        "step_coarse": 2,
+                                        "decimals": 0,
+                                        "slider_h": 10,
+                                        "value_w": 44,
+                                        "grow": 1.0,
+                                        "tab_group": "wb_left",
+                                        "nav_ordinal": 1
+                                      },
+                                      {
+                                        "component": "slider",
+                                        "id": "wb_arms",
+                                        "style": "slider",
+                                        "bind": "wb_arms",
+                                        "apply": "confirm",
+                                        "label": "$wb_arms",
+                                        "vertical": true,
+                                        "min": 3,
+                                        "max": 8,
+                                        "step": 1,
+                                        "step_coarse": 1,
+                                        "decimals": 0,
+                                        "slider_h": 10,
+                                        "value_w": 44,
+                                        "grow": 1.0,
+                                        "tab_group": "wb_left",
+                                        "nav_ordinal": 2
+                                      },
+                                      {
+                                        "component": "slider",
+                                        "id": "wb_rings",
+                                        "style": "slider",
+                                        "bind": "wb_rings",
+                                        "apply": "confirm",
+                                        "label": "$wb_rings",
+                                        "vertical": true,
+                                        "min": 1,
+                                        "max": 5,
+                                        "step": 1,
+                                        "step_coarse": 1,
+                                        "decimals": 0,
+                                        "slider_h": 10,
+                                        "value_w": 44,
+                                        "grow": 1.0,
+                                        "tab_group": "wb_left",
+                                        "nav_ordinal": 3
+                                      },
+                                      {
+                                        "component": "slider",
+                                        "id": "wb_height",
+                                        "style": "slider",
+                                        "bind": "wb_height",
+                                        "apply": "confirm",
+                                        "label": "$wb_height",
+                                        "vertical": true,
+                                        "min": 0,
+                                        "max": 12,
+                                        "step": 1,
+                                        "step_coarse": 2,
+                                        "decimals": 0,
+                                        "slider_h": 10,
+                                        "value_w": 44,
+                                        "grow": 1.0,
+                                        "tab_group": "wb_left",
+                                        "nav_ordinal": 4
+                                      }
+                                    ]
+                                  }
+                                ]
+                              }
+                            ]
+                          },
+                          {
+                            "component": "panel",
+                            "id": "wb_view",
+                            "style": "panel",
+                            "pane": true,
+                            "nav_ordinal": 2,
+                            "pad": 10,
+                            "aspect": 1.0,
+                            "children": [
+                              {
+                                "component": "cell",
+                                "visible_bind": "shown_page0",
+                                "grow": 1.0,
+                                "children": [
+                                  {
+                                    "component": "surface",
+                                    "id": "wb_view_rtt",
+                                    "style": "rtt_holder",
+                                    "grow": 1.0,
+                                    "source": "worldbench_globe"
+                                  }
+                                ]
+                              }
+                            ]
+                          },
+                          {
+                            "_comment": "RIGHT PANE — the FIELDS tree (always shown) above the selected tab's readouts.",
+                            "component": "panel",
+                            "id": "wb_right",
+                            "style": "panel",
+                            "pane": true,
+                            "nav_ordinal": 3,
+                            "pad": 10,
+                            "grow": 0.7,
+                            "children": [
+                              {
+                                "component": "cell",
+                                "size": 334,
+                                "gap": 6,
+                                "_comment": "THE FIELD TREE (indent = child, which inherits its parent's enable): WAVE › mask, ridge · the three harmonics › mask · COAST · HEAT › EMITTERS.",
+                                "children": [
+                                  {
+                                    "component": "text",
+                                    "text": "$wb_fields",
+                                    "text_size": 11,
+                                    "font": "label",
+                                    "color": "panel.stat_label",
+                                    "size": 16
+                                  },
+                                  {
+                                    "component": "checkbox",
+                                    "id": "wb_field_wave",
+                                    "bind": "wb_field_wave",
+                                    "label": "$wb_field_wave",
+                                    "box": 14,
+                                    "size": 22,
+                                    "style": "checkbox",
+                                    "tab_group": "wb_right",
+                                    "nav_ordinal": 1
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 0,
+                                    "children": [
+                                      {
+                                        "component": "cell",
+                                        "size": 18
+                                      },
+                                      {
+                                        "component": "checkbox",
+                                        "id": "wb_field_mask",
+                                        "bind": "wb_field_mask",
+                                        "label": "$wb_field_mask",
+                                        "box": 14,
+                                        "size": 22,
+                                        "style": "checkbox",
+                                        "tab_group": "wb_right",
+                                        "nav_ordinal": 2,
+                                        "grow": 1.0
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 0,
+                                    "children": [
+                                      {
+                                        "component": "cell",
+                                        "size": 18
+                                      },
+                                      {
+                                        "component": "checkbox",
+                                        "id": "wb_field_ridge",
+                                        "bind": "wb_field_ridge",
+                                        "label": "$wb_field_ridge",
+                                        "box": 14,
+                                        "size": 22,
+                                        "style": "checkbox",
+                                        "tab_group": "wb_right",
+                                        "nav_ordinal": 3,
+                                        "grow": 1.0
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "checkbox",
+                                    "id": "wb_field_w89",
+                                    "bind": "wb_field_w89",
+                                    "label": "$wb_field_w89",
+                                    "box": 14,
+                                    "size": 22,
+                                    "style": "checkbox",
+                                    "tab_group": "wb_right",
+                                    "nav_ordinal": 4
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 0,
+                                    "children": [
+                                      {
+                                        "component": "cell",
+                                        "size": 18
+                                      },
+                                      {
+                                        "component": "checkbox",
+                                        "id": "wb_mask_w89",
+                                        "bind": "wb_mask_w89",
+                                        "label": "$wb_field_mask",
+                                        "box": 14,
+                                        "size": 22,
+                                        "style": "checkbox",
+                                        "tab_group": "wb_right",
+                                        "nav_ordinal": 5,
+                                        "grow": 1.0
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "checkbox",
+                                    "id": "wb_field_w13",
+                                    "bind": "wb_field_w13",
+                                    "label": "$wb_field_w13",
+                                    "box": 14,
+                                    "size": 22,
+                                    "style": "checkbox",
+                                    "tab_group": "wb_right",
+                                    "nav_ordinal": 6
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 0,
+                                    "children": [
+                                      {
+                                        "component": "cell",
+                                        "size": 18
+                                      },
+                                      {
+                                        "component": "checkbox",
+                                        "id": "wb_mask_w13",
+                                        "bind": "wb_mask_w13",
+                                        "label": "$wb_field_mask",
+                                        "box": 14,
+                                        "size": 22,
+                                        "style": "checkbox",
+                                        "tab_group": "wb_right",
+                                        "nav_ordinal": 7,
+                                        "grow": 1.0
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "checkbox",
+                                    "id": "wb_field_w15",
+                                    "bind": "wb_field_w15",
+                                    "label": "$wb_field_w15",
+                                    "box": 14,
+                                    "size": 22,
+                                    "style": "checkbox",
+                                    "tab_group": "wb_right",
+                                    "nav_ordinal": 8
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 0,
+                                    "children": [
+                                      {
+                                        "component": "cell",
+                                        "size": 18
+                                      },
+                                      {
+                                        "component": "checkbox",
+                                        "id": "wb_mask_w15",
+                                        "bind": "wb_mask_w15",
+                                        "label": "$wb_field_mask",
+                                        "box": 14,
+                                        "size": 22,
+                                        "style": "checkbox",
+                                        "tab_group": "wb_right",
+                                        "nav_ordinal": 9,
+                                        "grow": 1.0
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "checkbox",
+                                    "id": "wb_field_coast",
+                                    "bind": "wb_field_coast",
+                                    "label": "$wb_field_coast",
+                                    "box": 14,
+                                    "size": 22,
+                                    "style": "checkbox",
+                                    "tab_group": "wb_right",
+                                    "nav_ordinal": 10
+                                  },
+                                  {
+                                    "component": "checkbox",
+                                    "id": "wb_field_heat",
+                                    "bind": "wb_field_heat",
+                                    "label": "$wb_field_heat",
+                                    "box": 14,
+                                    "size": 22,
+                                    "style": "checkbox",
+                                    "tab_group": "wb_right",
+                                    "nav_ordinal": 11
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 0,
+                                    "children": [
+                                      {
+                                        "component": "cell",
+                                        "size": 18
+                                      },
+                                      {
+                                        "component": "checkbox",
+                                        "id": "wb_field_emit",
+                                        "bind": "wb_field_emit",
+                                        "label": "$wb_field_emit",
+                                        "box": 14,
+                                        "size": 22,
+                                        "style": "checkbox",
+                                        "tab_group": "wb_right",
+                                        "nav_ordinal": 12,
+                                        "grow": 1.0
+                                      }
+                                    ]
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "cell",
+                                "visible_bind": "shown_p0_t0",
+                                "grow": 1.0,
+                                "gap": 8,
+                                "children": [
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$wb_stat_hexes",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "wb_hexes",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 112
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "cell",
+                                    "size": 40,
+                                    "gap": 4,
+                                    "children": [
+                                      {
+                                        "component": "row",
+                                        "size": 16,
+                                        "gap": 8,
+                                        "children": [
+                                          {
+                                            "component": "text",
+                                            "text": "$wb_stat_land",
+                                            "text_size": 11,
+                                            "font": "label",
+                                            "color": "panel.stat_label",
+                                            "grow": 1.0
+                                          },
+                                          {
+                                            "component": "text",
+                                            "text_bind": "wb_land_val",
+                                            "text_size": 15,
+                                            "font": "label",
+                                            "color": "panel.stat_value",
+                                            "align": "right",
+                                            "size": 56
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "component": "resource_gauge",
+                                        "id": "wb_land_gauge",
+                                        "bind": "wb_land",
+                                        "tone": "green",
+                                        "style": "load.gauge",
+                                        "height": 5
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$wb_stat_water",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "wb_water_val",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 112
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$wb_stat_sea",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "wb_sea_val",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 112
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$wb_stat_crests",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "wb_crests",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 112
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$wb_stat_seed",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "wb_seed",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 180
+                                      }
+                                    ]
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "cell",
+                                "visible_bind": "shown_p0_t1",
+                                "grow": 1.0,
+                                "gap": 8,
+                                "children": [
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$wb_stat_hexes",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "wb_hexes",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 112
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "cell",
+                                    "size": 40,
+                                    "gap": 4,
+                                    "children": [
+                                      {
+                                        "component": "row",
+                                        "size": 16,
+                                        "gap": 8,
+                                        "children": [
+                                          {
+                                            "component": "text",
+                                            "text": "$wb_stat_land",
+                                            "text_size": 11,
+                                            "font": "label",
+                                            "color": "panel.stat_label",
+                                            "grow": 1.0
+                                          },
+                                          {
+                                            "component": "text",
+                                            "text_bind": "wb_land_val",
+                                            "text_size": 15,
+                                            "font": "label",
+                                            "color": "panel.stat_value",
+                                            "align": "right",
+                                            "size": 56
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "component": "resource_gauge",
+                                        "id": "wb_land_gauge",
+                                        "bind": "wb_land",
+                                        "tone": "green",
+                                        "style": "load.gauge",
+                                        "height": 5
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$wb_stat_water",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "wb_water_val",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 112
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$wb_stat_sea",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "wb_sea_val",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 112
+                                      }
+                                    ]
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "cell",
+                                "visible_bind": "shown_p0_t2",
+                                "grow": 1.0,
+                                "gap": 8,
+                                "children": [
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$wb_stat_hexes",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "wb_hexes",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 112
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "cell",
+                                    "size": 40,
+                                    "gap": 4,
+                                    "children": [
+                                      {
+                                        "component": "row",
+                                        "size": 16,
+                                        "gap": 8,
+                                        "children": [
+                                          {
+                                            "component": "text",
+                                            "text": "$wb_stat_land",
+                                            "text_size": 11,
+                                            "font": "label",
+                                            "color": "panel.stat_label",
+                                            "grow": 1.0
+                                          },
+                                          {
+                                            "component": "text",
+                                            "text_bind": "wb_land_val",
+                                            "text_size": 15,
+                                            "font": "label",
+                                            "color": "panel.stat_value",
+                                            "align": "right",
+                                            "size": 56
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "component": "resource_gauge",
+                                        "id": "wb_land_gauge",
+                                        "bind": "wb_land",
+                                        "tone": "green",
+                                        "style": "load.gauge",
+                                        "height": 5
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$wb_stat_water",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "wb_water_val",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 112
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$wb_stat_sea",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "wb_sea_val",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 112
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$wb_stat_ratio",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "wb_ratioval_w89",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 112
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$wb_stat_seed",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "wb_seed_w89",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 180
+                                      }
+                                    ]
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "cell",
+                                "visible_bind": "shown_p0_t3",
+                                "grow": 1.0,
+                                "gap": 8,
+                                "children": [
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$wb_stat_hexes",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "wb_hexes",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 112
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "cell",
+                                    "size": 40,
+                                    "gap": 4,
+                                    "children": [
+                                      {
+                                        "component": "row",
+                                        "size": 16,
+                                        "gap": 8,
+                                        "children": [
+                                          {
+                                            "component": "text",
+                                            "text": "$wb_stat_land",
+                                            "text_size": 11,
+                                            "font": "label",
+                                            "color": "panel.stat_label",
+                                            "grow": 1.0
+                                          },
+                                          {
+                                            "component": "text",
+                                            "text_bind": "wb_land_val",
+                                            "text_size": 15,
+                                            "font": "label",
+                                            "color": "panel.stat_value",
+                                            "align": "right",
+                                            "size": 56
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "component": "resource_gauge",
+                                        "id": "wb_land_gauge",
+                                        "bind": "wb_land",
+                                        "tone": "green",
+                                        "style": "load.gauge",
+                                        "height": 5
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$wb_stat_water",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "wb_water_val",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 112
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$wb_stat_sea",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "wb_sea_val",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 112
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$wb_stat_ratio",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "wb_ratioval_w13",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 112
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$wb_stat_seed",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "wb_seed_w13",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 180
+                                      }
+                                    ]
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "cell",
+                                "visible_bind": "shown_p0_t4",
+                                "grow": 1.0,
+                                "gap": 8,
+                                "children": [
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$wb_stat_hexes",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "wb_hexes",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 112
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "cell",
+                                    "size": 40,
+                                    "gap": 4,
+                                    "children": [
+                                      {
+                                        "component": "row",
+                                        "size": 16,
+                                        "gap": 8,
+                                        "children": [
+                                          {
+                                            "component": "text",
+                                            "text": "$wb_stat_land",
+                                            "text_size": 11,
+                                            "font": "label",
+                                            "color": "panel.stat_label",
+                                            "grow": 1.0
+                                          },
+                                          {
+                                            "component": "text",
+                                            "text_bind": "wb_land_val",
+                                            "text_size": 15,
+                                            "font": "label",
+                                            "color": "panel.stat_value",
+                                            "align": "right",
+                                            "size": 56
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "component": "resource_gauge",
+                                        "id": "wb_land_gauge",
+                                        "bind": "wb_land",
+                                        "tone": "green",
+                                        "style": "load.gauge",
+                                        "height": 5
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$wb_stat_water",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "wb_water_val",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 112
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$wb_stat_sea",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "wb_sea_val",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 112
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$wb_stat_ratio",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "wb_ratioval_w15",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 112
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$wb_stat_seed",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "wb_seed_w15",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 180
+                                      }
+                                    ]
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "cell",
+                                "visible_bind": "shown_p0_t5",
+                                "grow": 1.0,
+                                "gap": 8,
+                                "children": [
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$wb_stat_hexes",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "wb_hexes",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 112
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "cell",
+                                    "size": 40,
+                                    "gap": 4,
+                                    "children": [
+                                      {
+                                        "component": "row",
+                                        "size": 16,
+                                        "gap": 8,
+                                        "children": [
+                                          {
+                                            "component": "text",
+                                            "text": "$wb_stat_land",
+                                            "text_size": 11,
+                                            "font": "label",
+                                            "color": "panel.stat_label",
+                                            "grow": 1.0
+                                          },
+                                          {
+                                            "component": "text",
+                                            "text_bind": "wb_land_val",
+                                            "text_size": 15,
+                                            "font": "label",
+                                            "color": "panel.stat_value",
+                                            "align": "right",
+                                            "size": 56
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "component": "resource_gauge",
+                                        "id": "wb_land_gauge",
+                                        "bind": "wb_land",
+                                        "tone": "green",
+                                        "style": "load.gauge",
+                                        "height": 5
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$wb_stat_water",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "wb_water_val",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 112
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$wb_stat_sea",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "wb_sea_val",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 112
+                                      }
+                                    ]
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "cell",
+                                "visible_bind": "shown_p0_t6",
+                                "grow": 1.0,
+                                "gap": 8,
+                                "children": [
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$wb_stat_hexes",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "wb_hexes",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 112
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$wb_stat_cells",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "wb_cells_val",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 112
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$wb_stat_spots",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "wb_spots_val",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 112
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$wb_stat_seams_seed",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "wb_seams_seed",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 180
+                                      }
+                                    ]
+                                  }
+                                ]
+                              },
+                              {
+                                "component": "cell",
+                                "visible_bind": "shown_p0_t7",
+                                "grow": 1.0,
+                                "gap": 8,
+                                "children": [
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$wb_stat_hexes",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "wb_hexes",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 112
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "cell",
+                                    "size": 40,
+                                    "gap": 4,
+                                    "children": [
+                                      {
+                                        "component": "row",
+                                        "size": 16,
+                                        "gap": 8,
+                                        "children": [
+                                          {
+                                            "component": "text",
+                                            "text": "$wb_stat_land",
+                                            "text_size": 11,
+                                            "font": "label",
+                                            "color": "panel.stat_label",
+                                            "grow": 1.0
+                                          },
+                                          {
+                                            "component": "text",
+                                            "text_bind": "wb_land_val",
+                                            "text_size": 15,
+                                            "font": "label",
+                                            "color": "panel.stat_value",
+                                            "align": "right",
+                                            "size": 56
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "component": "resource_gauge",
+                                        "id": "wb_land_gauge",
+                                        "bind": "wb_land",
+                                        "tone": "green",
+                                        "style": "load.gauge",
+                                        "height": 5
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$wb_stat_water",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "wb_water_val",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 112
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$wb_stat_sea",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "wb_sea_val",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 112
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "row",
+                                    "size": 22,
+                                    "gap": 8,
+                                    "children": [
+                                      {
+                                        "component": "text",
+                                        "text": "$wb_stat_emitters",
+                                        "text_size": 11,
+                                        "font": "label",
+                                        "color": "panel.stat_label",
+                                        "grow": 1.0
+                                      },
+                                      {
+                                        "component": "text",
+                                        "text_bind": "wb_emitters_val",
+                                        "text_size": 15,
+                                        "font": "label",
+                                        "color": "panel.stat_value",
+                                        "align": "right",
+                                        "size": 112
+                                      }
+                                    ]
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "component": "nav_footer",
+                "id": "wb_nav",
+                "style": "nav_footer.frame",
+                "nav_ordinal": 4,
+                "size": 52,
+                "pad_x": 12,
+                "pad_y": 10,
+                "gap": 8,
+                "children": [
+                  {
+                    "component": "option",
+                    "signal": "Confirm",
+                    "label": "$wb_ft_apply",
+                    "visible_bind": "ui_staged",
+                    "text_size": 12
+                  },
+                  {
+                    "component": "button",
+                    "id": "wb_nav_menu",
+                    "action": "pause_open",
+                    "label": "$wb_ft_menu",
+                    "size": 90,
+                    "size_class": "md",
+                    "tab_group": "wb_nav",
+                    "nav_ordinal": 1
+                  },
+                  {
+                    "component": "button",
+                    "id": "wb_nav_back",
+                    "action": "tab_prev",
+                    "label": "$wb_ft_back",
+                    "size": 90,
+                    "size_class": "md",
+                    "tab_group": "wb_nav",
+                    "nav_ordinal": 2
+                  },
+                  {
+                    "component": "button",
+                    "id": "wb_nav_next",
+                    "action": "tab_next",
+                    "label": "$wb_ft_next",
+                    "size": 90,
+                    "size_class": "md",
+                    "tab_group": "wb_nav",
+                    "nav_ordinal": 3
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "exits": {},
+  "stages": {
+    "worldbench_globe": {
+      "_comment": "The WORLDBENCH V5 globe — the hex world drawn into the centre viewport, same authored vocabulary as the Populous globe: NO `camera` block (the scene's orbit camera owns the view), `clear` transparent so the holder panel shows through, the near-black under-shell and the inset tile shell over it (the seams between tiles ARE the outlines), the shared reference frame above both. The bench EXTRUDES both shells per cell by the wave's relief and tints the tile shell by the `wave` style block; the radii, insets and static colours stay authored here.",
+      "lighting": "studio",
+      "clear": "$stage_void",
+      "layers": [
+        {
+          "draw": "shell",
+          "radius_scale": 0.998,
+          "inset": 0.0,
+          "color": "$world_seam"
+        },
+        {
+          "draw": "shell",
+          "radius_scale": 1.0,
+          "inset": 0.12,
+          "color": "$world_tile"
+        },
+        {
+          "draw": "graticule",
+          "radius_scale": 1.2
+        }
+      ],
+      "_hdr": "HDR: the `scene` pass (the globe's two shells + graticule, the layers above) renders into the LINEAR rgba16f `hdr` working attachment and `tonemap_grade` resolves it (ACES roll-off) into the sRGB `color` last. grade_strength 0 = tonemap only, no invented tint — an art grade is Aaron's to author in-window. Alpha passes through, so the transparent clear the holder panel shows through survives.",
+      "attachments": {
+        "hdr": {
+          "format": "rgba16f"
+        },
+        "color": {
+          "format": "surface"
+        },
+        "depth": {
+          "format": "depth32"
+        }
+      },
+      "passes": [
+        {
+          "pass": "scene",
+          "writes": [
+            "hdr",
+            "depth"
+          ]
+        },
+        {
+          "pass": "tonemap_grade"
+        }
+      ]
+    }
+  },
+  "styles": {
+    "paged_menu": {
+      "frame": {
+        "fill_top": "$surface_top",
+        "fill_bot": "$stage_void",
+        "border": "$edge2",
+        "border_w": 1,
+        "radius": 6
+      },
+      "hint": {
+        "fill_top": "$stone_btn_hi",
+        "fill_bot": "$stone_btn",
+        "border": "$edge4",
+        "border_w": 1,
+        "radius": 3
+      },
+      "eyebrow": "$bronze_dim",
+      "title": "$ink_bright",
+      "rule": "$seam",
+      "page_active": {
+        "fill_top": "$stage_void",
+        "fill_bot": "$stage_void",
+        "border": "$stage_void",
+        "border_w": 0,
+        "radius": 0,
+        "label": "$ink_bright",
+        "label_size": 15,
+        "underline": "$rune_glow_hi",
+        "underline_w": 2
+      },
+      "page_idle": {
+        "fill_top": "$stage_void",
+        "fill_bot": "$stage_void",
+        "border": "$stage_void",
+        "border_w": 0,
+        "radius": 0,
+        "label": "$dim",
+        "label_size": 15
+      },
+      "tab_track": {
+        "fill_top": "$well_top",
+        "fill_bot": "$well_bot",
+        "border": "$edge3",
+        "border_w": 1,
+        "radius": 14
+      },
+      "tab_active": {
+        "fill_top": "$sap_base",
+        "fill_bot": "$sap_base_lo",
+        "border": "$sap_border",
+        "border_w": 1,
+        "radius": 12,
+        "label": "$ink_sapphire"
+      },
+      "tab_idle": {
+        "fill_top": "$stage_void",
+        "fill_bot": "$stage_void",
+        "border": "$stage_void",
+        "border_w": 0,
+        "radius": 12,
+        "label": "$dim",
+        "disabled_label": "$faint"
+      },
+      "group_eyebrow": "$bronze",
+      "well": {
+        "fill_top": "$well_top",
+        "fill_bot": "$well_bot",
+        "border": "$edge2",
+        "border_w": 1,
+        "radius": 4
+      },
+      "row_label": "$dim_soft",
+      "row_label_focus": "$ink_bright",
+      "row_seam": "$seam",
+      "row_focus": {
+        "fill_top": "$accent_wash",
+        "fill_bot": "$stage_void",
+        "border": "$stage_void",
+        "border_w": 0,
+        "radius": 0
+      },
+      "legend_label": "$dim",
+      "legend_hint": "$faint"
+    },
+    "pad_glyphs": {
+      "tex": 2,
+      "cols": 4,
+      "rows": 4,
+      "color": "$bronze",
+      "flash": "$rune_glow_hi",
+      "cells": {
+        "lt": 0,
+        "rt": 1,
+        "lb": 2,
+        "rb": 3,
+        "a": 4,
+        "b": 5,
+        "x": 6,
+        "y": 7,
+        "menu": 8,
+        "view": 9,
+        "dpad": 10,
+        "dpad_up": 11,
+        "dpad_down": 12,
+        "dpad_left": 13,
+        "dpad_right": 14,
+        "stick": 15,
+        "face_south": 4,
+        "face_east": 5,
+        "face_west": 6,
+        "face_north": 7,
+        "bumper_l": 2,
+        "bumper_r": 3,
+        "trigger_l": 0,
+        "trigger_r": 1,
+        "stick_l": 15,
+        "stick_r": 15
+      }
+    },
+    "nav_footer": {
+      "_comment": "Bench nav rail band (the materialbench/catalog block, same values). `frame` = the node's own slab; `rule` (top hairline) + `label` (legend ink) resolve as the component's defaults.",
+      "frame": {
+        "fill_top": "$surface_top",
+        "fill_bot": "$stage_void",
+        "border": "$edge2",
+        "border_w": 1,
+        "radius": 6
+      },
+      "rule": {
+        "color": "$seam"
+      },
+      "label": "$dim"
+    },
+    "rtt_holder": {
+      "_comment": "The framed RTT HOLDER every bench's rtt/viewport slot styles against — the shared chrome for an offscreen-view slot (replaced the per-scene meshbench holder block, same values).",
+      "fill_top": "$well_top",
+      "fill_bot": "$well_bot",
+      "border": "$edge2",
+      "border_w": 1,
+      "radius": 4,
+      "inset": 6
+    },
+    "panel": {
+      "resting": {
+        "fill": "$panel_bg",
+        "border": "$edge2",
+        "border_w": 1,
+        "radius": 3
+      },
+      "focused": {
+        "fill": "$panel_bg",
+        "border": "$sap_border",
+        "border_w": 2,
+        "radius": 3
+      },
+      "empty": "$dim",
+      "stat_label": "$dim",
+      "stat_value": "$ink_bright"
+    },
+    "window": {
+      "radius": 4,
+      "fill_top": "$stone3",
+      "fill_bot": "$stone1",
+      "border": "$edge2"
+    },
+    "slider": {
+      "track": "$well",
+      "fill": "$sap_base",
+      "fill_hi": "$sap_border",
+      "handle": "$sap_border",
+      "handle_w": 14,
+      "focus_track": "$well",
+      "focus_fill": "$sap_hover",
+      "focus_label": "$rune_glow_hi",
+      "value_color": "$dim",
+      "label_size": 13,
+      "value_size": 12
+    },
+    "load": {
+      "_comment": "The bootstrap-roll progress bar reuses the loading-screen gauge look (same values as Loading.scene.json load.gauge); per-scene styles by design, palette tokens single-sourced in ui_theme.json.",
+      "field": {
+        "top": "$panel_bg",
+        "bot": "$panel_bg",
+        "border": "$edge2",
+        "border_w": 1,
+        "caret": "$mana_hi",
+        "focus_border_w": 2,
+        "label": "$ink_bright",
+        "placeholder": "$dim",
+        "radius": 4
+      },
+      "gauge": {
+        "track": "$well",
+        "border": "$edge2",
+        "border_w": 1,
+        "radius": 1,
+        "pad": 0,
+        "mana_top": "$mana_hi",
+        "mana_bot": "$mana_lo",
+        "green_top": "$sig_green",
+        "green_bot": "$sig_green_glow",
+        "sheen": "$sheen"
+      }
+    },
+    "wave": {
+      "_comment": "The WAVE expression's ink (five-line split: palette tokens here, numbers to the Rust). `trough`→`mean`→`crest` is the relief ramp over the wave's normalized value; `sea` is the translucent sphere's colour, `sea_alpha` its blend, `sea_gloss` its wet sheen.",
+      "trough": "$stone4",
+      "mean": "$world_tile",
+      "crest": "$ink",
+      "sea": "$sig_blue",
+      "sea_alpha": 0.55,
+      "sea_gloss": 0.5
+    },
+    "checkbox": {
+      "box": "$stone2",
+      "check": "$sig_green",
+      "border": "$edge4",
+      "pad": 3
+    }
+  }
+}

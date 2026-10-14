@@ -33,7 +33,7 @@
       ]
     },
     "cat_doll_stage": {
-      "_comment": "The Doll card's surface — the Loomforge portrait shot, ring and all. The catalog uploads no rig, so the ring is what draws; a consumer that sets a rig gets the character in the same seat with no stage change.",
+      "_comment": "The Doll card's surface — the PackBench portrait shot, ring and all. The catalog uploads no rig, so the ring is what draws; a consumer that sets a rig gets the character in the same seat with no stage change.",
       "lighting": "studio",
       "clear": "$stage_void",
       "camera": {
@@ -2150,7 +2150,7 @@
                             ]
                           },
                           {
-                            "_comment": "RECIPE — transport bar: three verbs and a readout. The time controls of every timeline consumer (Loomforge TAE, the DM wave editor, the GM clock).",
+                            "_comment": "RECIPE — transport bar: three verbs and a readout. The time controls of every timeline consumer (PackBench TAE, the DM wave editor, the GM clock).",
                             "component": "panel",
                             "id": "card_34",
                             "style": "panel",

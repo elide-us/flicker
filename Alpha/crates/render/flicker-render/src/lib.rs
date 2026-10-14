@@ -73,7 +73,8 @@ pub use mesh::{
 pub use pipeline_ground_fog::GroundFog;
 pub use pipeline_mesh::MATERIAL_PALETTE_LEN;
 pub use pipeline_mesh_textured::{
-    build_textured_verts, PbrMaps, TexturedMeshHandle, TexturedVertex,
+    build_textured_verts, mesh_tangents, mesh_tangents_into, PbrMaps, TexturedMeshHandle,
+    TexturedVertex,
 };
 pub use pipeline_skinned::{SkinnedMeshHandle, SkinnedMeshPipeline, SkinnedVertex};
 pub use pipeline_text::FontRole;

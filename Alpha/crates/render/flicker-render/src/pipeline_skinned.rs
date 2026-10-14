@@ -14,7 +14,15 @@
 //!   ([`FrameBindGroup`](crate::pipeline_mesh::FrameBindGroup));
 //! * group 1 — `palettes`(@0) + `instances`(@1), both **read-only storage** read in
 //!   the vertex stage (requires the adapter's `VERTEX_STORAGE` downlevel capability;
-//!   native Metal/Vulkan/D3D12 have it — the M5 Pro + RTX 3060 boxes both do).
+//!   native Metal/Vulkan/D3D12 have it — the M5 Pro + RTX 3060 boxes both do);
+//! * group 2 — the shadow bind.
+//!
+//! **The textured twin** (`shaders/skinned_textured.wgsl`): the same vertex stage (plus the
+//! bind-pose tangent, skinned by the palette's linear part) over the ONE PBR material path
+//! of `material.wgsl` — the [`TexturedMeshPipeline`]'s material bind group at group 2, the
+//! shadow bind at group 3. A frame's draw that carries a material (albedo + maps, see
+//! [`draw_instanced`](SkinnedMeshPipeline::draw_instanced)) renders through it; one without
+//! renders the neutral steel. The animated preview's "show the PBR" (Aaron, 2026-10-08).
 //!
 //! Per frame the caller hands [`draw_instanced`](SkinnedMeshPipeline::draw_instanced)
 //! a flat palette array (instance `i`'s bone `b` at `i*bone_count + b`) + one model
@@ -32,12 +40,16 @@ use wgpu::util::DeviceExt;
 
 use crate::mesh::MeshIndices;
 use crate::pipeline_mesh::{compose_lit, FrameBindGroup, DEPTH_FORMAT};
+use crate::pipeline_mesh_textured::{compose_material, PbrMaps, TexturedMeshPipeline};
 use crate::pipeline_shadow::ShadowBind;
+use crate::texture::{LoadedTexture, TextureHandle};
 
 /// Vertex for the skinned pipeline: the **bind pose** attributes, uploaded once and
 /// never re-uploaded (the GPU deforms them). `joints`/`weights` are 4-influence LBS,
 /// zero-padded, weights summing to 1 — the same convention as the `flicker.rig`
-/// contract and `flicker-skeletal`'s CPU skinner.
+/// contract and `flicker-skeletal`'s CPU skinner. `tangent` (`xyz` + handedness `w`, see
+/// [`mesh_tangents`](crate::pipeline_mesh_textured::mesh_tangents)) is the bind-pose basis
+/// the textured twin's normal map needs; the flat shade reads none.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable, PartialEq)]
 pub struct SkinnedVertex {
@@ -46,6 +58,7 @@ pub struct SkinnedVertex {
     pub uv: [f32; 2],
     pub joints: [u32; 4],
     pub weights: [f32; 4],
+    pub tangent: [f32; 4],
 }
 
 /// Opaque handle to a mesh uploaded to the skinned pipeline. Distinct from the flat
@@ -74,8 +87,9 @@ struct SkinnedMesh {
     index_format: wgpu::IndexFormat,
 }
 
-const VERTEX_ATTRS: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![
-    0 => Float32x3, 1 => Float32x3, 2 => Float32x2, 3 => Uint32x4, 4 => Float32x4
+const VERTEX_ATTRS: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![
+    0 => Float32x3, 1 => Float32x3, 2 => Float32x2, 3 => Uint32x4, 4 => Float32x4,
+    5 => Float32x4
 ];
 
 pub struct SkinnedMeshPipeline {
@@ -83,6 +97,15 @@ pub struct SkinnedMeshPipeline {
     /// shared uniform / skin storage bind groups; [`Self::render`] selects by
     /// [`crate::TargetColor`].
     pipeline: [wgpu::RenderPipeline; 2],
+    /// The textured, PBR-lit twin (`skinned_textured.wgsl`) over the SAME vertex buffer and
+    /// skin storage, plus the material layout the textured mesh pipeline owns at group 2 (the
+    /// shadow bind moves to group 3). [`Self::render`] picks it when the frame's draw carries
+    /// a material.
+    textured: [wgpu::RenderPipeline; 2],
+    /// The material queued with this frame's draw (albedo + maps), resolved to a bind group
+    /// in [`Self::prepare`].
+    queued_material: Option<(TextureHandle, PbrMaps)>,
+    material_bg: Option<wgpu::BindGroup>,
     /// Kept: the skin bind group is rebuilt against it when the storage buffers grow.
     skin_bgl: wgpu::BindGroupLayout,
     skin_bind_group: wgpu::BindGroup,
@@ -100,17 +123,27 @@ pub struct SkinnedMeshPipeline {
 }
 
 impl SkinnedMeshPipeline {
+    /// `material` is the textured mesh pipeline's combined material layout
+    /// ([`TexturedMeshPipeline::material_layout`]) — the textured twin binds a material of
+    /// that shape at group 2.
     pub fn new(
         device: &wgpu::Device,
         _queue: &wgpu::Queue,
         frame: &FrameBindGroup,
         shadow: &ShadowBind,
         surface_format: wgpu::TextureFormat,
+        material: &wgpu::BindGroupLayout,
     ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("flicker.skinned.shader"),
             source: wgpu::ShaderSource::Wgsl(
                 compose_lit(include_str!("shaders/skinned.wgsl")).into(),
+            ),
+        });
+        let textured_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("flicker.skinned_textured.shader"),
+            source: wgpu::ShaderSource::Wgsl(
+                compose_material(include_str!("shaders/skinned_textured.wgsl")).into(),
             ),
         });
 
@@ -136,6 +169,12 @@ impl SkinnedMeshPipeline {
             bind_group_layouts: &[frame.layout(), &skin_bgl, shadow.layout()],
             push_constant_ranges: &[],
         });
+        let textured_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("flicker.skinned_textured.pipeline_layout"),
+            // @group(2) = the material, @group(3) = the shadow bind — mesh_textured's shape.
+            bind_group_layouts: &[frame.layout(), &skin_bgl, material, shadow.layout()],
+            push_constant_ranges: &[],
+        });
 
         let vertex_layout = wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<SkinnedVertex>() as wgpu::BufferAddress,
@@ -145,18 +184,18 @@ impl SkinnedMeshPipeline {
 
         // Bake for both colour formats over the one shared layout; only the colour-target
         // format differs. `render` picks the variant by `TargetColor`.
-        let make = |fmt: wgpu::TextureFormat| {
+        let make = |label, layout: &wgpu::PipelineLayout, module: &wgpu::ShaderModule, fmt| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("flicker.skinned.pipeline"),
-                layout: Some(&pipeline_layout),
+                label: Some(label),
+                layout: Some(layout),
                 vertex: wgpu::VertexState {
-                    module: &shader,
+                    module,
                     entry_point: "vs_main",
                     buffers: std::slice::from_ref(&vertex_layout),
                     compilation_options: Default::default(),
                 },
                 fragment: Some(wgpu::FragmentState {
-                    module: &shader,
+                    module,
                     entry_point: "fs_main",
                     targets: &[Some(wgpu::ColorTargetState {
                         format: fmt,
@@ -186,7 +225,17 @@ impl SkinnedMeshPipeline {
                 cache: None,
             })
         };
-        let pipeline = [make(surface_format), make(crate::HDR_FORMAT)];
+        let flat = |fmt| make("flicker.skinned.pipeline", &pipeline_layout, &shader, fmt);
+        let pipeline = [flat(surface_format), flat(crate::HDR_FORMAT)];
+        let lit = |fmt| {
+            make(
+                "flicker.skinned_textured.pipeline",
+                &textured_layout,
+                &textured_shader,
+                fmt,
+            )
+        };
+        let textured = [lit(surface_format), lit(crate::HDR_FORMAT)];
 
         let palette_capacity: u32 = 256;
         let instance_capacity: u32 = 32;
@@ -207,6 +256,9 @@ impl SkinnedMeshPipeline {
 
         Self {
             pipeline,
+            textured,
+            queued_material: None,
+            material_bg: None,
             skin_bgl,
             skin_bind_group,
             palette_buf,
@@ -279,13 +331,18 @@ impl SkinnedMeshPipeline {
     /// Drop the frame's queued instanced draw (call at frame start).
     pub fn clear(&mut self) {
         self.queued = None;
+        self.queued_material = None;
+        self.material_bg = None;
     }
 
     /// Upload this frame's per-instance palettes + model transforms and queue **one
     /// instanced draw** of `mesh`. `palettes` is the concatenated bone matrices —
     /// instance `i`'s bone `b` lives at `i*bone_count + b`, so `palettes.len()` must be
     /// `models.len() * bone_count`. Grows the storage buffers (and rebuilds the skin
-    /// bind group) when this frame needs more than the current capacity.
+    /// bind group) when this frame needs more than the current capacity. `material`
+    /// (albedo + PBR maps) sends the draw through the textured twin; `None` is the neutral
+    /// steel.
+    #[allow(clippy::too_many_arguments)]
     pub fn draw_instanced(
         &mut self,
         device: &wgpu::Device,
@@ -294,12 +351,15 @@ impl SkinnedMeshPipeline {
         models: &[Mat4],
         palettes: &[Mat4],
         bone_count: u32,
+        material: Option<(TextureHandle, PbrMaps)>,
     ) {
         let count = models.len() as u32;
+        self.queued_material = None;
         if count == 0 || bone_count == 0 {
             self.queued = None;
             return;
         }
+        self.queued_material = material;
         debug_assert_eq!(
             palettes.len(),
             models.len() * bone_count as usize,
@@ -352,9 +412,29 @@ impl SkinnedMeshPipeline {
         self.queued = Some((mesh, count));
     }
 
+    /// Resolve the queued draw's material (if any) to its bind group from the renderer's
+    /// texture store, through the textured mesh pipeline that owns the material layout and
+    /// the default maps. A material whose albedo is gone renders the neutral steel.
+    pub(crate) fn prepare(
+        &mut self,
+        device: &wgpu::Device,
+        textures: &[Option<LoadedTexture>],
+        material: &TexturedMeshPipeline,
+    ) {
+        self.material_bg = self
+            .queued
+            .and(self.queued_material)
+            .and_then(|(texture, maps)| {
+                material.material_bind_group(device, textures, texture, maps)
+            });
+    }
+
     /// Issue the queued instanced draw (group 0 = the renderer's ONE per-frame group,
     /// group 1 = palettes + instances). One `draw_indexed` for all instances. `target`
-    /// selects the colour-format variant (sRGB or HDR) for the surface being encoded.
+    /// selects the colour-format variant (sRGB or HDR) for the surface being encoded. A
+    /// draw with a material (resolved in [`Self::prepare`]) goes through the textured twin
+    /// (group 2 = the material, group 3 = the shadow bind); the rest through the flat shade
+    /// (group 2 = the shadow bind).
     pub fn render<'a>(
         &'a self,
         pass: &mut wgpu::RenderPass<'a>,
@@ -368,11 +448,21 @@ impl SkinnedMeshPipeline {
         let Some(mesh) = self.meshes.get(handle.0 as usize).and_then(|s| s.as_ref()) else {
             return;
         };
-        pass.set_pipeline(&self.pipeline[target as usize]);
         pass.set_bind_group(0, frame.bind_group(), &[]);
         pass.set_bind_group(1, &self.skin_bind_group, &[]);
-        // @group(2) — the shadow bind for this surface (the active source, or the default).
-        pass.set_bind_group(2, shadow.active_bind_group(), &[]);
+        match &self.material_bg {
+            Some(material) => {
+                pass.set_pipeline(&self.textured[target as usize]);
+                pass.set_bind_group(2, material, &[]);
+                pass.set_bind_group(3, shadow.active_bind_group(), &[]);
+            }
+            None => {
+                pass.set_pipeline(&self.pipeline[target as usize]);
+                // @group(2) — the shadow bind for this surface (the active source, or the
+                // default).
+                pass.set_bind_group(2, shadow.active_bind_group(), &[]);
+            }
+        }
         pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
         pass.set_index_buffer(mesh.index_buffer.slice(..), mesh.index_format);
         pass.draw_indexed(0..mesh.index_count, 0, 0..count);
@@ -406,11 +496,12 @@ mod tests {
     use super::*;
     use glam::Vec3;
 
-    /// Builds the pipeline (compiles `skinned.wgsl`, validates the layouts incl.
-    /// **storage buffers in the vertex stage**), uploads a 1-triangle mesh, and
-    /// **executes a 2-instance skinned draw** to an offscreen target — all under a
-    /// validation error scope. Skips cleanly with no GPU adapter. This is the headless
-    /// proof of the instanced-skinning path (visual correctness is a windowed check).
+    /// Builds the pipeline (compiles `skinned.wgsl` AND `skinned_textured.wgsl`, validates
+    /// the layouts incl. **storage buffers in the vertex stage**), uploads a 1-triangle
+    /// mesh, and **executes a 2-instance skinned draw** to an offscreen target twice — the
+    /// neutral steel, then the textured twin over a 1×1 albedo — all under a validation
+    /// error scope. Skips cleanly with no GPU adapter. This is the headless proof of the
+    /// instanced-skinning path (visual correctness is a windowed check).
     #[test]
     fn skinned_pipeline_compiles_and_draws_instanced() {
         let Some((device, queue)) =
@@ -424,7 +515,16 @@ mod tests {
         let format = wgpu::TextureFormat::Rgba8UnormSrgb;
         let frame = FrameBindGroup::new(&device);
         let shadow = ShadowBind::new(&device);
-        let mut pipeline = SkinnedMeshPipeline::new(&device, &queue, &frame, &shadow, format);
+        let align = device.limits().min_uniform_buffer_offset_alignment;
+        let material = TexturedMeshPipeline::new(&device, &queue, &frame, &shadow, format, align);
+        let mut pipeline = SkinnedMeshPipeline::new(
+            &device,
+            &queue,
+            &frame,
+            &shadow,
+            format,
+            material.material_layout(),
+        );
         frame.set_scene_uniform(&queue, crate::pipeline_mesh::SceneUniform::default());
         frame.set_camera_matrix(&queue, Mat4::IDENTITY);
 
@@ -435,6 +535,7 @@ mod tests {
             uv: [0.0, 0.0],
             joints: [0, 0, 0, 0],
             weights: [1.0, 0.0, 0.0, 0.0],
+            tangent: [1.0, 0.0, 0.0, 1.0],
         };
         let verts = [
             v([-0.5, -0.5, 0.0]),
@@ -449,7 +550,17 @@ mod tests {
             Mat4::from_translation(Vec3::new(1.0, 0.0, 0.0)),
         ];
         let palettes = [Mat4::IDENTITY, Mat4::IDENTITY];
-        pipeline.draw_instanced(&device, &queue, mesh, &models, &palettes, 1);
+        // A 1×1 albedo in a one-slot texture store, for the textured pass.
+        let albedo = LoadedTexture::from_rgba8(
+            &device,
+            &queue,
+            &material.sampler,
+            &material.texture_bind_group_layout,
+            &[200, 180, 160, 255],
+            1,
+            1,
+        );
+        let textures = vec![Some(albedo)];
 
         // Offscreen colour + depth target, then execute the instanced draw.
         let target = |fmt, label| {
@@ -472,37 +583,61 @@ mod tests {
         let depth = target(DEPTH_FORMAT, "flicker.skinned_test.depth");
         let cview = color.create_view(&Default::default());
         let dview = depth.create_view(&Default::default());
-        let mut enc = device.create_command_encoder(&Default::default());
-        {
-            let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("flicker.skinned_test.pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &cview,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &dview,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Store,
+        for (name, material_for_draw) in [
+            ("skinned.wgsl", None),
+            (
+                "skinned_textured.wgsl",
+                Some((TextureHandle(0), PbrMaps::default())),
+            ),
+        ] {
+            pipeline.clear();
+            pipeline.draw_instanced(
+                &device,
+                &queue,
+                mesh,
+                &models,
+                &palettes,
+                1,
+                material_for_draw,
+            );
+            pipeline.prepare(&device, &textures, &material);
+            assert_eq!(
+                pipeline.material_bg.is_some(),
+                material_for_draw.is_some(),
+                "{name}: the draw's material resolves to a bind group exactly when it has one"
+            );
+            let mut enc = device.create_command_encoder(&Default::default());
+            {
+                let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("flicker.skinned_test.pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &cview,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &dview,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(1.0),
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
                     }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-            pipeline.render(&mut pass, &frame, &shadow, crate::TargetColor::Srgb);
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+                pipeline.render(&mut pass, &frame, &shadow, crate::TargetColor::Srgb);
+            }
+            queue.submit([enc.finish()]);
+            device.poll(wgpu::Maintain::Wait);
         }
-        queue.submit([enc.finish()]);
-        device.poll(wgpu::Maintain::Wait);
         let err = pollster::block_on(device.pop_error_scope());
         assert!(
             err.is_none(),
-            "skinned.wgsl / instanced draw failed validation: {err:?}"
+            "skinned.wgsl / skinned_textured.wgsl / instanced draw failed validation: {err:?}"
         );
     }
 }

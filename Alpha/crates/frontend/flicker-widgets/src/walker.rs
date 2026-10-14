@@ -243,7 +243,7 @@ impl<'a> WalkerHandler<'a> {
     /// navigable: collect the visible `text_field`s (and their authored exits) so a
     /// session can open on one — a click into it, a scene's `open_text_entry`, the
     /// `EnterText` signal — and close through `SubmitText` / `CancelText`. A bench
-    /// that routes nav to its own base layer (Quartermaster) uses this alone;
+    /// that routes nav to its own base layer (PackageBench) uses this alone;
     /// [`with_nav`](Self::with_nav) includes it.
     pub fn with_text_fields(mut self, tree: &UiNode, model: &ValueMap) -> Self {
         collect_text_fields(tree, model, &mut self.text_fields);
@@ -1882,7 +1882,7 @@ mod tests {
         for (i, id) in ["explore", "build", "developer"].iter().enumerate() {
             tree.children.push(button(id, "menu", i as u32, id));
         }
-        for (i, id) in ["populous", "sablework"].iter().enumerate() {
+        for (i, id) in ["populous", "materialbench"].iter().enumerate() {
             tree.children.push(button(id, "scenes", i as u32, id));
         }
         let mut ui = UiState::new();
@@ -1909,7 +1909,7 @@ mod tests {
         h.handle(&press(ActionSignal::NavDown, &raw), &mut rc);
         assert_eq!(
             h.ui.focused(),
-            Some("sablework"),
+            Some("materialbench"),
             "…whose rows the d-pad walks"
         );
 
