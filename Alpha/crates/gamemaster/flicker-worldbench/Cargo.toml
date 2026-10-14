@@ -1,6 +1,6 @@
 [package]
 name = "flicker-worldbench"
-version = "0.1.0"
+version = "0.1.11"
 edition.workspace = true
 license.workspace = true
 publish = false
@@ -17,7 +17,7 @@ path = "src/lib.rs"
 [dependencies]
 # The shared hex-globe view: mesh builder + graticule + orbit camera + the
 # offscreen viewport pass.
-flicker-globe = { version = "0.1.10", path = "../../frontend/flicker-globe" }
+flicker-globe = { version = "0.1.11", path = "../../frontend/flicker-globe" }
 flicker = { version = "0.1.0", path = "../../core/flicker" }
 flicker-shell.workspace = true
 # Input event bus — the shared resolve → route seam.

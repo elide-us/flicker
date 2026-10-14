@@ -37,7 +37,7 @@ flicker-rigview.workspace = true
 # the panel's picture, chrome, input and stage are its own.
 flicker-modelview = { version = "0.1.11", path = "../flicker-modelview" }
 # `Arrows` — the line-batch currency the rig view draws (shared with the globe).
-flicker-globe = { version = "0.1.10", path = "../../frontend/flicker-globe" }
+flicker-globe = { version = "0.1.11", path = "../../frontend/flicker-globe" }
 # The shared input event bus + core resolver (spec section 9): this scene dispatches
 # Esc->pause and the HUD pointer-consume through the router. Reused read-only — the
 # bus is built and proven elsewhere; this crate only consumes it.

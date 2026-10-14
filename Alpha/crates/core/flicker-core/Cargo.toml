@@ -1,6 +1,6 @@
 [package]
 name = "flicker-core"
-version.workspace = true
+version = "0.1.11"
 edition.workspace = true
 license.workspace = true
 

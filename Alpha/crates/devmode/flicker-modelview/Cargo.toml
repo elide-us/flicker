@@ -30,7 +30,7 @@ flicker = { version = "0.1.0", path = "../../core/flicker" }
 # The rig view this scene declares as its root stage — the panel itself.
 flicker-rigview.workspace = true
 # `Arrows` — the line-batch currency the rig view draws (shared with the globe).
-flicker-globe = { version = "0.1.10", path = "../../frontend/flicker-globe" }
+flicker-globe = { version = "0.1.11", path = "../../frontend/flicker-globe" }
 # The shared input event bus: this scene dispatches the frame's signals through its own
 # walker + its rig view, exactly as a top-level scene does.
 flicker-input-core.workspace = true
