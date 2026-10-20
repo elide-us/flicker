@@ -1025,7 +1025,7 @@ version = "0.1.0"
 dependencies = [
  "flicker-core",
  "flicker-render",
- "glam 0.33.12",
+ "glam 0.34.1",
  "tracing",
 ]
 
@@ -1072,7 +1072,7 @@ version = "0.1.0"
 dependencies = [
  "flicker-materials",
  "flicker-worldstate",
- "glam 0.33.12",
+ "glam 0.34.1",
  "serde",
  "serde_json",
 ]
@@ -1100,7 +1100,7 @@ dependencies = [
  "flicker-input-router",
  "flicker-rigview",
  "flicker-shell",
- "glam 0.33.12",
+ "glam 0.34.1",
  "serde_json",
  "tracing",
 ]
@@ -1113,7 +1113,7 @@ dependencies = [
  "flicker-core",
  "flicker-materials",
  "flicker-skeletal",
- "glam 0.33.12",
+ "glam 0.34.1",
  "serde",
  "serde_json",
  "tracing",
@@ -1145,7 +1145,7 @@ version = "0.1.11"
 dependencies = [
  "bytemuck",
  "flate2",
- "glam 0.33.12",
+ "glam 0.34.1",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -1169,7 +1169,7 @@ dependencies = [
  "flicker-skeletal",
  "flicker-voxel",
  "flicker-worker",
- "glam 0.33.12",
+ "glam 0.34.1",
  "serde_json",
  "tracing",
 ]
@@ -1191,7 +1191,7 @@ dependencies = [
  "flicker",
  "flicker-input-core",
  "flicker-input-router",
- "glam 0.33.12",
+ "glam 0.34.1",
  "serde_json",
  "tracing",
 ]
@@ -1208,7 +1208,7 @@ dependencies = [
 name = "flicker-input-core"
 version = "0.1.10"
 dependencies = [
- "glam 0.33.12",
+ "glam 0.34.1",
  "serde",
  "serde_json",
 ]
@@ -1219,7 +1219,7 @@ version = "0.1.10"
 dependencies = [
  "flicker-input-core",
  "gilrs",
- "glam 0.33.12",
+ "glam 0.34.1",
  "objc2 0.6.4",
  "objc2-foundation 0.3.2",
  "objc2-game-controller",
@@ -1265,7 +1265,7 @@ name = "flicker-mechanics"
 version = "0.1.11"
 dependencies = [
  "flicker-skeletal",
- "glam 0.33.12",
+ "glam 0.34.1",
 ]
 
 [[package]]
@@ -1283,7 +1283,7 @@ dependencies = [
  "flicker-rigview",
  "flicker-shell",
  "flicker-skeletal",
- "glam 0.33.12",
+ "glam 0.34.1",
  "image",
  "rfd",
  "serde",
@@ -1300,7 +1300,7 @@ dependencies = [
  "flicker-input-core",
  "flicker-input-router",
  "flicker-rigview",
- "glam 0.33.12",
+ "glam 0.34.1",
  "serde_json",
  "tracing",
 ]
@@ -1323,7 +1323,7 @@ dependencies = [
 name = "flicker-orrery"
 version = "0.1.0"
 dependencies = [
- "glam 0.33.12",
+ "glam 0.34.1",
 ]
 
 [[package]]
@@ -1356,7 +1356,7 @@ dependencies = [
  "flicker-rigview",
  "flicker-shell",
  "flicker-skeletal",
- "glam 0.33.12",
+ "glam 0.34.1",
  "serde_json",
  "tracing",
 ]
@@ -1369,7 +1369,7 @@ dependencies = [
  "flicker-worker",
  "flicker-worldgrid",
  "flicker-worldstate",
- "glam 0.33.12",
+ "glam 0.34.1",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -1392,7 +1392,7 @@ dependencies = [
  "flicker-skeletal",
  "flicker-voxel",
  "flicker-worker",
- "glam 0.33.12",
+ "glam 0.34.1",
  "serde_json",
  "tracing",
 ]
@@ -1427,7 +1427,7 @@ dependencies = [
  "anyhow",
  "bytemuck",
  "flicker-core",
- "glam 0.33.12",
+ "glam 0.34.1",
  "glyphon",
  "image",
  "pollster",
@@ -1447,7 +1447,7 @@ dependencies = [
  "flicker-input-router",
  "flicker-mechanics",
  "flicker-skeletal",
- "glam 0.33.12",
+ "glam 0.34.1",
  "serde_json",
  "tracing",
 ]
@@ -1468,7 +1468,7 @@ name = "flicker-script"
 version = "0.1.11"
 dependencies = [
  "flicker-input-core",
- "glam 0.33.12",
+ "glam 0.34.1",
  "mlua",
  "serde",
  "serde_json",
@@ -1497,7 +1497,7 @@ version = "0.1.11"
 dependencies = [
  "anyhow",
  "flicker-core",
- "glam 0.33.12",
+ "glam 0.34.1",
  "serde",
  "serde_json",
 ]
@@ -1513,7 +1513,7 @@ dependencies = [
  "flicker-input-router",
  "flicker-orrery",
  "flicker-shell",
- "glam 0.33.12",
+ "glam 0.34.1",
  "serde_json",
  "tracing",
 ]
@@ -1523,7 +1523,7 @@ name = "flicker-system"
 version = "0.1.0"
 dependencies = [
  "flicker-materials",
- "glam 0.33.12",
+ "glam 0.34.1",
 ]
 
 [[package]]
@@ -1545,7 +1545,7 @@ dependencies = [
  "clayengine",
  "flicker-core",
  "flicker-primitive",
- "glam 0.33.12",
+ "glam 0.34.1",
  "serde",
  "serde_json",
 ]
@@ -1595,7 +1595,7 @@ dependencies = [
  "flicker-worldgen",
  "flicker-worldgrid",
  "flicker-worldstate",
- "glam 0.33.12",
+ "glam 0.34.1",
  "image",
  "serde",
  "serde_json",
@@ -1611,7 +1611,7 @@ dependencies = [
  "flicker-primitive",
  "flicker-worldgrid",
  "flicker-worldstate",
- "glam 0.33.12",
+ "glam 0.34.1",
  "serde",
  "serde_json",
 ]
@@ -1620,7 +1620,7 @@ dependencies = [
 name = "flicker-worldgrid"
 version = "0.1.10"
 dependencies = [
- "glam 0.33.12",
+ "glam 0.34.1",
 ]
 
 [[package]]
@@ -1642,7 +1642,7 @@ dependencies = [
  "flicker-poc-chemistry",
  "flicker-worldengine",
  "flicker-worldgrid",
- "glam 0.33.12",
+ "glam 0.34.1",
  "serde",
  "serde_json",
 ]
@@ -1963,9 +1963,9 @@ dependencies = [
 
 [[package]]
 name = "glam"
-version = "0.33.12"
+version = "0.34.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "37bfe73dc8ec21f54d181e5a60554327ec3f1c600c455a75ccbfc65d2106a6c4"
+checksum = "fc148d4ddd3930c52f9e5ae79b89805c6f07e9ff417e7b083e0348cea60a5aba"
 dependencies = [
  "bytemuck",
  "serde_core",
@@ -4342,7 +4342,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.4",
  "windows-sys 0.61.2",
