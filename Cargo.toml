@@ -87,7 +87,7 @@ glam = { version = "0.33.11", features = ["bytemuck", "serde"] }
 bytemuck = { version = "1.25.2", features = ["derive"] }
 
 # Scripting
-mlua = { version = "0.10.5", features = ["luau", "vendored", "async", "serialize"] }
+mlua = { version = "0.12.2", features = ["luau", "vendored", "async", "serialize"] }
 
 # Async runtime (for net + async script bridge)
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
