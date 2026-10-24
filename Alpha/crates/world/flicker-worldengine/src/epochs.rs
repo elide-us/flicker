@@ -63,11 +63,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::crust::CrustField;
 use crate::map::{HexMap, TileId};
-use crate::rocks::Rock;
-use crate::recipe::{
-    floor_texture, Composed, Nearest, Recipe,
-};
+use crate::recipe::{floor_texture, Composed, Nearest, Recipe};
 use crate::resonance::{crater, Emitter, VolcanoShape, CRATER_REACH, VOLCANO_REACH};
+use crate::rocks::Rock;
 use crate::seams::{push_field, SeamField};
 
 /// **The epoch dials** — as data, beside the recipe.
@@ -861,8 +859,9 @@ impl Epochs {
                                 // Thickened crust hardens toward root: by the
                                 // ceiling it is metamorphic.
                                 if r.summit > 0.0 {
-                                    self.parcel_hardness[j] +=
-                                        (Rock::Quartzite.resistance() - self.parcel_hardness[j]) * (take / r.summit);
+                                    self.parcel_hardness[j] += (Rock::Quartzite.resistance()
+                                        - self.parcel_hardness[j])
+                                        * (take / r.summit);
                                 }
                                 stands += take;
                                 stats.uplifted = stats.uplifted.max(take);
@@ -1157,7 +1156,8 @@ mod tests {
         for i in map.len()..e.pos.len() {
             if e.alive[i] {
                 assert_eq!(
-                    e.parcel_hardness[i], Rock::Basalt.resistance(),
+                    e.parcel_hardness[i],
+                    Rock::Basalt.resistance(),
                     "young floor is basalt"
                 );
             }
@@ -1281,7 +1281,9 @@ mod tests {
             "the bowl is brecciated — struck ground reads softer than the floor it struck"
         );
         assert!(
-            hit.hardness().iter().all(|h| *h >= Rock::ImpactBreccia.resistance() - 1e-6),
+            hit.hardness()
+                .iter()
+                .all(|h| *h >= Rock::ImpactBreccia.resistance() - 1e-6),
             "nothing reads softer than breccia"
         );
         // The write-back.

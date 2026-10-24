@@ -25,8 +25,8 @@
 use flicker_poc_chemistry::{crust_thickness_m, density_kg_m3, World};
 use flicker_worldengine::recipe::{seam_ribbon, Composed, MaskKind, Recipe};
 use flicker_worldengine::{
-    Bubbles, CrustField, HarmonicWave, HexMap, PlanetEpoch, PlanetWave, SeamField, VolcanoShape,
-    Rock, Volcanoes, WaveMask,
+    Bubbles, CrustField, HarmonicWave, HexMap, PlanetEpoch, PlanetWave, Rock, SeamField,
+    VolcanoShape, Volcanoes, WaveMask,
 };
 use flicker_worldgrid::{icosphere_with_outlines, Sphere};
 use glam::{DVec2, DVec3};

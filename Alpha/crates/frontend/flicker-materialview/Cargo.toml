@@ -1,6 +1,6 @@
 [package]
 name = "flicker-materialview"
-version = "0.1.11"
+version = "0.1.12"
 edition.workspace = true
 license.workspace = true
 publish = false
@@ -23,13 +23,13 @@ flicker = { version = "0.1.0", path = "../../core/flicker" }
 # The ONE offscreen-target lifecycle every surface filler renders through
 # (`GlobeView::render_pass` + its `Seat`) — the rig view and its doll take the same seam,
 # so a sample's target is created, resized, composited and freed exactly as theirs are.
-flicker-globe = { version = "0.1.11", path = "../flicker-globe" }
+flicker-globe = { version = "0.1.12", path = "../flicker-globe" }
 # The map-role vocabulary (`MapKind`): which map is which, and which is colour. Also the
 # material GRAPH the graph view projects (`MaterialGraph::eval_order`, the output table).
 flicker-texture.workspace = true
 # The node-graph filler the graph view feeds: its card/edge shapes, its ink slots, its
 # pointer sample and the one seat test (`rect_contains`).
-flicker-canvas = { version = "0.1.10", path = "../flicker-canvas" }
+flicker-canvas = { version = "0.1.12", path = "../flicker-canvas" }
 # A promoted material's bundle on disk (`MaterialBundle`) — the decode's input.
 flicker-content.workspace = true
 # The material index row (`MaterialDef`, `RenderClass`) a flat sample stands in for.

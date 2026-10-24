@@ -104,10 +104,10 @@ pub use resonance::{
     DEFAULT_AXES, DEFAULT_LOBE, FLOOD_MARGIN, MAX_AXES, MAX_LOBE, MIN_AXES, MIN_LOBE,
     SEA_CREST_PERCENT,
 };
+pub use rocks::Rock;
 pub use seams::{
     push_field, SeamField, DEFAULT_CELLS, DEFAULT_SPOTS, MAX_CELLS, MAX_SPOTS, MIN_CELLS, MIN_SPOTS,
 };
-pub use rocks::Rock;
 pub use stages::{
     hardness_cut_bins, hardness_cut_matched, hardness_cut_matched_report,
     hardness_cut_matched_slope, hardness_cut_per_slope, hardness_cut_per_slope_report,

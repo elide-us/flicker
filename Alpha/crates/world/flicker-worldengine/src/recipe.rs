@@ -415,7 +415,13 @@ impl HardnessLedger {
         self.num
             .iter()
             .zip(&self.den)
-            .map(|(n, d)| if *d > 1e-12 { n / d } else { Rock::Granite.resistance() })
+            .map(|(n, d)| {
+                if *d > 1e-12 {
+                    n / d
+                } else {
+                    Rock::Granite.resistance()
+                }
+            })
             .collect()
     }
 }

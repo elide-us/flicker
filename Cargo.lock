@@ -1061,7 +1061,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-canvas"
-version = "0.1.10"
+version = "0.1.12"
 dependencies = [
  "flicker",
 ]
@@ -1092,7 +1092,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-componentcatalog"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "flicker",
  "flicker-canvas",
@@ -1107,7 +1107,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-content"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "anyhow",
  "flicker-core",
@@ -1124,7 +1124,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-controllertester"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "flicker",
  "flicker-core",
@@ -1186,7 +1186,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-globe"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "flicker",
  "flicker-input-core",
@@ -1236,7 +1236,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-materialbench"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "flicker",
  "flicker-canvas",
@@ -1255,7 +1255,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-materialcatalog"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "flicker",
  "flicker-canvas",
@@ -1274,7 +1274,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-materials"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "serde",
  "serde_json",
@@ -1283,7 +1283,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-materialview"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "flicker",
  "flicker-canvas",
@@ -1364,7 +1364,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-packagebench"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "flicker",
  "flicker-content",
@@ -1381,7 +1381,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-packbench"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "anyhow",
  "flicker",
@@ -1458,7 +1458,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-render"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -1514,7 +1514,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-shell"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "anyhow",
  "flicker",
@@ -1564,7 +1564,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-texture"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "flicker-materials",
  "flicker-primitive",
@@ -1575,7 +1575,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-voxel"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "bytemuck",
  "clayengine",
@@ -1588,7 +1588,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-widgets"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "flicker-core",
  "flicker-input-core",
@@ -1607,7 +1607,7 @@ version = "0.1.0"
 
 [[package]]
 name = "flicker-worldbench"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "fastrand",
  "flicker",
@@ -1625,7 +1625,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-worldengine"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "clayengine",
  "fastrand",
@@ -1673,7 +1673,7 @@ dependencies = [
 
 [[package]]
 name = "flicker-worldtile"
-version = "0.1.10"
+version = "0.1.12"
 dependencies = [
  "clayengine",
  "flicker-core",
@@ -3476,7 +3476,7 @@ checksum = "e8cf8e6a8aa66ce33f63993ffc4ea4271eb5b0530a9002db8455ea6050c77bfa"
 
 [[package]]
 name = "prism-alpha"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "anyhow",
  "flicker-clicktrainer",

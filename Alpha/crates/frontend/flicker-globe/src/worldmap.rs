@@ -1453,7 +1453,11 @@ mod tests {
         assert_eq!(bake.lines.len(), plain + 1, "one group for the pick");
         let (ink, segments) = bake.lines.last().expect("the pick's group");
         assert_eq!(*ink, [1.0, 0.8, 0.2, 1.0], "the authored pick ink");
-        let ring = c.atlas[0].as_ref().expect("cell 0 is on the sheet").ring.len();
+        let ring = c.atlas[0]
+            .as_ref()
+            .expect("cell 0 is on the sheet")
+            .ring
+            .len();
         assert_eq!(segments.len(), ring * 2, "two loops round the cell");
         assert!(segments
             .iter()

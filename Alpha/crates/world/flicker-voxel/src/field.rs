@@ -338,7 +338,10 @@ mod tests {
                     && f.at(q.x + 1, q.y + 1).is_some()
             })
             .count();
-        assert!(blocks > 0 && blocks < f.quads.len(), "the hole and the rim cost blocks");
+        assert!(
+            blocks > 0 && blocks < f.quads.len(),
+            "the hole and the rim cost blocks"
+        );
         assert_eq!(regions.iter().map(|r| r.quads).sum::<usize>(), blocks);
         assert_eq!(
             regions.iter().map(|r| r.mesh.indices.len()).sum::<usize>(),
@@ -350,7 +353,9 @@ mod tests {
             for v in &r.mesh.vertices {
                 let x = (v.position[0] / d + f.dim as f32 * 0.5 - 0.5).round() as u32;
                 let y = (-v.position[2] / d + f.dim as f32 * 0.5 - 0.5).round() as u32;
-                let q = f.at(x, y).expect("a vertex is a present cluster at its centre");
+                let q = f
+                    .at(x, y)
+                    .expect("a vertex is a present cluster at its centre");
                 assert_eq!(v.position, f.vertex_position(q));
                 assert_eq!(v.material, direct_rgb(q.rgb));
                 assert!(v.normal[1] > 0.0);
@@ -368,7 +373,10 @@ mod tests {
                 assert!(u[2] * w[0] - u[0] * w[2] > 0.0, "triangle {t:?} faces up");
             }
         }
-        assert!(apron > 0, "blocks across a region's edge borrow the far vertices");
+        assert!(
+            apron > 0,
+            "blocks across a region's edge borrow the far vertices"
+        );
         // The slope leans the normal: a rise to the east tips it west.
         let q = f
             .quads
@@ -390,13 +398,22 @@ mod tests {
     fn the_framing_is_the_field_box() {
         let f = sample();
         let (c, r) = f.framing();
-        let (xlo, xhi) = (f.quads.iter().map(|q| q.x).min().unwrap(), f.quads.iter().map(|q| q.x).max().unwrap() + 1);
-        let (ylo, yhi) = (f.quads.iter().map(|q| q.y).min().unwrap(), f.quads.iter().map(|q| q.y).max().unwrap() + 1);
+        let (xlo, xhi) = (
+            f.quads.iter().map(|q| q.x).min().unwrap(),
+            f.quads.iter().map(|q| q.x).max().unwrap() + 1,
+        );
+        let (ylo, yhi) = (
+            f.quads.iter().map(|q| q.y).min().unwrap(),
+            f.quads.iter().map(|q| q.y).max().unwrap() + 1,
+        );
         assert_eq!(c[0], (f.west_x(xlo) + f.west_x(xhi)) * 0.5);
         assert_eq!(c[2], (f.south_z(ylo) + f.south_z(yhi)) * 0.5);
         let mean = f.quads.iter().map(|q| f64::from(q.height)).sum::<f64>() / f.quads.len() as f64;
         assert!((c[1] - mean as f32).abs() < 1e-3);
-        let (hw, hd) = ((f.west_x(xhi) - f.west_x(xlo)) * 0.5, (f.south_z(ylo) - f.south_z(yhi)) * 0.5);
+        let (hw, hd) = (
+            (f.west_x(xhi) - f.west_x(xlo)) * 0.5,
+            (f.south_z(ylo) - f.south_z(yhi)) * 0.5,
+        );
         assert!((r - (hw * hw + hd * hd).sqrt()).abs() < 1e-3);
         let empty = QuadField::build(4, |_, _| false, |_, _| 0.0, |_, _| [0; 3]);
         assert_eq!(empty.framing(), ([0.0; 3], CLUSTER_DIM as f32));

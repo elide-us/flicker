@@ -3521,7 +3521,11 @@ mod tests {
         assert_eq!(bench.map_state(), (0, 0, false), "a click only picks");
         bench.pump_map_now();
         assert!(!bench.tile_in_flight(), "a click starts no render");
-        assert_eq!(bench.map_picked(), Some(cell), "the sheet outlines the pick");
+        assert_eq!(
+            bench.map_picked(),
+            Some(cell),
+            "the sheet outlines the pick"
+        );
         let m = bench.model();
         assert!(m
             .text(ui::MAP_PICK_BIND)
@@ -3683,7 +3687,10 @@ mod tests {
         // lit.
         assert!(bench.field_ready(), "the field is baked");
         let (vectors, quads) = bench.field_quads;
-        assert!(vectors > 3_000_000, "a hex is millions of clusters: {vectors}");
+        assert!(
+            vectors > 3_000_000,
+            "a hex is millions of clusters: {vectors}"
+        );
         assert!(
             quads > vectors * 9 / 10 && quads < vectors,
             "a quad across every four vectors: {quads}"

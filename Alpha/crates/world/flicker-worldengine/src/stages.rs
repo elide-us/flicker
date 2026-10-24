@@ -178,7 +178,12 @@ fn hardness_cut_bins_within(
         if h0 <= before.sea || !keep(i) {
             continue;
         }
-        let hard = before.hardness.get(i).copied().unwrap_or(0.5).clamp(0.0, 1.0);
+        let hard = before
+            .hardness
+            .get(i)
+            .copied()
+            .unwrap_or(0.5)
+            .clamp(0.0, 1.0);
         let b = CUT_BIN_EDGES
             .windows(2)
             .position(|w| hard >= w[0] && hard < w[1])
@@ -202,7 +207,11 @@ fn hardness_cut_bins_within(
             mean_dh: if n == 0 { 0.0 } else { (sum / n as f64) as f32 },
             mean_cut: if n == 0 { 0.0 } else { (cut / n as f64) as f32 },
             lowered: if n == 0 { 0.0 } else { low as f32 / n as f32 },
-            mean_rise: if n == 0 { 0.0 } else { (rise / n as f64) as f32 },
+            mean_rise: if n == 0 {
+                0.0
+            } else {
+                (rise / n as f64) as f32
+            },
         })
         .collect()
 }
@@ -249,7 +258,11 @@ pub fn hardness_cut_matched_slope(
 /// out, so what is left to compare across bins is the grade's doing (and
 /// the rain's). Per bin: its hardness range, its count, the mean cut per
 /// slope.
-pub fn hardness_cut_per_slope(map: &HexMap, before: &Composed, after: &[f32]) -> Vec<(f32, f32, usize, f32)> {
+pub fn hardness_cut_per_slope(
+    map: &HexMap,
+    before: &Composed,
+    after: &[f32],
+) -> Vec<(f32, f32, usize, f32)> {
     let n_bins = CUT_BIN_EDGES.len() - 1;
     let mut sums = vec![(0.0f64, 0usize); n_bins];
     for t in 0..map.len() as u32 {
@@ -270,7 +283,12 @@ pub fn hardness_cut_per_slope(map: &HexMap, before: &Composed, after: &[f32]) ->
         if slope <= 1e-4 {
             continue;
         }
-        let hard = before.hardness.get(i).copied().unwrap_or(0.5).clamp(0.0, 1.0);
+        let hard = before
+            .hardness
+            .get(i)
+            .copied()
+            .unwrap_or(0.5)
+            .clamp(0.0, 1.0);
         let b = CUT_BIN_EDGES
             .windows(2)
             .position(|w| hard >= w[0] && hard < w[1])
@@ -333,8 +351,7 @@ fn matched_by(before: &Composed, after: &[f32], key: &[f32]) -> Vec<(f32, f32, V
         .windows(2)
         .map(|w| {
             let (lo, hi) = (w[0], w[1]);
-            let bins =
-                hardness_cut_bins_within(before, after, |i| key[i] >= lo && key[i] < hi);
+            let bins = hardness_cut_bins_within(before, after, |i| key[i] >= lo && key[i] < hi);
             (lo, hi.min(keys[n - 1]), bins)
         })
         .collect()
@@ -372,9 +389,9 @@ pub fn hardness_cut_report(bins: &[CutBin]) -> String {
         ));
     }
     match soft_over_hard(bins) {
-        Some(ratio) if ratio > 1.0 => {
-            s.push_str(&format!("  soft/hard cut {ratio:.2}: hardness steers the cut\n"))
-        }
+        Some(ratio) if ratio > 1.0 => s.push_str(&format!(
+            "  soft/hard cut {ratio:.2}: hardness steers the cut\n"
+        )),
         Some(ratio) => s.push_str(&format!(
             "  soft/hard cut {ratio:.2}: THE CUT IS BLIND TO HARDNESS\n"
         )),
@@ -391,7 +408,15 @@ pub fn hardness_cut_matched_report(key: &str, terciles: &[(f32, f32, Vec<CutBin>
         let cuts: Vec<String> = bins
             .iter()
             .filter(|b| b.count > 0)
-            .map(|b| format!("{:.2}..{:.2}→{:.0} µR ({})", b.lo, b.hi, b.mean_cut * 1e6, b.count))
+            .map(|b| {
+                format!(
+                    "{:.2}..{:.2}→{:.0} µR ({})",
+                    b.lo,
+                    b.hi,
+                    b.mean_cut * 1e6,
+                    b.count
+                )
+            })
             .collect();
         let verdict = match soft_over_hard(bins) {
             Some(r) if r > 1.0 => format!("soft/hard {r:.2}: steers"),
@@ -443,12 +468,18 @@ mod hardness_honesty {
         assert!((bins[0].mean_cut - 0.010).abs() < 1e-6);
         assert!((bins[4].mean_cut - 0.002).abs() < 1e-6);
         assert_eq!(bins[0].lowered, 1.0);
-        assert!((bins[0].mean_rise - 0.1).abs() < 1e-6, "adopted a tenth of a radius up");
+        assert!(
+            (bins[0].mean_rise - 0.1).abs() < 1e-6,
+            "adopted a tenth of a radius up"
+        );
         // At matched relief (every land hex at the same height here, so
         // one tercile holds them all and two are empty of the rest).
         let matched = hardness_cut_matched(&before, &after);
         assert_eq!(matched.len(), 3);
-        let populated: Vec<_> = matched.iter().filter(|(_, _, b)| b.iter().any(|x| x.count > 0)).collect();
+        let populated: Vec<_> = matched
+            .iter()
+            .filter(|(_, _, b)| b.iter().any(|x| x.count > 0))
+            .collect();
         assert!(!populated.is_empty());
         assert!(hardness_cut_matched_report("relief", &matched).contains("steers"));
         let ratio = soft_over_hard(&bins).expect("two bins populated");

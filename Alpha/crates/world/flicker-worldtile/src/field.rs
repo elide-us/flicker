@@ -110,8 +110,12 @@ mod tests {
             regions.iter().map(|r| r.mesh.indices.len()).sum::<usize>(),
             quads * 6
         );
-        let q = field.at(TILE_DIM / 2, TILE_DIM / 2).expect("the hex's middle");
-        let e = field.at(TILE_DIM / 2 + 1, TILE_DIM / 2).expect("its east neighbour");
+        let q = field
+            .at(TILE_DIM / 2, TILE_DIM / 2)
+            .expect("the hex's middle");
+        let e = field
+            .at(TILE_DIM / 2 + 1, TILE_DIM / 2)
+            .expect("its east neighbour");
         let (p, pe) = (field.vertex_position(q), field.vertex_position(e));
         assert_eq!(p[1], q.height, "the vertex stands at the vector");
         assert_eq!(pe[0] - p[0], flicker_voxel::CLUSTER_DIM as f32);
