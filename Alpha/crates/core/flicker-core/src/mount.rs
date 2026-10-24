@@ -41,7 +41,13 @@ static MOUNT: Mutex<Option<PackageMount>> = Mutex::new(None);
 pub fn mount_package(flk: &Path, mount_root: &Path) -> io::Result<usize> {
     let archive = ZipArchive::new(BufReader::new(File::open(flk)?))
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-    let mut names: Vec<String> = archive.file_names().map(str::to_owned).collect();
+    // zip 9 decodes entry names lazily; a name that is not valid text fails the
+    // mount loud rather than vanishing from the index.
+    let mut names = archive
+        .file_names()
+        .map(|name| name.map(|n| n.into_owned()))
+        .collect::<Result<Vec<String>, _>>()
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     names.sort_unstable();
     let count = names.len();
     *MOUNT.lock().expect("package mount lock") = Some(PackageMount {

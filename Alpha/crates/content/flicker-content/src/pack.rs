@@ -176,7 +176,10 @@ pub fn verify_pack(flk: &Path, tree: Option<&Path>) -> Result<PackStats> {
                 let mut entry = zip
                     .by_index(i)
                     .with_context(|| format!("verify: entry #{i}"))?;
-                let name = entry.name().to_string();
+                let name = entry
+                    .name()
+                    .with_context(|| format!("verify: entry #{i} has an undecodable name"))?
+                    .into_owned();
                 let mut sink = Vec::with_capacity(entry.size() as usize);
                 entry
                     .read_to_end(&mut sink) // the reader checks the stored CRC at EOF

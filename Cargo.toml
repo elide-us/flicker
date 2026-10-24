@@ -112,10 +112,12 @@ flate2 = { version = "1.1.10", default-features = false, features = ["rust_backe
 # The store-only content package container (package.flk). default-features=false
 # strips every compression backend — the crate CANNOT deflate, which mechanically
 # enforces the ratified store-only rule (entries are already gz-at-rest).
-# Security floor: >=2.3.0 (RUSTSEC-2025-0168/CVE-2025-29787 — extract() path
-# traversal, an API we never call; never resolve below the patched range).
-# zip 8.x is why workspace rust-version is 1.88.
-zip = { version = "8.6.0", default-features = false }
+# Security floor: >=9.0.0 (RUSTSEC-2026-0367/0368/0369 — SUID bits kept, symlink
+# targets unconfined and permissions applied through symlinks, all in extract(), an
+# API we never call; the earlier floor >=2.3.0 covered RUSTSEC-2025-0168 the same
+# way). Never resolve below the patched range. Reviewed 9.0.5 on 2026-10-24.
+# zip 9.x MSRV is 1.88 — why workspace rust-version is 1.88.
+zip = { version = "9.0.5", default-features = false }
 
 # Logging
 tracing = "0.1.44"
@@ -155,7 +157,7 @@ flicker-celestial = { version = "0.1.0", path = "crates/flicker-celestial" }
 flicker-system = { version = "0.1.0", path = "crates/flicker-system" }
 flicker-primitive = { version = "0.1.9", path = "Alpha/crates/content/flicker-primitive" }
 flicker-texture = { version = "0.1.12", path = "Alpha/crates/content/flicker-texture" }
-flicker-core = { version = "0.1.11", path = "Alpha/crates/core/flicker-core" }
+flicker-core = { version = "0.1.12", path = "Alpha/crates/core/flicker-core" }
 # Input model + resolution leaf (spec §2). Router/device build on it.
 flicker-input-core = { version = "0.1.10", path = "Alpha/crates/input/flicker-input-core" }
 # Input event bus + focus + consumer API (spec §4). Depends only on flicker-input-core.
