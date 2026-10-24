@@ -24,6 +24,7 @@ flicker-shell.workspace = true
 # raw `impl App`, not a `Scene` yet, so it is NOT here until it is converted.
 flicker-clicktrainer = { version = "0.1.11", path = "../crates/adventurer/flicker-clicktrainer" }
 flicker-componentcatalog = { version = "0.1.11", path = "../crates/devmode/flicker-componentcatalog" }
+flicker-materialcatalog = { version = "0.1.11", path = "../crates/devmode/flicker-materialcatalog" }
 flicker-controllertester = { version = "0.1.11", path = "../crates/adventurer/flicker-controllertester" }
 flicker-solarbirth = { version = "0.1.11", path = "../crates/adventurer/flicker-solarbirth" }
 flicker-packbench = { version = "0.1.11", path = "../crates/devmode/flicker-packbench" }

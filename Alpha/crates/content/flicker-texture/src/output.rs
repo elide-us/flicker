@@ -12,7 +12,15 @@
 
 use serde::{Deserialize, Serialize};
 
+/// The neutral mid-grey a surface falls back to when nothing authors its colour —
+/// an empty ramp, or a material graph whose base port is unwired. Visible rather
+/// than black, because an unauthored surface is easier to diagnose when it shows.
+pub(crate) const NEUTRAL: [f32; 3] = [0.5, 0.5, 0.5];
+
 /// One stop of a colour ramp: a position in `[0,1]` and the linear RGB there.
+///
+/// A v1 type, read as v1 always read it: unknown keys inside a stop are TOLERATED
+/// (dropped), unlike the v2 graph's own nodes, which refuse them.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RampStop {
     /// Where on the field this colour sits.
@@ -62,7 +70,7 @@ impl ColorRamp {
     /// mistake, and a visible neutral surface is easier to diagnose than black.
     pub fn sample(&self, t: f32) -> [f32; 3] {
         if self.stops.is_empty() {
-            return [0.5, 0.5, 0.5];
+            return NEUTRAL;
         }
         let t = t.clamp(0.0, 1.0);
         // Sorted lazily on read: the list is 2-4 entries, so this costs nothing
@@ -235,12 +243,12 @@ impl Default for OutputStage {
 impl OutputStage {
     /// Roughness at a texel whose field value is `h`.
     pub fn roughness_at(&self, h: f32) -> f32 {
-        (self.roughness + (h - 0.5) * 2.0 * self.roughness_mod).clamp(0.0, 1.0)
+        modulate(self.roughness, self.roughness_mod, h)
     }
 
     /// Metalness at a texel whose field value is `h`.
     pub fn metalness_at(&self, h: f32) -> f32 {
-        (self.metalness + (h - 0.5) * 2.0 * self.metalness_mod).clamp(0.0, 1.0)
+        modulate(self.metalness, self.metalness_mod, h)
     }
 
     /// How strongly a texel at field value `h` emits, `0..=1`.
@@ -252,9 +260,44 @@ impl OutputStage {
         if self.emissive_strength <= 0.0 {
             return 0.0;
         }
-        let band = self.emissive_band.clamp(0.0, 0.999);
-        let t = ((h - band) / (1.0 - band)).clamp(0.0, 1.0);
-        t * self.emissive_strength.clamp(0.0, 1.0)
+        band_window(h, self.emissive_band, None, 1.0) * self.emissive_strength.clamp(0.0, 1.0)
+    }
+}
+
+/// A level `base` swung by the field: `amount` of modulation either side of the
+/// field's midpoint, clamped to `[0, 1]`. Signed — a negative `amount` makes the
+/// crests the LOW part (polished high points).
+///
+/// The ONE modulation: the output stage's roughness and metalness, and the material
+/// graph's `Modulate` node, all call this, so a converted recipe cannot drift from
+/// the rack it came from.
+pub(crate) fn modulate(base: f32, amount: f32, h: f32) -> f32 {
+    (base + (h - 0.5) * 2.0 * amount).clamp(0.0, 1.0)
+}
+
+/// The glow band's shape at field value `h`: dark below `edge`, then a linear ramp up
+/// toward the field's ceiling — or, when `close` is given, a soft WINDOW: up from
+/// `edge` and back down onto `close`. `soft` scales the ramps' span. Open, `1` fades
+/// all the way to the ceiling (the output stage's band); closed, it is held to
+/// `(0, 1]` and `1` spans half the window, so the light peaks at full strength in its
+/// middle; toward `0` either hardens into steps.
+///
+/// The edges are ABSOLUTE field values here; seating a band FRACTION into the field's
+/// real range is the baker's job (`bake::seat`). The ONE band shape, shared by
+/// [`OutputStage::emissive_at`] (open, `soft` 1) and the material graph's `Band` node.
+pub(crate) fn band_window(h: f32, edge: f32, close: Option<f32>, soft: f32) -> f32 {
+    let band = edge.clamp(0.0, 0.999);
+    match close {
+        // `soft` of exactly 1 multiplies the span by one, which IEEE keeps exact —
+        // the output stage's band is this ramp bit for bit.
+        None => ((h - band) / ((1.0 - band) * soft.max(1e-6))).clamp(0.0, 1.0),
+        // Closed, `soft` is held to (0, 1]: at 1 the two ramps meet in the middle and
+        // the light peaks at full; any softer would only cap the peak below it.
+        Some(top) => {
+            let span = ((top - band) * 0.5).max(1e-6) * soft.clamp(1e-6, 1.0);
+            let rise = ((h - band) / span).clamp(0.0, 1.0);
+            rise.min(((top - h) / span).clamp(0.0, 1.0))
+        }
     }
 }
 

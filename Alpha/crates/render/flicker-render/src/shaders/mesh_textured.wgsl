@@ -6,7 +6,8 @@
 // bind group at group 2 and the whole PBR path live there, shared with the skinned textured
 // shader): samples albedo (sRGB) for base colour and the PBR map set (LINEAR), a tangent-space
 // normal map (perturbs the world normal via a TBN built from the interpolated normal + tangent),
-// roughness, metalness, AO, and self-illumination (`Emit`).
+// roughness, metalness, AO, and self-illumination (`Emit`, scaled by the per-draw emissive gain
+// in `flags.w`).
 // Lighting keeps the SAME light-list Lambertian diffuse as mesh.wgsl, then:
 //   * diffuse is scaled by (1 - metalness) and by AO (metal has no diffuse; AO darkens);
 //   * a pragmatic GGX-lite specular is added per light — its lobe sharpens with
@@ -22,7 +23,8 @@ struct Camera {
 struct PerDraw {
     model: mat4x4<f32>,
     tint: vec4<f32>,
-    flags: vec4<f32>, // flags.y = gloss (sheen strength), flags.z = soft-alpha blend.
+    // flags.y = gloss (sheen strength), flags.z = soft-alpha blend, flags.w = emissive gain.
+    flags: vec4<f32>,
 };
 
 // The frame prelude (struct Light / Scene / ShadowUniform / light_sample / shadow_factor)
@@ -83,6 +85,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         in.tangent_w,
         per_draw.tint,
         per_draw.flags.y,
+        per_draw.flags.w,
         soft,
     );
     if (!soft && shaded.alpha < 0.5) {

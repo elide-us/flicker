@@ -1,9 +1,10 @@
 //! **The ONE stage compiler** — `stages.<source>` JSON → [`StageDef`].
 //!
 //! A nested `surface` node names a stage SOURCE; this module turns the authored block
-//! (lighting preset · clear · camera · layers · attachments · passes · rate) into the
-//! typed definition every filler consumes. It replaced three private parsers (the packbench doll rig, the globe, the
-//! MaterialBench lit sample) that each knew a third of the vocabulary and rejected the rest —
+//! (lighting preset · clear · camera · layers · attachments · passes · rate · emissive
+//! gain) into the typed definition every filler consumes. It replaced three private parsers
+//! (the packbench doll rig, the globe, the MaterialBench lit sample) that each knew a third
+//! of the vocabulary and rejected the rest —
 //! a `graticule` in a doll stage or a `ring` on a globe was a warning in one reader and
 //! silence in another, and the globe's copy dropped the sky palette on the floor. One
 //! vocabulary, one reader, one set of defaults.
@@ -124,6 +125,7 @@ pub fn compile_stage(styles: &Json, source: &str) -> Option<(StageDef, Vec<Strin
                 None => problems.push(format!("{at} must be an array of passes")),
             },
             "rate" => def.rate = compile_rate(v, &at, &mut problems),
+            "emissive_gain" => def.emissive_gain = compile_emissive_gain(v, &at, &mut problems),
             "lighting" => match v.as_str() {
                 Some(name) => match compile_preset(styles, name, &mut problems) {
                     Some(l) => def.lighting = l,
@@ -192,6 +194,15 @@ pub fn compile_stage(styles: &Json, source: &str) -> Option<(StageDef, Vec<Strin
              is no HDR colour to extract the glow from"
         ));
     }
+    // The emissive gain multiplies a MATERIAL's Emit, and only the material sample reads it:
+    // authored on a stage that draws no `material` layer it is dead data — named, never
+    // silently carried.
+    if obj.contains_key("emissive_gain") && !def.has_layer("material") {
+        problems.push(format!(
+            "stages.{source}.emissive_gain is authored, but the stage draws no `material` \
+             layer — no material sample reads it"
+        ));
+    }
     // Every surface hands the graph a CONTENT closure, and the `scene` pass is where it
     // runs. An authored recipe that omits it would drop the surface's own drawing on the
     // floor in silence — the one shape of recipe that renders less than it was given.
@@ -247,6 +258,64 @@ pub fn compile_stage(styles: &Json, source: &str) -> Option<(StageDef, Vec<Strin
         ));
     }
     Some((def, problems))
+}
+
+/// **The HDR-resolve contract** a lit HDR surface keeps — ONE predicate, held over the whole
+/// shipped corpus by the `every_lit3d_shipped_stage_resolves_through_exactly_one_tonemap`
+/// gate and checked by a consumer over its own stage once at load (the Material Catalog's
+/// `mc_sample`): its rgba16f attachment is THE `hdr` one, and it resolves through EXACTLY one
+/// `tonemap_grade`, which reads `hdr` and runs LAST in the derived order (it reads what the
+/// lit passes write). `None` for a stage that declares no rgba16f attachment — not an HDR
+/// surface, nothing to resolve; otherwise every breach, each naming `stages.<source>`, and an
+/// empty list when the stage is well-formed.
+pub fn hdr_resolve_problems(def: &StageDef, source: &str) -> Option<Vec<String>> {
+    let hdr_names: Vec<&str> = def
+        .attachments
+        .names()
+        .filter(|&n| {
+            def.attachments
+                .get(n)
+                .is_some_and(|a| a.format == AttachmentFormat::Rgba16f)
+        })
+        .collect();
+    if hdr_names.is_empty() {
+        return None;
+    }
+    let mut problems = Vec::new();
+    if hdr_names != [Attachments::HDR] {
+        problems.push(format!(
+            "stages.{source}: an HDR surface's rgba16f attachment is the `hdr` one, found \
+             {hdr_names:?}"
+        ));
+    }
+    let is_tonemap = |p: &PassDef| matches!(p.kind, PassKind::TonemapGrade(_));
+    let tonemaps: Vec<&PassDef> = def.recipe().iter().filter(|p| is_tonemap(p)).collect();
+    if tonemaps.len() != 1 {
+        problems.push(format!(
+            "stages.{source}: an HDR surface resolves through EXACTLY one tonemap_grade \
+             (found {})",
+            tonemaps.len()
+        ));
+    }
+    if tonemaps
+        .iter()
+        .any(|t| !t.reads.iter().any(|r| r.as_str() == Attachments::HDR))
+    {
+        problems.push(format!(
+            "stages.{source}: the tonemap_grade must READ the `hdr` attachment"
+        ));
+    }
+    let (order, cyclic) = def.pass_order();
+    if cyclic {
+        problems.push(format!("stages.{source}: the recipe order is cyclic"));
+    }
+    if !order.last().is_some_and(|&i| is_tonemap(&def.recipe()[i])) {
+        problems.push(format!(
+            "stages.{source}: the tonemap_grade resolves LAST (it reads what the lit passes \
+             write)"
+        ));
+    }
+    Some(problems)
 }
 
 /// `stages.lighting.<name>` → the frame's [`LightRig`]. Two authoring forms compile
@@ -1346,6 +1415,22 @@ pub fn compile_rate(v: &Json, at: &str, problems: &mut Vec<String>) -> Rate {
     }
 }
 
+/// `stages.<source>.emissive_gain` — the draw-time multiplier on a material's Emit in this
+/// stage's HDR space ([`StageDef::emissive_gain`]). A finite number `>= 0`: anything else is
+/// a problem and the gain stays UNITY (the Emit texel as authored) — a negative gain would
+/// subtract light, and a malformed one must cost the authored glow, never the picture.
+fn compile_emissive_gain(v: &Json, at: &str, problems: &mut Vec<String>) -> f32 {
+    let unity = StageDef::default().emissive_gain;
+    let gain = num(v, at, unity, problems);
+    if gain < 0.0 {
+        problems.push(format!(
+            "{at} must be >= 0 — a negative emissive gain would subtract light"
+        ));
+        return unity;
+    }
+    gain
+}
+
 /// The pack editor's gold ground ring — what a `ring` layer draws in when it authors
 /// no colour.
 const RING_COLOR: [f32; 4] = [0.72, 0.59, 0.35, 1.0];
@@ -1547,6 +1632,38 @@ mod tests {
         out
     }
 
+    /// The `shared/` fragments that author stages of their OWN — a SCENE-HOSTED shared tree
+    /// (the Material Inspector, hosted by a scene of its own because what it draws is live)
+    /// carries the stage its surface names in its file, and its host folds that section
+    /// into the styles root exactly as the scene parser folds a scene's (merged INTO the
+    /// shared library, beside the presets). `(file, own source names, that styles root)`.
+    fn shared_fragment_stages() -> Vec<(String, Vec<String>, Json)> {
+        let mut out = Vec::new();
+        for path in scene_files(&content_root().join("scenes/shared")) {
+            let text = std::fs::read_to_string(&path).expect("fragment reads");
+            let json: Json = serde_json::from_str(&text).expect("fragment parses");
+            let Some(stages) = json.get("stages").and_then(Json::as_object) else {
+                continue;
+            };
+            let file = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap()
+                .to_string();
+            let names = stages
+                .keys()
+                .filter(|k| is_source_key(k))
+                .cloned()
+                .collect();
+            let styles = crate::load_styles_for(
+                theme_path(),
+                Some(&serde_json::json!({ "stages": stages })),
+            );
+            out.push((file, names, styles));
+        }
+        out
+    }
+
     fn walk(n: &UiNode, f: &mut impl FnMut(&UiNode)) {
         f(n);
         for c in &n.children {
@@ -1618,6 +1735,13 @@ mod tests {
             scene_stages > 0,
             "the shipped scenes author stages of their own"
         );
+        // …and each scene-hosted shared fragment's own stages, against the root its host
+        // builds for it.
+        for (file, names, styles) in shared_fragment_stages() {
+            for source in &names {
+                assert_compiles_clean(&styles, source, &format!("shared/{file}"));
+            }
+        }
     }
 
     /// **GATE — the sun-shadow `shadow_map` parser: the two roles compile and every misuse
@@ -2212,14 +2336,20 @@ mod tests {
             });
         }
         assert!(named > 0, "shipped surfaces name sources");
-        // A shell fragment has no scene file of its own, so a source it names can only
-        // come from the shared library.
+        // A shell fragment has no behaviour of its own, so a source it names comes from the
+        // shared library — or from the fragment's OWN `stages`, for a scene-hosted shared
+        // tree whose host folds them in (`shared_fragment_stages`).
         let shared = shipped_styles();
+        let hosted = shared_fragment_stages();
         for (file, id, source) in shared_fragment_sources() {
+            let styles = hosted
+                .iter()
+                .find(|(f, _, _)| *f == file)
+                .map_or(&shared, |(_, _, s)| s);
             assert!(
-                compile_stage(&shared, &source).is_some(),
-                "shared/{file}: surface `{id}` names stage `{source}`, which the shared \
-                 library does not author"
+                compile_stage(styles, &source).is_some(),
+                "shared/{file}: surface `{id}` names stage `{source}`, which neither the \
+                 fragment's own `stages` nor the shared library authors"
             );
         }
     }
@@ -2454,6 +2584,118 @@ mod tests {
         // A negative radius is a GEOMETRY guard's job (ring_segments yields nothing); the
         // compiler carries the authored number through.
         assert!(matches!(b.layers[0], StageLayer::Ring { radius, .. } if radius == -1.0));
+    }
+
+    /// **The emissive gain is a STAGE key** ([`StageDef::emissive_gain`]): unauthored it is
+    /// UNITY (the Emit texel as authored — never zero, which would black out every glow);
+    /// authored it lands as written, zero included (no glow is a legal look); a negative or
+    /// non-numeric one is a NAMED problem that degrades to unity. And the shipped Material
+    /// Catalog's sample stage authors a real glow — a finite gain of at least one — because
+    /// a gain below one would dim the very Emit its spheres exist to show.
+    #[test]
+    fn the_emissive_gain_is_authored_per_stage_and_defaults_to_unity() {
+        let styles = serde_json::json!({
+            "stages": {
+                "plain": { "layers": [{ "draw": "material" }] },
+                "glowing": { "layers": [{ "draw": "material" }], "emissive_gain": 4.0 },
+                "dark": { "layers": [{ "draw": "material" }], "emissive_gain": 0.0 },
+                "negative": { "layers": [{ "draw": "material" }], "emissive_gain": -2.0 },
+                "wordy": { "layers": [{ "draw": "material" }], "emissive_gain": "bright" },
+                "dead": { "layers": [{ "draw": "shells" }], "emissive_gain": 2.0 }
+            }
+        });
+        let gain = |source: &str| {
+            let (def, problems) = compile_stage(&styles, source).expect("authored");
+            (def.emissive_gain, problems)
+        };
+        assert_eq!(gain("plain"), (1.0, vec![]), "unauthored is unity");
+        assert_eq!(gain("glowing"), (4.0, vec![]));
+        assert_eq!(gain("dark"), (0.0, vec![]), "zero is a legal gain: no glow");
+        for bad in ["negative", "wordy"] {
+            let (g, problems) = gain(bad);
+            assert_eq!(g, 1.0, "{bad} degrades to unity");
+            assert!(
+                problems
+                    .iter()
+                    .any(|p| p.contains(&format!("stages.{bad}.emissive_gain"))),
+                "{bad} is a named problem: {problems:?}"
+            );
+        }
+        // Only the material sample reads the gain: on a stage that draws no `material` layer
+        // it is dead data, and named.
+        let (_, problems) = gain("dead");
+        assert!(
+            problems.iter().any(|p| {
+                p.contains("stages.dead.emissive_gain") && p.contains("no `material` layer")
+            }),
+            "a gain nothing reads is a named problem: {problems:?}"
+        );
+
+        // The shipped Material Catalog's sample stage, compiled against the root the runtime
+        // builds for that scene (its own `stages` merged in).
+        let (_, _, catalog) = shipped_scenes()
+            .into_iter()
+            .find(|(id, _, _)| id == "materialcatalog")
+            .expect("the Material Catalog scene ships");
+        let (def, problems) =
+            compile_stage(&catalog, "mc_sample").expect("the catalog authors stages.mc_sample");
+        assert!(problems.is_empty(), "{problems:?}");
+        assert!(
+            def.emissive_gain.is_finite() && def.emissive_gain >= 1.0,
+            "the catalog's spheres glow at a real gain, found {}",
+            def.emissive_gain
+        );
+    }
+
+    /// **The shared HDR-resolve predicate** names every breach of the one shape a lit HDR
+    /// surface keeps: a stage with no rgba16f attachment is not HDR (`None`); a well-formed
+    /// one resolves clean; two tonemaps, or a tonemap that does not read `hdr`, are each
+    /// named against the source the caller passes.
+    #[test]
+    fn the_hdr_resolve_predicate_names_each_breach() {
+        let styles = serde_json::json!({
+            "stages": {
+                "plain": { "layers": [{ "draw": "material" }] },
+                "good": {
+                    "attachments": { "hdr": { "format": "rgba16f" },
+                                     "color": { "format": "surface" },
+                                     "depth": { "format": "depth32" } },
+                    "passes": [ { "pass": "scene", "writes": ["hdr", "depth"] },
+                                { "pass": "tonemap_grade" } ]
+                },
+                "twice": {
+                    "attachments": { "hdr": { "format": "rgba16f" },
+                                     "color": { "format": "surface" },
+                                     "depth": { "format": "depth32" } },
+                    "passes": [ { "pass": "scene", "writes": ["hdr", "depth"] },
+                                { "pass": "tonemap_grade" },
+                                { "pass": "tonemap_grade" } ]
+                },
+                "unread": {
+                    "attachments": { "hdr": { "format": "rgba16f" },
+                                     "color": { "format": "surface" },
+                                     "depth": { "format": "depth32" } },
+                    "passes": [ { "pass": "scene", "writes": ["hdr", "depth"] },
+                                { "pass": "tonemap_grade", "reads": ["depth"] } ]
+                }
+            }
+        });
+        let resolve = |source: &str| {
+            let (def, _) = compile_stage(&styles, source).expect("authored");
+            hdr_resolve_problems(&def, source)
+        };
+        assert_eq!(resolve("plain"), None, "no rgba16f: not an HDR surface");
+        assert_eq!(resolve("good"), Some(vec![]), "the well-formed shape");
+        let twice = resolve("twice").expect("HDR").join("\n");
+        assert!(
+            twice.contains("stages.twice") && twice.contains("EXACTLY one tonemap_grade (found 2)"),
+            "{twice}"
+        );
+        let unread = resolve("unread").expect("HDR").join("\n");
+        assert!(
+            unread.contains("must READ the `hdr` attachment"),
+            "{unread}"
+        );
     }
 
     /// **The recipe vocabulary compiles, and every unresolved name in it is a NAMED
@@ -2794,7 +3036,9 @@ mod tests {
     /// fails loud if a shipped stage falls back off HDR (rule 4BB12A75).
     #[test]
     fn every_lit3d_shipped_stage_resolves_through_exactly_one_tonemap() {
-        /// Assert one stage's HDR resolve is well-formed; return whether it is HDR at all.
+        /// Assert one stage's HDR resolve is well-formed — through the ONE shared predicate,
+        /// [`hdr_resolve_problems`], the same one a consumer checks its own stage with —
+        /// and return whether it is HDR at all.
         fn hdr_resolved(styles: &Json, source: &str, where_: &str) -> bool {
             let (def, problems) = compile_stage(styles, source)
                 .unwrap_or_else(|| panic!("{where_}: `{source}` exists"));
@@ -2802,54 +3046,14 @@ mod tests {
                 problems.is_empty(),
                 "{where_} stages.{source}: {problems:?}"
             );
-            let hdr_names: Vec<&str> = def
-                .attachments
-                .names()
-                .filter(|&n| {
-                    def.attachments
-                        .get(n)
-                        .is_some_and(|a| a.format == AttachmentFormat::Rgba16f)
-                })
-                .collect();
-            if hdr_names.is_empty() {
-                return false; // not a lit-3D HDR surface — nothing to resolve.
+            match hdr_resolve_problems(&def, source) {
+                // Not a lit-3D HDR surface — nothing to resolve.
+                None => false,
+                Some(breaches) => {
+                    assert!(breaches.is_empty(), "{where_}: {breaches:?}");
+                    true
+                }
             }
-            assert_eq!(
-                hdr_names,
-                [Attachments::HDR],
-                "{where_} stages.{source}: an HDR surface's rgba16f attachment is the `hdr` one"
-            );
-            let tonemaps = def
-                .recipe()
-                .iter()
-                .filter(|p| matches!(p.kind, PassKind::TonemapGrade(_)))
-                .count();
-            assert_eq!(
-                tonemaps, 1,
-                "{where_} stages.{source}: an HDR surface resolves through EXACTLY one \
-                 tonemap_grade (found {tonemaps})"
-            );
-            let tm = def
-                .recipe()
-                .iter()
-                .find(|p| matches!(p.kind, PassKind::TonemapGrade(_)))
-                .unwrap();
-            assert!(
-                tm.reads.iter().any(|r| r.as_str() == Attachments::HDR),
-                "{where_} stages.{source}: the tonemap_grade must READ the `hdr` attachment"
-            );
-            let (order, cyclic) = def.pass_order();
-            assert!(
-                !cyclic,
-                "{where_} stages.{source}: the recipe order is cyclic"
-            );
-            let last = *order.last().expect("a recipe has at least one pass");
-            assert!(
-                matches!(def.recipe()[last].kind, PassKind::TonemapGrade(_)),
-                "{where_} stages.{source}: the tonemap_grade resolves LAST (it reads what \
-                 the lit passes write)"
-            );
-            true
         }
 
         let mut hdr_stages: Vec<String> = Vec::new();
@@ -2869,17 +3073,30 @@ mod tests {
                 }
             }
         }
+        for (file, names, styles) in shared_fragment_stages() {
+            for source in &names {
+                if hdr_resolved(&styles, source, &format!("shared/{file}")) {
+                    hdr_stages.push(source.clone());
+                }
+            }
+        }
 
         // The flip is PRESENT: every lit-3D stage S3b took HDR is found on the path. Absent
         // this, a silent revert to the non-HDR encode would pass every compile-clean gate.
         // (`pocepochs_globe` + `godmode_globe` left the corpus with their retired scenes,
         // 2026-08-26 — superseded by the Populous Bench.)
+        // `mc_sample` (the Material Catalog's lit spheres, 2026-10-20) joined them HDR from
+        // birth: its sphere's glow is real radiance only on an rgba16f attachment — and so
+        // did `inspector_sample` (the catalog's inspector modal, a scene-hosted shared tree,
+        // 2026-10-21).
         for expected in [
             "solarbirth_sky",
             "pocclusters_world",
             "populous_globe",
             "materialbench_lit",
             "portrait",
+            "mc_sample",
+            "inspector_sample",
         ] {
             assert!(
                 hdr_stages.iter().any(|s| s.as_str() == expected),
@@ -2888,9 +3105,9 @@ mod tests {
             );
         }
         assert!(
-            hdr_stages.len() >= 5,
-            "expected at least the five surviving S3b lit-3D stages on the HDR path, found \
-             {hdr_stages:?}"
+            hdr_stages.len() >= 7,
+            "expected at least the five surviving S3b lit-3D stages, the catalog's sample \
+             stage and the inspector's on the HDR path, found {hdr_stages:?}"
         );
     }
 
@@ -3284,6 +3501,11 @@ mod tests {
         for (id, def, styles) in shipped_scenes() {
             for source in def.stages().into_iter().flat_map(|s| s.keys()) {
                 check(&format!("{id}.scene.json"), &styles, source);
+            }
+        }
+        for (file, names, styles) in shared_fragment_stages() {
+            for source in &names {
+                check(&format!("shared/{file}"), &styles, source);
             }
         }
         assert!(checked > 0, "some shipped stage draws a skinned layer");

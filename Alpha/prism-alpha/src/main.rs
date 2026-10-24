@@ -94,6 +94,20 @@ fn roster() -> Vec<SceneEntry> {
             "One live copy of every Rust widget component with all features on — a nav rail of bookmarks over a card per control. The UI test scene.",
             "Clay 0.1 · Bench · UI catalog",
         )),
+        SceneEntry::new(
+            "materialcatalog",
+            "Material Catalog",
+            "primary",
+            flicker_materialcatalog::scene,
+        )
+        .with_realm(REALM_DEVELOPER)
+        .with_info(SceneInfo::new(
+            "Material Catalog",
+            "Reference",
+            "Materials / Slots",
+            "Every slot of the material byte as a sixteen-by-sixteen grid — each assigned material in the colour the engine draws it, a promoted bundle as its base map, the free and emissive slots plain. The materials registry scene.",
+            "Clay 0.1 · Bench · material catalog",
+        )),
         SceneEntry::new("materialbench", "MaterialBench", "primary", flicker_materialbench::scene)
             .with_realm(REALM_DEVELOPER)
             .with_info(SceneInfo::new(
@@ -236,11 +250,13 @@ mod tests {
                 "meshbench",
                 "packagebench",
                 "componentcatalog",
+                "materialcatalog",
                 "materialbench",
                 "packbench"
             ],
             "MeshBench leads the Developer benches (QA menu-order ruling), with the \
-             PackageBench beside it, then the Component Catalog + MaterialBench + PackBench"
+             PackageBench beside it, then the Component Catalog, the Material Catalog, \
+             the MaterialBench and the PackBench"
         );
         assert_eq!(
             realm_ids(REALM_ADVENTURER),

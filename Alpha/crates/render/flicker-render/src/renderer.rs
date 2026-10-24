@@ -906,14 +906,31 @@ impl Renderer {
         }
     }
 
-    /// Free a texture slot, returning it to the reuse pool. Dropping the
-    /// [`LoadedTexture`] drops its GPU texture + bind groups; wgpu defers the
-    /// actual free until the device finishes reading, so this is safe the same
-    /// frame the texture was last drawn. An already-free or unknown handle is
-    /// ignored. Private: the only freeable textures today are render-target
-    /// colours (via [`Self::free_render_target`]); directly-uploaded textures
-    /// (atlases, sprite sheets) live for the app's lifetime.
-    fn free_texture(&mut self, handle: TextureHandle) {
+    /// Free an uploaded texture ([`Self::load_texture`] / [`Self::load_texture_linear`]),
+    /// returning its slot to the reuse pool. Dropping the [`LoadedTexture`] drops its GPU
+    /// texture + bind groups; wgpu defers the actual free until the device finishes reading,
+    /// so this is safe the same frame the texture was last drawn. An already-free or unknown
+    /// handle is ignored.
+    ///
+    /// **Free a handle exactly once, then forget it.** Like [`Self::free_mesh`], the slot goes
+    /// back to the pool and the NEXT upload reuses it — so a second free, or a draw, through
+    /// the old handle after that lands on whatever was uploaded into the slot since. Keep an
+    /// uploaded texture in ONE owner that frees it on a consuming release. A render target's
+    /// colour texture is refused (warned): it belongs to the target, freed with
+    /// [`Self::free_render_target`].
+    pub fn free_texture(&mut self, handle: TextureHandle) {
+        if self
+            .render_targets
+            .iter()
+            .flatten()
+            .any(|rt| rt.color == handle)
+        {
+            tracing::warn!(
+                "free_texture: {handle:?} is a live render target's colour — NOT freed; free \
+                 the target with free_render_target"
+            );
+            return;
+        }
         pool_free(&mut self.textures, &mut self.free_texture_slots, handle.0);
     }
 
@@ -1436,8 +1453,14 @@ impl Renderer {
     /// `options` controls fill vs wireframe and the tint.
     pub fn draw_mesh(&mut self, mesh: MeshHandle, model: Mat4, options: MeshDrawOptions) {
         self.note_draw();
-        self.mesh
-            .push(mesh, model, options.tint, options.wireframe, options.gloss);
+        self.mesh.push(
+            mesh,
+            model,
+            options.tint,
+            options.wireframe,
+            options.gloss,
+            options.flat,
+        );
     }
 
     /// Upload a textured 3D mesh (position + normal + UV) and return a handle. Persists
@@ -1480,6 +1503,7 @@ impl Renderer {
             model,
             options.tint,
             options.gloss,
+            options.emissive_gain,
             false,
         );
     }
@@ -1503,17 +1527,20 @@ impl Renderer {
             model,
             options.tint,
             options.gloss,
+            options.emissive_gain,
             true,
         );
     }
 
     /// Queue a textured mesh this frame with a full PBR map set. Same as
     /// [`Renderer::draw_textured_mesh`] but additionally samples the `maps`
-    /// (normal / roughness / metalness / AO) — any `None` slot uses the pipeline's
-    /// default (flat normal / rough=1 / metal=0 / ao=1). The normal map perturbs the
-    /// surface normal (via the vertex tangent), roughness+metalness drive a pragmatic
-    /// specular highlight (reflective steel on the katana blade), and AO attenuates the
-    /// ambient term. Load the map textures with [`Renderer::load_texture_linear`].
+    /// (normal / roughness / metalness / AO / emit) — any `None` slot uses the pipeline's
+    /// default (flat normal / rough=1 / metal=0 / ao=1 / no emit). The normal map perturbs
+    /// the surface normal (via the vertex tangent), roughness+metalness drive a pragmatic
+    /// specular highlight (reflective steel on the katana blade), AO attenuates the ambient
+    /// term, and the Emit colour is added after the tint, scaled by
+    /// [`MeshDrawOptions::emissive_gain`]. Load the data maps with
+    /// [`Renderer::load_texture_linear`]; albedo and Emit are colour (sRGB).
     pub fn draw_textured_mesh_pbr(
         &mut self,
         mesh: TexturedMeshHandle,
@@ -1530,6 +1557,7 @@ impl Renderer {
             model,
             options.tint,
             options.gloss,
+            options.emissive_gain,
             false,
         );
     }

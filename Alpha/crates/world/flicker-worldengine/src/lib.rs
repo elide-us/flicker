@@ -56,14 +56,18 @@
 //! ```
 
 // ── THE LIVE PLANET ────────────────────────────────────────────────────────
+pub mod bubbles;
 pub mod crust;
 pub mod epochfile;
+pub mod epochs;
 pub mod evolve;
 pub mod map;
 pub mod plates;
 pub mod recipe;
 pub mod resonance;
+pub mod rocks;
 pub mod seams;
+pub mod stages;
 
 // ── THE FROZEN v1 TOOLBOX ──────────────────────────────────────────────────
 pub mod config;
@@ -77,25 +81,38 @@ pub mod snapshot;
 // The live driver's surface: the map a planet stands on, the three static
 // fields rolled onto it, and the era that evolves them.
 pub use crust::{CrustField, UPWELL_HEAT};
+pub use epochs::{raft_closing, raft_turns, EpochRecipe, EpochStats, Epochs, Rafts};
 pub use evolve::{
     vein_index_of, vein_kinds, Evolution, Phase, VeinKind, VeinNode, AIR_LAYERS, BOOTSTRAP_TICKS,
     CHANNEL_LIVE, DECK_ALT, GREEN_COVER, ICE_SOLID, MARINE_HARD_CAP, META_HARD_CAP, PHASES,
 };
-pub use map::{diameter_mi, HexMap, TileId, DEFAULT_FREQ, MAX_FREQ, MIN_FREQ, TILE_MI};
+pub use map::{
+    diameter_mi, HexMap, TileId, DEFAULT_FREQ, MAX_FREQ, MIN_FREQ, RESOLVE_TILES, TILE_MI,
+};
 pub use plates::{PlateField, DEFAULT_PLATES, MAX_PLATES, MIN_PLATES};
 // Planet generation V5 — the field recipe (the stack as data, composed the one
 // way, measured, de-projected) and the resonance field family.
+pub use bubbles::{BubbleRecipe, Bubbles};
 pub use recipe::{
-    compose, metrics, plateau, render_equirect, ridge, score, CoastBandRecipe, Composed,
-    HarmonicRecipe, HeatRecipe, MaskRecipe, Metrics, Recipe, RidgeRecipe, WaveRecipe,
+    compose, compose_with, floor_texture, hill_shade, metrics, render_equirect, render_globe,
+    render_hardness, resonance_seed, score, seam_ribbon, seam_ribbon_from, spectral_amp, Composed,
+    HeatRecipe, MaskKind, MaskRecipe, Metrics, Ramp, Recipe, SlotRecipe, StackRecipe, WaveRecipe,
+    DEFAULT_LAYERS, GLOBE_SHADE_GAIN, SHADE_AMBIENT,
 };
 pub use resonance::{
     land_share, sea_level, HarmonicWave, PlanetWave, VolcanoShape, Volcanoes, WaveMask,
-    BASE_WAVELENGTH, DEFAULT_AXES, DEFAULT_LOBE, FLOOD_MARGIN, MAX_AXES, MAX_LOBE, MIN_AXES,
-    MIN_LOBE, SEA_CREST_PERCENT,
+    DEFAULT_AXES, DEFAULT_LOBE, FLOOD_MARGIN, MAX_AXES, MAX_LOBE, MIN_AXES, MIN_LOBE,
+    SEA_CREST_PERCENT,
 };
 pub use seams::{
-    SeamField, DEFAULT_CELLS, DEFAULT_SPOTS, MAX_CELLS, MAX_SPOTS, MIN_CELLS, MIN_SPOTS,
+    push_field, SeamField, DEFAULT_CELLS, DEFAULT_SPOTS, MAX_CELLS, MAX_SPOTS, MIN_CELLS, MIN_SPOTS,
+};
+pub use rocks::Rock;
+pub use stages::{
+    hardness_cut_bins, hardness_cut_matched, hardness_cut_matched_report,
+    hardness_cut_matched_slope, hardness_cut_per_slope, hardness_cut_per_slope_report,
+    hardness_cut_report, soft_over_hard, stage, CutBin, Staged, CUT_BIN_EDGES, LOOP_CYCLES,
+    LOOP_EPOCHS,
 };
 
 // The `.epoch` format — v2 (`PlanetEpoch`, what `Evolution` captures into) and

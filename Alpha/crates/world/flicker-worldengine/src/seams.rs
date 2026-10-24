@@ -557,6 +557,38 @@ impl SeamField {
     }
 }
 
+/// **The seams' PUSH** over `map` at the field's current heat: per tile, the
+/// tangential shove DOWNHILL on the heat field — zero in the cold interiors,
+/// radiating outward from vents and seam lines (Aaron 2026-08-25: "the seams
+/// should be driving the motion of the crust, not the edges of the plates").
+/// The direction is entirely the local field's; the speed is the gradient's
+/// magnitude times `rate_scale`, saturating at `rate_max` — the era's band and
+/// the epochs' band differ only in those two numbers. Never averaged here: a
+/// caller that wants a rigid raft takes the mean itself.
+pub fn push_field(map: &HexMap, seams: &SeamField, rate_scale: f32, rate_max: f32) -> Vec<Vec3> {
+    (0..map.len() as u32)
+        .map(|t| {
+            let p = map.direction(t);
+            let mut g = Vec3::ZERO;
+            let h0 = seams.heat(t);
+            for nb in map.neighbours(t) {
+                let d = map.direction(*nb) - p;
+                // A true gradient estimate: Δh/|d| along d̂ — so the ISEA
+                // creases' uneven spacing does not bias the push.
+                let l2 = d.length_squared().max(1e-9);
+                g += d * ((seams.heat(*nb) - h0) / l2);
+            }
+            let shove = -(g - p * p.dot(g));
+            let mag = shove.length();
+            if mag < 1e-6 {
+                Vec3::ZERO
+            } else {
+                shove / mag * (mag * rate_scale).min(rate_max)
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

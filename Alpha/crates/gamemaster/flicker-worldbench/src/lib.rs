@@ -23,6 +23,7 @@
 //! translucent sea sphere whose level the SEA dial sets: 0% at the lowest tile,
 //! 98% at the highest, the last two percent drowning the planet.
 
+pub mod cache;
 mod scene;
 pub mod ui;
 

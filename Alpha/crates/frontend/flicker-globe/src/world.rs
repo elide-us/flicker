@@ -40,8 +40,10 @@ use flicker_input_router::{Flow, InputEvent, InputHandler, RouteCtx};
 use crate::view::{Arrows, GlobeView, Seat, GLOBE_LAYERS};
 
 /// One baked shell set's CPU meshes, each with its draw options, waiting for
-/// a renderer.
-type BakedSet = Vec<(Vec<MeshVertex>, Vec<u32>, MeshDrawOptions)>;
+/// a renderer — what [`GlobeWorld::bake`] builds from shells, and what a
+/// caller with geometry of its own (a tile's field of cluster quads) hands
+/// [`GlobeWorld::bake_meshes`] directly.
+pub type BakedSet = Vec<(Vec<MeshVertex>, Vec<u32>, MeshDrawOptions)>;
 use crate::{build, graticule, OrbitCam, RADIUS};
 
 /// The set name [`GlobeWorld::set_shells`] bakes into — the whole world of a
@@ -263,6 +265,18 @@ impl GlobeWorld {
         self.dirty = false;
     }
 
+    /// Build a NAMED set from meshes the CALLER made — the same pending →
+    /// upload → free path a shell bake takes, for geometry that is not a
+    /// shell over a tiling: a hex's field of LOD8 cluster quads, built by the
+    /// engine's own field module and handed over as world-space meshes. A
+    /// re-bake of the key replaces one still waiting; the set it replaces
+    /// on the GPU is freed at the upload.
+    pub fn bake_meshes(&mut self, key: &str, built: BakedSet) {
+        self.pending.retain(|(k, _)| k != key);
+        self.pending.push((key.to_string(), built));
+        self.dirty = false;
+    }
+
     /// Draw the named set from here on. A key that was never baked draws
     /// NOTHING — loudly warned, and visibly wrong (rule 4BB12A75), never a
     /// stale other view standing in.
@@ -327,6 +341,19 @@ impl GlobeWorld {
     /// (the default target is the origin the planet is centred on).
     pub fn aim(&mut self, target: Vec3) {
         self.cam.look_at(target);
+    }
+
+    /// The zoom clamps in world units (after [`set_frame`](Self::set_frame)'s
+    /// multiples of the radius) — a field is flown from the whole hex to one
+    /// quad; see [`OrbitCam::set_range`].
+    pub fn set_range(&mut self, min_distance: f32, max_distance: f32) {
+        self.cam.set_range(min_distance, max_distance);
+    }
+
+    /// Let a right-drag slide the camera's target across the ground — an
+    /// inspector over a field; see [`OrbitCam::set_panning`].
+    pub fn set_panning(&mut self, panning: bool) {
+        self.cam.set_panning(panning);
     }
 
     /// Re-frame the camera around a region of `radius`, optionally opening with

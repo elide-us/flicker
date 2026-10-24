@@ -1239,10 +1239,31 @@ name = "flicker-materialbench"
 version = "0.1.11"
 dependencies = [
  "flicker",
+ "flicker-canvas",
  "flicker-content",
  "flicker-input-core",
  "flicker-input-router",
  "flicker-materials",
+ "flicker-materialview",
+ "flicker-shell",
+ "flicker-texture",
+ "flicker-worker",
+ "image",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
+name = "flicker-materialcatalog"
+version = "0.1.11"
+dependencies = [
+ "flicker",
+ "flicker-canvas",
+ "flicker-content",
+ "flicker-input-core",
+ "flicker-input-router",
+ "flicker-materials",
+ "flicker-materialview",
  "flicker-shell",
  "flicker-texture",
  "flicker-worker",
@@ -1258,6 +1279,21 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "flicker-materialview"
+version = "0.1.11"
+dependencies = [
+ "flicker",
+ "flicker-canvas",
+ "flicker-content",
+ "flicker-globe",
+ "flicker-materials",
+ "flicker-texture",
+ "image",
+ "serde_json",
+ "tracing",
 ]
 
 [[package]]
@@ -1579,7 +1615,10 @@ dependencies = [
  "flicker-input-core",
  "flicker-input-router",
  "flicker-shell",
+ "flicker-voxel",
  "flicker-worldengine",
+ "flicker-worldtile",
+ "image",
  "serde_json",
  "tracing",
 ]
@@ -1640,9 +1679,11 @@ dependencies = [
  "flicker-core",
  "flicker-materials",
  "flicker-poc-chemistry",
+ "flicker-voxel",
  "flicker-worldengine",
  "flicker-worldgrid",
  "glam 0.33.12",
+ "image",
  "serde",
  "serde_json",
 ]
@@ -3444,6 +3485,7 @@ dependencies = [
  "flicker-controllertester",
  "flicker-csgtest",
  "flicker-materialbench",
+ "flicker-materialcatalog",
  "flicker-meshbench",
  "flicker-modelview",
  "flicker-packagebench",

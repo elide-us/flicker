@@ -38,6 +38,7 @@ mod cluster_map;
 mod contour;
 mod corner_vector;
 mod derive_lod;
+pub mod field;
 pub mod frame;
 pub mod generators;
 mod local_coord;
@@ -58,6 +59,7 @@ pub use cluster_map::ClusterMap;
 pub use contour::contour;
 pub use corner_vector::CornerVector;
 pub use derive_lod::derive_lod;
+pub use field::{direct_rgb, voxel_span_m, FieldRegion, Quad, QuadField};
 pub use flicker_primitive::heightmap;
 pub use flicker_primitive::{
     Cone, Cube, Cylinder, FlatField, HalfCylinder, HalfSphere, HeightField, Hermite, Primitive,

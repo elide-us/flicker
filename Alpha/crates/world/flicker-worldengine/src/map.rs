@@ -21,6 +21,9 @@ pub type TileId = u32;
 /// The smallest map the bench offers, in icosphere frequency — half the
 /// standard world by diameter.
 pub const MIN_FREQ: u32 = 48;
+/// Tile angles a wavelength must span for the hex grid to carry the wave
+/// (see [`HexMap::resolving_frequency`]); a bubble's diameter likewise.
+pub const RESOLVE_TILES: f32 = 4.0;
 /// The largest — 1.25× the standard, around the ceiling of comfortable
 /// human-scale gravity.
 pub const MAX_FREQ: u32 = 120;
@@ -98,6 +101,33 @@ impl HexMap {
     /// The grid itself, for the mesh builder.
     pub fn grid(&self) -> &Sphere {
         &self.grid
+    }
+
+    /// **The grid's resolution**: the mean angle between neighbouring tile
+    /// centres, radians — the step the epochs move crust by, and what
+    /// [`Self::resolving_frequency`] is read from.
+    pub fn tile_angle(&self) -> f32 {
+        let mut sum = 0.0f32;
+        let mut c = 0usize;
+        for t in self.tiles() {
+            let p = self.direction(t);
+            for nb in self.neighbours(t) {
+                sum += p.dot(self.direction(*nb)).clamp(-1.0, 1.0).acos();
+                c += 1;
+            }
+        }
+        sum / c.max(1) as f32
+    }
+
+    /// **The finest wave the grid CARRIES**, cycles per great circle: a
+    /// wavelength of [`RESOLVE_TILES`] tile angles. The one recipe has
+    /// layers finer than this — the composition leaves them to the pixel
+    /// tier, where every layer is evaluated exactly (sampled at the centres
+    /// they would alias: the hills at 160 cycles drew every continent in
+    /// corduroy, 2026-10-16). Not Nyquist's two: a lattice needs twice that
+    /// before the hill-shade stops reading the grid in it.
+    pub fn resolving_frequency(&self) -> f32 {
+        std::f32::consts::TAU / (RESOLVE_TILES * self.tile_angle())
     }
 
     /// Every outline, for the mesh builder.

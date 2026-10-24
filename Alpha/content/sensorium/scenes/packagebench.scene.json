@@ -2266,6 +2266,7 @@
               { "component": "text", "text": "$pkg_holding", "text_size": 12, "visible_bind": "has_clip", "style": "packagebench.meta", "size": 60 },
               { "component": "text", "text_bind": "clip_name", "text_size": 12, "visible_bind": "has_clip", "style": "packagebench.crumb", "size": 160 },
               { "component": "text", "text_bind": "error", "text_size": 12, "visible_bind": "has_error", "style": "packagebench.error", "size": 260 },
+              { "component": "text", "text_bind": "error_detail", "text_size": 12, "visible_bind": "has_error", "style": "packagebench.crumb", "size": 200 },
               { "component": "button", "id": "pkg_ft_menu", "action": "pause_open", "label": "$pkg_ft_menu", "variant": "secondary", "size_class": "md", "size": 90 },
               { "component": "button", "id": "promote", "action": "promote", "label": "$pkg_review_promote", "visible_bind": "review_on", "variant": "primary", "size_class": "md", "size": 150 }
             ]

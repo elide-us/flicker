@@ -33,7 +33,7 @@
             "wrap": true,
             "text_size": 12,
             "font": "label",
-            "color": "$dim"
+            "color": "modal.body.color"
           },
           {
             "component": "button",

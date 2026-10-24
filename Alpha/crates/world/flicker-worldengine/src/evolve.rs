@@ -45,6 +45,8 @@ use glam::Vec3;
 use crate::crust::CrustField;
 use crate::map::{HexMap, TileId};
 use crate::plates::OCEAN_BED_H_FRAC;
+use crate::recipe::Composed;
+use crate::rocks::Rock;
 use crate::seams::SeamField;
 
 /// The derived plate rate's clamp band, radians of turn per tick —
@@ -392,6 +394,10 @@ const WASTE_RATE: f32 = 0.5;
 /// the threshold, never a teleport.
 const STRATA_CLIFF: f32 = 1.4;
 const CLIFF_RATE: f32 = 0.7;
+/// The most a face's grade can hold the cliff by — 5.6 tile widths of
+/// local relief, past what the epochs build; a bed pressed over this cap
+/// must not stand a tower the needle-killer exists to fell.
+const CLIFF_GRADE_CAP: f32 = 4.0;
 // (An ABSOLUTE height ceiling was tried here and rejected before it shipped —
 // Aaron: it would sand every range down to one worldwide plateau at the cap.
 // The crumble limit is the DIFFERENCE FROM NEIGHBOURS, nothing else: a broad
@@ -969,6 +975,57 @@ pub enum Phase {
     Weld,
 }
 
+impl Phase {
+    /// Whether this procedure is the SURFACE's — the water, the air and the
+    /// weathering (Climate, Weather, Erode, Compact, Weld) — as against the
+    /// era's own planet-BUILDING (Upwell, Spread, Collide, Push, Form). An
+    /// era that has ADOPTED a wave planet runs the surface procedures only:
+    /// that planet's building is the resonance stack's and the epochs'.
+    pub fn surface(self) -> bool {
+        matches!(
+            self,
+            Phase::Climate | Phase::Weather | Phase::Erode | Phase::Compact | Phase::Weld
+        )
+    }
+}
+
+/// **The adopted frame** — how an adopted wave planet's heights (fractions
+/// of the radius) map onto the era's column units (tile widths), so the
+/// relief round-trips exactly: `height = origin + ground × scale`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Adopted {
+    /// The height (radius fraction) a ground of zero stands at.
+    pub origin: f32,
+    /// Radius fraction per tile-width unit — the era's own tile step.
+    pub scale: f32,
+    /// The adopted relief's roughness over land (mean |Δh| between
+    /// neighbours, radius units) — what the texture gate compares against.
+    pub roughness: f32,
+}
+
+/// **Resistance ↔ grade.** The ledger carries the catalog's erosional
+/// resistance, `0..1` (`rocks.json`: shale 0.15 … basalt 0.75 … granite 0.80
+/// … gneiss 0.85 … quartzite 0.95 — [`Rock`]); the era's grades multiply
+/// erosion's resistance around a reference of 1.0 (a vent pours 0.4–1.9), so
+/// a grade is the resistance over the BASEMENT's: granite reads 1.0, shale
+/// under a fifth, quartzite a fifth over. One number, the catalog's, at the
+/// hex and at the pixel (ruling 4EECFD93, 2026-10-19). The octave laws
+/// tuned over the V5 votes earlier that day went with the votes; the
+/// catalog's numbers are content, Aaron's to tune.
+pub fn grade_of_hardness(resistance: f32) -> f32 {
+    (resistance / Rock::Granite.resistance()).clamp(GRADE_MIN, GRADE_MAX)
+}
+
+/// The inverse of [`grade_of_hardness`], `0..1`.
+pub fn hardness_of_grade(grade: f32) -> f32 {
+    (grade.clamp(GRADE_MIN, GRADE_MAX) * Rock::Granite.resistance()).clamp(0.0, 1.0)
+}
+
+/// The grade's range: nothing softer than a twentieth of basement, nothing
+/// harder than twice it.
+const GRADE_MIN: f32 = 0.05;
+const GRADE_MAX: f32 = 2.0;
+
 /// The cycle, in order. `PHASES.len()` is what a display divides by.
 pub const PHASES: [Phase; 10] = [
     Phase::Climate,
@@ -1251,6 +1308,10 @@ pub struct Evolution {
     carry: Option<TickCarry>,
     cursor: u8,
     ticks: u64,
+    /// The adopted wave planet's frame, when the era runs over one (V5
+    /// slice 3): the surface procedures only, heights round-tripping
+    /// through `origin + ground × scale`.
+    adopted: Option<Adopted>,
 }
 
 impl Evolution {
@@ -1320,6 +1381,7 @@ impl Evolution {
             frontier: Vec::new(),
             changed: 0,
             ticks: 0,
+            adopted: None,
         };
         e.reset(map, seams);
         e
@@ -1428,7 +1490,166 @@ impl Evolution {
         // A fresh world stands STILL until something touches it.
         self.frontier = vec![false; map.len()];
         self.changed = 0;
+        self.adopted = None;
         self.derive_motion(map, seams);
+    }
+
+    /// **ADOPT THE WAVE PLANET** (V5 slice 3, Aaron 2026-10-15: *"get the
+    /// water and atmosphere layers running the full erosion cycle, get the
+    /// hardness ledger working … the procedures we've collected along the
+    /// way … should be modified to work with our resonance model"*). The era
+    /// starts from `world` — the composed (or epoched) heights, sea and
+    /// hardness — instead of the bare sea floor it bootstraps from:
+    /// - the plate shell stays the bare datum (`OCEAN_BED_H_FRAC`) and the
+    ///   whole relief above the world's deepest floor is laid down as the
+    ///   CONSOLIDATED stratum L4, in tile-width units (the era's own
+    ///   `tile_step`), with L4's GRADE from the hardness channel
+    ///   ([`grade_of_hardness`]) — so the Erode procedure's existing take,
+    ///   `HARD_STRATA / (bed × grade)`, cuts the soft country and spares the
+    ///   hard: local, selective, never a global relaxation (23D867F8);
+    /// - the CONSERVED WATER VOLUME is what stands below the world's sea
+    ///   over that ground, so the resolved sea opens exactly at it and the
+    ///   coverage at the land share;
+    /// - the whole world is LIVE for the first cycle (the frontier then
+    ///   keeps what keeps changing, as ever);
+    /// - the era runs the SURFACE procedures only ([`Phase::surface`]):
+    ///   volcanism, spreading, collision, the push and layer-forming are the
+    ///   stack's and the epochs' on this planet, not re-done here; the basal
+    ///   ceiling stands down (the lift ceiling bounds this crust at its
+    ///   source), and the drowned floor takes no water-cut (no stream runs
+    ///   under the sea — the floor's waves are buried by what the rivers
+    ///   bring, never planed).
+    ///
+    /// Heights read back through [`Self::relief`] / [`Self::relief_sea`],
+    /// the surface hardness through [`Self::surface_hardness`]. A later
+    /// `reset` leaves the frame. Capture (`.epoch`) does not yet carry the
+    /// adopted frame — a restored adopted world is owed its V5 recipe.
+    pub fn adopt(&mut self, map: &HexMap, seams: &SeamField, world: &Composed) {
+        self.reset(map, seams);
+        let n = map.len();
+        let scale = 4.0 / (n as f32).sqrt();
+        let floor = world
+            .heights
+            .iter()
+            .copied()
+            .filter(|h| h.is_finite())
+            .fold(f32::MAX, f32::min);
+        // The datum lies a hundredth of a tile under the deepest floor, so
+        // every column — the deepest included — carries a consolidated L4
+        // that reads its grade.
+        let floor = if floor.is_finite() { floor } else { 0.0 } - 0.01 * scale;
+        let origin = floor - OCEAN_BED_H_FRAC * scale;
+        for i in 0..n {
+            let h = world.heights.get(i).copied().unwrap_or(floor);
+            self.l4_h[i] = ((h - floor) / scale).max(0.0);
+            self.l4_hard[i] = grade_of_hardness(world.hardness.get(i).copied().unwrap_or(0.5));
+        }
+        let sea_units = (world.sea - origin) / scale;
+        self.water_volume = self.volume_below(sea_units);
+        self.frontier = vec![true; n];
+        let mut sum = 0.0f32;
+        let mut k = 0usize;
+        for t in 0..n as TileId {
+            if world.heights[t as usize] <= world.sea {
+                continue;
+            }
+            for nb in map.neighbours(t) {
+                sum += (world.heights[t as usize] - world.heights[*nb as usize]).abs();
+                k += 1;
+            }
+        }
+        self.adopted = Some(Adopted {
+            origin,
+            scale,
+            roughness: sum / k.max(1) as f32,
+        });
+    }
+
+    /// The adopted frame, if the era runs over a wave planet.
+    pub fn adopted(&self) -> Option<Adopted> {
+        self.adopted
+    }
+
+    /// **The relief as the wave planet reads it** — every tile's ground in
+    /// radius units through the adopted frame (`origin + ground × scale`;
+    /// an un-adopted era reads its ground in tile widths times its own
+    /// step, origin zero).
+    pub fn relief(&self) -> Vec<f32> {
+        let (origin, scale) = self.frame_of();
+        (0..self.rock.len() as TileId)
+            .map(|t| origin + self.ground(t) * scale)
+            .collect()
+    }
+
+    /// The resolved sea in the wave planet's units.
+    pub fn relief_sea(&self) -> f32 {
+        let (origin, scale) = self.frame_of();
+        let sea = self.resolve_sea();
+        if sea == f32::MIN {
+            f32::MIN
+        } else {
+            origin + sea * scale
+        }
+    }
+
+    fn frame_of(&self) -> (f32, f32) {
+        match self.adopted {
+            Some(a) => (a.origin, a.scale),
+            None => (0.0, 4.0 / (self.rock.len().max(1) as f32).sqrt()),
+        }
+    }
+
+    /// **The surface's hardness** at `tile`, `0..1` — what the material on
+    /// top resists with: a real pile of loose sediment (past `MOVE_MIN`; a
+    /// dusting is the stratum's skin) is the softest thing on any column;
+    /// loose rock reads its pour's grade; a consolidated slot its grade
+    /// times the marine press; the bare plate shell is as hard as crust gets.
+    pub fn surface_hardness(&self, tile: TileId) -> f32 {
+        let i = tile as usize;
+        if self.sediment.get(i).copied().unwrap_or(0.0) >= MOVE_MIN {
+            Rock::Shale.resistance()
+        } else if self.rock.get(i).copied().unwrap_or(0.0) > 1e-3 {
+            hardness_of_grade(self.rock_hard[i])
+        } else if self.l4_h.get(i).copied().unwrap_or(0.0) > 0.0 {
+            hardness_of_grade(self.l4_hard[i] * self.bed_hard[i])
+        } else if self.l3_h.get(i).copied().unwrap_or(0.0) > 0.0 {
+            hardness_of_grade(self.l3_hard[i] * self.bed_hard[i] / HARD_L3_FACTOR)
+        } else {
+            1.0
+        }
+    }
+
+    /// Every tile's [`Self::surface_hardness`].
+    pub fn surface_hardnesses(&self) -> Vec<f32> {
+        (0..self.rock.len() as TileId)
+            .map(|t| self.surface_hardness(t))
+            .collect()
+    }
+
+    /// The relief's roughness over land now (mean |Δh| between neighbours
+    /// above the resolved sea, in the adopted frame's units) against the
+    /// adopted relief's — the texture gate's reading: 1 is untouched, lower
+    /// is planed. `None` until a world is adopted.
+    pub fn texture_ratio(&self, map: &HexMap) -> Option<f32> {
+        let a = self.adopted?;
+        let h = self.relief();
+        let sea = self.relief_sea();
+        let mut sum = 0.0f32;
+        let mut k = 0usize;
+        for t in 0..map.len() as TileId {
+            if h[t as usize] <= sea {
+                continue;
+            }
+            for nb in map.neighbours(t) {
+                sum += (h[t as usize] - h[*nb as usize]).abs();
+                k += 1;
+            }
+        }
+        Some(if a.roughness > 0.0 {
+            sum / k.max(1) as f32 / a.roughness
+        } else {
+            1.0
+        })
     }
 
     /// POUR the water: fix the conserved volume so that the CURRENT world is
@@ -1498,31 +1719,11 @@ impl Evolution {
     /// whenever the molten field re-rolls.
     pub fn derive_motion(&mut self, map: &HexMap, seams: &SeamField) {
         let n = map.len();
-        self.push = (0..n as TileId)
-            .map(|t| {
-                let p = map.direction(t);
-                // The push: downhill on the heat field, tangential at p.
-                let mut g = Vec3::ZERO;
-                let h0 = seams.heat(t);
-                for nb in map.neighbours(t) {
-                    let d = map.direction(*nb) - p;
-                    // A true gradient estimate: Δh/|d| along d̂ — so the ISEA
-                    // creases' uneven spacing does not bias the push.
-                    let l2 = d.length_squared().max(1e-9);
-                    g += d * ((seams.heat(*nb) - h0) / l2);
-                }
-                let shove = -(g - p * p.dot(g));
-                let mag = shove.length();
-                if mag < 1e-6 {
-                    Vec3::ZERO
-                } else {
-                    // The DIRECTION is entirely the local field's; the SPEED
-                    // saturates at the band's ceiling — hot ground creeps at
-                    // the geological pace, cold ground does not creep at all.
-                    shove / mag * (mag * RATE_SCALE).min(RATE_MAX)
-                }
-            })
-            .collect();
+        // The push: downhill on the heat field, tangential — the DIRECTION is
+        // entirely the local field's; the SPEED saturates at the band's
+        // ceiling, so hot ground creeps at the geological pace and cold
+        // ground does not creep at all.
+        self.push = crate::seams::push_field(map, seams, RATE_SCALE, RATE_MAX);
         if self.drift.len() != n {
             self.drift = vec![0.0; n];
         }
@@ -2312,8 +2513,19 @@ impl Evolution {
             if self.frontier.len() != n {
                 self.frontier = vec![false; n];
             }
+            // An ADOPTED planet has no quiet frontier: the rain falls on the
+            // whole world every cycle, and the cut it makes in a cycle is far
+            // under the activity floor volcanism's piles were measured by —
+            // so every tile is live every cycle. The frontier still rebuilds
+            // from what changed (the readout), it just does not gate.
+            let act = if self.adopted.is_some() {
+                self.frontier = vec![false; n];
+                vec![true; n]
+            } else {
+                std::mem::replace(&mut self.frontier, vec![false; n])
+            };
             self.carry = Some(TickCarry {
-                act: std::mem::replace(&mut self.frontier, vec![false; n]),
+                act,
                 compressed: Vec::new(),
                 snap_base: self.base.clone(),
                 snap_rock: self.rock.clone(),
@@ -2337,18 +2549,24 @@ impl Evolution {
             snap_strata,
             sea,
         } = self.carry.take().expect("the cycle is open");
-        self.run_phase(
-            phase,
-            map,
-            seams,
-            crust,
-            sea,
-            &mut act,
-            &mut compressed,
-            (&snap_base, &snap_rock, &snap_sed, &snap_strata),
-            n,
-            tile_step,
-        );
+        // An adopted wave planet runs the SURFACE procedures only; its
+        // building procedures pass without running (the cursor still walks
+        // the whole cycle, so a display's phase label and the tick count
+        // read as ever).
+        if self.adopted.is_none() || phase.surface() {
+            self.run_phase(
+                phase,
+                map,
+                seams,
+                crust,
+                sea,
+                &mut act,
+                &mut compressed,
+                (&snap_base, &snap_rock, &snap_sed, &snap_strata),
+                n,
+                tile_step,
+            );
+        }
         self.cursor += 1;
         if self.cursor as usize == PHASES.len() {
             self.cursor = 0;
@@ -3506,7 +3724,16 @@ impl Evolution {
                     // weather actually delivers — deserts and rain-shadow
                     // interiors keep their plains.
                     let wet = if h < sea {
-                        BASE_WET + SUBMERGED_WET
+                        // On an ADOPTED wave planet the drowned floor takes
+                        // no water-cut: no stream runs under the sea, and the
+                        // floor's stone waves are what the epochs made —
+                        // buried by the rivers' load where it settles, never
+                        // planed by a budget (the era's own floor was bare).
+                        if self.adopted.is_some() {
+                            0.0
+                        } else {
+                            BASE_WET + SUBMERGED_WET
+                        }
                     } else {
                         // The COVER binds the soil: full vegetation holds
                         // back most of the budget — deserts starve of rain,
@@ -3665,9 +3892,23 @@ impl Evolution {
                     // the needle-killer. A vent column that densified into a spike
                     // loses its face to its neighbours as loose spoil, tick by tick,
                     // until the relief is a mountain instead of a needle.
-                    let cliff = deepest - STRATA_CLIFF;
+                    // THE GRADE HOLDS THE CLIFF: a consolidated face stands
+                    // relief in proportion to its grade and calves slower by
+                    // it — granite walls where shale slumps. Grade 1.0 (a
+                    // column no ledger graded: bed × stratum = 1) reads
+                    // STRATA_CLIFF and CLIFF_RATE exactly, bit-identical to
+                    // the needle-killer as it shipped; the hardness ledger
+                    // (`grade_of_hardness`, the catalog's resistance over basement) moves it, capped
+                    // at the root's grade so a pressed bed never stands a
+                    // tower. Measured 2026-10-19 (incident F4BDD125): blind
+                    // to the grade, this path planed the orogenic belts —
+                    // the tallest, steepest ground — 3–4× faster than soft
+                    // lowland at the same elevation, the ledger's inverse.
+                    let grade = self.face_grade(i).clamp(0.1, CLIFF_GRADE_CAP);
+                    let cliff = deepest - STRATA_CLIFF * grade;
                     if cliff > 0.0 && (self.l4_h[i] > 0.0 || self.l3_h[i] > 0.0) {
-                        let mut fall = (cliff * CLIFF_RATE).min(self.l4_h[i] + self.l3_h[i]);
+                        let mut fall =
+                            (cliff * CLIFF_RATE / grade).min(self.l4_h[i] + self.l3_h[i]);
                         let from_l4 = fall.min(self.l4_h[i]);
                         self.l4_h[i] -= from_l4;
                         fall -= from_l4;
@@ -4150,9 +4391,15 @@ impl Evolution {
                         *sank += take;
                     }
                 };
+                // On an ADOPTED wave planet the ceiling stands down: its
+                // crust was not built here, and its height is already bound
+                // at the source — the epochs' lift ceiling (`summit`); a grade
+                // read as weight would founder the resonance stack's own
+                // ranges on the first cycle (the hard world lost ninety times
+                // the soft one's height to the ceiling, not to the water).
                 #[allow(clippy::needless_range_loop)] // parallel stores, one index
                 for i in 0..n {
-                    if !act[i] {
+                    if !act[i] || self.adopted.is_some() {
                         continue;
                     }
                     let mut over = self.overburden(i) - DELAM_LOAD;
@@ -7019,10 +7266,19 @@ mod tests {
         let sea = e.resolve_sea();
         e.tick(&map, &seams, &crust, sea);
         // Both consolidated under pressure into the vein layer — and the
-        // GRADE rode in.
+        // GRADE rode in. The soft pile already stands lower: since
+        // 2026-10-19 a face holds the cliff by its grade, so a 0.6-grade
+        // face calves past 0.84 of relief where the 1.8 face stands to 2.5
+        // — the differential begins at the first tick.
         assert!(
-            e.l3_h[ai] > 0.5 && e.l3_h[bi] > 0.5,
+            e.l3_h[ai] > 0.5 && e.l3_h[bi] > 0.3,
             "both piles formed strata: {} / {}",
+            e.l3_h[ai],
+            e.l3_h[bi]
+        );
+        assert!(
+            e.l3_h[bi] < e.l3_h[ai],
+            "the soft face calves where the hard one stands: {} / {}",
             e.l3_h[ai],
             e.l3_h[bi]
         );
@@ -8603,5 +8859,117 @@ mod tests {
             }
         }
         eprintln!("WELL early +{early:.4}/{WINDOW}t  late +{late:.4}/{WINDOW}t");
+    }
+
+    /// **THE ERA ADOPTS THE WAVE PLANET** (V5 slice 3): the composed relief,
+    /// sea and hardness stand up as the era's column exactly (the relief
+    /// round-trips, the sea resolves at the composed sea, the coverage is
+    /// the land share); over fifty surface cycles the water cuts — heights
+    /// move, the sea holds, nothing is minted — and it cuts BY HARDNESS:
+    /// soft country loses more than hard, the land's texture survives, and
+    /// no building procedure runs (no rock poured, no stratum formed).
+    #[test]
+    fn the_era_adopts_the_wave_planet_and_erodes_by_hardness() {
+        use crate::recipe::{compose, Recipe};
+        use crate::resonance::land_share;
+        let map = HexMap::new(MIN_FREQ);
+        let recipe = Recipe::default_at(MIN_FREQ, 7);
+        let c = compose(&map, &recipe);
+        let seams = SeamField::new(&map, recipe.heat.cells, recipe.heat.spots, recipe.heat.seed);
+        let crust = CrustField::derive(&map, &seams);
+        let mut e = Evolution::new(&map, &seams);
+        e.adopt(&map, &seams, &c);
+        let frame = e.adopted().expect("adopted");
+        assert!(frame.scale > 0.0 && frame.roughness > 0.0);
+        let back = e.relief();
+        for (t, (a, b)) in back.iter().zip(&c.heights).enumerate() {
+            assert!(
+                (a - b).abs() < 1e-5,
+                "tile {t}: {a} vs {b} — the relief round-trips"
+            );
+        }
+        let sea0 = e.relief_sea();
+        assert!(
+            (sea0 - c.sea).abs() < 2e-4,
+            "the sea resolves at the composed sea: {sea0} vs {}",
+            c.sea
+        );
+        let land0 = land_share(&map, |t| c.heights[t as usize], c.sea);
+        assert!(
+            (e.coverage() - (1.0 - land0)).abs() < 0.02,
+            "coverage {} vs water {}",
+            e.coverage(),
+            1.0 - land0
+        );
+        // The hardness channel became the grades, and reads back.
+        for t in 0..map.len() as TileId {
+            let want = c.hardness[t as usize];
+            let got = e.surface_hardness(t);
+            assert!(
+                (got - want).abs() < 0.02,
+                "tile {t}: hardness {got} vs {want}"
+            );
+        }
+        let ratio0 = e.texture_ratio(&map).expect("adopted");
+        assert!(
+            (ratio0 - 1.0).abs() < 1e-4,
+            "the adopted texture reads 1: {ratio0}"
+        );
+        // Fifty surface cycles.
+        let (rock0, strata0) = (e.rock.iter().sum::<f32>(), e.strata_total());
+        for _ in 0..50 {
+            let sea = e.resolve_sea();
+            e.tick(&map, &seams, &crust, sea);
+        }
+        assert_eq!(e.ticks(), 50);
+        assert_eq!(e.eruptions(), 0, "no volcanism on the adopted planet");
+        assert_eq!(e.rock.iter().sum::<f32>(), rock0, "no rock poured");
+        assert_eq!(
+            e.strata_total(),
+            strata0,
+            "no stratum formed by the era's own building"
+        );
+        let after = e.relief();
+        assert!(after.iter().all(|h| h.is_finite()));
+        assert_ne!(after, back, "the water cut");
+        let sea1 = e.relief_sea();
+        assert!(
+            (sea1 - sea0).abs() < 0.1 * (c.sea - frame.origin).abs() + 1e-3,
+            "the sea holds: {sea0} → {sea1}"
+        );
+        // THE TEXTURE SURVIVES: the land's roughness holds within a fifth.
+        let ratio = e.texture_ratio(&map).expect("adopted");
+        assert!(ratio > 0.8, "the waves stand: texture ratio {ratio}");
+        // BY HARDNESS — the inverse probe: the SAME relief adopted as soft
+        // sediment and as metamorphic root, identical geometry, hardness the
+        // only difference; the soft world loses more land height than the
+        // hard one (a rate discriminator, never a landform — 935269B7).
+        let loss_of = |hardness: f32| -> f32 {
+            let world = Composed {
+                heights: c.heights.clone(),
+                sea: c.sea,
+                hardness: vec![hardness; map.len()],
+            };
+            let mut e = Evolution::new(&map, &seams);
+            e.adopt(&map, &seams, &world);
+            for _ in 0..50 {
+                let sea = e.resolve_sea();
+                e.tick(&map, &seams, &crust, sea);
+            }
+            let h = e.relief();
+            (0..map.len())
+                .filter(|t| c.heights[*t] > c.sea)
+                .map(|t| (c.heights[t] - h[t]).max(0.0))
+                .sum::<f32>()
+        };
+        let (soft, hard) = (loss_of(0.3), loss_of(0.9));
+        assert!(soft > 0.0, "the soft world erodes at all");
+        assert!(
+            soft > 2.0 * hard,
+            "soft land erodes well ahead of hard: {soft} vs {hard}"
+        );
+        // A reset leaves the frame.
+        e.reset(&map, &seams);
+        assert!(e.adopted().is_none());
     }
 }

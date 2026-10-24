@@ -348,7 +348,7 @@ mod tests {
             MeshIndices::U32(&[0, 1, 2]),
         );
         let store = vec![Some(loaded)];
-        mesh.push(MeshHandle(0), Mat4::IDENTITY, [1.0; 4], false, 0.0);
+        mesh.push(MeshHandle(0), Mat4::IDENTITY, [1.0; 4], false, 0.0, false);
         mesh.prepare(&device, &queue);
 
         let color = make_tex(fmt, "flicker.shadow_test.color");

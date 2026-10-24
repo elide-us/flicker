@@ -31,6 +31,8 @@ struct PerDraw {
     model: mat4x4<f32>,
     tint: vec4<f32>,
     // flags.x: 1.0 = wireframe mode, 0.0 = filled. flags.y: gloss (sheen strength).
+    // flags.z: 1.0 = FLAT shading — the normal is the face's own, from the screen-space
+    // derivatives of the world position (vertex normals ignored); 0.0 = the smooth path.
     flags: vec4<f32>,
 };
 
@@ -121,6 +123,22 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     }
 
     let base = material_color(in.material);
+    // THE NORMAL: the interpolated vertex normal, or — flat shading, `flags.z` — the face's
+    // own from the derivatives of the world position. The derivatives are taken here, in
+    // uniform control flow, before any branch; a cross product of them is the face plane's
+    // normal up to sign, and the sign is settled by facing the camera: a front face (the
+    // only kind this back-culled pipeline rasterizes) has its outward normal toward the
+    // viewer, so the camera-facing choice IS the outward normal.
+    let dpx = dpdx(in.world_position);
+    let dpy = dpdy(in.world_position);
+    var normal = in.world_normal;
+    if (per_draw.flags.z > 0.5) {
+        var face = normalize(cross(dpx, dpy));
+        if (dot(face, scene.camera_pos.xyz - in.world_position) < 0.0) {
+            face = -face;
+        }
+        normal = face;
+    }
     // EMISSIVE direct colour (bit 30 inside the bit-31 direct escape): the
     // surface GLOWS — no Lambert, no sheen, slightly over unit so it reads
     // hot against every lit neighbour (and survives an HDR roll-off as a
@@ -150,7 +168,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         let li = scene.lights[i];
         let s = light_sample(li, in.world_position);
         let radiance = li.color_intensity.rgb * li.color_intensity.w;
-        let ndl = max(dot(in.world_normal, s.xyz), 0.0);
+        let ndl = max(dot(normal, s.xyz), 0.0);
         // Shadow: darken ONLY the light this map is cast for; every other light, and the
         // whole surface when no shadow is bound (enabled = 0), keeps vis = 1.0 exactly, so
         // the term is bit-identical to the unshadowed `radiance * (ndl * s.w)`.
@@ -162,10 +180,10 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         if (gloss > 0.001 && !sheen_taken && li.position_kind.w >= 0.5) {
             sheen_taken = true;
             let view_dir = normalize(scene.camera_pos.xyz - in.world_position);
-            let ndv = max(dot(in.world_normal, view_dir), 0.0);
+            let ndv = max(dot(normal, view_dir), 0.0);
             let fresnel = pow(1.0 - ndv, 3.0); // grazing-angle limb brightening
             let half_vec = normalize(s.xyz + view_dir);
-            let broad = pow(max(dot(in.world_normal, half_vec), 0.0), 3.0); // very broad, faint
+            let broad = pow(max(dot(normal, half_vec), 0.0), 3.0); // very broad, faint
             sheen = radiance * (0.35 * fresnel + 0.10 * broad) * ndl * gloss;
         }
     }

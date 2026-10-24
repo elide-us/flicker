@@ -101,8 +101,10 @@ pub use sections::{Section, SectionChange, Sections};
 
 pub mod strings;
 
-/// Data-driven rows: a `list` with `rows_from` expands its ONE prototype child into a
-/// clone per row the scene publishes — see [`rows`].
+/// Data-driven rows: a `list` (or `row`) with `rows_from` expands its ONE prototype child
+/// into a clone per row the scene publishes, and a `select` with `rows_from` repeats its
+/// LAST child — the prototype `option` — after the options authored ahead of it — see
+/// [`rows`].
 pub mod rows;
 /// The **one stage compiler** — `stages.<source>` JSON → the typed
 /// [`StageDef`](flicker_render::StageDef) every surface filler consumes, with every
@@ -110,7 +112,8 @@ pub mod rows;
 pub mod stages;
 pub use rows::{instantiate_rows, Row};
 pub use stages::{
-    compile_rate, compile_stage, is_source_key, lighting_preset, stage_def, stage_defs,
+    compile_rate, compile_stage, hdr_resolve_problems, is_source_key, lighting_preset, stage_def,
+    stage_defs,
 };
 
 /// The **structural** component kinds — the ones the walker itself lays out and
@@ -557,28 +560,48 @@ pub fn load_shared_ui_json(script: &ScriptHost, scene: Option<&serde_json::Value
 /// (rule 8D8A4215) and is refused loudly.
 const THEME_SATELLITES: &[&str] = &["ui_stages.json", "ui_style.json"];
 
+/// A key that starts with `_` is an ANNOTATION — `_comment`, `_emissive_gain`, … —
+/// a file's note to its reader, never style data. Every theme file carries a
+/// `_comment`, so merging annotations made each load report a "collision" per
+/// satellite; the loader skips them at every level it merges (a satellite's top
+/// level, a scene's blocks, a scene's stages) and each file keeps its own.
+fn is_annotation(key: &str) -> bool {
+    key.starts_with('_')
+}
+
 /// Merge one satellite file's top-level entries into the theme root. The theme
-/// file WINS a key collision (loud error — a satellite must own its keys), and a
-/// `theme` key is refused outright (the palette-fork guard).
-fn merge_satellite(root: &mut serde_json::Value, sat: serde_json::Value, name: &str) {
+/// file WINS a key collision (a satellite must own its keys), a `theme` key is
+/// refused outright (the palette-fork guard), and annotations are skipped
+/// ([`is_annotation`]). Returns every problem — the caller logs each one loudly.
+fn merge_satellite(
+    root: &mut serde_json::Value,
+    sat: serde_json::Value,
+    name: &str,
+) -> Vec<String> {
     let (Some(obj), serde_json::Value::Object(sat)) = (root.as_object_mut(), sat) else {
-        tracing::error!("{name}: not a JSON object — ignored");
-        return;
+        return vec![format!("{name}: not a JSON object — ignored")];
     };
+    let mut problems = Vec::new();
     for (k, v) in sat {
+        if is_annotation(&k) {
+            continue;
+        }
         if k == "theme" {
-            tracing::error!(
+            problems.push(format!(
                 "{name} carries a `theme` key — the palette lives ONLY in ui_theme.json \
                  (one-palette law); refusing the fork"
-            );
+            ));
             continue;
         }
         if obj.contains_key(&k) {
-            tracing::error!("{name}: key `{k}` collides with ui_theme.json — the theme file wins");
+            problems.push(format!(
+                "{name}: key `{k}` collides with ui_theme.json — the theme file wins"
+            ));
             continue;
         }
         obj.insert(k, v);
     }
+    problems
 }
 
 /// Load `ui_theme.json` at `path`, merge its sibling SATELLITE files
@@ -629,13 +652,17 @@ pub fn load_styles_for(
                 continue;
             };
             match serde_json::from_str::<serde_json::Value>(&text) {
-                Ok(sat) => merge_satellite(&mut ui, sat, name),
+                Ok(sat) => merge_satellite(&mut ui, sat, name)
+                    .iter()
+                    .for_each(|p| tracing::error!("{p}")),
                 Err(e) => tracing::error!("{name} parse failed ({}): {e}", sp.display()),
             }
         }
     }
     if let (Some(obj), Some(serde_json::Value::Object(scene))) = (ui.as_object_mut(), scene) {
-        merge_scene_blocks(obj, scene);
+        merge_scene_blocks(obj, scene)
+            .iter()
+            .for_each(|p| tracing::error!("{p}"));
     }
     resolve_tokens(&mut ui);
     ui
@@ -647,36 +674,47 @@ pub fn load_styles_for(
 /// a scene's stages land beside the library's `lighting` presets, and a scene stage
 /// that collides with a library source is refused loudly (the library wins), because
 /// two definitions of one name is exactly the drift the one compiler exists to end.
+/// Annotations are skipped at both levels ([`is_annotation`]). Returns every problem —
+/// the caller logs each one loudly.
 fn merge_scene_blocks(
     root: &mut serde_json::Map<String, serde_json::Value>,
     scene: &serde_json::Map<String, serde_json::Value>,
-) {
+) -> Vec<String> {
+    let mut problems = Vec::new();
     for (k, v) in scene {
+        if is_annotation(k) {
+            continue;
+        }
         match k.as_str() {
-            "theme" => tracing::error!(
+            "theme" => problems.push(
                 "scene styles carry a `theme` key — the palette lives ONLY in \
                  ui_theme.json (one-palette law); refusing the fork"
+                    .to_string(),
             ),
             "stages" => {
                 let Some(scene_stages) = v.as_object() else {
-                    tracing::error!("scene `stages` is not an object — ignored");
+                    problems.push("scene `stages` is not an object — ignored".to_string());
                     continue;
                 };
                 let shared = root
                     .entry("stages")
                     .or_insert_with(|| serde_json::Value::Object(Default::default()));
                 let Some(shared) = shared.as_object_mut() else {
-                    tracing::error!(
+                    problems.push(
                         "the shared `stages` block is not an object — scene stages dropped"
+                            .to_string(),
                     );
                     continue;
                 };
                 for (name, stage) in scene_stages {
+                    if is_annotation(name) {
+                        continue;
+                    }
                     if shared.contains_key(name) {
-                        tracing::error!(
+                        problems.push(format!(
                             "scene stage `{name}` collides with the shared stage library \
                              (ui_stages.json) — the library wins; rename the scene's stage"
-                        );
+                        ));
                         continue;
                     }
                     shared.insert(name.clone(), stage.clone());
@@ -687,6 +725,7 @@ fn merge_scene_blocks(
             }
         }
     }
+    problems
 }
 
 /// Like [`load_styles`] but from an already-in-memory `ui_theme.json` string
@@ -726,12 +765,16 @@ pub fn load_styles_strs_for(
     };
     for (i, part) in parts.iter().enumerate().skip(1) {
         match serde_json::from_str::<serde_json::Value>(part) {
-            Ok(sat) => merge_satellite(&mut ui, sat, &format!("embedded satellite #{i}")),
+            Ok(sat) => merge_satellite(&mut ui, sat, &format!("embedded satellite #{i}"))
+                .iter()
+                .for_each(|p| tracing::error!("{p}")),
             Err(e) => tracing::error!("embedded satellite #{i} parse failed: {e}"),
         }
     }
     if let (Some(obj), Some(serde_json::Value::Object(scene))) = (ui.as_object_mut(), scene) {
-        merge_scene_blocks(obj, scene);
+        merge_scene_blocks(obj, scene)
+            .iter()
+            .for_each(|p| tracing::error!("{p}"));
     }
     resolve_tokens(&mut ui);
     ui
@@ -1111,6 +1154,120 @@ mod tests {
             checked > 0,
             "the gate found the shipped scene files in {}",
             dir.display()
+        );
+    }
+
+    /// **Annotations never merge, and a real collision still reports.** Every theme
+    /// file carries a `_comment`; the satellite merge used to report each one as a
+    /// collision with ui_theme.json — two loud ERRORs on every styles load (every scene
+    /// open, every modal). The loader skips annotations at every level it merges.
+    #[test]
+    fn annotations_never_merge_and_a_real_collision_still_reports() {
+        let mut root = serde_json::json!({ "_comment": "theme", "theme": {}, "chrome": {} });
+        let problems = merge_satellite(
+            &mut root,
+            serde_json::json!({ "_comment": "satellite", "_note": 1, "chrome": {}, "stages": {} }),
+            "sat.json",
+        );
+        assert_eq!(
+            problems.len(),
+            1,
+            "only the real collision reports: {problems:?}"
+        );
+        assert!(problems[0].contains("`chrome`"), "{problems:?}");
+        assert_eq!(root["_comment"], "theme", "each file keeps its own note");
+        assert!(
+            root.get("_note").is_none(),
+            "an annotation never lands as style data"
+        );
+        assert!(
+            root.get("stages").is_some(),
+            "the satellite's own key merged"
+        );
+        let obj = root.as_object_mut().expect("an object");
+        let scene = serde_json::json!({
+            "_comment": "the scene's note",
+            "stages": { "_comment": "the scene's stages", "mine": {} },
+            "screens": {}
+        });
+        let scene = scene.as_object().expect("an object");
+        let problems = merge_scene_blocks(obj, scene);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(
+            obj["_comment"], "theme",
+            "a scene's note never replaces the theme's"
+        );
+        assert!(obj["stages"].get("_comment").is_none());
+        assert!(
+            obj["stages"].get("mine").is_some(),
+            "the scene's stage merged"
+        );
+        let again = merge_scene_blocks(obj, scene);
+        assert_eq!(
+            again.len(),
+            1,
+            "a real stage collision still reports: {again:?}"
+        );
+        assert!(again[0].contains("`mine`"), "{again:?}");
+    }
+
+    /// **The shipped theme trio and every shipped scene's blocks merge CLEAN** — no
+    /// collision, no palette fork, no stage clash — so no styles load logs an ERROR.
+    #[test]
+    fn the_shipped_theme_files_and_every_scene_merge_without_a_problem() {
+        use std::path::{Path, PathBuf};
+        let sensorium =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../content/sensorium");
+        let read = |p: &Path| -> serde_json::Value {
+            let text =
+                std::fs::read_to_string(p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+            serde_json::from_str(&text).unwrap_or_else(|e| panic!("{}: {e}", p.display()))
+        };
+        let resources = sensorium.join("resources");
+        let mut theme = read(&resources.join("ui_theme.json"));
+        let mut problems = Vec::new();
+        for name in THEME_SATELLITES {
+            problems.extend(merge_satellite(
+                &mut theme,
+                read(&resources.join(name)),
+                name,
+            ));
+        }
+        fn scenes(dir: &Path, out: &mut Vec<PathBuf>) {
+            for entry in std::fs::read_dir(dir).expect("scenes dir reads").flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    scenes(&path, out);
+                } else if path.to_string_lossy().ends_with(".scene.json") {
+                    out.push(path);
+                }
+            }
+        }
+        let mut files = Vec::new();
+        scenes(&sensorium.join("scenes"), &mut files);
+        let mut styled = 0;
+        for path in &files {
+            let scene = read(path);
+            let Some(styles) = scene.get("styles").and_then(|s| s.as_object()) else {
+                continue;
+            };
+            let mut root = theme.as_object().cloned().expect("the theme is an object");
+            problems.extend(
+                merge_scene_blocks(&mut root, styles)
+                    .into_iter()
+                    .map(|p| format!("{}: {p}", path.display())),
+            );
+            styled += 1;
+        }
+        assert!(
+            problems.is_empty(),
+            "a styles load logs ERRORs:\n{}",
+            problems.join("\n")
+        );
+        assert!(
+            files.len() > 20 && styled > 15,
+            "the gate found the shipped scenes ({} files, {styled} with styles)",
+            files.len()
         );
     }
 

@@ -1,33 +1,66 @@
 {
-  "_comment": "MaterialBench SCENE DEFINITION (201F4F51 template-free). The texture SYNTHESIZER console: LEFT the 6-voice channel rack (each voice row is authored DATA — arrangement, not a template), CENTRE the tiled-swatch preview under an 8-tab view selector (7 flat maps + the LIT turntable; the tabs bind `sel_map`, a NUMBER), RIGHT the output stage over the selected voice's fine knobs. Header: material dropdown (Rust-filled from the index, binds `sel_material`) + patch stepper + Roll/Reseed. Footer: bake rung · Commit · status. The `materialbench` behaviour plays it (flicker-materialbench); materialbench.lua derives the row washes + view-cell visibility. Styles were folded in from the crate's quarantined scene_styles.json (its layout block described the deleted workbench template and did not move).",
+  "_comment": "MaterialBench SCENE DEFINITION — the MATERIAL DESIGNER (plan 92F0F90D S4): a node-graph editor over flicker-texture's v2 MaterialGraph. HEADER: the slot binding (the index dropdown) · the preset select (New, then every graph of the factory library, data/factory_materials.json, in file order) · Roll · Reseed · the designer ⇄ materials pages. LEFT the node list; CENTRE the graph canvas over the seven map views + the lit sample; RIGHT the selected node's parameters (one cell per node kind) over the output stage. FOOTER: bake rung · Commit · the status line. The `materialbench` behaviour plays it (flicker-materialbench); materialbench.lua derives the washes and the cell / page gates. Every control is a signal routed through the ONE dispatcher; nothing in Rust composes a control or injects a style.",
   "behaviour": "materialbench",
-  "params": {},
-  "stages": {
-    "materialbench_lit": {
-      "_comment": "The MaterialBench LIT PREVIEW — the material shown on a turning sample under a fixed light, which is the only way roughness/metalness/normal relief actually read. The `material` layer IS the sample body, drawn by the bench's lit module in the six preview maps it already holds; the target clears TRANSPARENT so the node's panel supplies the backdrop, matching `portrait`.",
-      "lighting": "studio",
-      "clear": "$stage_void",
-      "camera": {
-        "kind": "orbit",
-        "yaw": 0.6,
-        "pitch": 0.28,
-        "dist": 2.6,
-        "target_y": 0.0
-      },
-      "layers": [
+  "params": {
+    "_comment_new_material": "The NEW-material default — what the preset select's first entry (New) opens: one fBm noise driving the height, coloured through the neutral stone ramp. A v2 material graph document, authored as data; a malformed one is loud and New opens the factory library's first entry (data/factory_materials.json) instead — a blank graph when that library is empty too. Every number in it is Aaron's to tune.",
+    "new_material": {
+      "version": 2,
+      "id": "new",
+      "name": "New Material",
+      "material": null,
+      "seed": 1,
+      "nodes": [
         {
-          "draw": "material"
+          "key": "noise",
+          "kind": "noise",
+          "source": "fbm",
+          "scale": 4,
+          "octaves": 4,
+          "lacunarity": 2.0,
+          "gain": 0.5,
+          "warp": 0.0,
+          "salt": 1,
+          "contrast": 1.0,
+          "invert": false
+        },
+        {
+          "key": "ramp",
+          "kind": "ramp",
+          "inputs": ["noise"],
+          "ramp": {"stops": [{"at": 0.0, "color": [0.09, 0.09, 0.1]}, {"at": 0.5, "color": [0.36, 0.34, 0.32]}, {"at": 1.0, "color": [0.78, 0.76, 0.72]}]}
         }
       ],
+      "output": {"base": "ramp", "height": "noise", "relief": 0.5, "roughness": 0.75, "metalness": 0.0, "ao": 1.0}
+    },
+    "_comment_new_glow_strength": "The strength a glow STARTS at when a glow colour is picked on a material that has none (the output stage's Glow select) — so the glow is visible the moment it exists. Aaron's to tune; a missing value is loud and falls back to the crate's own output-stage default.",
+    "new_glow_strength": 1.0,
+    "_comment_canvas_fit_floor": "The graph canvas's READABLE zoom floor: a loaded graph (and Reset view) frames the whole graph only while that takes no smaller a zoom than this — below it the card titles and port labels are too small to read — and otherwise frames the selected node (or the Output card) at this zoom, the rest a pan away. Aaron's to tune; a missing value is loud and lets a fit zoom out to the canvas's own floor.",
+    "canvas_fit_floor": 0.75
+  },
+  "stages": {
+    "materialbench_lit": {
+      "_comment": "The MaterialBench LIT PREVIEW — the material shown on a turning sample under a fixed light, which is the only way roughness/metalness/normal relief actually read. The `material` layer IS the sample body, drawn by the engine's material sample filler (flicker-materialview) in the seven preview maps the bench already holds (six bound — Height feeds no shading slot); the target clears TRANSPARENT so the node's panel supplies the backdrop, matching `portrait`.",
+      "lighting": "studio",
+      "clear": "$stage_void",
+      "camera": {"kind": "orbit", "yaw": 0.6, "pitch": 0.28, "dist": 2.6, "target_y": 0.0},
+      "layers": [{"draw": "material"}],
+      "_emissive_gain": "EMISSIVE GAIN — the draw-time multiplier on the material's Emit in this stage's HDR space (the bench hands it to the lit sample's maps). An 8-bit Emit texel caps at 1.0, so at 1.0 a glow never outshines the surface's own white and never crosses the bloom threshold; at 4.0 a full Emit texel burns at 4.0, past the threshold + knee below, so a glow reads as a glow — bloomed into a halo past the sample's edge — rather than as paint. The SAME 4.0 the Material Catalog's `mc_sample` authors, so a material glows alike in both (a gate holds the two equal). A finite number >= 0 (the stage compiler gates anything else). AARON'S TO TUNE in-window — a placeholder, never a Rust constant. The Emit COLOUR stays the material's own (the curated palette); this is only how bright it burns.",
+      "emissive_gain": 4.0,
       "_hdr": "HDR: the `scene` pass (the lit material sample) renders into the LINEAR rgba16f `hdr` working attachment and `tonemap_grade` resolves it (ACES roll-off) into the sRGB `color` last, so specular highlights on metal/low-roughness roll off instead of clipping. grade_strength 0 = tonemap only, no invented tint — an art grade is Aaron's to author in-window. Alpha passes through, so the transparent clear the panel shows through survives.",
-      "attachments": {
-        "hdr": { "format": "rgba16f" },
-        "color": { "format": "surface" },
-        "depth": { "format": "depth32" }
-      },
+      "attachments": {"hdr": {"format": "rgba16f"}, "color": {"format": "surface"}, "depth": {"format": "depth32"}},
       "passes": [
-        { "pass": "scene", "writes": ["hdr", "depth"] },
-        { "pass": "tonemap_grade" }
+        {"pass": "scene", "writes": ["hdr", "depth"]},
+        {
+          "_comment": "BLOOM — what makes an EMISSIVE read as a glow: it reads the linear `hdr` the scene pass wrote, extracts everything above the threshold into a half-res buffer, blurs it, and ADDS the halo back into `hdr` — with the halo's coverage as alpha, so it shows past the body's edge over this TRANSPARENT clear. What crosses the threshold: a hot specular off low-roughness metal, and an Emit added over a lit surface at this stage's authored `emissive_gain` (4.0 above — a full Emit texel burns at 4.0, well past threshold + knee) — so it derives AFTER the scene pass (it reads `hdr`) and BEFORE `tonemap_grade` (which reads the bloomed `hdr` and rolls it off). No pass numbers anywhere — the reads/writes ARE the order. EVERY NUMBER BELOW IS AN ART PLACEHOLDER (pocclusters' values), tuned in-window, never in Rust: `threshold` ~1.0 is the brightness a pixel must exceed to bloom, so a lit matte surface (< 1.0) does not glow; `knee` is the soft shoulder below it so the glow fades in rather than popping on; `intensity` is how strongly the blurred glow is added back; `radius` scales the blur spread.",
+          "pass": "bloom",
+          "reads": ["hdr"],
+          "writes": ["hdr"],
+          "threshold": 1.0,
+          "knee": 0.5,
+          "intensity": 0.6,
+          "radius": 1.0
+        },
+        {"pass": "tonemap_grade"}
       ]
     }
   },
@@ -48,7 +81,8 @@
         "accent": "$rune_glow_hi",
         "bronze": "$bronze",
         "bronze_deep": "$bronze_deep",
-        "off": "$faint"
+        "off": "$faint",
+        "warn": "$danger_text"
       },
       "panel": {
         "fill_top": "$stone3",
@@ -56,70 +90,11 @@
         "border": "$edge2",
         "border_w": 1,
         "radius": 4,
-        "focused": {
-          "fill_top": "$stone4",
-          "fill_bot": "$stone2",
-          "border": "$sap_border",
-          "border_w": 1,
-          "radius": 4
-        }
+        "focused": {"fill_top": "$stone4", "fill_bot": "$stone2", "border": "$sap_border", "border_w": 1, "radius": 4}
       },
-      "well": {
-        "fill_top": "$stone0",
-        "fill_bot": "$stone0",
-        "border": "$edge3",
-        "border_w": 1,
-        "radius": 3
-      },
-      "frame": {
-        "fill_top": "$stage_void",
-        "fill_bot": "$stage_void",
-        "border": "$bronze_deep",
-        "border_w": 1,
-        "radius": 3
-      },
-      "row": {
-        "fill_top": "$stone2",
-        "fill_bot": "$stone1",
-        "border": "$edge1",
-        "border_w": 1,
-        "radius": 3,
-        "focused": {
-          "fill_top": "$stone3",
-          "fill_bot": "$stone1",
-          "border": "$sap_border",
-          "border_w": 1,
-          "radius": 3
-        }
-      },
-      "row_sel": {
-        "fill_top": "$stone4",
-        "fill_bot": "$stone2",
-        "border": "$sap_border",
-        "border_w": 1,
-        "radius": 3,
-        "focused": {
-          "fill_top": "$stone4",
-          "fill_bot": "$stone2",
-          "border": "$sap_hover_border",
-          "border_w": 1,
-          "radius": 3
-        }
-      },
-      "checkbox": {
-        "box": "$stone2",
-        "check": "$sig_green",
-        "border": "$edge4",
-        "pad": 3
-      },
-      "slider": {
-        "track": "$well",
-        "border": "$edge2",
-        "fill": "$sap_base",
-        "fill_hi": "$sap_border",
-        "handle": "$sap_border",
-        "handle_w": 14
-      },
+      "well": {"fill_top": "$stone0", "fill_bot": "$stone0", "border": "$edge3", "border_w": 1, "radius": 3},
+      "frame": {"fill_top": "$stage_void", "fill_bot": "$stage_void", "border": "$bronze_deep", "border_w": 1, "radius": 3},
+      "slider": {"track": "$well", "border": "$edge2", "fill": "$sap_base", "fill_hi": "$sap_border", "handle": "$sap_border", "handle_w": 14},
       "field": {
         "top": "$well",
         "bot": "$well",
@@ -131,24 +106,23 @@
         "placeholder": "$dim",
         "radius": 3
       },
-      "button": {
-        "fill_top": "$stone4",
-        "fill_bot": "$stone2",
-        "border": "$edge3",
-        "border_w": 1,
-        "radius": 3
-      },
-      "button_on": {
-        "fill_top": "$sap_hover",
-        "fill_bot": "$sap_base",
-        "border": "$sap_border",
-        "border_w": 1,
-        "radius": 3
-      },
+      "button": {"fill_top": "$stone4", "fill_bot": "$stone2", "border": "$edge3", "border_w": 1, "radius": 3},
+      "button_on": {"fill_top": "$sap_hover", "fill_bot": "$sap_base", "border": "$sap_border", "border_w": 1, "radius": 3},
       "select": {
-        "_comment": "The material binding dropdown (header). `field` = the closed control; `menu` = the open popup rows. Options are Rust-filled from the material index (label_bind per row), so the names ride the Model bind channel, not raw tree literals.",
-        "field": { "top": "$stone4", "bot": "$stone2", "border": "$edge3", "hover_border": "$sap_border", "radius": 3, "label": "$ink", "label_size": 13, "caret": "$bronze" },
-        "menu": { "top": "$stone3", "bot": "$stone0", "border": "$edge2", "radius": 3, "row_h": 26, "label": "$ink", "label_size": 13, "sel_bg": "$sap_base", "sel_label": "$ink_bright", "hover_bg": "$sap_hover" }
+        "_comment": "The header's dropdowns (the material binding, the preset) and the enum dials. `field` = the closed control; `menu` = the open popup rows. Data-driven options (the material names, the factory library's graph names from data/factory_materials.json, the glow palette) ride the Model through `label_bind`, never raw tree literals.",
+        "field": {"top": "$stone4", "bot": "$stone2", "border": "$edge3", "hover_border": "$sap_border", "radius": 3, "label": "$ink", "label_size": 13, "caret": "$bronze"},
+        "menu": {
+          "top": "$stone3",
+          "bot": "$stone0",
+          "border": "$edge2",
+          "radius": 3,
+          "row_h": 26,
+          "label": "$ink",
+          "label_size": 13,
+          "sel_bg": "$sap_base",
+          "sel_label": "$ink_bright",
+          "hover_bg": "$sap_hover"
+        }
       },
       "bar": {
         "_comment": "Header/footer band — a subtly raised slab so the top + bottom rows read as bars distinct from the body panels (UX pass may refine).",
@@ -158,30 +132,116 @@
         "border_w": 1,
         "radius": 3
       },
+      "source_select": {
+        "_comment": "The SOURCE selects — a port's input, an output port's driver. Tighter rows than the header's: a graph's field list can run long, and the menu opens downward from the field.",
+        "field": {"top": "$stone3", "bot": "$stone1", "border": "$edge2", "hover_border": "$sap_border", "radius": 3, "label": "$ink", "label_size": 12, "caret": "$bronze"},
+        "menu": {
+          "top": "$stone3",
+          "bot": "$stone0",
+          "border": "$edge2",
+          "radius": 3,
+          "row_h": 22,
+          "label": "$ink",
+          "label_size": 12,
+          "sel_bg": "$sap_base",
+          "sel_label": "$ink_bright",
+          "hover_bg": "$sap_hover"
+        }
+      },
+      "node_row": {
+        "_comment": "A node-list row at rest (a `button` block — materialbench.lua washes the selected row with `node_row_sel`).",
+        "fill_top": "$stone2",
+        "fill_bot": "$stone1",
+        "border": "$edge1",
+        "border_w": 1,
+        "radius": 3,
+        "label": "$ink",
+        "hover_border": "$sap_border"
+      },
+      "node_row_sel": {"fill_top": "$sap_hover", "fill_bot": "$sap_base", "border": "$sap_border", "border_w": 1, "radius": 3, "label": "$ink_bright"},
+      "swatch": {
+        "_comment": "A glow swatch's frame (the colour itself is the sprite inside); `swatch_sel` rings the one the glow wears.",
+        "fill_top": "$stone0",
+        "fill_bot": "$stone0",
+        "border": "$edge2",
+        "border_w": 1,
+        "radius": 3
+      },
+      "swatch_sel": {"fill_top": "$stone0", "fill_bot": "$stone0", "border": "$ink_bright", "border_w": 2, "radius": 3},
+      "pill": {
+        "_comment": "The canvas tool switch (Move ⇄ Link).",
+        "bg": "$well",
+        "border": "$edge2",
+        "active_top": "$sap_hover",
+        "active_bot": "$sap_base",
+        "active_label": "$ink_bright",
+        "label": "$dim",
+        "label_size": 11
+      },
+      "canvas": {
+        "_comment": "The graph canvas's colour slots (flicker_canvas::CanvasStyle). The filler owns no colour at all; every slot is a theme token here, resolved once when the bench enters.",
+        "bg": "$well_bot",
+        "edge": "$edge3",
+        "edge_lit": "$sap_base",
+        "card_fill_top": "$stone3",
+        "card_fill_bot": "$stone1",
+        "card_border": "$edge2",
+        "card_border_selected": "$sap_border",
+        "label": "$ink_bright",
+        "label_selected": "$ink_sapphire",
+        "meta": "$dim",
+        "icon_top": "$well_top",
+        "icon_bot": "$well_bot",
+        "icon_border": "$seam",
+        "port": "$bronze",
+        "link": "$rune_glow"
+      },
       "preview": {
         "_comment": "`tiles` = how many times the scene repeats the baked swatch per axis BEFORE uploading, so the seam shows in one sprite. Read by the Rust scene when it creates the preview textures.",
         "tiles": 3
       }
     },
-    "tooltip": {
-      "bg": "$stone2",
-      "border": "$edge3",
-      "radius": 3,
-      "pad": 8,
-      "name_color": "$ink",
-      "name_size": 13,
-      "meta_color": "$dim",
-      "meta_size": 11
-    },
+    "tooltip": {"bg": "$stone2", "border": "$edge3", "radius": 3, "pad": 8, "name_color": "$ink", "name_size": 13, "meta_color": "$dim", "meta_size": 11},
     "nav_footer": {
       "_comment": "Bench nav rail band (like the Component Catalog's). `frame` = the node's own slab; `rule` (top hairline) + `label` (legend ink) + the `pad_glyphs` atlas resolve as the component's defaults.",
-      "frame": { "fill_top": "$surface_top", "fill_bot": "$stage_void", "border": "$edge2", "border_w": 1, "radius": 6 },
-      "rule": { "color": "$seam" },
+      "frame": {"fill_top": "$surface_top", "fill_bot": "$stage_void", "border": "$edge2", "border_w": 1, "radius": 6},
+      "rule": {"color": "$seam"},
       "label": "$dim"
     },
     "pad_glyphs": {
-      "tex": 2, "cols": 4, "rows": 4, "color": "$bronze", "flash": "$rune_glow_hi",
-      "cells": { "lt": 0, "rt": 1, "lb": 2, "rb": 3, "a": 4, "b": 5, "x": 6, "y": 7, "menu": 8, "view": 9, "dpad": 10, "dpad_up": 11, "dpad_down": 12, "dpad_left": 13, "dpad_right": 14, "stick": 15, "face_south": 4, "face_east": 5, "face_west": 6, "face_north": 7, "bumper_l": 2, "bumper_r": 3, "trigger_l": 0, "trigger_r": 1, "stick_l": 15, "stick_r": 15 }
+      "tex": 2,
+      "cols": 4,
+      "rows": 4,
+      "color": "$bronze",
+      "flash": "$rune_glow_hi",
+      "cells": {
+        "lt": 0,
+        "rt": 1,
+        "lb": 2,
+        "rb": 3,
+        "a": 4,
+        "b": 5,
+        "x": 6,
+        "y": 7,
+        "menu": 8,
+        "view": 9,
+        "dpad": 10,
+        "dpad_up": 11,
+        "dpad_down": 12,
+        "dpad_left": 13,
+        "dpad_right": 14,
+        "stick": 15,
+        "face_south": 4,
+        "face_east": 5,
+        "face_west": 6,
+        "face_north": 7,
+        "bumper_l": 2,
+        "bumper_r": 3,
+        "trigger_l": 0,
+        "trigger_r": 1,
+        "stick_l": 15,
+        "stick_r": 15
+      }
     }
   },
   "tree": {
@@ -213,42 +273,21 @@
             "gap": 8,
             "align": "center",
             "children": [
-              {
-                "component": "text",
-                "text": "$mtl_title",
-                "text_size": 17,
-                "font": "label",
-                "color": "materialbench.col.title",
-                "size": 200
-              },
-              {
-                "component": "text",
-                "text_bind": "recipe_line",
-                "text_size": 13,
-                "font": "label",
-                "color": "materialbench.col.value",
-                "grow": 1.0
-              },
-              {
-                "component": "text",
-                "text": "$mtl_material",
-                "text_size": 11,
-                "font": "label",
-                "color": "materialbench.col.label",
-                "size": 58
-              },
+              {"component": "text", "text": "$mtl_title", "text_size": 17, "font": "label", "color": "materialbench.col.title", "size": 200},
+              {"component": "text", "text_bind": "recipe_line", "text_size": 13, "font": "label", "color": "materialbench.col.value", "grow": 1.0},
+              {"component": "text", "text": "$mtl_material", "text_size": 11, "font": "label", "color": "materialbench.col.label", "size": 58},
               {
                 "component": "select",
                 "id": "material_select",
                 "bind": "sel_material",
+                "rows_from": "materials",
+                "placeholder": "$mtl_material_unlisted",
                 "style": "materialbench.select",
                 "visible_bind": "not_renaming",
                 "size": 150,
                 "tab_group": "mtl_top",
                 "nav_ordinal": 1,
-                "children": [
-                  { "component": "option", "value": 0, "label": "$mtl_unbound" }
-                ]
+                "children": [{"component": "option", "value": 0, "label": "$mtl_unbound"}, {"component": "option", "value": 1, "label_bind": "material_opt{row}"}]
               },
               {
                 "component": "text_field",
@@ -264,47 +303,31 @@
                 "tab_group": "mtl_top",
                 "nav_ordinal": 2
               },
-              {
-                "component": "text",
-                "text_bind": "material_id_label",
-                "text_size": 12,
-                "font": "label",
-                "color": "materialbench.col.dim",
-                "size": 38
-              },
+              {"component": "text", "text_bind": "material_id_label", "text_size": 12, "font": "label", "color": "materialbench.col.dim", "size": 38},
               {
                 "component": "button",
                 "id": "rename",
                 "action": "rename",
                 "label": "$mtl_rename",
-                "visible_bind": "can_rename",
                 "style": "materialbench.button",
                 "size": 66,
                 "size_class": "sm",
                 "tab_group": "mtl_top",
-                "nav_ordinal": 2
+                "nav_ordinal": 2,
+                "visible_bind": "can_rename"
               },
+              {"component": "text", "text": "$mtl_preset", "text_size": 11, "font": "label", "color": "materialbench.col.label", "size": 48},
               {
-                "component": "button",
-                "id": "patch_prev",
-                "action": "patch_prev",
-                "label": "$mtl_prev",
-                "style": "materialbench.button",
-                "size": 34,
-                "size_class": "sm",
+                "component": "select",
+                "id": "preset_select",
+                "bind": "sel_preset",
+                "rows_from": "preset",
+                "placeholder": "$mtl_preset_custom",
+                "style": "materialbench.select",
+                "size": 150,
                 "tab_group": "mtl_top",
-                "nav_ordinal": 3
-              },
-              {
-                "component": "button",
-                "id": "patch_next",
-                "action": "patch_next",
-                "label": "$mtl_next",
-                "style": "materialbench.button",
-                "size": 34,
-                "size_class": "sm",
-                "tab_group": "mtl_top",
-                "nav_ordinal": 4
+                "nav_ordinal": 3,
+                "children": [{"component": "option", "value": 0, "label": "$mtl_preset_new"}, {"component": "option", "value": 1, "label_bind": "preset_opt{row}"}]
               },
               {
                 "component": "button",
@@ -315,7 +338,7 @@
                 "size": 72,
                 "size_class": "md",
                 "tab_group": "mtl_top",
-                "nav_ordinal": 5
+                "nav_ordinal": 4
               },
               {
                 "component": "button",
@@ -326,23 +349,45 @@
                 "size": 88,
                 "size_class": "md",
                 "tab_group": "mtl_top",
+                "nav_ordinal": 5
+              },
+              {
+                "component": "button",
+                "id": "mtl_page_bench",
+                "action": "page_bench",
+                "label": "$mtl_page_bench",
+                "style_bind": "page_bench_sty",
+                "size": 84,
+                "size_class": "md",
+                "tab_group": "mtl_top",
                 "nav_ordinal": 6
               },
-              { "component": "button", "id": "mtl_page_bench", "action": "page_bench", "label": "$mtl_page_bench", "style_bind": "page_bench_sty", "size": 74, "size_class": "md", "tab_group": "mtl_top", "nav_ordinal": 7 },
-              { "component": "button", "id": "mtl_page_materials", "action": "page_materials", "label": "$mtl_page_materials", "style_bind": "page_materials_sty", "size": 104, "size_class": "md", "tab_group": "mtl_top", "nav_ordinal": 8 }
+              {
+                "component": "button",
+                "id": "mtl_page_materials",
+                "action": "page_materials",
+                "label": "$mtl_page_materials",
+                "style_bind": "page_materials_sty",
+                "size": 104,
+                "size_class": "md",
+                "tab_group": "mtl_top",
+                "nav_ordinal": 7
+              }
             ]
           },
           {
-            "_comment": "P5 informational tooltips (ruling 7AB130A7): a help strip for the bench's key ACTIONS. These are scene actions (not ActionSignals), so the cards are informational name/meta only — no device affordance (that's for signal-bound controls, like Solar Birth's restart). Bench page only.",
+            "_comment": "P5 informational tooltips (ruling 7AB130A7): a help strip for the designer's key ACTIONS. Informational name/meta only. Designer page only.",
             "component": "row",
             "id": "mtl_help",
             "visible_bind": "page_bench_shown",
             "size": 44,
             "gap": 12,
             "children": [
-              { "component": "tooltip", "style": "tooltip", "grow": 1.0, "name": "$mtl_roll", "meta": "$mtl_roll_meta" },
-              { "component": "tooltip", "style": "tooltip", "grow": 1.0, "name": "$mtl_reseed", "meta": "$mtl_reseed_meta" },
-              { "component": "tooltip", "style": "tooltip", "grow": 1.0, "name": "$mtl_commit", "meta": "$mtl_commit_meta" }
+              {"component": "tooltip", "style": "tooltip", "grow": 1.0, "name": "$mtl_insert", "meta": "$mtl_insert_meta"},
+              {"component": "tooltip", "style": "tooltip", "grow": 1.0, "name": "$mtl_canvas_link", "meta": "$mtl_link_meta"},
+              {"component": "tooltip", "style": "tooltip", "grow": 1.0, "name": "$mtl_roll", "meta": "$mtl_roll_meta"},
+              {"component": "tooltip", "style": "tooltip", "grow": 1.0, "name": "$mtl_reseed", "meta": "$mtl_reseed_meta"},
+              {"component": "tooltip", "style": "tooltip", "grow": 1.0, "name": "$mtl_commit", "meta": "$mtl_commit_meta"}
             ]
           },
           {
@@ -353,269 +398,135 @@
             "gap": 12,
             "children": [
               {
+                "_comment": "LEFT — the NODE LIST. A data-driven `list` over ONE button prototype (`rows_from: nodes`, CBF52F5C — the Component Catalog's breadcrumb recipe turned vertical): one row per node in the graph's node list, labelled `key · Kind` through `nl<i>_label`, picked by `nl_pick_<i>`, the selected row washed by materialbench.lua off `sel_node_index`. A bigger graph is more rows, never more tree. Insert opens the shared popup menu of node kinds; Delete takes the selected wire if one is picked on the canvas, else the selected node; Up / Down move it in the list (authoring order — the wires, not the list, decide evaluation).",
                 "component": "panel",
-                "id": "mtl_rack",
+                "id": "mtl_nodes",
                 "style": "materialbench.panel",
-                "size": 620,
-                "pad": 14,
-                "gap": 8,
+                "size": 280,
+                "pad": 12,
+                "gap": 6,
+                "nav_ordinal": 2,
                 "children": [
+                  {"component": "text", "text": "$mtl_nodes", "text_size": 11, "font": "label", "color": "materialbench.col.label", "size": 20},
                   {
-                    "component": "text",
-                    "text": "$mtl_channel_rack",
-                    "text_size": 11,
-                    "font": "label",
-                    "color": "materialbench.col.label",
-                    "size": 20
-                  },
-                  {
-                    "component": "row",
+                    "component": "list",
+                    "id": "mtl_node_list",
+                    "bind": "nl_scroll",
+                    "rows_from": "nodes",
                     "grow": 1.0,
-                    "gap": 8,
+                    "gap": 2,
+                    "pad": 2,
                     "children": [
-                  {
-                    "component": "cell",
-                    "id": "mtl_voice_1",
-                    "style_bind": "ch1_sty",
-                    "nav_ordinal": 2,
-                    "grow": 1.0,
-                    "pad": 8,
-                    "gap": 4,
-                    "children": [
-                      { "component": "text", "text": "$mtl_ch1", "text_size": 12, "font": "label", "color": "materialbench.col.title", "size": 18 },
-                      { "component": "text", "text_bind": "ch1_fx", "text_size": 11, "font": "label", "color": "materialbench.col.value", "size": 16 },
-                      { "component": "text", "id": "ch1_desc", "text_bind": "ch1_fx2", "text_size": 11, "font": "label", "color": "materialbench.col.dim", "size": 16 },
                       {
-                        "component": "row",
-                        "gap": 8,
-                        "size": 34,
-                        "align": "center",
-                        "children": [
-                          { "component": "checkbox", "id": "ch1_on", "bind": "ch1_on", "box": 16, "size": 26, "style": "materialbench.checkbox", "tab_group": "mtl_voice_1", "nav_ordinal": 1 },
-                          { "component": "button", "id": "ch1_source", "action": "ch1_source", "label_bind": "ch1_source_label", "style": "materialbench.button", "size": 84, "size_class": "md", "tab_group": "mtl_voice_1", "nav_ordinal": 2 },
-                          { "component": "button", "id": "ch1_blend", "action": "ch1_blend", "label_bind": "ch1_blend_label", "style": "materialbench.button", "size": 84, "size_class": "md", "tab_group": "mtl_voice_1", "nav_ordinal": 3 }
-                        ]
-                      },
-                      {
-                        "component": "cell",
-                        "gap": 4,
-                        "size": 108,
-                        "children": [
-                          { "component": "slider", "id": "ch1_scale", "bind": "ch1_scale", "label": "$mtl_scale", "min": 1, "max": 64, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 46, "size": 24, "style": "materialbench.slider", "tab_group": "mtl_voice_1", "nav_ordinal": 4 },
-                          { "component": "slider", "id": "ch1_octaves", "bind": "ch1_octaves", "label": "$mtl_oct", "min": 1, "max": 8, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 46, "size": 24, "style": "materialbench.slider", "tab_group": "mtl_voice_1", "nav_ordinal": 5 },
-                          { "component": "slider", "id": "ch1_warp", "bind": "ch1_warp", "label": "$mtl_warp", "min": 0, "max": 2, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 46, "size": 24, "style": "materialbench.slider", "tab_group": "mtl_voice_1", "nav_ordinal": 6 },
-                          { "component": "slider", "id": "ch1_amount", "bind": "ch1_amount", "label": "$mtl_amt", "min": 0, "max": 1, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 46, "size": 24, "style": "materialbench.slider", "tab_group": "mtl_voice_1", "nav_ordinal": 7 }
-                        ]
+                        "component": "button",
+                        "id": "nl_{row}",
+                        "action": "nl_pick_{row}",
+                        "label_bind": "nl{row}_label",
+                        "label_size": 12,
+                        "style": "materialbench.node_row",
+                        "style_bind": "nl{row}_sty",
+                        "size": 26,
+                        "tab_group": "mtl_nodes",
+                        "nav_ordinal": 1
                       }
-                    ]
-                  },
-                  {
-                    "component": "cell",
-                    "id": "mtl_voice_2",
-                    "style_bind": "ch2_sty",
-                    "nav_ordinal": 3,
-                    "grow": 1.0,
-                    "pad": 8,
-                    "gap": 4,
-                    "children": [
-                      { "component": "text", "text": "$mtl_ch2", "text_size": 12, "font": "label", "color": "materialbench.col.title", "size": 18 },
-                      { "component": "text", "text_bind": "ch2_fx", "text_size": 11, "font": "label", "color": "materialbench.col.value", "size": 16 },
-                      { "component": "text", "id": "ch2_desc", "text_bind": "ch2_fx2", "text_size": 11, "font": "label", "color": "materialbench.col.dim", "size": 16 },
-                      {
-                        "component": "row",
-                        "gap": 8,
-                        "size": 34,
-                        "align": "center",
-                        "children": [
-                          { "component": "checkbox", "id": "ch2_on", "bind": "ch2_on", "box": 16, "size": 26, "style": "materialbench.checkbox", "tab_group": "mtl_voice_2", "nav_ordinal": 1 },
-                          { "component": "button", "id": "ch2_source", "action": "ch2_source", "label_bind": "ch2_source_label", "style": "materialbench.button", "size": 84, "size_class": "md", "tab_group": "mtl_voice_2", "nav_ordinal": 2 },
-                          { "component": "button", "id": "ch2_blend", "action": "ch2_blend", "label_bind": "ch2_blend_label", "style": "materialbench.button", "size": 84, "size_class": "md", "tab_group": "mtl_voice_2", "nav_ordinal": 3 }
-                        ]
-                      },
-                      {
-                        "component": "cell",
-                        "gap": 4,
-                        "size": 108,
-                        "children": [
-                          { "component": "slider", "id": "ch2_scale", "bind": "ch2_scale", "label": "$mtl_scale", "min": 1, "max": 64, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 46, "size": 24, "style": "materialbench.slider", "tab_group": "mtl_voice_2", "nav_ordinal": 4 },
-                          { "component": "slider", "id": "ch2_octaves", "bind": "ch2_octaves", "label": "$mtl_oct", "min": 1, "max": 8, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 46, "size": 24, "style": "materialbench.slider", "tab_group": "mtl_voice_2", "nav_ordinal": 5 },
-                          { "component": "slider", "id": "ch2_warp", "bind": "ch2_warp", "label": "$mtl_warp", "min": 0, "max": 2, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 46, "size": 24, "style": "materialbench.slider", "tab_group": "mtl_voice_2", "nav_ordinal": 6 },
-                          { "component": "slider", "id": "ch2_amount", "bind": "ch2_amount", "label": "$mtl_amt", "min": 0, "max": 1, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 46, "size": 24, "style": "materialbench.slider", "tab_group": "mtl_voice_2", "nav_ordinal": 7 }
-                        ]
-                      }
-                    ]
-                  }
                     ]
                   },
                   {
                     "component": "row",
-                    "grow": 1.0,
-                    "gap": 8,
+                    "size": 30,
+                    "gap": 6,
+                    "align": "center",
                     "children": [
-                  {
-                    "component": "cell",
-                    "id": "mtl_voice_3",
-                    "style_bind": "ch3_sty",
-                    "nav_ordinal": 4,
-                    "grow": 1.0,
-                    "pad": 8,
-                    "gap": 4,
-                    "children": [
-                      { "component": "text", "text": "$mtl_ch3", "text_size": 12, "font": "label", "color": "materialbench.col.title", "size": 18 },
-                      { "component": "text", "text_bind": "ch3_fx", "text_size": 11, "font": "label", "color": "materialbench.col.value", "size": 16 },
-                      { "component": "text", "id": "ch3_desc", "text_bind": "ch3_fx2", "text_size": 11, "font": "label", "color": "materialbench.col.dim", "size": 16 },
                       {
-                        "component": "row",
-                        "gap": 8,
-                        "size": 34,
-                        "align": "center",
-                        "children": [
-                          { "component": "checkbox", "id": "ch3_on", "bind": "ch3_on", "box": 16, "size": 26, "style": "materialbench.checkbox", "tab_group": "mtl_voice_3", "nav_ordinal": 1 },
-                          { "component": "button", "id": "ch3_source", "action": "ch3_source", "label_bind": "ch3_source_label", "style": "materialbench.button", "size": 84, "size_class": "md", "tab_group": "mtl_voice_3", "nav_ordinal": 2 },
-                          { "component": "button", "id": "ch3_blend", "action": "ch3_blend", "label_bind": "ch3_blend_label", "style": "materialbench.button", "size": 84, "size_class": "md", "tab_group": "mtl_voice_3", "nav_ordinal": 3 }
-                        ]
+                        "component": "button",
+                        "id": "node_insert",
+                        "action": "node_insert",
+                        "label": "$mtl_insert",
+                        "style": "materialbench.button",
+                        "size_class": "sm",
+                        "tab_group": "mtl_nodes",
+                        "nav_ordinal": 1001,
+                        "grow": 1.0
                       },
                       {
-                        "component": "cell",
-                        "gap": 4,
-                        "size": 108,
-                        "children": [
-                          { "component": "slider", "id": "ch3_scale", "bind": "ch3_scale", "label": "$mtl_scale", "min": 1, "max": 64, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 46, "size": 24, "style": "materialbench.slider", "tab_group": "mtl_voice_3", "nav_ordinal": 4 },
-                          { "component": "slider", "id": "ch3_octaves", "bind": "ch3_octaves", "label": "$mtl_oct", "min": 1, "max": 8, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 46, "size": 24, "style": "materialbench.slider", "tab_group": "mtl_voice_3", "nav_ordinal": 5 },
-                          { "component": "slider", "id": "ch3_warp", "bind": "ch3_warp", "label": "$mtl_warp", "min": 0, "max": 2, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 46, "size": 24, "style": "materialbench.slider", "tab_group": "mtl_voice_3", "nav_ordinal": 6 },
-                          { "component": "slider", "id": "ch3_amount", "bind": "ch3_amount", "label": "$mtl_amt", "min": 0, "max": 1, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 46, "size": 24, "style": "materialbench.slider", "tab_group": "mtl_voice_3", "nav_ordinal": 7 }
-                        ]
-                      }
-                    ]
-                  },
-                  {
-                    "component": "cell",
-                    "id": "mtl_voice_4",
-                    "style_bind": "ch4_sty",
-                    "nav_ordinal": 5,
-                    "grow": 1.0,
-                    "pad": 8,
-                    "gap": 4,
-                    "children": [
-                      { "component": "text", "text": "$mtl_ch4", "text_size": 12, "font": "label", "color": "materialbench.col.title", "size": 18 },
-                      { "component": "text", "text_bind": "ch4_fx", "text_size": 11, "font": "label", "color": "materialbench.col.value", "size": 16 },
-                      { "component": "text", "id": "ch4_desc", "text_bind": "ch4_fx2", "text_size": 11, "font": "label", "color": "materialbench.col.dim", "size": 16 },
-                      {
-                        "component": "row",
-                        "gap": 8,
-                        "size": 34,
-                        "align": "center",
-                        "children": [
-                          { "component": "checkbox", "id": "ch4_on", "bind": "ch4_on", "box": 16, "size": 26, "style": "materialbench.checkbox", "tab_group": "mtl_voice_4", "nav_ordinal": 1 },
-                          { "component": "button", "id": "ch4_source", "action": "ch4_source", "label_bind": "ch4_source_label", "style": "materialbench.button", "size": 84, "size_class": "md", "tab_group": "mtl_voice_4", "nav_ordinal": 2 },
-                          { "component": "button", "id": "ch4_blend", "action": "ch4_blend", "label_bind": "ch4_blend_label", "style": "materialbench.button", "size": 84, "size_class": "md", "tab_group": "mtl_voice_4", "nav_ordinal": 3 }
-                        ]
+                        "component": "button",
+                        "id": "node_delete",
+                        "action": "node_delete",
+                        "label": "$mtl_delete",
+                        "style": "materialbench.button",
+                        "size_class": "sm",
+                        "tab_group": "mtl_nodes",
+                        "nav_ordinal": 1002,
+                        "grow": 1.0
                       },
                       {
-                        "component": "cell",
-                        "gap": 4,
-                        "size": 108,
-                        "children": [
-                          { "component": "slider", "id": "ch4_scale", "bind": "ch4_scale", "label": "$mtl_scale", "min": 1, "max": 64, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 46, "size": 24, "style": "materialbench.slider", "tab_group": "mtl_voice_4", "nav_ordinal": 4 },
-                          { "component": "slider", "id": "ch4_octaves", "bind": "ch4_octaves", "label": "$mtl_oct", "min": 1, "max": 8, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 46, "size": 24, "style": "materialbench.slider", "tab_group": "mtl_voice_4", "nav_ordinal": 5 },
-                          { "component": "slider", "id": "ch4_warp", "bind": "ch4_warp", "label": "$mtl_warp", "min": 0, "max": 2, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 46, "size": 24, "style": "materialbench.slider", "tab_group": "mtl_voice_4", "nav_ordinal": 6 },
-                          { "component": "slider", "id": "ch4_amount", "bind": "ch4_amount", "label": "$mtl_amt", "min": 0, "max": 1, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 46, "size": 24, "style": "materialbench.slider", "tab_group": "mtl_voice_4", "nav_ordinal": 7 }
-                        ]
-                      }
-                    ]
-                  }
-                    ]
-                  },
-                  {
-                    "component": "row",
-                    "grow": 1.0,
-                    "gap": 8,
-                    "children": [
-                  {
-                    "component": "cell",
-                    "id": "mtl_voice_5",
-                    "style_bind": "ch5_sty",
-                    "nav_ordinal": 6,
-                    "grow": 1.0,
-                    "pad": 8,
-                    "gap": 4,
-                    "children": [
-                      { "component": "text", "text": "$mtl_ch5", "text_size": 12, "font": "label", "color": "materialbench.col.title", "size": 18 },
-                      { "component": "text", "text_bind": "ch5_fx", "text_size": 11, "font": "label", "color": "materialbench.col.value", "size": 16 },
-                      { "component": "text", "id": "ch5_desc", "text_bind": "ch5_fx2", "text_size": 11, "font": "label", "color": "materialbench.col.dim", "size": 16 },
-                      {
-                        "component": "row",
-                        "gap": 8,
-                        "size": 34,
-                        "align": "center",
-                        "children": [
-                          { "component": "checkbox", "id": "ch5_on", "bind": "ch5_on", "box": 16, "size": 26, "style": "materialbench.checkbox", "tab_group": "mtl_voice_5", "nav_ordinal": 1 },
-                          { "component": "button", "id": "ch5_source", "action": "ch5_source", "label_bind": "ch5_source_label", "style": "materialbench.button", "size": 84, "size_class": "md", "tab_group": "mtl_voice_5", "nav_ordinal": 2 },
-                          { "component": "button", "id": "ch5_blend", "action": "ch5_blend", "label_bind": "ch5_blend_label", "style": "materialbench.button", "size": 84, "size_class": "md", "tab_group": "mtl_voice_5", "nav_ordinal": 3 }
-                        ]
+                        "component": "button",
+                        "id": "node_up",
+                        "action": "node_up",
+                        "label": "$mtl_up",
+                        "style": "materialbench.button",
+                        "size_class": "sm",
+                        "tab_group": "mtl_nodes",
+                        "nav_ordinal": 1003,
+                        "grow": 1.0
                       },
                       {
-                        "component": "cell",
-                        "gap": 4,
-                        "size": 108,
-                        "children": [
-                          { "component": "slider", "id": "ch5_scale", "bind": "ch5_scale", "label": "$mtl_scale", "min": 1, "max": 64, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 46, "size": 24, "style": "materialbench.slider", "tab_group": "mtl_voice_5", "nav_ordinal": 4 },
-                          { "component": "slider", "id": "ch5_octaves", "bind": "ch5_octaves", "label": "$mtl_oct", "min": 1, "max": 8, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 46, "size": 24, "style": "materialbench.slider", "tab_group": "mtl_voice_5", "nav_ordinal": 5 },
-                          { "component": "slider", "id": "ch5_warp", "bind": "ch5_warp", "label": "$mtl_warp", "min": 0, "max": 2, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 46, "size": 24, "style": "materialbench.slider", "tab_group": "mtl_voice_5", "nav_ordinal": 6 },
-                          { "component": "slider", "id": "ch5_amount", "bind": "ch5_amount", "label": "$mtl_amt", "min": 0, "max": 1, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 46, "size": 24, "style": "materialbench.slider", "tab_group": "mtl_voice_5", "nav_ordinal": 7 }
-                        ]
+                        "component": "button",
+                        "id": "node_down",
+                        "action": "node_down",
+                        "label": "$mtl_down",
+                        "style": "materialbench.button",
+                        "size_class": "sm",
+                        "tab_group": "mtl_nodes",
+                        "nav_ordinal": 1004,
+                        "grow": 1.0
                       }
-                    ]
-                  },
-                  {
-                    "component": "cell",
-                    "id": "mtl_voice_6",
-                    "style_bind": "ch6_sty",
-                    "nav_ordinal": 7,
-                    "grow": 1.0,
-                    "pad": 8,
-                    "gap": 4,
-                    "children": [
-                      { "component": "text", "text": "$mtl_ch6", "text_size": 12, "font": "label", "color": "materialbench.col.title", "size": 18 },
-                      { "component": "text", "text_bind": "ch6_fx", "text_size": 11, "font": "label", "color": "materialbench.col.value", "size": 16 },
-                      { "component": "text", "id": "ch6_desc", "text_bind": "ch6_fx2", "text_size": 11, "font": "label", "color": "materialbench.col.dim", "size": 16 },
-                      {
-                        "component": "row",
-                        "gap": 8,
-                        "size": 34,
-                        "align": "center",
-                        "children": [
-                          { "component": "checkbox", "id": "ch6_on", "bind": "ch6_on", "box": 16, "size": 26, "style": "materialbench.checkbox", "tab_group": "mtl_voice_6", "nav_ordinal": 1 },
-                          { "component": "button", "id": "ch6_source", "action": "ch6_source", "label_bind": "ch6_source_label", "style": "materialbench.button", "size": 84, "size_class": "md", "tab_group": "mtl_voice_6", "nav_ordinal": 2 },
-                          { "component": "button", "id": "ch6_blend", "action": "ch6_blend", "label_bind": "ch6_blend_label", "style": "materialbench.button", "size": 84, "size_class": "md", "tab_group": "mtl_voice_6", "nav_ordinal": 3 }
-                        ]
-                      },
-                      {
-                        "component": "cell",
-                        "gap": 4,
-                        "size": 108,
-                        "children": [
-                          { "component": "slider", "id": "ch6_scale", "bind": "ch6_scale", "label": "$mtl_scale", "min": 1, "max": 64, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 46, "size": 24, "style": "materialbench.slider", "tab_group": "mtl_voice_6", "nav_ordinal": 4 },
-                          { "component": "slider", "id": "ch6_octaves", "bind": "ch6_octaves", "label": "$mtl_oct", "min": 1, "max": 8, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 46, "size": 24, "style": "materialbench.slider", "tab_group": "mtl_voice_6", "nav_ordinal": 5 },
-                          { "component": "slider", "id": "ch6_warp", "bind": "ch6_warp", "label": "$mtl_warp", "min": 0, "max": 2, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 46, "size": 24, "style": "materialbench.slider", "tab_group": "mtl_voice_6", "nav_ordinal": 6 },
-                          { "component": "slider", "id": "ch6_amount", "bind": "ch6_amount", "label": "$mtl_amt", "min": 0, "max": 1, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 46, "size": 24, "style": "materialbench.slider", "tab_group": "mtl_voice_6", "nav_ordinal": 7 }
-                        ]
-                      }
-                    ]
-                  }
                     ]
                   }
                 ]
               },
               {
+                "_comment": "CENTRE — the GRAPH CANVAS (flicker_canvas::GraphCanvas, seated in the `mtl_canvas` surface the walker reserves) above the seven-map swatch tabs and the lit sample. Cards are the nodes in evaluation order plus ONE output card (ports base · height · roughness · metalness · ao · glow colour · glow mask, down its right edge). Move drags cards (your arrangement, never the document); Link drags a card onto a port to wire it; a card pick selects its node, an edge pick selects that wire (Delete unwires it); the wheel zooms, a middle-drag pans.",
                 "component": "panel",
                 "id": "mtl_view",
                 "style": "materialbench.panel",
                 "grow": 1.0,
                 "pad": 14,
                 "gap": 8,
-                "nav_ordinal": 8,
+                "nav_ordinal": 3,
                 "children": [
+                  {
+                    "component": "row",
+                    "size": 28,
+                    "gap": 8,
+                    "align": "center",
+                    "children": [
+                      {"component": "text", "text": "$mtl_graph", "text_size": 11, "font": "label", "color": "materialbench.col.label", "size": 64},
+                      {
+                        "component": "pill_toggle",
+                        "id": "canvas_mode_pill",
+                        "bind": "canvas_mode",
+                        "style": "materialbench.pill",
+                        "size": 180,
+                        "tab_group": "mtl_view",
+                        "nav_ordinal": 1,
+                        "children": [{"component": "option", "value": 0, "label": "$mtl_canvas_move"}, {"component": "option", "value": 1, "label": "$mtl_canvas_link"}]
+                      },
+                      {
+                        "component": "button",
+                        "id": "canvas_reset",
+                        "action": "canvas_reset",
+                        "label": "$mtl_canvas_reset",
+                        "style": "materialbench.button",
+                        "size": 110,
+                        "size_class": "sm",
+                        "tab_group": "mtl_view",
+                        "nav_ordinal": 2
+                      },
+                      {"component": "text", "text": "$mtl_canvas_hint", "text_size": 11, "font": "label", "color": "materialbench.col.dim", "grow": 1.0}
+                    ]
+                  },
+                  {"component": "surface", "id": "mtl_canvas", "style": "materialbench.well", "grow": 1.0},
                   {
                     "component": "tabs",
                     "id": "mtl_views",
@@ -627,99 +538,1569 @@
                     "tab_active": "materialbench.button_on",
                     "tab_idle": "materialbench.button",
                     "tab_group": "mtl_view",
-                    "nav_ordinal": 1,
+                    "nav_ordinal": 3,
                     "children": [
-                      { "component": "option", "value": 0, "label": "$mtl_map_base" },
-                      { "component": "option", "value": 1, "label": "$mtl_map_normal" },
-                      { "component": "option", "value": 2, "label": "$mtl_map_rough" },
-                      { "component": "option", "value": 3, "label": "$mtl_map_metal" },
-                      { "component": "option", "value": 4, "label": "$mtl_map_ao" },
-                      { "component": "option", "value": 5, "label": "$mtl_map_height" },
-                      { "component": "option", "value": 6, "label": "$mtl_map_emit" },
-                      { "component": "option", "value": 7, "label": "$mtl_map_lit" }
+                      {"component": "option", "value": 0, "label": "$mtl_map_base"},
+                      {"component": "option", "value": 1, "label": "$mtl_map_normal"},
+                      {"component": "option", "value": 2, "label": "$mtl_map_rough"},
+                      {"component": "option", "value": 3, "label": "$mtl_map_metal"},
+                      {"component": "option", "value": 4, "label": "$mtl_map_ao"},
+                      {"component": "option", "value": 5, "label": "$mtl_map_height"},
+                      {"component": "option", "value": 6, "label": "$mtl_map_emit"},
+                      {"component": "option", "value": 7, "label": "$mtl_map_lit"}
                     ]
                   },
                   {
                     "component": "cell",
                     "id": "mtl_swatch_well",
                     "style": "materialbench.well",
-                    "grow": 1.0,
+                    "size": 330,
                     "pad": 8,
+                    "_comment": "The seven flat maps (each a `sprite` over its preview texture — `tex` 3..9, after the theme's own three in the HUD's table) and the LIT sample (the engine's material sample in the `mtl_lit` surface), exactly one shown at a time off `sel_map`. `size` is the well's height and the sprites' 300×300 is the swatch's drawn square — both Aaron's to tune.",
                     "children": [
-                      { "component": "cell", "visible_bind": "map_base_shown", "grow": 1.0, "children": [ { "component": "sprite", "tex": 0, "width": 600, "height": 600, "anchor": "center" } ] },
-                      { "component": "cell", "visible_bind": "map_normal_shown", "grow": 1.0, "children": [ { "component": "sprite", "tex": 1, "width": 600, "height": 600, "anchor": "center" } ] },
-                      { "component": "cell", "visible_bind": "map_rough_shown", "grow": 1.0, "children": [ { "component": "sprite", "tex": 2, "width": 600, "height": 600, "anchor": "center" } ] },
-                      { "component": "cell", "visible_bind": "map_metal_shown", "grow": 1.0, "children": [ { "component": "sprite", "tex": 3, "width": 600, "height": 600, "anchor": "center" } ] },
-                      { "component": "cell", "visible_bind": "map_ao_shown", "grow": 1.0, "children": [ { "component": "sprite", "tex": 4, "width": 600, "height": 600, "anchor": "center" } ] },
-                      { "component": "cell", "visible_bind": "map_height_shown", "grow": 1.0, "children": [ { "component": "sprite", "tex": 5, "width": 600, "height": 600, "anchor": "center" } ] },
-                      { "component": "cell", "visible_bind": "map_emit_shown", "grow": 1.0, "children": [ { "component": "sprite", "tex": 6, "width": 600, "height": 600, "anchor": "center" } ] },
+                      {
+                        "component": "cell",
+                        "visible_bind": "map_base_shown",
+                        "grow": 1.0,
+                        "children": [{"component": "sprite", "tex": 3, "width": 300, "height": 300, "anchor": "center"}]
+                      },
+                      {
+                        "component": "cell",
+                        "visible_bind": "map_normal_shown",
+                        "grow": 1.0,
+                        "children": [{"component": "sprite", "tex": 4, "width": 300, "height": 300, "anchor": "center"}]
+                      },
+                      {
+                        "component": "cell",
+                        "visible_bind": "map_rough_shown",
+                        "grow": 1.0,
+                        "children": [{"component": "sprite", "tex": 5, "width": 300, "height": 300, "anchor": "center"}]
+                      },
+                      {
+                        "component": "cell",
+                        "visible_bind": "map_metal_shown",
+                        "grow": 1.0,
+                        "children": [{"component": "sprite", "tex": 6, "width": 300, "height": 300, "anchor": "center"}]
+                      },
+                      {
+                        "component": "cell",
+                        "visible_bind": "map_ao_shown",
+                        "grow": 1.0,
+                        "children": [{"component": "sprite", "tex": 7, "width": 300, "height": 300, "anchor": "center"}]
+                      },
+                      {
+                        "component": "cell",
+                        "visible_bind": "map_height_shown",
+                        "grow": 1.0,
+                        "children": [{"component": "sprite", "tex": 8, "width": 300, "height": 300, "anchor": "center"}]
+                      },
+                      {
+                        "component": "cell",
+                        "visible_bind": "map_emit_shown",
+                        "grow": 1.0,
+                        "children": [{"component": "sprite", "tex": 9, "width": 300, "height": 300, "anchor": "center"}]
+                      },
                       {
                         "component": "cell",
                         "visible_bind": "lit_shown",
                         "grow": 1.0,
                         "gap": 8,
                         "children": [
-                          { "component": "surface", "id": "mtl_lit", "source": "materialbench_lit", "style": "materialbench.frame", "grow": 1.0 },
+                          {"component": "surface", "id": "mtl_lit", "source": "materialbench_lit", "style": "materialbench.frame", "grow": 1.0},
                           {
                             "component": "row",
                             "size": 32,
                             "gap": 8,
                             "align": "center",
                             "children": [
-                              { "component": "button", "id": "lit_body", "action": "lit_body", "label_bind": "lit_body_label", "style": "materialbench.button", "size": 92, "size_class": "md", "tab_group": "mtl_view", "nav_ordinal": 2 },
-                              { "component": "text", "text": "$mtl_spin", "text_size": 12, "font": "label", "color": "materialbench.col.label", "size": 60 },
-                              { "component": "toggle", "id": "lit_spin", "bind": "lit_spin", "size": 44, "tab_group": "mtl_view", "nav_ordinal": 3 }
+                              {
+                                "component": "button",
+                                "id": "lit_body",
+                                "action": "lit_body",
+                                "label_bind": "lit_body_label",
+                                "style": "materialbench.button",
+                                "size": 92,
+                                "size_class": "md",
+                                "tab_group": "mtl_view",
+                                "nav_ordinal": 4
+                              },
+                              {"component": "text", "text": "$mtl_spin", "text_size": 12, "font": "label", "color": "materialbench.col.label", "size": 60},
+                              {"component": "toggle", "id": "lit_spin", "bind": "lit_spin", "size": 44, "tab_group": "mtl_view", "nav_ordinal": 5},
+                              {
+                                "_comment": "The Lit view's ZOOM — how close the sample is drawn: the lit stage's camera distance divided by it (1 = the stage's own framing). The wheel over the sample moves the same number, one `step` per notch, inside this same range: the bench reads `min` / `max` / `step` from THIS node, the one source — no param repeats them. The zoom is the VIEW's: the body toggle and a material load keep it. AARON'S TO TUNE — placeholders: min 1.0, max 4.0, step 0.25. `min` must stay in (0, 1] and `max` at least 1 (the sample opens on the stage's framing) and `step` above 0; anything else switches the zoom off, loudly.",
+                                "component": "slider",
+                                "id": "lit_zoom",
+                                "bind": "lit_zoom",
+                                "label": "$mtl_lit_zoom",
+                                "min": 1.0,
+                                "max": 4.0,
+                                "step": 0.25,
+                                "decimals": 2,
+                                "slider_h": 7,
+                                "value_w": 46,
+                                "size": 240,
+                                "style": "materialbench.slider",
+                                "tab_group": "mtl_view",
+                                "nav_ordinal": 6
+                              }
                             ]
                           }
                         ]
                       }
                     ]
                   },
-                  {
-                    "component": "text",
-                    "text_bind": "preview_info",
-                    "text_size": 12,
-                    "font": "label",
-                    "color": "materialbench.col.dim",
-                    "size": 18
-                  }
+                  {"component": "text", "text_bind": "preview_info", "text_size": 12, "font": "label", "color": "materialbench.col.dim", "size": 18}
                 ]
               },
               {
+                "_comment": "RIGHT — the SELECTED NODE's parameters: one authored, `visible_bind`-gated cell PER NODE KIND (materialbench.lua shows exactly the one `sel_kind` names). Each lists only its kind's dials, bound `node_<param>` (sliders for numbers, selects for the enums, a toggle for invert), then one SOURCE select per input port bound `node_in<k>`: option 0 is none, then one option per row of `rows_from: in<k>` — only the nodes the graph would ACCEPT there (that port's kind of signal; never the node itself nor anything it feeds), so a pad can wire without the canvas and no option on offer is refused. Below them the OUTPUT STAGE (`rows_from: field` / `colour`). Every select repeats its LAST option (the prototype) after the ones authored ahead of it. Every slider range here is CONTENT — Aaron's to tune; the bench keeps the document valid (integers round, a non-finite value is refused) whatever a control writes.",
                 "component": "panel",
-                "id": "mtl_out",
+                "id": "mtl_params",
                 "style": "materialbench.panel",
-                "size": 330,
-                "pad": 14,
+                "size": 380,
+                "pad": 12,
                 "gap": 6,
-                "nav_ordinal": 9,
+                "nav_ordinal": 4,
                 "children": [
-                  { "component": "text", "text": "$mtl_output_stage", "text_size": 11, "font": "label", "color": "materialbench.col.label", "size": 20 },
-                  { "component": "slider", "id": "tint_hue", "bind": "tint_hue", "label": "$mtl_hue", "min": 0, "max": 1, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 46, "size": 24, "style": "materialbench.slider", "tab_group": "mtl_out", "nav_ordinal": 1 },
-                  { "component": "slider", "id": "tint_sat", "bind": "tint_sat", "label": "$mtl_saturation", "min": 0, "max": 1, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 46, "size": 24, "style": "materialbench.slider", "tab_group": "mtl_out", "nav_ordinal": 2 },
-                  { "component": "slider", "id": "relief", "bind": "relief", "label": "$mtl_relief", "min": 0, "max": 1, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 46, "size": 24, "style": "materialbench.slider", "tab_group": "mtl_out", "nav_ordinal": 3 },
-                  { "component": "slider", "id": "roughness", "bind": "roughness", "label": "$mtl_roughness", "min": 0, "max": 1, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 46, "size": 24, "style": "materialbench.slider", "tab_group": "mtl_out", "nav_ordinal": 4 },
-                  { "component": "slider", "id": "roughness_mod", "bind": "roughness_mod", "label": "$mtl_rough_mod", "min": -1, "max": 1, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 46, "size": 24, "style": "materialbench.slider", "tab_group": "mtl_out", "nav_ordinal": 5 },
-                  { "component": "slider", "id": "metalness", "bind": "metalness", "label": "$mtl_metalness", "min": 0, "max": 1, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 46, "size": 24, "style": "materialbench.slider", "tab_group": "mtl_out", "nav_ordinal": 6 },
-                  { "component": "slider", "id": "metalness_mod", "bind": "metalness_mod", "label": "$mtl_metal_mod", "min": -1, "max": 1, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 46, "size": 24, "style": "materialbench.slider", "tab_group": "mtl_out", "nav_ordinal": 7 },
-                  { "component": "slider", "id": "ao", "bind": "ao", "label": "$mtl_ao", "min": 0, "max": 1, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 46, "size": 24, "style": "materialbench.slider", "tab_group": "mtl_out", "nav_ordinal": 8 },
-                  { "component": "slider", "id": "emissive_strength", "bind": "emissive_strength", "label": "$mtl_glow", "min": 0, "max": 1, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 46, "size": 24, "style": "materialbench.slider", "tab_group": "mtl_out", "nav_ordinal": 9 },
-                  { "component": "slider", "id": "emissive_band", "bind": "emissive_band", "label": "$mtl_glow_band", "min": 0, "max": 1, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 46, "size": 24, "style": "materialbench.slider", "tab_group": "mtl_out", "nav_ordinal": 10 },
-                  { "component": "text", "text": "$mtl_glow_color", "text_size": 11, "font": "label", "color": "materialbench.col.label", "size": 16 },
-                  { "component": "row", "id": "mtl_glow_swatches", "size": 26, "gap": 4, "children": [] },
                   {
                     "component": "row",
                     "size": 20,
                     "gap": 6,
+                    "align": "center",
                     "children": [
-                      { "component": "text", "text": "$mtl_voice", "text_size": 11, "font": "label", "color": "materialbench.col.label", "size": 104 },
-                      { "component": "text", "text_bind": "sel_voice", "text_size": 11, "font": "label", "color": "materialbench.col.accent", "grow": 1.0 }
+                      {"component": "text", "text": "$mtl_node", "text_size": 11, "font": "label", "color": "materialbench.col.label", "size": 44},
+                      {"component": "text", "text_bind": "sel_node_label", "text_size": 12, "font": "label", "color": "materialbench.col.value", "grow": 1.0}
                     ]
                   },
-                  { "component": "slider", "id": "sel_lacunarity", "bind": "sel_lacunarity", "label": "$mtl_lacunarity", "min": 1, "max": 4, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 46, "size": 24, "style": "materialbench.slider", "tab_group": "mtl_out", "nav_ordinal": 51 },
-                  { "component": "slider", "id": "sel_gain", "bind": "sel_gain", "label": "$mtl_gain", "min": 0, "max": 1, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 46, "size": 24, "style": "materialbench.slider", "tab_group": "mtl_out", "nav_ordinal": 52 },
-                  { "component": "slider", "id": "sel_contrast", "bind": "sel_contrast", "label": "$mtl_contrast", "min": 0, "max": 4, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 46, "size": 24, "style": "materialbench.slider", "tab_group": "mtl_out", "nav_ordinal": 53 },
-                  { "component": "checkbox", "id": "sel_invert", "bind": "sel_invert", "label": "$mtl_invert", "box": 16, "size": 26, "style": "materialbench.checkbox", "tab_group": "mtl_out", "nav_ordinal": 54 }
+                  {
+                    "component": "text",
+                    "text": "$mtl_select_node",
+                    "text_size": 11,
+                    "font": "label",
+                    "color": "materialbench.col.dim",
+                    "size": 18,
+                    "visible_bind": "no_node_shown"
+                  },
+                  {
+                    "component": "cell",
+                    "id": "cell_noise",
+                    "visible_bind": "cell_noise_shown",
+                    "gap": 4,
+                    "size": 248,
+                    "children": [
+                      {"component": "text", "text": "$mtl_kind_noise", "text_size": 13, "font": "label", "color": "materialbench.col.accent", "size": 20},
+                      {
+                        "component": "row",
+                        "size": 26,
+                        "gap": 6,
+                        "children": [
+                          {"component": "text", "text": "$mtl_p_source", "text_size": 11, "font": "label", "color": "materialbench.col.label", "size": 96},
+                          {
+                            "component": "select",
+                            "id": "noise_source",
+                            "bind": "node_source",
+                            "style": "materialbench.select",
+                            "grow": 1.0,
+                            "tab_group": "mtl_params",
+                            "nav_ordinal": 1,
+                            "children": [
+                              {"component": "option", "value": 0, "label": "$mtl_src_value"},
+                              {"component": "option", "value": 1, "label": "$mtl_src_fbm"},
+                              {"component": "option", "value": 2, "label": "$mtl_src_ridged"},
+                              {"component": "option", "value": 3, "label": "$mtl_src_billow"},
+                              {"component": "option", "value": 4, "label": "$mtl_src_worley"},
+                              {"component": "option", "value": 5, "label": "$mtl_src_stripe"}
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        "component": "slider",
+                        "id": "noise_scale",
+                        "bind": "node_scale",
+                        "label": "$mtl_p_scale",
+                        "min": 1,
+                        "max": 64,
+                        "step": 1,
+                        "decimals": 0,
+                        "slider_h": 7,
+                        "value_w": 46,
+                        "size": 24,
+                        "style": "materialbench.slider",
+                        "tab_group": "mtl_params",
+                        "nav_ordinal": 2
+                      },
+                      {
+                        "component": "slider",
+                        "id": "noise_octaves",
+                        "bind": "node_octaves",
+                        "label": "$mtl_p_octaves",
+                        "min": 1,
+                        "max": 12,
+                        "step": 1,
+                        "decimals": 0,
+                        "slider_h": 7,
+                        "value_w": 46,
+                        "size": 24,
+                        "style": "materialbench.slider",
+                        "tab_group": "mtl_params",
+                        "nav_ordinal": 3
+                      },
+                      {
+                        "component": "slider",
+                        "id": "noise_lacunarity",
+                        "bind": "node_lacunarity",
+                        "label": "$mtl_p_lacunarity",
+                        "min": 1,
+                        "max": 8,
+                        "step": 0.01,
+                        "decimals": 2,
+                        "slider_h": 7,
+                        "value_w": 46,
+                        "size": 24,
+                        "style": "materialbench.slider",
+                        "tab_group": "mtl_params",
+                        "nav_ordinal": 4
+                      },
+                      {
+                        "component": "slider",
+                        "id": "noise_gain",
+                        "bind": "node_gain",
+                        "label": "$mtl_p_gain",
+                        "min": 0,
+                        "max": 1,
+                        "step": 0.01,
+                        "decimals": 2,
+                        "slider_h": 7,
+                        "value_w": 46,
+                        "size": 24,
+                        "style": "materialbench.slider",
+                        "tab_group": "mtl_params",
+                        "nav_ordinal": 5
+                      },
+                      {
+                        "component": "slider",
+                        "id": "noise_warp",
+                        "bind": "node_warp",
+                        "label": "$mtl_p_warp",
+                        "min": 0,
+                        "max": 4,
+                        "step": 0.01,
+                        "decimals": 2,
+                        "slider_h": 7,
+                        "value_w": 46,
+                        "size": 24,
+                        "style": "materialbench.slider",
+                        "tab_group": "mtl_params",
+                        "nav_ordinal": 6
+                      },
+                      {
+                        "component": "slider",
+                        "id": "noise_contrast",
+                        "bind": "node_contrast",
+                        "label": "$mtl_p_contrast",
+                        "min": 0,
+                        "max": 4,
+                        "step": 0.01,
+                        "decimals": 2,
+                        "slider_h": 7,
+                        "value_w": 46,
+                        "size": 24,
+                        "style": "materialbench.slider",
+                        "tab_group": "mtl_params",
+                        "nav_ordinal": 7
+                      },
+                      {
+                        "component": "row",
+                        "size": 26,
+                        "gap": 6,
+                        "children": [
+                          {"component": "text", "text": "$mtl_p_invert", "text_size": 11, "font": "label", "color": "materialbench.col.label", "size": 96},
+                          {"component": "toggle", "id": "noise_invert", "bind": "node_invert", "size": 44, "tab_group": "mtl_params", "nav_ordinal": 8}
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "component": "cell",
+                    "id": "cell_constant",
+                    "visible_bind": "cell_constant_shown",
+                    "gap": 4,
+                    "size": 48,
+                    "children": [
+                      {"component": "text", "text": "$mtl_kind_constant", "text_size": 13, "font": "label", "color": "materialbench.col.accent", "size": 20},
+                      {
+                        "component": "slider",
+                        "id": "constant_value",
+                        "bind": "node_value",
+                        "label": "$mtl_p_value",
+                        "min": 0,
+                        "max": 1,
+                        "step": 0.01,
+                        "decimals": 2,
+                        "slider_h": 7,
+                        "value_w": 46,
+                        "size": 24,
+                        "style": "materialbench.slider",
+                        "tab_group": "mtl_params",
+                        "nav_ordinal": 1
+                      }
+                    ]
+                  },
+                  {
+                    "component": "cell",
+                    "id": "cell_gradient",
+                    "visible_bind": "cell_gradient_shown",
+                    "gap": 4,
+                    "size": 78,
+                    "children": [
+                      {"component": "text", "text": "$mtl_kind_gradient", "text_size": 13, "font": "label", "color": "materialbench.col.accent", "size": 20},
+                      {
+                        "component": "row",
+                        "size": 26,
+                        "gap": 6,
+                        "children": [
+                          {"component": "text", "text": "$mtl_p_axis", "text_size": 11, "font": "label", "color": "materialbench.col.label", "size": 96},
+                          {
+                            "component": "select",
+                            "id": "gradient_axis",
+                            "bind": "node_axis",
+                            "style": "materialbench.select",
+                            "grow": 1.0,
+                            "tab_group": "mtl_params",
+                            "nav_ordinal": 1,
+                            "children": [
+                              {"component": "option", "value": 0, "label": "$mtl_axis_u"},
+                              {"component": "option", "value": 1, "label": "$mtl_axis_v"},
+                              {"component": "option", "value": 2, "label": "$mtl_axis_radial"}
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        "component": "slider",
+                        "id": "gradient_repeat",
+                        "bind": "node_repeat",
+                        "label": "$mtl_p_repeat",
+                        "min": 1,
+                        "max": 32,
+                        "step": 1,
+                        "decimals": 0,
+                        "slider_h": 7,
+                        "value_w": 46,
+                        "size": 24,
+                        "style": "materialbench.slider",
+                        "tab_group": "mtl_params",
+                        "nav_ordinal": 2
+                      }
+                    ]
+                  },
+                  {
+                    "component": "cell",
+                    "id": "cell_shape",
+                    "visible_bind": "cell_shape_shown",
+                    "gap": 4,
+                    "size": 106,
+                    "children": [
+                      {"component": "text", "text": "$mtl_kind_shape", "text_size": 13, "font": "label", "color": "materialbench.col.accent", "size": 20},
+                      {
+                        "component": "row",
+                        "size": 26,
+                        "gap": 6,
+                        "children": [
+                          {"component": "text", "text": "$mtl_p_pattern", "text_size": 11, "font": "label", "color": "materialbench.col.label", "size": 96},
+                          {
+                            "component": "select",
+                            "id": "shape_pattern",
+                            "bind": "node_pattern",
+                            "style": "materialbench.select",
+                            "grow": 1.0,
+                            "tab_group": "mtl_params",
+                            "nav_ordinal": 1,
+                            "children": [
+                              {"component": "option", "value": 0, "label": "$mtl_pattern_tiles"},
+                              {"component": "option", "value": 1, "label": "$mtl_pattern_bricks"},
+                              {"component": "option", "value": 2, "label": "$mtl_pattern_hex"},
+                              {"component": "option", "value": 3, "label": "$mtl_pattern_dots"}
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        "component": "slider",
+                        "id": "shape_cells",
+                        "bind": "node_cells",
+                        "label": "$mtl_p_cells",
+                        "min": 1,
+                        "max": 32,
+                        "step": 1,
+                        "decimals": 0,
+                        "slider_h": 7,
+                        "value_w": 46,
+                        "size": 24,
+                        "style": "materialbench.slider",
+                        "tab_group": "mtl_params",
+                        "nav_ordinal": 2
+                      },
+                      {
+                        "component": "slider",
+                        "id": "shape_mortar",
+                        "bind": "node_mortar",
+                        "label": "$mtl_p_mortar",
+                        "min": 0,
+                        "max": 0.5,
+                        "step": 0.01,
+                        "decimals": 2,
+                        "slider_h": 7,
+                        "value_w": 46,
+                        "size": 24,
+                        "style": "materialbench.slider",
+                        "tab_group": "mtl_params",
+                        "nav_ordinal": 3
+                      }
+                    ]
+                  },
+                  {
+                    "component": "cell",
+                    "id": "cell_levels",
+                    "visible_bind": "cell_levels_shown",
+                    "gap": 4,
+                    "size": 134,
+                    "children": [
+                      {"component": "text", "text": "$mtl_kind_levels", "text_size": 13, "font": "label", "color": "materialbench.col.accent", "size": 20},
+                      {
+                        "component": "slider",
+                        "id": "levels_lo",
+                        "bind": "node_lo",
+                        "label": "$mtl_p_lo",
+                        "min": 0,
+                        "max": 1,
+                        "step": 0.01,
+                        "decimals": 2,
+                        "slider_h": 7,
+                        "value_w": 46,
+                        "size": 24,
+                        "style": "materialbench.slider",
+                        "tab_group": "mtl_params",
+                        "nav_ordinal": 1
+                      },
+                      {
+                        "component": "slider",
+                        "id": "levels_hi",
+                        "bind": "node_hi",
+                        "label": "$mtl_p_hi",
+                        "min": 0,
+                        "max": 1,
+                        "step": 0.01,
+                        "decimals": 2,
+                        "slider_h": 7,
+                        "value_w": 46,
+                        "size": 24,
+                        "style": "materialbench.slider",
+                        "tab_group": "mtl_params",
+                        "nav_ordinal": 2
+                      },
+                      {
+                        "component": "slider",
+                        "id": "levels_gamma",
+                        "bind": "node_gamma",
+                        "label": "$mtl_p_gamma",
+                        "min": 0.2,
+                        "max": 5,
+                        "step": 0.01,
+                        "decimals": 2,
+                        "slider_h": 7,
+                        "value_w": 46,
+                        "size": 24,
+                        "style": "materialbench.slider",
+                        "tab_group": "mtl_params",
+                        "nav_ordinal": 3
+                      },
+                      {
+                        "component": "row",
+                        "size": 26,
+                        "gap": 6,
+                        "children": [
+                          {"component": "text", "text": "$mtl_port_field", "text_size": 11, "font": "label", "color": "materialbench.col.label", "size": 96},
+                          {
+                            "component": "select",
+                            "id": "levels_in0",
+                            "bind": "node_in0",
+                            "style": "materialbench.source_select",
+                            "grow": 1.0,
+                            "tab_group": "mtl_params",
+                            "nav_ordinal": 4,
+                            "rows_from": "in0",
+                            "children": [{"component": "option", "value": 0, "label": "$mtl_none"}, {"component": "option", "value": 1, "label_bind": "in0_opt{row}"}]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "component": "cell",
+                    "id": "cell_contrast",
+                    "visible_bind": "cell_contrast_shown",
+                    "gap": 4,
+                    "size": 106,
+                    "children": [
+                      {"component": "text", "text": "$mtl_kind_contrast", "text_size": 13, "font": "label", "color": "materialbench.col.accent", "size": 20},
+                      {
+                        "component": "slider",
+                        "id": "contrast_pivot",
+                        "bind": "node_pivot",
+                        "label": "$mtl_p_pivot",
+                        "min": 0,
+                        "max": 1,
+                        "step": 0.01,
+                        "decimals": 2,
+                        "slider_h": 7,
+                        "value_w": 46,
+                        "size": 24,
+                        "style": "materialbench.slider",
+                        "tab_group": "mtl_params",
+                        "nav_ordinal": 1
+                      },
+                      {
+                        "component": "slider",
+                        "id": "contrast_amount",
+                        "bind": "node_amount",
+                        "label": "$mtl_p_amount",
+                        "min": 0,
+                        "max": 4,
+                        "step": 0.01,
+                        "decimals": 2,
+                        "slider_h": 7,
+                        "value_w": 46,
+                        "size": 24,
+                        "style": "materialbench.slider",
+                        "tab_group": "mtl_params",
+                        "nav_ordinal": 2
+                      },
+                      {
+                        "component": "row",
+                        "size": 26,
+                        "gap": 6,
+                        "children": [
+                          {"component": "text", "text": "$mtl_port_field", "text_size": 11, "font": "label", "color": "materialbench.col.label", "size": 96},
+                          {
+                            "component": "select",
+                            "id": "contrast_in0",
+                            "bind": "node_in0",
+                            "style": "materialbench.source_select",
+                            "grow": 1.0,
+                            "tab_group": "mtl_params",
+                            "nav_ordinal": 3,
+                            "rows_from": "in0",
+                            "children": [{"component": "option", "value": 0, "label": "$mtl_none"}, {"component": "option", "value": 1, "label_bind": "in0_opt{row}"}]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "component": "cell",
+                    "id": "cell_invert",
+                    "visible_bind": "cell_invert_shown",
+                    "gap": 4,
+                    "size": 72,
+                    "children": [
+                      {"component": "text", "text": "$mtl_kind_invert", "text_size": 13, "font": "label", "color": "materialbench.col.accent", "size": 20},
+                      {"component": "text", "text": "$mtl_no_params", "text_size": 11, "font": "label", "color": "materialbench.col.dim", "size": 18},
+                      {
+                        "component": "row",
+                        "size": 26,
+                        "gap": 6,
+                        "children": [
+                          {"component": "text", "text": "$mtl_port_field", "text_size": 11, "font": "label", "color": "materialbench.col.label", "size": 96},
+                          {
+                            "component": "select",
+                            "id": "invert_in0",
+                            "bind": "node_in0",
+                            "style": "materialbench.source_select",
+                            "grow": 1.0,
+                            "tab_group": "mtl_params",
+                            "nav_ordinal": 1,
+                            "rows_from": "in0",
+                            "children": [{"component": "option", "value": 0, "label": "$mtl_none"}, {"component": "option", "value": 1, "label_bind": "in0_opt{row}"}]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "component": "cell",
+                    "id": "cell_blur",
+                    "visible_bind": "cell_blur_shown",
+                    "gap": 4,
+                    "size": 78,
+                    "children": [
+                      {"component": "text", "text": "$mtl_kind_blur", "text_size": 13, "font": "label", "color": "materialbench.col.accent", "size": 20},
+                      {
+                        "component": "slider",
+                        "id": "blur_radius",
+                        "bind": "node_radius",
+                        "label": "$mtl_p_radius",
+                        "min": 0,
+                        "max": 0.1,
+                        "step": 0.001,
+                        "decimals": 3,
+                        "slider_h": 7,
+                        "value_w": 46,
+                        "size": 24,
+                        "style": "materialbench.slider",
+                        "tab_group": "mtl_params",
+                        "nav_ordinal": 1
+                      },
+                      {
+                        "component": "row",
+                        "size": 26,
+                        "gap": 6,
+                        "children": [
+                          {"component": "text", "text": "$mtl_port_field", "text_size": 11, "font": "label", "color": "materialbench.col.label", "size": 96},
+                          {
+                            "component": "select",
+                            "id": "blur_in0",
+                            "bind": "node_in0",
+                            "style": "materialbench.source_select",
+                            "grow": 1.0,
+                            "tab_group": "mtl_params",
+                            "nav_ordinal": 2,
+                            "rows_from": "in0",
+                            "children": [{"component": "option", "value": 0, "label": "$mtl_none"}, {"component": "option", "value": 1, "label_bind": "in0_opt{row}"}]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "component": "cell",
+                    "id": "cell_threshold",
+                    "visible_bind": "cell_threshold_shown",
+                    "gap": 4,
+                    "size": 106,
+                    "children": [
+                      {"component": "text", "text": "$mtl_kind_threshold", "text_size": 13, "font": "label", "color": "materialbench.col.accent", "size": 20},
+                      {
+                        "component": "slider",
+                        "id": "threshold_at",
+                        "bind": "node_at",
+                        "label": "$mtl_p_at",
+                        "min": 0,
+                        "max": 1,
+                        "step": 0.01,
+                        "decimals": 2,
+                        "slider_h": 7,
+                        "value_w": 46,
+                        "size": 24,
+                        "style": "materialbench.slider",
+                        "tab_group": "mtl_params",
+                        "nav_ordinal": 1
+                      },
+                      {
+                        "component": "slider",
+                        "id": "threshold_soft",
+                        "bind": "node_soft",
+                        "label": "$mtl_p_soft",
+                        "min": 0,
+                        "max": 1,
+                        "step": 0.01,
+                        "decimals": 2,
+                        "slider_h": 7,
+                        "value_w": 46,
+                        "size": 24,
+                        "style": "materialbench.slider",
+                        "tab_group": "mtl_params",
+                        "nav_ordinal": 2
+                      },
+                      {
+                        "component": "row",
+                        "size": 26,
+                        "gap": 6,
+                        "children": [
+                          {"component": "text", "text": "$mtl_port_field", "text_size": 11, "font": "label", "color": "materialbench.col.label", "size": 96},
+                          {
+                            "component": "select",
+                            "id": "threshold_in0",
+                            "bind": "node_in0",
+                            "style": "materialbench.source_select",
+                            "grow": 1.0,
+                            "tab_group": "mtl_params",
+                            "nav_ordinal": 3,
+                            "rows_from": "in0",
+                            "children": [{"component": "option", "value": 0, "label": "$mtl_none"}, {"component": "option", "value": 1, "label_bind": "in0_opt{row}"}]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "component": "cell",
+                    "id": "cell_band",
+                    "visible_bind": "cell_band_shown",
+                    "gap": 4,
+                    "size": 134,
+                    "children": [
+                      {"component": "text", "text": "$mtl_kind_band", "text_size": 13, "font": "label", "color": "materialbench.col.accent", "size": 20},
+                      {
+                        "component": "slider",
+                        "id": "band_at",
+                        "bind": "node_at",
+                        "label": "$mtl_p_at",
+                        "min": 0,
+                        "max": 1,
+                        "step": 0.01,
+                        "decimals": 2,
+                        "slider_h": 7,
+                        "value_w": 46,
+                        "size": 24,
+                        "style": "materialbench.slider",
+                        "tab_group": "mtl_params",
+                        "nav_ordinal": 1
+                      },
+                      {
+                        "component": "slider",
+                        "id": "band_width",
+                        "bind": "node_width",
+                        "label": "$mtl_p_width",
+                        "min": 0,
+                        "max": 2,
+                        "step": 0.01,
+                        "decimals": 2,
+                        "slider_h": 7,
+                        "value_w": 46,
+                        "size": 24,
+                        "style": "materialbench.slider",
+                        "tab_group": "mtl_params",
+                        "nav_ordinal": 2
+                      },
+                      {
+                        "component": "slider",
+                        "id": "band_soft",
+                        "bind": "node_soft",
+                        "label": "$mtl_p_soft",
+                        "min": 0,
+                        "max": 1,
+                        "step": 0.01,
+                        "decimals": 2,
+                        "slider_h": 7,
+                        "value_w": 46,
+                        "size": 24,
+                        "style": "materialbench.slider",
+                        "tab_group": "mtl_params",
+                        "nav_ordinal": 3
+                      },
+                      {
+                        "component": "row",
+                        "size": 26,
+                        "gap": 6,
+                        "children": [
+                          {"component": "text", "text": "$mtl_port_field", "text_size": 11, "font": "label", "color": "materialbench.col.label", "size": 96},
+                          {
+                            "component": "select",
+                            "id": "band_in0",
+                            "bind": "node_in0",
+                            "style": "materialbench.source_select",
+                            "grow": 1.0,
+                            "tab_group": "mtl_params",
+                            "nav_ordinal": 4,
+                            "rows_from": "in0",
+                            "children": [{"component": "option", "value": 0, "label": "$mtl_none"}, {"component": "option", "value": 1, "label_bind": "in0_opt{row}"}]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "component": "cell",
+                    "id": "cell_curvature",
+                    "visible_bind": "cell_curvature_shown",
+                    "gap": 4,
+                    "size": 78,
+                    "children": [
+                      {"component": "text", "text": "$mtl_kind_curvature", "text_size": 13, "font": "label", "color": "materialbench.col.accent", "size": 20},
+                      {
+                        "component": "slider",
+                        "id": "curvature_radius",
+                        "bind": "node_radius",
+                        "label": "$mtl_p_radius",
+                        "min": 0,
+                        "max": 0.1,
+                        "step": 0.001,
+                        "decimals": 3,
+                        "slider_h": 7,
+                        "value_w": 46,
+                        "size": 24,
+                        "style": "materialbench.slider",
+                        "tab_group": "mtl_params",
+                        "nav_ordinal": 1
+                      },
+                      {
+                        "component": "row",
+                        "size": 26,
+                        "gap": 6,
+                        "children": [
+                          {"component": "text", "text": "$mtl_port_field", "text_size": 11, "font": "label", "color": "materialbench.col.label", "size": 96},
+                          {
+                            "component": "select",
+                            "id": "curvature_in0",
+                            "bind": "node_in0",
+                            "style": "materialbench.source_select",
+                            "grow": 1.0,
+                            "tab_group": "mtl_params",
+                            "nav_ordinal": 2,
+                            "rows_from": "in0",
+                            "children": [{"component": "option", "value": 0, "label": "$mtl_none"}, {"component": "option", "value": 1, "label_bind": "in0_opt{row}"}]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "component": "cell",
+                    "id": "cell_warp",
+                    "visible_bind": "cell_warp_shown",
+                    "gap": 4,
+                    "size": 108,
+                    "children": [
+                      {"component": "text", "text": "$mtl_kind_warp", "text_size": 13, "font": "label", "color": "materialbench.col.accent", "size": 20},
+                      {
+                        "component": "slider",
+                        "id": "warp_amount",
+                        "bind": "node_amount",
+                        "label": "$mtl_p_amount",
+                        "min": 0,
+                        "max": 1,
+                        "step": 0.01,
+                        "decimals": 2,
+                        "slider_h": 7,
+                        "value_w": 46,
+                        "size": 24,
+                        "style": "materialbench.slider",
+                        "tab_group": "mtl_params",
+                        "nav_ordinal": 1
+                      },
+                      {
+                        "component": "row",
+                        "size": 26,
+                        "gap": 6,
+                        "children": [
+                          {"component": "text", "text": "$mtl_port_field", "text_size": 11, "font": "label", "color": "materialbench.col.label", "size": 96},
+                          {
+                            "component": "select",
+                            "id": "warp_in0",
+                            "bind": "node_in0",
+                            "style": "materialbench.source_select",
+                            "grow": 1.0,
+                            "tab_group": "mtl_params",
+                            "nav_ordinal": 2,
+                            "rows_from": "in0",
+                            "children": [{"component": "option", "value": 0, "label": "$mtl_none"}, {"component": "option", "value": 1, "label_bind": "in0_opt{row}"}]
+                          }
+                        ]
+                      },
+                      {
+                        "component": "row",
+                        "size": 26,
+                        "gap": 6,
+                        "children": [
+                          {"component": "text", "text": "$mtl_port_by", "text_size": 11, "font": "label", "color": "materialbench.col.label", "size": 96},
+                          {
+                            "component": "select",
+                            "id": "warp_in1",
+                            "bind": "node_in1",
+                            "style": "materialbench.source_select",
+                            "grow": 1.0,
+                            "tab_group": "mtl_params",
+                            "nav_ordinal": 3,
+                            "rows_from": "in1",
+                            "children": [{"component": "option", "value": 0, "label": "$mtl_none"}, {"component": "option", "value": 1, "label_bind": "in1_opt{row}"}]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "component": "cell",
+                    "id": "cell_tile",
+                    "visible_bind": "cell_tile_shown",
+                    "gap": 4,
+                    "size": 78,
+                    "children": [
+                      {"component": "text", "text": "$mtl_kind_tile", "text_size": 13, "font": "label", "color": "materialbench.col.accent", "size": 20},
+                      {
+                        "component": "slider",
+                        "id": "tile_repeat",
+                        "bind": "node_repeat",
+                        "label": "$mtl_p_repeat",
+                        "min": 1,
+                        "max": 32,
+                        "step": 1,
+                        "decimals": 0,
+                        "slider_h": 7,
+                        "value_w": 46,
+                        "size": 24,
+                        "style": "materialbench.slider",
+                        "tab_group": "mtl_params",
+                        "nav_ordinal": 1
+                      },
+                      {
+                        "component": "row",
+                        "size": 26,
+                        "gap": 6,
+                        "children": [
+                          {"component": "text", "text": "$mtl_port_field", "text_size": 11, "font": "label", "color": "materialbench.col.label", "size": 96},
+                          {
+                            "component": "select",
+                            "id": "tile_in0",
+                            "bind": "node_in0",
+                            "style": "materialbench.source_select",
+                            "grow": 1.0,
+                            "tab_group": "mtl_params",
+                            "nav_ordinal": 2,
+                            "rows_from": "in0",
+                            "children": [{"component": "option", "value": 0, "label": "$mtl_none"}, {"component": "option", "value": 1, "label_bind": "in0_opt{row}"}]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "component": "cell",
+                    "id": "cell_modulate",
+                    "visible_bind": "cell_modulate_shown",
+                    "gap": 4,
+                    "size": 106,
+                    "children": [
+                      {"component": "text", "text": "$mtl_kind_modulate", "text_size": 13, "font": "label", "color": "materialbench.col.accent", "size": 20},
+                      {
+                        "component": "slider",
+                        "id": "modulate_base",
+                        "bind": "node_base",
+                        "label": "$mtl_p_base",
+                        "min": 0,
+                        "max": 1,
+                        "step": 0.01,
+                        "decimals": 2,
+                        "slider_h": 7,
+                        "value_w": 46,
+                        "size": 24,
+                        "style": "materialbench.slider",
+                        "tab_group": "mtl_params",
+                        "nav_ordinal": 1
+                      },
+                      {
+                        "component": "slider",
+                        "id": "modulate_amount",
+                        "bind": "node_amount",
+                        "label": "$mtl_p_amount",
+                        "min": -1,
+                        "max": 1,
+                        "step": 0.01,
+                        "decimals": 2,
+                        "slider_h": 7,
+                        "value_w": 46,
+                        "size": 24,
+                        "style": "materialbench.slider",
+                        "tab_group": "mtl_params",
+                        "nav_ordinal": 2
+                      },
+                      {
+                        "component": "row",
+                        "size": 26,
+                        "gap": 6,
+                        "children": [
+                          {"component": "text", "text": "$mtl_port_field", "text_size": 11, "font": "label", "color": "materialbench.col.label", "size": 96},
+                          {
+                            "component": "select",
+                            "id": "modulate_in0",
+                            "bind": "node_in0",
+                            "style": "materialbench.source_select",
+                            "grow": 1.0,
+                            "tab_group": "mtl_params",
+                            "nav_ordinal": 3,
+                            "rows_from": "in0",
+                            "children": [{"component": "option", "value": 0, "label": "$mtl_none"}, {"component": "option", "value": 1, "label_bind": "in0_opt{row}"}]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "component": "cell",
+                    "id": "cell_occlusion",
+                    "visible_bind": "cell_occlusion_shown",
+                    "gap": 4,
+                    "size": 78,
+                    "children": [
+                      {"component": "text", "text": "$mtl_kind_occlusion", "text_size": 13, "font": "label", "color": "materialbench.col.accent", "size": 20},
+                      {
+                        "component": "slider",
+                        "id": "occlusion_strength",
+                        "bind": "node_strength",
+                        "label": "$mtl_p_strength",
+                        "min": 0,
+                        "max": 4,
+                        "step": 0.01,
+                        "decimals": 2,
+                        "slider_h": 7,
+                        "value_w": 46,
+                        "size": 24,
+                        "style": "materialbench.slider",
+                        "tab_group": "mtl_params",
+                        "nav_ordinal": 1
+                      },
+                      {
+                        "component": "row",
+                        "size": 26,
+                        "gap": 6,
+                        "children": [
+                          {"component": "text", "text": "$mtl_port_field", "text_size": 11, "font": "label", "color": "materialbench.col.label", "size": 96},
+                          {
+                            "component": "select",
+                            "id": "occlusion_in0",
+                            "bind": "node_in0",
+                            "style": "materialbench.source_select",
+                            "grow": 1.0,
+                            "tab_group": "mtl_params",
+                            "nav_ordinal": 2,
+                            "rows_from": "in0",
+                            "children": [{"component": "option", "value": 0, "label": "$mtl_none"}, {"component": "option", "value": 1, "label_bind": "in0_opt{row}"}]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "component": "cell",
+                    "id": "cell_blend",
+                    "visible_bind": "cell_blend_shown",
+                    "gap": 4,
+                    "size": 168,
+                    "children": [
+                      {"component": "text", "text": "$mtl_kind_blend", "text_size": 13, "font": "label", "color": "materialbench.col.accent", "size": 20},
+                      {
+                        "component": "row",
+                        "size": 26,
+                        "gap": 6,
+                        "children": [
+                          {"component": "text", "text": "$mtl_p_mode", "text_size": 11, "font": "label", "color": "materialbench.col.label", "size": 96},
+                          {
+                            "component": "select",
+                            "id": "blend_mode",
+                            "bind": "node_mode",
+                            "style": "materialbench.select",
+                            "grow": 1.0,
+                            "tab_group": "mtl_params",
+                            "nav_ordinal": 1,
+                            "children": [
+                              {"component": "option", "value": 0, "label": "$mtl_blend_base"},
+                              {"component": "option", "value": 1, "label": "$mtl_blend_add"},
+                              {"component": "option", "value": 2, "label": "$mtl_blend_mul"},
+                              {"component": "option", "value": 3, "label": "$mtl_blend_screen"},
+                              {"component": "option", "value": 4, "label": "$mtl_blend_overlay"},
+                              {"component": "option", "value": 5, "label": "$mtl_blend_min"},
+                              {"component": "option", "value": 6, "label": "$mtl_blend_max"},
+                              {"component": "option", "value": 7, "label": "$mtl_blend_diff"}
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        "component": "slider",
+                        "id": "blend_amount",
+                        "bind": "node_amount",
+                        "label": "$mtl_p_amount",
+                        "min": 0,
+                        "max": 1,
+                        "step": 0.01,
+                        "decimals": 2,
+                        "slider_h": 7,
+                        "value_w": 46,
+                        "size": 24,
+                        "style": "materialbench.slider",
+                        "tab_group": "mtl_params",
+                        "nav_ordinal": 2
+                      },
+                      {
+                        "component": "row",
+                        "size": 26,
+                        "gap": 6,
+                        "children": [
+                          {"component": "text", "text": "$mtl_port_a", "text_size": 11, "font": "label", "color": "materialbench.col.label", "size": 96},
+                          {
+                            "component": "select",
+                            "id": "blend_in0",
+                            "bind": "node_in0",
+                            "style": "materialbench.source_select",
+                            "grow": 1.0,
+                            "tab_group": "mtl_params",
+                            "nav_ordinal": 3,
+                            "rows_from": "in0",
+                            "children": [{"component": "option", "value": 0, "label": "$mtl_none"}, {"component": "option", "value": 1, "label_bind": "in0_opt{row}"}]
+                          }
+                        ]
+                      },
+                      {
+                        "component": "row",
+                        "size": 26,
+                        "gap": 6,
+                        "children": [
+                          {"component": "text", "text": "$mtl_port_b", "text_size": 11, "font": "label", "color": "materialbench.col.label", "size": 96},
+                          {
+                            "component": "select",
+                            "id": "blend_in1",
+                            "bind": "node_in1",
+                            "style": "materialbench.source_select",
+                            "grow": 1.0,
+                            "tab_group": "mtl_params",
+                            "nav_ordinal": 4,
+                            "rows_from": "in1",
+                            "children": [{"component": "option", "value": 0, "label": "$mtl_none"}, {"component": "option", "value": 1, "label_bind": "in1_opt{row}"}]
+                          }
+                        ]
+                      },
+                      {
+                        "component": "row",
+                        "size": 26,
+                        "gap": 6,
+                        "children": [
+                          {"component": "text", "text": "$mtl_port_mask", "text_size": 11, "font": "label", "color": "materialbench.col.label", "size": 96},
+                          {
+                            "component": "select",
+                            "id": "blend_in2",
+                            "bind": "node_in2",
+                            "style": "materialbench.source_select",
+                            "grow": 1.0,
+                            "tab_group": "mtl_params",
+                            "nav_ordinal": 5,
+                            "rows_from": "in2",
+                            "children": [{"component": "option", "value": 0, "label": "$mtl_none"}, {"component": "option", "value": 1, "label_bind": "in2_opt{row}"}]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "component": "cell",
+                    "id": "cell_ramp",
+                    "visible_bind": "cell_ramp_shown",
+                    "gap": 4,
+                    "size": 106,
+                    "children": [
+                      {"component": "text", "text": "$mtl_kind_ramp", "text_size": 13, "font": "label", "color": "materialbench.col.accent", "size": 20},
+                      {
+                        "component": "slider",
+                        "id": "ramp_hue",
+                        "bind": "node_hue",
+                        "label": "$mtl_p_hue",
+                        "min": 0,
+                        "max": 1,
+                        "step": 0.01,
+                        "decimals": 2,
+                        "slider_h": 7,
+                        "value_w": 46,
+                        "size": 24,
+                        "style": "materialbench.slider",
+                        "tab_group": "mtl_params",
+                        "nav_ordinal": 1
+                      },
+                      {
+                        "component": "slider",
+                        "id": "ramp_sat",
+                        "bind": "node_sat",
+                        "label": "$mtl_p_sat",
+                        "min": 0,
+                        "max": 1,
+                        "step": 0.01,
+                        "decimals": 2,
+                        "slider_h": 7,
+                        "value_w": 46,
+                        "size": 24,
+                        "style": "materialbench.slider",
+                        "tab_group": "mtl_params",
+                        "nav_ordinal": 2
+                      },
+                      {
+                        "component": "row",
+                        "size": 26,
+                        "gap": 6,
+                        "children": [
+                          {"component": "text", "text": "$mtl_port_field", "text_size": 11, "font": "label", "color": "materialbench.col.label", "size": 96},
+                          {
+                            "component": "select",
+                            "id": "ramp_in0",
+                            "bind": "node_in0",
+                            "style": "materialbench.source_select",
+                            "grow": 1.0,
+                            "tab_group": "mtl_params",
+                            "nav_ordinal": 3,
+                            "rows_from": "in0",
+                            "children": [{"component": "option", "value": 0, "label": "$mtl_none"}, {"component": "option", "value": 1, "label_bind": "in0_opt{row}"}]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "component": "cell",
+                    "id": "cell_palette",
+                    "visible_bind": "cell_palette_shown",
+                    "gap": 4,
+                    "size": 50,
+                    "children": [
+                      {"component": "text", "text": "$mtl_kind_palette", "text_size": 13, "font": "label", "color": "materialbench.col.accent", "size": 20},
+                      {
+                        "component": "row",
+                        "size": 26,
+                        "gap": 6,
+                        "children": [
+                          {"component": "text", "text": "$mtl_p_rgb", "text_size": 11, "font": "label", "color": "materialbench.col.label", "size": 96},
+                          {
+                            "component": "select",
+                            "id": "palette_rgb",
+                            "bind": "node_rgb",
+                            "style": "materialbench.select",
+                            "grow": 1.0,
+                            "tab_group": "mtl_params",
+                            "nav_ordinal": 1,
+                            "rows_from": "glow",
+                            "placeholder": "$mtl_pal_custom",
+                            "children": [{"component": "option", "value": 0, "label_bind": "glow_opt{row}"}]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "component": "cell",
+                    "id": "cell_mix_color",
+                    "visible_bind": "cell_mix_color_shown",
+                    "gap": 4,
+                    "size": 138,
+                    "children": [
+                      {"component": "text", "text": "$mtl_kind_mix_color", "text_size": 13, "font": "label", "color": "materialbench.col.accent", "size": 20},
+                      {
+                        "component": "slider",
+                        "id": "mix_color_amount",
+                        "bind": "node_amount",
+                        "label": "$mtl_p_amount",
+                        "min": 0,
+                        "max": 1,
+                        "step": 0.01,
+                        "decimals": 2,
+                        "slider_h": 7,
+                        "value_w": 46,
+                        "size": 24,
+                        "style": "materialbench.slider",
+                        "tab_group": "mtl_params",
+                        "nav_ordinal": 1
+                      },
+                      {
+                        "component": "row",
+                        "size": 26,
+                        "gap": 6,
+                        "children": [
+                          {"component": "text", "text": "$mtl_port_a", "text_size": 11, "font": "label", "color": "materialbench.col.label", "size": 96},
+                          {
+                            "component": "select",
+                            "id": "mix_color_in0",
+                            "bind": "node_in0",
+                            "style": "materialbench.source_select",
+                            "grow": 1.0,
+                            "tab_group": "mtl_params",
+                            "nav_ordinal": 2,
+                            "rows_from": "in0",
+                            "children": [{"component": "option", "value": 0, "label": "$mtl_none"}, {"component": "option", "value": 1, "label_bind": "in0_opt{row}"}]
+                          }
+                        ]
+                      },
+                      {
+                        "component": "row",
+                        "size": 26,
+                        "gap": 6,
+                        "children": [
+                          {"component": "text", "text": "$mtl_port_b", "text_size": 11, "font": "label", "color": "materialbench.col.label", "size": 96},
+                          {
+                            "component": "select",
+                            "id": "mix_color_in1",
+                            "bind": "node_in1",
+                            "style": "materialbench.source_select",
+                            "grow": 1.0,
+                            "tab_group": "mtl_params",
+                            "nav_ordinal": 3,
+                            "rows_from": "in1",
+                            "children": [{"component": "option", "value": 0, "label": "$mtl_none"}, {"component": "option", "value": 1, "label_bind": "in1_opt{row}"}]
+                          }
+                        ]
+                      },
+                      {
+                        "component": "row",
+                        "size": 26,
+                        "gap": 6,
+                        "children": [
+                          {"component": "text", "text": "$mtl_port_mask", "text_size": 11, "font": "label", "color": "materialbench.col.label", "size": 96},
+                          {
+                            "component": "select",
+                            "id": "mix_color_in2",
+                            "bind": "node_in2",
+                            "style": "materialbench.source_select",
+                            "grow": 1.0,
+                            "tab_group": "mtl_params",
+                            "nav_ordinal": 4,
+                            "rows_from": "in2",
+                            "children": [{"component": "option", "value": 0, "label": "$mtl_none"}, {"component": "option", "value": 1, "label_bind": "in2_opt{row}"}]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "component": "cell",
+                    "id": "mtl_output_stage",
+                    "gap": 4,
+                    "size": 396,
+                    "children": [
+                      {"component": "text", "text": "$mtl_output_stage", "text_size": 13, "font": "label", "color": "materialbench.col.accent", "size": 20},
+                      {
+                        "component": "row",
+                        "size": 26,
+                        "gap": 6,
+                        "children": [
+                          {"component": "text", "text": "$mtl_out_base", "text_size": 11, "font": "label", "color": "materialbench.col.label", "size": 96},
+                          {
+                            "component": "select",
+                            "id": "out_base",
+                            "bind": "out_base",
+                            "style": "materialbench.source_select",
+                            "grow": 1.0,
+                            "tab_group": "mtl_params",
+                            "nav_ordinal": 50,
+                            "rows_from": "colour",
+                            "children": [{"component": "option", "value": 0, "label": "$mtl_none"}, {"component": "option", "value": 1, "label_bind": "colour_opt{row}"}]
+                          }
+                        ]
+                      },
+                      {
+                        "component": "row",
+                        "size": 26,
+                        "gap": 6,
+                        "children": [
+                          {"component": "text", "text": "$mtl_out_height", "text_size": 11, "font": "label", "color": "materialbench.col.label", "size": 96},
+                          {
+                            "component": "select",
+                            "id": "out_height",
+                            "bind": "out_height",
+                            "style": "materialbench.source_select",
+                            "grow": 1.0,
+                            "tab_group": "mtl_params",
+                            "nav_ordinal": 51,
+                            "rows_from": "field",
+                            "children": [{"component": "option", "value": 0, "label": "$mtl_none"}, {"component": "option", "value": 1, "label_bind": "field_opt{row}"}]
+                          }
+                        ]
+                      },
+                      {
+                        "component": "slider",
+                        "id": "out_relief",
+                        "bind": "out_relief",
+                        "label": "$mtl_relief",
+                        "min": 0,
+                        "max": 4,
+                        "step": 0.01,
+                        "decimals": 2,
+                        "slider_h": 7,
+                        "value_w": 46,
+                        "size": 24,
+                        "style": "materialbench.slider",
+                        "tab_group": "mtl_params",
+                        "nav_ordinal": 52
+                      },
+                      {
+                        "component": "row",
+                        "size": 26,
+                        "gap": 6,
+                        "children": [
+                          {"component": "text", "text": "$mtl_roughness", "text_size": 11, "font": "label", "color": "materialbench.col.label", "size": 96},
+                          {
+                            "component": "select",
+                            "id": "out_rough_src",
+                            "bind": "out_rough_src",
+                            "style": "materialbench.source_select",
+                            "grow": 1.0,
+                            "tab_group": "mtl_params",
+                            "nav_ordinal": 53,
+                            "rows_from": "field",
+                            "children": [{"component": "option", "value": 0, "label": "$mtl_const"}, {"component": "option", "value": 1, "label_bind": "field_opt{row}"}]
+                          }
+                        ]
+                      },
+                      {
+                        "component": "slider",
+                        "id": "out_rough",
+                        "bind": "out_rough",
+                        "label": "$mtl_level",
+                        "min": 0,
+                        "max": 1,
+                        "step": 0.01,
+                        "decimals": 2,
+                        "slider_h": 7,
+                        "value_w": 46,
+                        "size": 24,
+                        "style": "materialbench.slider",
+                        "tab_group": "mtl_params",
+                        "nav_ordinal": 54,
+                        "visible_bind": "out_rough_const"
+                      },
+                      {
+                        "component": "row",
+                        "size": 26,
+                        "gap": 6,
+                        "children": [
+                          {"component": "text", "text": "$mtl_metalness", "text_size": 11, "font": "label", "color": "materialbench.col.label", "size": 96},
+                          {
+                            "component": "select",
+                            "id": "out_metal_src",
+                            "bind": "out_metal_src",
+                            "style": "materialbench.source_select",
+                            "grow": 1.0,
+                            "tab_group": "mtl_params",
+                            "nav_ordinal": 55,
+                            "rows_from": "field",
+                            "children": [{"component": "option", "value": 0, "label": "$mtl_const"}, {"component": "option", "value": 1, "label_bind": "field_opt{row}"}]
+                          }
+                        ]
+                      },
+                      {
+                        "component": "slider",
+                        "id": "out_metal",
+                        "bind": "out_metal",
+                        "label": "$mtl_level",
+                        "min": 0,
+                        "max": 1,
+                        "step": 0.01,
+                        "decimals": 2,
+                        "slider_h": 7,
+                        "value_w": 46,
+                        "size": 24,
+                        "style": "materialbench.slider",
+                        "tab_group": "mtl_params",
+                        "nav_ordinal": 56,
+                        "visible_bind": "out_metal_const"
+                      },
+                      {
+                        "component": "row",
+                        "size": 26,
+                        "gap": 6,
+                        "children": [
+                          {"component": "text", "text": "$mtl_ao", "text_size": 11, "font": "label", "color": "materialbench.col.label", "size": 96},
+                          {
+                            "component": "select",
+                            "id": "out_ao_src",
+                            "bind": "out_ao_src",
+                            "style": "materialbench.source_select",
+                            "grow": 1.0,
+                            "tab_group": "mtl_params",
+                            "nav_ordinal": 57,
+                            "rows_from": "field",
+                            "children": [{"component": "option", "value": 0, "label": "$mtl_const"}, {"component": "option", "value": 1, "label_bind": "field_opt{row}"}]
+                          }
+                        ]
+                      },
+                      {
+                        "component": "slider",
+                        "id": "out_ao",
+                        "bind": "out_ao",
+                        "label": "$mtl_level",
+                        "min": 0,
+                        "max": 1,
+                        "step": 0.01,
+                        "decimals": 2,
+                        "slider_h": 7,
+                        "value_w": 46,
+                        "size": 24,
+                        "style": "materialbench.slider",
+                        "tab_group": "mtl_params",
+                        "nav_ordinal": 58,
+                        "visible_bind": "out_ao_const"
+                      },
+                      {
+                        "component": "row",
+                        "size": 26,
+                        "gap": 6,
+                        "children": [
+                          {"component": "text", "text": "$mtl_glow", "text_size": 11, "font": "label", "color": "materialbench.col.label", "size": 96},
+                          {
+                            "component": "select",
+                            "id": "out_emit_color",
+                            "bind": "out_emit_color",
+                            "style": "materialbench.select",
+                            "grow": 1.0,
+                            "tab_group": "mtl_params",
+                            "nav_ordinal": 59,
+                            "rows_from": "glow",
+                            "placeholder": "$mtl_pal_custom",
+                            "children": [{"component": "option", "value": 0, "label": "$mtl_none"}, {"component": "option", "value": 1, "label_bind": "glow_opt{row}"}]
+                          }
+                        ]
+                      },
+                      {
+                        "component": "row",
+                        "id": "mtl_glow_swatches",
+                        "rows_from": "glow",
+                        "size": 22,
+                        "gap": 4,
+                        "_comment": "The curated glow palette as SWATCHES — a data-driven `row` over ONE prototype (CBF52F5C): one cell per palette entry, each a `sprite` over the 1×1 texture the bench uploads for that colour (its texture slot rides the Model as `glow<i>_tex`). The swatch the glow wears is washed `materialbench.swatch_sel` by materialbench.lua. A legend, not a control: the glow colour is picked in the select above (one way to do it).",
+                        "children": [
+                          {
+                            "component": "cell",
+                            "style": "materialbench.swatch",
+                            "style_bind": "glow{row}_sty",
+                            "grow": 1.0,
+                            "pad": 3,
+                            "children": [{"component": "sprite", "tex_bind": "glow{row}_tex", "grow": 1.0}]
+                          }
+                        ]
+                      },
+                      {
+                        "component": "row",
+                        "size": 26,
+                        "gap": 6,
+                        "children": [
+                          {"component": "text", "text": "$mtl_glow_mask", "text_size": 11, "font": "label", "color": "materialbench.col.label", "size": 96},
+                          {
+                            "component": "select",
+                            "id": "out_emit_mask",
+                            "bind": "out_emit_mask",
+                            "style": "materialbench.source_select",
+                            "grow": 1.0,
+                            "tab_group": "mtl_params",
+                            "nav_ordinal": 60,
+                            "rows_from": "field",
+                            "enabled_bind": "out_emit_on",
+                            "children": [{"component": "option", "value": 0, "label": "$mtl_none"}, {"component": "option", "value": 1, "label_bind": "field_opt{row}"}]
+                          }
+                        ]
+                      },
+                      {
+                        "component": "slider",
+                        "id": "out_emit_strength",
+                        "bind": "out_emit_strength",
+                        "label": "$mtl_glow_strength",
+                        "min": 0,
+                        "max": 1,
+                        "step": 0.01,
+                        "decimals": 2,
+                        "slider_h": 7,
+                        "value_w": 46,
+                        "size": 24,
+                        "style": "materialbench.slider",
+                        "tab_group": "mtl_params",
+                        "nav_ordinal": 61,
+                        "enabled_bind": "out_emit_on"
+                      }
+                    ]
+                  }
                 ]
               }
             ]
@@ -731,54 +2112,164 @@
             "grow": 1.0,
             "gap": 8,
             "children": [
-              { "component": "text", "text": "$mtl_materials", "text_size": 14, "font": "label", "color": "materialbench.col.label", "size": 24 },
+              {"component": "text", "text": "$mtl_materials", "text_size": 14, "font": "label", "color": "materialbench.col.label", "size": 24},
               {
                 "component": "panel",
                 "id": "mtl_mat_panel",
                 "style": "materialbench.panel",
                 "grow": 1.0,
                 "pad": 8,
-                "nav_ordinal": 12,
+                "nav_ordinal": 7,
                 "children": [
-                  { "component": "list", "id": "mtl_mat_list", "grow": 1.0, "gap": 4, "pad": 4 }
+                  {
+                    "component": "list",
+                    "id": "mtl_mat_list",
+                    "bind": "mat_scroll",
+                    "rows_from": "materials",
+                    "grow": 1.0,
+                    "gap": 4,
+                    "pad": 4,
+                    "_comment": "One row per DEFINED material (the index is data: a data-driven list over ONE button prototype, CBF52F5C). A row binds the graph to that slot (not an image edit).",
+                    "children": [
+                      {
+                        "component": "button",
+                        "id": "mat_pick_{row}",
+                        "action": "mat_pick_{row}",
+                        "label_bind": "mat_row_{row}",
+                        "style": "materialbench.button",
+                        "size": 28,
+                        "tab_group": "mtl_mat_panel",
+                        "nav_ordinal": 1
+                      }
+                    ]
+                  }
                 ]
               },
-              { "component": "text", "text": "$mtl_mat_pick_hint", "text_size": 11, "font": "label", "color": "materialbench.col.dim", "size": 18 }
+              {"component": "text", "text": "$mtl_mat_pick_hint", "text_size": 11, "font": "label", "color": "materialbench.col.dim", "size": 18}
             ]
           },
           {
             "component": "row",
             "id": "mtl_footer",
             "style": "materialbench.bar",
-            "nav_ordinal": 10,
+            "nav_ordinal": 5,
             "size": 52,
             "pad_x": 12,
             "pad_y": 10,
             "gap": 8,
             "align": "center",
             "children": [
-              { "component": "text", "text": "$mtl_size", "text_size": 12, "font": "label", "color": "materialbench.col.label", "size": 40 },
-              { "component": "button", "id": "bake_size", "action": "bake_size", "label_bind": "size_label", "style": "materialbench.button", "size": 90, "size_class": "md", "tab_group": "mtl_footer", "nav_ordinal": 1 },
-              { "component": "button", "id": "commit", "action": "commit", "label": "$mtl_commit", "enabled_bind": "material_bound", "style": "materialbench.button", "size": 110, "size_class": "md", "tab_group": "mtl_footer", "nav_ordinal": 2 },
-              { "component": "text", "text_bind": "commit_status", "text_size": 12, "font": "label", "color": "materialbench.col.value", "grow": 1.0 },
-              { "component": "text", "text_bind": "bake_info", "text_size": 12, "font": "label", "color": "materialbench.col.dim", "size": 180 }
+              {"component": "text", "text": "$mtl_size", "text_size": 12, "font": "label", "color": "materialbench.col.label", "size": 40},
+              {
+                "component": "button",
+                "id": "bake_size",
+                "action": "bake_size",
+                "label_bind": "size_label",
+                "style": "materialbench.button",
+                "size": 90,
+                "size_class": "md",
+                "tab_group": "mtl_footer",
+                "nav_ordinal": 1
+              },
+              {
+                "component": "button",
+                "id": "commit",
+                "action": "commit",
+                "label": "$mtl_commit",
+                "enabled_bind": "material_bound",
+                "style": "materialbench.button",
+                "size": 110,
+                "size_class": "md",
+                "tab_group": "mtl_footer",
+                "nav_ordinal": 2
+              },
+              {"component": "text", "text_bind": "commit_status", "text_size": 12, "font": "label", "color": "materialbench.col.value", "grow": 1.0},
+              {"component": "text", "text_bind": "commit_detail", "text_size": 12, "font": "label", "color": "materialbench.col.dim", "grow": 0.6},
+              {
+                "component": "text",
+                "text": "$mtl_problems",
+                "text_size": 12,
+                "font": "label",
+                "color": "materialbench.col.warn",
+                "size": 64,
+                "visible_bind": "problems_shown"
+              },
+              {
+                "component": "text",
+                "text_bind": "problems_label",
+                "text_size": 12,
+                "font": "label",
+                "color": "materialbench.col.warn",
+                "size": 28,
+                "visible_bind": "problems_shown"
+              },
+              {
+                "component": "text",
+                "text_bind": "status_line",
+                "text_size": 12,
+                "font": "label",
+                "color": "materialbench.col.warn",
+                "grow": 1.6,
+                "visible_bind": "status_shown"
+              },
+              {
+                "component": "text",
+                "text_bind": "status_detail",
+                "text_size": 12,
+                "font": "label",
+                "color": "materialbench.col.value",
+                "grow": 0.8,
+                "visible_bind": "status_shown",
+                "_comment": "What the status line's token is about — the node, port, parameter or loop a graph error names — as raw data beside the localized message."
+              },
+              {"component": "text", "text_bind": "bake_info", "text_size": 12, "font": "label", "color": "materialbench.col.dim", "size": 180}
             ]
           },
           {
             "component": "nav_footer",
             "id": "mtl_nav",
             "style": "nav_footer.frame",
-            "nav_ordinal": 11,
+            "nav_ordinal": 6,
             "size": 52,
             "pad_x": 12,
             "pad_y": 10,
             "gap": 8,
             "children": [
-              { "component": "option", "glyph": "lb", "label": "$mtl_ft_prev", "size": 56 },
-              { "component": "option", "glyph": "rb", "label": "$mtl_ft_next", "size": 56 },
-              { "component": "button", "id": "mtl_nav_menu", "action": "pause_open", "label": "$mtl_ft_menu", "style": "materialbench.button", "size": 90, "size_class": "md", "tab_group": "mtl_nav", "nav_ordinal": 1 },
-              { "component": "button", "id": "mtl_nav_prev", "action": "map_prev", "label": "$mtl_ft_prev", "style": "materialbench.button", "size": 90, "size_class": "md", "tab_group": "mtl_nav", "nav_ordinal": 2 },
-              { "component": "button", "id": "mtl_nav_next", "action": "map_next", "label": "$mtl_ft_next", "style": "materialbench.button", "size": 90, "size_class": "md", "tab_group": "mtl_nav", "nav_ordinal": 3 }
+              {"component": "option", "glyph": "lb", "label": "$mtl_ft_prev", "size": 56},
+              {"component": "option", "glyph": "rb", "label": "$mtl_ft_next", "size": 56},
+              {
+                "component": "button",
+                "id": "mtl_nav_menu",
+                "action": "pause_open",
+                "label": "$mtl_ft_menu",
+                "style": "materialbench.button",
+                "size": 90,
+                "size_class": "md",
+                "tab_group": "mtl_nav",
+                "nav_ordinal": 1
+              },
+              {
+                "component": "button",
+                "id": "mtl_nav_prev",
+                "action": "map_prev",
+                "label": "$mtl_ft_prev",
+                "style": "materialbench.button",
+                "size": 90,
+                "size_class": "md",
+                "tab_group": "mtl_nav",
+                "nav_ordinal": 2
+              },
+              {
+                "component": "button",
+                "id": "mtl_nav_next",
+                "action": "map_next",
+                "label": "$mtl_ft_next",
+                "style": "materialbench.button",
+                "size": 90,
+                "size_class": "md",
+                "tab_group": "mtl_nav",
+                "nav_ordinal": 3
+              }
             ]
           }
         ]

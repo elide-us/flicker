@@ -92,7 +92,9 @@ impl From<&flicker::ui::SurfacePointer> for PointerSample {
 }
 
 /// Whether `p` is inside `r` (inclusive of its far edges, matching every other
-/// pick in the engine: a click exactly on a border hits the thing it borders).
-pub(crate) fn rect_contains(r: flicker::render::Rect, p: Vec2) -> bool {
+/// pick in the engine: a click exactly on a border hits the thing it borders). Public
+/// so a consumer gating a sample on its seat (`flicker_materialview::graph_view`) asks
+/// the very test the fillers pick with, rather than spelling a second one.
+pub fn rect_contains(r: flicker::render::Rect, p: Vec2) -> bool {
     p.x >= r.pos.x && p.x <= r.pos.x + r.size.x && p.y >= r.pos.y && p.y <= r.pos.y + r.size.y
 }

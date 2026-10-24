@@ -23,6 +23,10 @@ pub struct OrbitCam {
     /// there); somewhere else for an inspector framing a region of it — a column
     /// standing at its true radius is orbited about its own midpoint.
     target: Vec3,
+    /// Whether a right-drag slides the target across the ground — what a
+    /// camera over a FIELD wants (fly from one end of a hex to the other) and a
+    /// camera around a planet never does (its target is the planet).
+    panning: bool,
     /// The player's OWN look settings — sensitivity and the two invert flags,
     /// straight off the settings panel. The planet turns at the rate the player
     /// asked for, the same as every other camera in the app; this struct does
@@ -41,6 +45,7 @@ impl OrbitCam {
             min_distance: radius * 1.2,
             max_distance: radius * 9.0,
             target: Vec3::ZERO,
+            panning: false,
             controls: AbstractControls::default(),
         }
     }
@@ -66,6 +71,23 @@ impl OrbitCam {
         self.distance = radius * 3.0;
         self.min_distance = radius * 1.2;
         self.max_distance = radius * 9.0;
+    }
+
+    /// Set the zoom clamps outright, in world units — for a frame whose
+    /// interesting distances are not a planet's multiples of its radius: a
+    /// field of 128 ft quads is flown from the whole hex down to one quad,
+    /// which [`set_frame`](Self::set_frame)'s `1.2 R` floor would never reach.
+    /// The current distance is pulled inside the new clamps.
+    pub fn set_range(&mut self, min_distance: f32, max_distance: f32) {
+        self.min_distance = min_distance.max(1e-3);
+        self.max_distance = max_distance.max(self.min_distance);
+        self.distance = self.distance.clamp(self.min_distance, self.max_distance);
+    }
+
+    /// Let a right-drag slide the target across the ground (an inspector
+    /// over a field); off (the default) for a planet, whose target is itself.
+    pub fn set_panning(&mut self, panning: bool) {
+        self.panning = panning;
     }
 
     /// Open with the planet FILLING `fill` of the viewport's height (0..1):
@@ -102,10 +124,32 @@ impl OrbitCam {
             self.yaw -= p.delta.x * 0.01;
             self.pitch = (self.pitch + p.delta.y * 0.01).clamp(-1.4, 1.4);
         }
+        if self.panning && p.captured && p.right && !p.left {
+            self.pan(p.delta, p.rect.size.y);
+        }
         if p.wheel != 0.0 {
             self.distance =
                 (self.distance * (1.0 - p.wheel * 0.1)).clamp(self.min_distance, self.max_distance);
         }
+    }
+
+    /// Slide the target across the GROUND PLANE by a pointer delta in pixels —
+    /// the editor orbit's right-drag pan, kept to the ground rather than the
+    /// view plane because what is under this camera is a field: the ground
+    /// tracks the cursor 1:1 at the target's depth (`2·d·tan(fov/2)` of world
+    /// per viewport height), so drag right shows what lies west and drag down
+    /// shows what lies ahead, at every zoom alike.
+    pub fn pan(&mut self, delta: Vec2, viewport_h: f32) {
+        if viewport_h <= 0.0 || delta == Vec2::ZERO {
+            return;
+        }
+        let cam = self.camera();
+        let forward = (cam.target - cam.position).normalize_or_zero();
+        let right = forward.cross(Vec3::Y).normalize_or_zero();
+        let ahead = Vec3::Y.cross(right).normalize_or_zero();
+        let visible_h = 2.0 * self.distance * (cam.fov_y_radians * 0.5).tan();
+        let world_per_px = visible_h / viewport_h;
+        self.target += (-right * delta.x + ahead * delta.y) * world_per_px;
     }
 
     /// Held-input orbit — the SIGNAL channel beside the mouse drag. `dx` / `dy`
@@ -139,8 +183,20 @@ impl OrbitCam {
             .clamp(self.min_distance, self.max_distance);
     }
 
+    /// The camera, with its depth range sized to the frame: the far plane
+    /// reaches the whole framed region from any distance (a field flown up
+    /// close still shows its horizon) and the near plane rides the distance
+    /// (a hundredth of it, never under the default), so the depth buffer
+    /// keeps its resolution where the camera is. A planet at `RADIUS` 200
+    /// keeps the default planes exactly.
     pub fn camera(&self) -> Camera {
-        Camera::orbit(self.target, self.distance, self.yaw, self.pitch)
+        let mut cam = Camera::orbit(self.target, self.distance, self.yaw, self.pitch);
+        let far = cam.far.max(self.radius * 8.0).max(self.distance * 12.0);
+        if far > cam.far {
+            cam.far = far;
+            cam.near = cam.near.max(self.distance * 0.01);
+        }
+        cam
     }
 }
 
@@ -279,6 +335,70 @@ mod tests {
         cam.refill(0.85);
         let want = OrbitCam::new(10.0).with_fill(0.85).distance;
         assert!((cam.distance - want).abs() < 1e-4);
+    }
+
+    /// **A field's camera**: `set_range` pulls the clamps (and the distance)
+    /// to the asked world units; the depth range follows the frame — far
+    /// reaches the region, near rides the distance; a right-drag pans the
+    /// target across the ground, 1:1 at the target's depth, and only when
+    /// panning is on; a planet keeps its default planes.
+    #[test]
+    fn a_field_camera_ranges_frames_and_pans_across_the_ground() {
+        let planet = OrbitCam::new(200.0).camera();
+        assert_eq!(planet.near, Camera::default().near);
+        assert_eq!(planet.far, Camera::default().far);
+
+        let mut cam = OrbitCam::new(300_000.0);
+        cam.look_at(Vec3::new(0.0, 70_000.0, 0.0));
+        cam.set_range(512.0, 900_000.0);
+        assert_eq!(cam.min_distance, 512.0);
+        assert_eq!(cam.max_distance, 900_000.0);
+        assert_eq!(cam.distance, 900_000.0, "the opening distance clamps in");
+        let far = cam.camera().far;
+        assert!(
+            far >= 300_000.0 * 8.0,
+            "the far plane reaches the field: {far}"
+        );
+        for _ in 0..400 {
+            cam.zoom(1.0, 0.5);
+        }
+        assert_eq!(cam.distance, 512.0, "zooms down to a quad");
+        let close = cam.camera();
+        assert!(close.far >= 300_000.0 * 8.0, "and still sees the horizon");
+        assert!((close.near - 5.12).abs() < 1e-3, "near rides the distance");
+
+        let pointer = |right: bool, delta: Vec2| SurfacePointer {
+            id: "field".into(),
+            root: false,
+            cursor: Vec2::ZERO,
+            local: Vec2::ZERO,
+            delta,
+            left: false,
+            right,
+            pressed: false,
+            wheel: 0.0,
+            captured: true,
+            rect: flicker::render::Rect {
+                pos: Vec2::ZERO,
+                size: Vec2::new(800.0, 600.0),
+            },
+        };
+        let before = cam.camera().target;
+        cam.apply_pointer(Some(&pointer(true, Vec2::new(100.0, 0.0))));
+        assert_eq!(cam.camera().target, before, "no pan unless panning is on");
+        cam.set_panning(true);
+        cam.apply_pointer(Some(&pointer(true, Vec2::new(100.0, 0.0))));
+        let after = cam.camera().target;
+        let moved = after - before;
+        assert!(moved.y.abs() < 1e-3, "a pan stays on the ground");
+        // 1:1 at the target's depth: 100 px of a 600 px viewport is a sixth of
+        // the visible height, 2·d·tan(fov/2).
+        let visible = 2.0 * 512.0 * (Camera::default().fov_y_radians * 0.5).tan();
+        assert!(
+            (moved.length() - visible * 100.0 / 600.0).abs() < 1e-2,
+            "the ground tracks the cursor: {moved}"
+        );
+        assert_eq!(cam.camera().far, close.far);
     }
 
     /// The stick zoom is exponential inside the same clamps as the wheel:

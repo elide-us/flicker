@@ -87,7 +87,13 @@ impl TileFrame {
 
     /// Where a pixel sits on the unit sphere.
     pub fn direction(&self, x: u32, y: u32) -> DVec3 {
-        let p = self.plane_m(x, y) / self.radius_m;
+        self.direction_m(self.plane_m(x, y))
+    }
+
+    /// Unit direction of a point of the tile's plane, metres from the
+    /// middle — any point, a voxel's as well as a pixel's.
+    pub fn direction_m(&self, plane: DVec2) -> DVec3 {
+        let p = plane / self.radius_m;
         (self.centre + self.east * p.x + self.north * p.y).normalize()
     }
 

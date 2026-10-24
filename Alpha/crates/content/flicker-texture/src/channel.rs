@@ -148,20 +148,26 @@ impl BlendMode {
             BlendMode::Max => bus.max(top),
             BlendMode::Diff => (bus - top).abs(),
         };
-        let a = amount.clamp(0.0, 1.0);
-        // The endpoints are EXACT, not merely approached: a fully-open amount is
-        // the blend itself and a closed one is the bus itself. Letting the
-        // interpolation compute them instead leaves a float crumb (0.8 + (0.3 −
-        // 0.8) is not 0.3), which accumulates across six folds and makes a rack's
-        // output depend on how many silent channels sit in front of it.
-        let mixed = if a >= 1.0 {
-            blended
-        } else if a <= 0.0 {
-            bus
-        } else {
-            bus + (blended - bus) * a
-        };
-        mixed.clamp(0.0, 1.0)
+        fade(bus, blended, amount).clamp(0.0, 1.0)
+    }
+}
+
+/// Cross-fade `from` toward `to` by `k` (clamped to `0..=1`).
+///
+/// The endpoints are EXACT, not merely approached: a fully-open fade is `to` itself
+/// and a closed one is `from` itself. Letting the interpolation compute them instead
+/// leaves a float crumb (0.8 + (0.3 − 0.8) is not 0.3), which accumulates across six
+/// folds and makes a rack's output depend on how many silent channels sit in front of
+/// it. The ONE cross-fade: [`BlendMode::apply`] folds a voice with it and the material
+/// graph's `MixColor` fades colours with it.
+pub(crate) fn fade(from: f64, to: f64, k: f64) -> f64 {
+    let k = k.clamp(0.0, 1.0);
+    if k >= 1.0 {
+        to
+    } else if k <= 0.0 {
+        from
+    } else {
+        from + (to - from) * k
     }
 }
 

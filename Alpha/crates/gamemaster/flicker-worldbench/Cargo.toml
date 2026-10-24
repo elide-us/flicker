@@ -28,5 +28,11 @@ tracing.workspace = true
 fastrand.workspace = true
 # THE PLANET: the hex map and the V5 resonance fields.
 flicker-worldengine.workspace = true
+# THE GROUND: a hex of the planet at 2K through the pixel tier's migration.
+flicker-worldtile.workspace = true
+# THE ENGINE'S CLUSTERS: the hex handed over as its LOD8 quad field.
+flicker-voxel.workspace = true
 # The scene holds the loaded `ui_theme.json` styles as a JSON value.
 serde_json.workspace = true
+# THE TILE CACHE: the hexes' pictures written to and read from disk as PNG.
+image.workspace = true

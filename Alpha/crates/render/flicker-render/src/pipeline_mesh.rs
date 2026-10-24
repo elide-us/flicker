@@ -85,7 +85,8 @@ const CAMERA_UNIFORM_SIZE: u64 = std::mem::size_of::<CameraUniform>() as u64;
 struct PerDraw {
     model: [[f32; 4]; 4], // 64 bytes
     tint: [f32; 4],       // 16 bytes
-    // 16 bytes; flags.x = wireframe (0/1), flags.y = gloss (sheen strength). zw unused.
+    // 16 bytes; flags.x = wireframe (0/1), flags.y = gloss (sheen strength), flags.z = flat
+    // shading (0/1). w unused.
     flags: [f32; 4],
 }
 
@@ -648,14 +649,21 @@ impl MeshPipeline {
         tint: [f32; 4],
         wireframe: bool,
         gloss: f32,
+        flat: bool,
     ) {
         self.queued.push(MeshDraw {
             handle,
             per_draw: PerDraw {
                 model: model.to_cols_array_2d(),
                 tint,
-                // flags.x = wireframe, flags.y = gloss (specular strength).
-                flags: [if wireframe { 1.0 } else { 0.0 }, gloss, 0.0, 0.0],
+                // flags.x = wireframe, flags.y = gloss (specular strength), flags.z = flat
+                // (the face's own normal from derivatives, vertex normals ignored).
+                flags: [
+                    if wireframe { 1.0 } else { 0.0 },
+                    gloss,
+                    if flat { 1.0 } else { 0.0 },
+                    0.0,
+                ],
             },
         });
     }
@@ -927,7 +935,11 @@ pub(crate) mod tests {
                 "mesh.wgsl",
                 &[
                     "var diffuse = scene.ambient.rgb;",
-                    "let ndl = max(dot(in.world_normal, s.xyz), 0.0);",
+                    // `normal` is the vertex normal as interpolated (the smooth path,
+                    // bit-identical to the `in.world_normal` it spelled before) or the
+                    // face's own under the per-draw FLAT flag — see `MeshDrawOptions::flat`.
+                    "var normal = in.world_normal;",
+                    "let ndl = max(dot(normal, s.xyz), 0.0);",
                     "diffuse = diffuse + radiance * (ndl * s.w) * vis;",
                 ],
             ),

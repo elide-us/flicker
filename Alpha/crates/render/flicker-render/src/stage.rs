@@ -110,7 +110,8 @@ pub enum StageLayer {
     },
     /// The shared reference frame over a globe at this fraction of its radius.
     Graticule { radius_scale: f32 },
-    /// The material sample — the lit body the MaterialBench dresses in its six maps.
+    /// The material sample — the lit body `flicker_materialview::MaterialSample` dresses in a
+    /// material's maps (the MaterialBench's Lit view; the Material Catalog's spheres).
     Material,
 }
 
@@ -898,9 +899,11 @@ impl StageInputs {
 /// engine passes that runs around the drawing.
 ///
 /// Every field's default is its own type's — an unlit rig, no clear, no framing, nothing
-/// drawn, the colour+depth pair, the default one-`scene` recipe, live — so the default is
-/// DERIVED rather than a second spelling of the same list.
-#[derive(Clone, Debug, Default)]
+/// drawn, the colour+depth pair, the default one-`scene` recipe, live — EXCEPT the
+/// emissive gain, whose default is unity (the Emit texel as authored): its type's own
+/// default, zero, would be a decision (no glow at all), not an absence. That one field is
+/// why [`Default`] is written out below rather than derived.
+#[derive(Clone, Debug)]
 pub struct StageDef {
     pub lighting: LightRig,
     /// What the surface clears to, or `None` when the stage authors no `clear` — the
@@ -921,6 +924,30 @@ pub struct StageDef {
     pub passes: Vec<PassDef>,
     /// How often a surface of this stage re-renders, when its seat authors nothing.
     pub rate: Rate,
+    /// The draw-time multiplier on a material's Emit in THIS stage's HDR space — what a
+    /// consumer drawing materials under the stage hands its PBR draws
+    /// (`MeshDrawOptions::emissive_gain`). An 8-bit Emit texel caps at 1.0, so at the
+    /// default `1.0` a glow never outshines the surface's own white; above it the glow is
+    /// real HDR radiance on the stage's `rgba16f` attachment, which its `bloom` spreads and
+    /// its `tonemap_grade` rolls off. Authored per stage (`"emissive_gain"`, finite and
+    /// `>= 0`); the Emit texel itself stays the material's colour — the gain is how bright
+    /// it burns, never what hue.
+    pub emissive_gain: f32,
+}
+
+impl Default for StageDef {
+    fn default() -> Self {
+        Self {
+            lighting: LightRig::default(),
+            clear: None,
+            camera: None,
+            layers: Vec::new(),
+            attachments: Attachments::default(),
+            passes: Vec::new(),
+            rate: Rate::default(),
+            emissive_gain: 1.0,
+        }
+    }
 }
 
 /// The recipe of a stage that authors none: ONE content pass. Every stage written before
@@ -1630,6 +1657,22 @@ mod tests {
         for layer in &def.layers {
             assert!(StageLayer::KINDS.contains(&layer.kind()));
         }
+    }
+
+    /// A stage that authors no `emissive_gain` draws Emit at UNITY — the texel as authored —
+    /// never at its type's zero, which would black out every glow drawn under it. Every
+    /// partial definition built over the default keeps it.
+    #[test]
+    fn an_unauthored_stage_draws_emit_at_unity_gain() {
+        assert_eq!(StageDef::default().emissive_gain, 1.0);
+        let def = StageDef {
+            layers: vec![StageLayer::Material],
+            ..StageDef::default()
+        };
+        assert_eq!(def.emissive_gain, 1.0);
+        // The rest of the default is still each field's own.
+        assert_eq!(def.rate, Rate::Live);
+        assert!(def.clear.is_none() && def.camera.is_none() && def.passes.is_empty());
     }
 
     /// The default framing is the portrait — and a framing turns into an orbit camera

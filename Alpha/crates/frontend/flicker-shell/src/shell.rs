@@ -2093,18 +2093,29 @@ mod menu_tree_tests {
     }
 
     /// THE SHARED-MODAL FOLDER GATE: every `scenes/shared/*.scene.json` on disk is
-    /// either registered in [`SHARED_MODALS`] (so a bench can open it by id) or the ONE
-    /// named exemption, `settings` — the settings SCREEN, hosted by
-    /// [`UnifiedSettingsScene`] with hardened Rust rows rather than by params.
+    /// either registered in [`SHARED_MODALS`] (so a bench can open it by id) or one of
+    /// the NAMED exemptions — the trees hosted by a scene of their own OUTSIDE this
+    /// registry: `settings` (the settings SCREEN, [`UnifiedSettingsScene`], hardened Rust
+    /// rows) and `material_inspector` (the Material Catalog's inspector,
+    /// `flicker_materialcatalog::MaterialInspector`, which owns a live lit sample and a
+    /// graph canvas). Each exemption must ALSO name its host in [`HOSTED_ELSEWHERE`], so
+    /// the param seam refuses it by name rather than hosting it as a trap.
     ///
     /// Walks the FOLDER, not a hardcoded list, so a shared modal tree added and never
     /// registered fails the build instead of shipping as a file nothing can open — and
     /// so every gate below (parse · pad-reachability · draw) automatically covers it.
+    /// An exempted tree's own host crate carries those gates over the same predicates.
     #[test]
     fn every_shared_modal_file_is_registered() {
-        /// The settings screen is not a param-driven modal; it is loaded by its own
+        /// The scene-hosted trees outside the param registry, each loaded by its own
         /// scene. Named here so the exemption is a decision, not a silent gap.
-        const NOT_A_MODAL: [&str; 1] = ["settings"];
+        const NOT_A_MODAL: [&str; 2] = ["settings", "material_inspector"];
+        for id in NOT_A_MODAL {
+            assert!(
+                modal_host_of(id).is_some(),
+                "the exempted shared tree '{id}' must name its host in HOSTED_ELSEWHERE"
+            );
+        }
 
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../../content/sensorium/scenes/shared");
@@ -2145,34 +2156,14 @@ mod menu_tree_tests {
     /// mouse could" bug the menu nav already fixed once. Controller is the floor.
     #[test]
     fn every_shared_modal_button_is_pad_reachable() {
-        // Read the RAW file, not the parsed tree: `nav_ordinal` parses into a typed
-        // field defaulting to 0, so only the JSON can tell an authored 0 from a missing
-        // one — and a missing one silently stacks every button on the same rung.
-        fn buttons(v: &serde_json::Value, id: &str, broken: &mut Vec<String>) {
-            if v.get("component").and_then(|c| c.as_str()) == Some("button") {
-                let bid = v.get("id").and_then(|i| i.as_str()).unwrap_or("<anon>");
-                for key in ["tab_group", "nav_ordinal"] {
-                    if v.get(key).is_none() {
-                        broken.push(format!(
-                            "{id}: button '{bid}' authors no `{key}` — a modal button \
-                             the d-pad cannot reach"
-                        ));
-                    }
-                }
-            }
-            if let Some(kids) = v.get("children").and_then(|c| c.as_array()) {
-                for k in kids {
-                    buttons(k, id, broken);
-                }
-            }
-        }
-
+        // The ONE predicate ([`modal_pad_problems`]) — a scene-hosted tree's own gate
+        // calls it too — over the RAW file of every registered tree.
         let mut broken = Vec::new();
         let mut seen = 0usize;
         for (id, json, _) in SHARED_MODALS {
             let doc: serde_json::Value =
                 serde_json::from_str(json).unwrap_or_else(|e| panic!("{id} parses: {e}"));
-            buttons(&doc["tree"], id, &mut broken);
+            broken.extend(modal_pad_problems(id, &doc));
             seen += 1;
         }
         assert_eq!(
@@ -2658,18 +2649,10 @@ mod menu_tree_tests {
             // gated the day it lands. The live main menu's vocabulary is gated by
             // `the_main_menu_composes_from_the_rust_components`.
             for (screen, json, _) in SHARED_MODALS {
-                let tree = shared_tree(json);
-                assert!(
-                    flicker::ui::unknown_kinds(&tree).is_empty(),
-                    "shared modal '{screen}' names unknown kinds: {:?}",
-                    flicker::ui::unknown_kinds(&tree)
-                );
-                // The strings gate (S10): every display literal is a `$token`.
-                assert!(
-                    flicker::ui::raw_display_literals(&tree).is_empty(),
-                    "shared modal '{screen}' ships raw display literals: {:?}",
-                    flicker::ui::raw_display_literals(&tree)
-                );
+                // The ONE predicate ([`modal_vocabulary_problems`]): known kinds only, and
+                // the strings gate (S10) — every display literal a `$token`.
+                let problems = modal_vocabulary_problems(screen, &shared_tree(json));
+                assert!(problems.is_empty(), "{problems:#?}");
             }
 
             // The settings screen is the STATIC scene now (`settings.scene.json`), filled with
@@ -4465,6 +4448,15 @@ const HOSTED_ELSEWHERE: &[(&str, &str)] = &[
     ("pause", "PauseScene::new"),
     ("confirm", "ConfirmDisplayScene::new"),
     ("settings", "UnifiedSettingsScene::new"),
+    // The Material Catalog's inspector: a shared tree whose host is a scene of its OWN,
+    // because what it shows is LIVE — a turning lit sample on its own stage and the
+    // material's graph on a canvas — and the host beneath a modal is frozen, so the
+    // modal scene itself must own them. It loads through `hosted_modal_tree` (the parse
+    // path every host here uses) and answers with `modal_cancelled`.
+    (
+        "material_inspector",
+        "flicker_materialcatalog::MaterialInspector",
+    ),
 ];
 
 /// The scene that owns `id`, when `id` is not the param seam's to host — `None` for a
@@ -4485,6 +4477,101 @@ fn hosted_elsewhere(id: &str) -> Option<&'static str> {
     modal_host_of(id)
 }
 
+// ── the shared-modal checks ─────────────────────────────────────────────────────
+//
+// The predicates the registry's gates hold every shared tree to, PUBLIC so a tree hosted
+// by a scene of its own (the Material Inspector) is held to the very same checks by its
+// host's gates, rather than a copy of them that can drift (F1BFA408).
+
+/// Every BUTTON in a shared tree's RAW document the d-pad could not reach — one line per
+/// button missing its `tab_group` or its `nav_ordinal`. Read from the raw JSON, not the
+/// parsed tree: `nav_ordinal` parses into a typed field defaulting to 0, so only the file
+/// can tell an authored 0 from a missing one — and a missing one silently stacks every
+/// button on the same rung. Empty when every button is pad-reachable. `id` names the tree
+/// in each line.
+#[must_use]
+pub fn modal_pad_problems(id: &str, doc: &serde_json::Value) -> Vec<String> {
+    fn buttons(v: &serde_json::Value, id: &str, broken: &mut Vec<String>) {
+        if v.get("component").and_then(|c| c.as_str()) == Some("button") {
+            let bid = v.get("id").and_then(|i| i.as_str()).unwrap_or("<anon>");
+            for key in ["tab_group", "nav_ordinal"] {
+                if v.get(key).is_none() {
+                    broken.push(format!(
+                        "{id}: button '{bid}' authors no `{key}` — a modal button the d-pad \
+                         cannot reach"
+                    ));
+                }
+            }
+        }
+        if let Some(kids) = v.get("children").and_then(|c| c.as_array()) {
+            for k in kids {
+                buttons(k, id, broken);
+            }
+        }
+    }
+    let mut broken = Vec::new();
+    buttons(&doc["tree"], id, &mut broken);
+    broken
+}
+
+/// The VOCABULARY and STRINGS problems of a parsed shared tree: every component kind the
+/// engine does not know (a kind it does not know draws NOTHING), and every display literal
+/// that is not a `$token`. Empty when the tree is clean.
+#[must_use]
+pub fn modal_vocabulary_problems(id: &str, tree: &UiNode) -> Vec<String> {
+    let mut problems: Vec<String> = flicker::ui::unknown_kinds(tree)
+        .into_iter()
+        .map(|k| format!("{id}: unknown kind {k:?}"))
+        .collect();
+    problems.extend(
+        flicker::ui::raw_display_literals(tree)
+            .into_iter()
+            .map(|l| format!("{id}: raw display literal {l:?}")),
+    );
+    problems
+}
+
+/// The NEVER-A-TRAP problems of a shared tree's RAW document: a static `dismissable` that is
+/// not `true` (only Lua may hold a modal shut, through `dismissable_bind`; a static false
+/// traps the player the moment the script is not there — B89FAC21), and a
+/// `dismissable_bind` naming nothing. Returns the problems and every key the tree binds the
+/// toggle to (a bind is only a toggle if something publishes it — the caller checks that).
+#[must_use]
+pub fn modal_trap_problems(id: &str, doc: &serde_json::Value) -> (Vec<String>, Vec<String>) {
+    fn scan(
+        node: &serde_json::Value,
+        id: &str,
+        problems: &mut Vec<String>,
+        binds: &mut Vec<String>,
+    ) {
+        if let Some(v) = node.get("dismissable") {
+            if v.as_bool() != Some(true) {
+                problems.push(format!(
+                    "{id}: `dismissable: {v}` is authored statically — only Lua may hold a \
+                     modal shut (`dismissable_bind`); a static false traps the player the \
+                     moment the script is not there"
+                ));
+            }
+        }
+        if let Some(k) = node.get("dismissable_bind") {
+            match k.as_str() {
+                Some(key) if !key.is_empty() => binds.push(key.to_string()),
+                _ => problems.push(format!("{id}: `dismissable_bind` names nothing")),
+            }
+        }
+        if let Some(kids) = node.get("children").and_then(|c| c.as_array()) {
+            for kid in kids {
+                scan(kid, id, problems, binds);
+            }
+        }
+    }
+    let (mut problems, mut binds) = (Vec::new(), Vec::new());
+    if let Some(tree) = doc.get("tree") {
+        scan(tree, id, &mut problems, &mut binds);
+    }
+    (problems, binds)
+}
+
 /// Every PARAM-DRIVEN shared modal id, in registry order — the trees
 /// [`SharedModal`] hosts, because their whole arrangement comes from the caller's
 /// [`ModalParams`]. The registry of record for anything that enumerates them.
@@ -4502,11 +4589,72 @@ pub fn param_driven_modals() -> Vec<&'static str> {
 /// pause folds both to `resume`. The name only REACHES the host when the topmost
 /// `popup_panel` is currently dismissable; the ladder then answers it with the caller's
 /// action, or [`MODAL_CANCELLED`] where the caller named none.
-const MODAL_CANCEL: &str = "modal_cancel";
+///
+/// Public for the scenes that host a shared tree THEMSELVES ([`hosted_modal_tree`]): the
+/// exit they are handed is this name, so their Close button authors it and their answer
+/// reads it — one name for backing out of any modal, whoever hosts it.
+pub const MODAL_CANCEL: &str = "modal_cancel";
 /// The result a modal closes with when the walker's Cancel arrives and the CALLER
 /// declared no cancel option of its own. The exit is the HOST's, not the caller's and
 /// not the tree's: a shared modal is never a trap (incident B89FAC21, rule 1B5F6BB8).
-const MODAL_CANCELLED: &str = "cancelled";
+pub const MODAL_CANCELLED: &str = "cancelled";
+
+/// **THE HOST'S EXIT, as the transition it is**: close the modal `id` with
+/// [`MODAL_CANCELLED`] and nothing collected. ONE definition of "the player backed out
+/// and nobody named an answer for it", read by the param seam's answer ladder, by its
+/// refusal of a scene-hosted id, and by every scene that hosts a shared tree itself — so
+/// the scene beneath hears the same thing however the modal it opened was hosted.
+#[must_use]
+pub fn modal_cancelled(id: &str) -> Transition {
+    Transition::CloseModal {
+        modal: id.to_string(),
+        result: MODAL_CANCELLED.to_string(),
+        payload: None,
+    }
+}
+
+/// **A SCENE-HOSTED shared tree, parsed through the ONE path.** For a tree in
+/// `scenes/shared/` whose host is a scene of its own ([`modal_host_of`] names it) rather
+/// than [`SharedModal`] — because what it shows is live and the host beneath a modal is
+/// frozen, so the modal scene must own it.
+///
+/// It is [`parse_shared_modal`] — the path pause, confirm and every param-driven tree load
+/// through — with the param seam's exit, [`MODAL_CANCEL`], written onto the PARSED root
+/// whatever the file authored (and onto the bare fallback a file that will not parse
+/// yields). So the host answers ONE name for Esc / pad-B and for its own Close button, and
+/// a tree that spells its exit wrong, or not at all, still has one (incident B89FAC21).
+/// Whether that exit may be taken stays the slab's own `dismissable` toggle (DA0E1B57).
+#[must_use]
+pub fn hosted_modal_tree(json: &str, id: &str) -> UiNode {
+    debug_assert!(
+        hosted_elsewhere(id).is_some(),
+        "'{id}' is not a scene-hosted shared tree — register its host in HOSTED_ELSEWHERE, \
+         or open it through SharedModal if it is param-driven"
+    );
+    parse_shared_modal(json, id, Some(MODAL_CANCEL))
+}
+
+/// **The styles a scene-hosted shared tree renders under**: the shell-furniture carrier
+/// every shared modal reads its chrome from (`modal.*` for the slab, Main's blocks —
+/// [`main_scene_styles`]) with the tree file's OWN top-level blocks laid over it, key by
+/// key. That is the hosting contract the authored-style-path gate already pins for every
+/// `scenes/shared/` file (host styles ⊕ its own), now as the one function a host loads
+/// through. Unresolved scene blocks, ready for the loader the host draws with — a host
+/// whose tree authors stages loads them with the stage library beside the theme.
+#[must_use]
+pub fn hosted_modal_styles(own: Option<&serde_json::Value>) -> Option<serde_json::Value> {
+    let mut merged = main_scene_styles();
+    if let Some(serde_json::Value::Object(blocks)) = own {
+        let base = merged.get_or_insert_with(|| serde_json::Value::Object(Default::default()));
+        if let Some(map) = base.as_object_mut() {
+            for (key, block) in blocks {
+                map.insert(key.clone(), block.clone());
+            }
+        }
+    }
+    merged
+}
+
 /// The result name a text prompt's OK button and its field's `submit_action` both fire.
 const MODAL_SUBMIT: &str = "modal_submit";
 /// The Model key a text prompt's field binds — the seed text in, the edited text out.
@@ -5148,11 +5296,7 @@ impl ModalAnswer {
         if actions.is_on(MODAL_CANCEL) {
             return match self.cancel.clone() {
                 Some(c) => self.close(&c),
-                None => Transition::CloseModal {
-                    modal: self.id.to_string(),
-                    result: MODAL_CANCELLED.to_string(),
-                    payload: None,
-                },
+                None => modal_cancelled(self.id),
             };
         }
         Transition::None
@@ -5234,11 +5378,7 @@ impl Scene for SharedModal {
         // A refused id never draws a second frame: it is an overlay whose controls this
         // host cannot answer, so it leaves rather than sits (B89FAC21).
         if self.answer.refused {
-            return Transition::CloseModal {
-                modal: self.answer.id.to_string(),
-                result: MODAL_CANCELLED.to_string(),
-                payload: None,
-            };
+            return modal_cancelled(self.answer.id);
         }
         // The bar reads the SHARED handle: the host that opened this modal is frozen
         // beneath it and could not feed a fraction per frame.
@@ -6060,30 +6200,6 @@ mod script_smoke {
     /// the bind AND registers the script that publishes its key.
     #[test]
     fn no_shared_tree_authors_a_static_dismissable_false() {
-        fn scan(node: &serde_json::Value, id: &str, binds: &mut Vec<String>) {
-            if let Some(v) = node.get("dismissable") {
-                assert_eq!(
-                    v.as_bool(),
-                    Some(true),
-                    "{id}.scene.json authors `dismissable: {v}` statically — only Lua may \
-                     hold a modal shut (`dismissable_bind`); a static false traps the \
-                     player the moment the script is not there"
-                );
-            }
-            if let Some(k) = node.get("dismissable_bind").and_then(|b| b.as_str()) {
-                assert!(
-                    !k.is_empty(),
-                    "{id}.scene.json binds dismissable to nothing"
-                );
-                binds.push(k.to_string());
-            }
-            if let Some(kids) = node.get("children").and_then(|c| c.as_array()) {
-                for kid in kids {
-                    scan(kid, id, binds);
-                }
-            }
-        }
-
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../../content/sensorium/scenes/shared");
         let mut bound_trees = Vec::new();
@@ -6096,10 +6212,10 @@ mod script_smoke {
             let doc: serde_json::Value =
                 serde_json::from_str(&std::fs::read_to_string(&path).expect("scene reads"))
                     .unwrap_or_else(|e| panic!("{id}.scene.json parses: {e}"));
-            let mut binds = Vec::new();
-            if let Some(tree) = doc.get("tree") {
-                scan(tree, id, &mut binds);
-            }
+            // The ONE predicate ([`modal_trap_problems`]) — a scene-hosted tree's own gate
+            // calls it too.
+            let (problems, binds) = modal_trap_problems(id, &doc);
+            assert!(problems.is_empty(), "{problems:#?}");
             if !binds.is_empty() {
                 bound_trees.push((id.to_string(), binds));
             }
@@ -6162,7 +6278,7 @@ mod script_smoke {
     /// update rather than sitting there.
     #[test]
     fn the_scene_hosted_modals_are_refused_by_the_param_seam() {
-        for id in ["pause", "confirm", "settings"] {
+        for id in ["pause", "confirm", "settings", "material_inspector"] {
             let host = modal_host_of(id)
                 .unwrap_or_else(|| panic!("'{id}' must name the scene that hosts it"));
             assert!(!host.is_empty());
@@ -6171,13 +6287,82 @@ mod script_smoke {
                 "'{id}' must not be offered as a param-driven tree"
             );
         }
-        // …and the param-driven roster is exactly the registry minus those three, so a
-        // tree added to `SHARED_MODALS` is hostable unless it is named as hosted.
+        // …and the param-driven roster is exactly the registry minus its scene-hosted
+        // entries, so a tree added to `SHARED_MODALS` is hostable unless it is named as
+        // hosted.
         assert_eq!(
             param_driven_modals().len(),
             SHARED_MODALS.len() - 2,
-            "pause + confirm are the registry's two scene-hosted entries (settings is \
-             not registered at all)"
+            "pause + confirm are the registry's two scene-hosted entries (settings and \
+             material_inspector are not registered at all — their hosts load them)"
+        );
+    }
+
+    /// **A SCENE-HOSTED TREE ALWAYS CARRIES THE HOST'S EXIT** — the never-trap mechanism
+    /// of [`SharedModal`] (incident B89FAC21), on the path a scene that hosts a shared
+    /// tree itself loads through. The root declares [`MODAL_CANCEL`] whatever the file
+    /// authored — nothing, the wrong name, or a file that will not parse at all — and
+    /// the answer to that name is the one [`modal_cancelled`] transition every host
+    /// hands the scene beneath.
+    #[test]
+    fn a_scene_hosted_tree_always_carries_the_host_exit() {
+        let cancel_of = |tree: &UiNode| {
+            UiIntents::of(tree)
+                .result_for(ActionSignal::Cancel)
+                .map(str::to_string)
+        };
+        let authored_none = r#"{"tree": {"component": "surface", "children": []}}"#;
+        let authored_wrong =
+            r#"{"tree": {"component": "surface", "on_cancel": "resume", "children": []}}"#;
+        let broken = r#"{"tree": "#;
+        for (case, json) in [
+            ("an exit authored nowhere", authored_none),
+            ("the wrong exit authored", authored_wrong),
+            ("a file that does not parse", broken),
+        ] {
+            let tree = hosted_modal_tree(json, "material_inspector");
+            assert_eq!(
+                cancel_of(&tree).as_deref(),
+                Some(MODAL_CANCEL),
+                "{case}: the host's exit is written onto the root"
+            );
+        }
+        match modal_cancelled("material_inspector") {
+            Transition::CloseModal {
+                modal,
+                result,
+                payload,
+            } => {
+                assert_eq!(modal, "material_inspector");
+                assert_eq!(result, MODAL_CANCELLED);
+                assert!(payload.is_none(), "backing out collects nothing");
+            }
+            _ => panic!("the host's exit closes the modal"),
+        }
+    }
+
+    /// **A SCENE-HOSTED TREE RENDERS UNDER THE CARRIER ⊕ ITS OWN BLOCKS** — the hosting
+    /// contract the authored-style-path gate pins for every `scenes/shared/` file, as the
+    /// one function a host loads through: the slab's `modal.*` chrome still comes from the
+    /// carrier, and a block the tree authors itself wins its key.
+    #[test]
+    fn a_scene_hosted_tree_renders_under_the_carrier_and_its_own_blocks() {
+        let own = serde_json::json!({ "inspector": { "well": { "fill": "$well" } } });
+        let merged = hosted_modal_styles(Some(&own)).expect("the carrier loads");
+        assert!(
+            merged
+                .get("modal")
+                .is_some_and(serde_json::Value::is_object),
+            "the slab's chrome rides the carrier"
+        );
+        assert_eq!(
+            merged["inspector"], own["inspector"],
+            "the tree's own block wins"
+        );
+        assert_eq!(
+            hosted_modal_styles(None),
+            main_scene_styles(),
+            "with no blocks of its own a hosted tree renders exactly as a param-driven one"
         );
     }
 

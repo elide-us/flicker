@@ -121,16 +121,34 @@ const AO_GAIN: f32 = 6.0;
 ///
 /// Rounds rather than truncates: truncation biases every map downward by half a
 /// level and makes a flat 1.0 field quantize to 254.
-fn q(v: f32) -> u8 {
+pub(crate) fn q(v: f32) -> u8 {
     (v.clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
 /// Read the height buffer with **wrapping** indices, so every neighbourhood
 /// operation sees across the seam.
-fn at(field: &[f32], size: u32, x: i64, y: i64) -> f32 {
+pub(crate) fn at(field: &[f32], size: u32, x: i64, y: i64) -> f32 {
     let n = size as i64;
     let (wx, wy) = (x.rem_euclid(n) as usize, y.rem_euclid(n) as usize);
     field[wy * size as usize + wx]
+}
+
+/// Sample `f(u, v)` over a `size × size` tile, row-major from the top-left — the ONE
+/// raster walk, shared by the rack's [`field`] and the material graph's generators,
+/// so both put every texel at the same tile position bit for bit.
+pub(crate) fn sample_grid<T>(size: u32, mut f: impl FnMut(f64, f64) -> T) -> Vec<T> {
+    let n = size.max(1);
+    let inv = 1.0 / n as f64;
+    let mut out = Vec::with_capacity((n as usize) * (n as usize));
+    for y in 0..n {
+        for x in 0..n {
+            // Texel CENTRES would be the usual choice, but the tile's seam must
+            // land on a lattice line: sampling at `x/n` puts column 0 exactly on
+            // the period boundary, which is what makes the wrap bit-exact.
+            out.push(f(x as f64 * inv, y as f64 * inv));
+        }
+    }
+    out
 }
 
 /// Evaluate the rack into a `size × size` field of `[0,1]` values.
@@ -139,20 +157,37 @@ fn at(field: &[f32], size: u32, x: i64, y: i64) -> f32 {
 /// the full map set when it commits — and because it is the natural unit to test
 /// tiling on.
 pub fn field(recipe: &TextureRecipe, size: u32) -> Vec<f32> {
-    let n = size.max(1);
-    let inv = 1.0 / n as f64;
-    let mut out = vec![0.0f32; (n as usize) * (n as usize)];
-    for y in 0..n {
-        for x in 0..n {
-            // Texel CENTRES would be the usual choice, but the tile's seam must
-            // land on a lattice line: sampling at `x/n` puts column 0 exactly on
-            // the period boundary, which is what makes the wrap bit-exact.
-            let u = x as f64 * inv;
-            let v = y as f64 * inv;
-            out[(y * n + x) as usize] = mix(&recipe.channels, u, v, recipe.seed) as f32;
-        }
+    sample_grid(size, |u, v| mix(&recipe.channels, u, v, recipe.seed) as f32)
+}
+
+/// The resolution a glow band is seated at. Fixed, so a band means the same thing at
+/// every bake size — the preview and the commit glow in the same places.
+pub(crate) const SEAT_SIZE: u32 = 32;
+
+/// The real `[lo, hi]` of `measured` (a field sampled at [`SEAT_SIZE`]) — what a band
+/// fraction is seated against. `None` when the field has no range at all: a banded
+/// glow cannot show anywhere on a flat field, so the claim is dropped rather than
+/// washed flat over the surface.
+///
+/// With [`seat`], the ONE seating: [`bake`] seats the output stage's `emissive_band`
+/// with it and the material graph's `Band` node seats its edges, so the two cannot
+/// drift.
+pub(crate) fn seat_range(measured: &[f32]) -> Option<(f32, f32)> {
+    let (lo, hi) = measured
+        .iter()
+        .fold((f32::MAX, f32::MIN), |(l, h), v| (l.min(*v), h.max(*v)));
+    if hi - lo < 0.02 {
+        return None;
     }
-    out
+    Some((lo, hi))
+}
+
+/// Seat a band FRACTION — "a fraction of the way up the field" — into the range
+/// `[lo, hi]`, returning the absolute edge. Keeps the band's INTENT measured against
+/// the field that exists rather than the abstract 0..1.
+pub(crate) fn seat(lo: f32, hi: f32, frac: f32) -> f32 {
+    let frac = frac.clamp(0.0, 0.95);
+    lo + (hi - lo) * frac * 0.9
 }
 
 /// Seat a glow's band inside the field it will be applied to. `emissive_band` is a
@@ -165,20 +200,126 @@ fn seat_the_glow(recipe: &mut TextureRecipe) {
     if recipe.out.emissive_strength <= 0.0 {
         return;
     }
-    let f = field(recipe, 32);
-    let (lo, hi) = f
-        .iter()
-        .fold((f32::MAX, f32::MIN), |(l, h), v| (l.min(*v), h.max(*v)));
-    // A field with no range at all cannot show a banded glow anywhere; drop the claim
-    // rather than emit a flat wash the author did not ask for.
-    if hi - lo < 0.02 {
-        recipe.out.emissive_strength = 0.0;
-        return;
+    match seat_range(&field(recipe, SEAT_SIZE)) {
+        Some((lo, hi)) => recipe.out.emissive_band = seat(lo, hi, recipe.out.emissive_band),
+        None => recipe.out.emissive_strength = 0.0,
     }
-    // Keep the band's INTENT — a fraction of the way up — measured against the field
-    // that exists rather than the abstract 0..1.
-    let frac = recipe.out.emissive_band.clamp(0.0, 0.95);
-    recipe.out.emissive_band = lo + (hi - lo) * frac * 0.9;
+}
+
+/// The gradient's run: one texel, in tile units. Scaling relief by `n` would make a
+/// 2048² bake eight times as bumpy as its 256² preview for the same slider — the map
+/// must describe the SURFACE, not the sampling rate.
+pub(crate) const fn relief_step(n: u32) -> f32 {
+    2.0 / n as f32
+}
+
+/// The tangent-space normal at `(x, y)`: central differences on the WRAPPED height
+/// field → the surface slope, tipped by `relief`, encoded to `[0,255]`. The ONE
+/// gradient → normal, shared by [`bake`] and the material graph's output.
+pub(crate) fn normal_texel(h: &[f32], n: u32, x: i64, y: i64, relief: f32, step: f32) -> [u8; 4] {
+    let dx = (at(h, n, x + 1, y) - at(h, n, x - 1, y)) * relief / step;
+    let dy = (at(h, n, x, y + 1) - at(h, n, x, y - 1)) * relief / step;
+    let len = (dx * dx + dy * dy + 1.0).sqrt();
+    let (nx, ny, nz) = (-dx / len, -dy / len, 1.0 / len);
+    [q(nx * 0.5 + 0.5), q(ny * 0.5 + 0.5), q(nz * 0.5 + 0.5), 255]
+}
+
+/// The occlusion ring's radius in texels at size `n`: a fixed fraction of the TILE.
+///
+/// Occlusion is a CAVITY measure, so its ring must sit a fixed fraction of the tile
+/// away rather than one texel away. Sampling the immediate neighbours instead makes
+/// the map vanish as resolution rises — at 1024² two adjacent texels of a smooth field
+/// differ by ~0.001, which rounds to no occlusion at all — and that is the same
+/// resolution-dependence [`relief_step`] exists to keep out of the normal map.
+pub(crate) fn ring_radius(n: u32) -> i64 {
+    (n / AO_RING_DIVISOR).max(1) as i64
+}
+
+/// The mean of the field on the eight compass points `r` texels from `(x, y)`,
+/// wrapping — the neighbourhood a cavity (or an edge) is measured against.
+pub(crate) fn ring_mean(h: &[f32], n: u32, x: i64, y: i64, r: i64) -> f32 {
+    let ring = [
+        at(h, n, x - r, y),
+        at(h, n, x + r, y),
+        at(h, n, x, y - r),
+        at(h, n, x, y + r),
+        at(h, n, x - r, y - r),
+        at(h, n, x + r, y - r),
+        at(h, n, x - r, y + r),
+        at(h, n, x + r, y + r),
+    ];
+    ring.iter().sum::<f32>() / ring.len() as f32
+}
+
+/// Ambient occlusion at `(x, y)`: how far the texel sits below the surface a ring of
+/// radius `r` away, darkened by `strength`. A texel level with or above its
+/// surroundings is fully open (`1`). The ONE ring-cavity AO, shared by [`bake`] and
+/// the material graph's `Occlusion` node.
+pub(crate) fn occlusion_at(h: &[f32], n: u32, x: i64, y: i64, r: i64, strength: f32) -> f32 {
+    let v = at(h, n, x, y);
+    let mean = ring_mean(h, n, x, y, r);
+    (1.0 - (mean - v).max(0.0) * strength * AO_GAIN).clamp(0.0, 1.0)
+}
+
+/// A scalar map texel: the value replicated across RGB, opaque.
+pub(crate) fn scalar_texel(v: f32) -> [u8; 4] {
+    let b = q(v);
+    [b, b, b, 255]
+}
+
+/// A colour map texel, opaque.
+pub(crate) fn color_texel(c: [f32; 3]) -> [u8; 4] {
+    [q(c[0]), q(c[1]), q(c[2]), 255]
+}
+
+/// An emission texel: the glow COLOUR scaled by how strongly this texel emits —
+/// `0` writes black, which the shader adds as nothing.
+pub(crate) fn emit_texel(color: [f32; 3], e: f32) -> [u8; 4] {
+    [q(color[0] * e), q(color[1] * e), q(color[2] * e), 255]
+}
+
+/// The set, from the seven maps' bytes in [`MapKind::ALL`] order — the one assembly
+/// both bakers share, so a set always carries every [`MapKind`] in that order.
+pub(crate) fn map_set(n: u32, maps: [Vec<u8>; 7]) -> MapSet {
+    MapSet {
+        size: n,
+        maps: MapKind::ALL
+            .into_iter()
+            .zip(maps)
+            .map(|(kind, pixels)| Map {
+                kind,
+                size: n,
+                pixels,
+            })
+            .collect(),
+    }
+}
+
+/// Accumulates the seven maps texel by texel — [`bake`]'s single interleaved pass.
+pub(crate) struct MapWriter {
+    n: u32,
+    maps: [Vec<u8>; 7],
+}
+
+impl MapWriter {
+    pub(crate) fn new(n: u32) -> Self {
+        let cap = (n as usize) * (n as usize) * 4;
+        Self {
+            n,
+            maps: std::array::from_fn(|_| Vec::with_capacity(cap)),
+        }
+    }
+
+    /// One texel of every map, in [`MapKind::ALL`] order.
+    pub(crate) fn push(&mut self, texels: [[u8; 4]; 7]) {
+        for (map, texel) in self.maps.iter_mut().zip(texels) {
+            map.extend_from_slice(&texel);
+        }
+    }
+
+    pub(crate) fn finish(self) -> MapSet {
+        map_set(self.n, self.maps)
+    }
 }
 
 /// Bake a recipe into the full map set at `size × size`.
@@ -194,107 +335,29 @@ pub fn bake(recipe: &TextureRecipe, size: u32) -> MapSet {
     seat_the_glow(&mut seated);
     let recipe = &seated;
     let h = field(recipe, n);
-    let count = (n as usize) * (n as usize);
     let out = &recipe.out;
+    let step = relief_step(n);
+    let ring_r = ring_radius(n);
 
-    let mut base = Vec::with_capacity(count * 4);
-    let mut normal = Vec::with_capacity(count * 4);
-    let mut rough = Vec::with_capacity(count * 4);
-    let mut metal = Vec::with_capacity(count * 4);
-    let mut ao = Vec::with_capacity(count * 4);
-    let mut height = Vec::with_capacity(count * 4);
-    let mut emit = Vec::with_capacity(count * 4);
-
-    // The gradient's run: one texel, in tile units. Scaling relief by `n` would
-    // make a 2048² bake eight times as bumpy as its 256² preview for the same
-    // slider — the map must describe the SURFACE, not the sampling rate.
-    let step = 2.0 / n as f32;
-
-    // Occlusion is a CAVITY measure, so its ring must sit a fixed fraction of the
-    // tile away rather than one texel away. Sampling the immediate neighbours
-    // instead makes the map vanish as resolution rises — at 1024² two adjacent
-    // texels of a smooth field differ by ~0.001, which rounds to no occlusion at
-    // all — and that is the same resolution-dependence `step` exists to keep out
-    // of the normal map.
-    let ring_r = (n / AO_RING_DIVISOR).max(1) as i64;
-
+    let mut maps = MapWriter::new(n);
     for y in 0..n as i64 {
         for x in 0..n as i64 {
             let v = at(&h, n, x, y);
-
-            let c = out.ramp.sample(v);
-            base.extend_from_slice(&[q(c[0]), q(c[1]), q(c[2]), 255]);
-
-            // Central differences on the wrapped field → the surface slope, then
-            // the tangent-space normal of that slope, encoded to `[0,255]`.
-            let dx = (at(&h, n, x + 1, y) - at(&h, n, x - 1, y)) * out.relief / step;
-            let dy = (at(&h, n, x, y + 1) - at(&h, n, x, y - 1)) * out.relief / step;
-            let len = (dx * dx + dy * dy + 1.0).sqrt();
-            let (nx, ny, nz) = (-dx / len, -dy / len, 1.0 / len);
-            normal.extend_from_slice(&[
-                q(nx * 0.5 + 0.5),
-                q(ny * 0.5 + 0.5),
-                q(nz * 0.5 + 0.5),
-                255,
-            ]);
-
-            let r = q(out.roughness_at(v));
-            rough.extend_from_slice(&[r, r, r, 255]);
-            let m = q(out.metalness_at(v));
-            metal.extend_from_slice(&[m, m, m, 255]);
-
-            // Occlusion: how far this texel sits below the surface a cavity-radius
-            // away, on all eight compass points. A texel level with or above its
-            // surroundings is fully open.
-            let r = ring_r;
-            let ring = [
-                at(&h, n, x - r, y),
-                at(&h, n, x + r, y),
-                at(&h, n, x, y - r),
-                at(&h, n, x, y + r),
-                at(&h, n, x - r, y - r),
-                at(&h, n, x + r, y - r),
-                at(&h, n, x - r, y + r),
-                at(&h, n, x + r, y + r),
-            ];
-            let mean = ring.iter().sum::<f32>() / ring.len() as f32;
-            let occ = (1.0 - (mean - v).max(0.0) * out.ao * AO_GAIN).clamp(0.0, 1.0);
-            let a = q(occ);
-            ao.extend_from_slice(&[a, a, a, 255]);
-
-            let hv = q(v);
-            height.extend_from_slice(&[hv, hv, hv, 255]);
-
-            // Emission: the authored glow colour, gated by where in the field it
-            // sits. `emissive_at` returns 0 outside the band, so a material with no
-            // glow writes a black map and the shader adds nothing.
-            let e = out.emissive_at(v);
-            emit.extend_from_slice(&[
-                q(out.emissive[0] * e),
-                q(out.emissive[1] * e),
-                q(out.emissive[2] * e),
-                255,
+            maps.push([
+                color_texel(out.ramp.sample(v)),
+                normal_texel(&h, n, x, y, out.relief, step),
+                scalar_texel(out.roughness_at(v)),
+                scalar_texel(out.metalness_at(v)),
+                scalar_texel(occlusion_at(&h, n, x, y, ring_r, out.ao)),
+                scalar_texel(v),
+                // Emission: the authored glow colour, gated by where in the field it
+                // sits. `emissive_at` returns 0 outside the band, so a material with
+                // no glow writes a black map and the shader adds nothing.
+                emit_texel(out.emissive, out.emissive_at(v)),
             ]);
         }
     }
-
-    let map = |kind, pixels| Map {
-        kind,
-        size: n,
-        pixels,
-    };
-    MapSet {
-        size: n,
-        maps: vec![
-            map(MapKind::BaseColor, base),
-            map(MapKind::Normal, normal),
-            map(MapKind::Roughness, rough),
-            map(MapKind::Metallic, metal),
-            map(MapKind::Ao, ao),
-            map(MapKind::Height, height),
-            map(MapKind::Emit, emit),
-        ],
-    }
+    maps.finish()
 }
 
 #[cfg(test)]

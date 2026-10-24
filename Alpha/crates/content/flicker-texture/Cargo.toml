@@ -6,10 +6,11 @@ license.workspace = true
 
 # The texture SYNTHESIZER — data-model tier ③ of the material pipeline
 # (Elements → Compounds → **Materials**). A fixed rack of noise channels blended
-# into one field, projected through an output stage into a PBR map set. Pure CPU
-# and pure function: no graphics, no filesystem, no clock — a recipe plus a size
-# is the whole input, and identical input always produces identical bytes. That
-# is what lets the bench be a face on it and the tests run headless.
+# into one field, projected through an output stage into a PBR map set — and (v2)
+# a material GRAPH over the same maths, of which the rack is one preset. Pure CPU
+# and pure function: no graphics, no filesystem, no clock — a recipe (or graph)
+# plus a size is the whole input, and identical input always produces identical
+# bytes. That is what lets the bench be a face on it and the tests run headless.
 [dependencies]
 # The shared seeded lattice (2D-tileable) — the one noise in the tree.
 flicker-primitive.workspace = true
@@ -17,8 +18,10 @@ flicker-primitive.workspace = true
 # 47 look like?"); this crate never classifies, it only names the binding.
 flicker-materials.workspace = true
 serde.workspace = true
+# The material document's loader (`graph::load_material_json`) parses TEXT handed to
+# it — reading and writing the file stays the caller's, so the crate keeps no IO.
+serde_json.workspace = true
 
 [dev-dependencies]
-serde_json.workspace = true
 # Examples only — the crate itself emits raw pixel buffers and never a file format.
 image.workspace = true

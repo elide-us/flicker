@@ -83,8 +83,8 @@ pub use flicker_core::roots::{
     init_from_app_dir, installed_app_dir, roots, set_content_root, ContentConfig, ContentRoots,
 };
 pub use ops::{
-    keep_both_name, occupied, physical_path, probe_conflicts, BatchFileOp, Conflict, FileFacts,
-    FileOp, Resolution, TRASH_DIR,
+    human_bytes, keep_both_name, occupied, physical_path, probe_conflicts, BatchFileOp, Conflict,
+    FileFacts, FileOp, Resolution, TRASH_DIR,
 };
 pub use pipeline::{import_folder, source_maps, ImportSummary, RawMeshPrep, SourceMaps};
 pub use propset::{PropSet, PropVariant};

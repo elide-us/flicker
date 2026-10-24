@@ -5,7 +5,9 @@
 // PREPENDED to a shader by `compose_material` (pipeline_mesh_textured.rs), after the frame
 // prelude, the way the prelude itself is — the ONE shared text, not a copy pasted into each
 // shader. The shader keeps its own vertex stage, per-draw bindings and shadow bind (group 3)
-// and calls `shade_material` from `fs_main`.
+// and calls `shade_material` from `fs_main`, handing it the draw's tint, gloss and EMISSIVE
+// GAIN — the multiplier on the sampled Emit map (mesh_textured.wgsl: per-draw `flags.w`;
+// skinned_textured.wgsl: unity, a skinned draw takes no options).
 
 // Combined material group: 6 textures + one shared sampler. Packed into a single bind
 // group to stay within the default `max_bind_groups` limit of 4 (0 = frame, 1 = per-draw).
@@ -58,6 +60,7 @@ fn shade_material(
     tangent_w: f32,
     tint: vec4<f32>,
     gloss: f32,
+    emissive_gain: f32,
     soft: bool,
 ) -> Shaded {
     let texel = textureSample(albedo_tex, mat_sampler, uv);
@@ -144,7 +147,11 @@ fn shade_material(
     // glow is the surface's own light — dimming the object must not dim what it
     // emits — and before fog because distance still swallows a glow like any other
     // radiance. Never multiplied by AO or a light term: nothing shadows a light.
-    let lit = vec4<f32>(shaded, 1.0) * tint + vec4<f32>(emit, 0.0);
+    // The EMISSIVE GAIN scales it: an 8-bit Emit texel caps at 1.0, so without a gain a glow
+    // never outshines the surface's own white. 1.0 is the texel as authored; above it the glow
+    // is real HDR radiance on an `rgba16f` target, which a stage's `bloom` pass spreads into a
+    // halo before `tonemap_grade` rolls it off (an sRGB target clips it).
+    let lit = vec4<f32>(shaded, 1.0) * tint + vec4<f32>(emit * emissive_gain, 0.0);
 
     let dist = length(world_position - scene.camera_pos.xyz);
     let fog = 1.0 - exp(-scene.fog_color.w * dist);

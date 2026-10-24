@@ -104,6 +104,21 @@ impl FileFacts {
     }
 }
 
+/// A measured byte count as people read it — `1.4 MB` / `230 KB` / `87 B`. THE one
+/// formatter every surface that shows a file's size reads (the PackageBench's two tabs and
+/// its collision prompt, the Material Catalog's inspector), so a size reads the same
+/// wherever it is shown. A fact, not copy: the unit is the number's own notation.
+#[must_use]
+pub fn human_bytes(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    match bytes {
+        b if b >= MB => format!("{:.1} MB", b as f64 / MB as f64),
+        b if b >= KB => format!("{:.0} KB", b as f64 / KB as f64),
+        b => format!("{b} B"),
+    }
+}
+
 /// One collision found before a batch runs, so the UI can prompt ONCE per
 /// conflict instead of discovering them halfway through.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -427,6 +442,18 @@ mod tests {
 
     fn read_content(logical: &Path) -> String {
         crate::package::read_text(logical).unwrap()
+    }
+
+    /// The one byte formatter reads a size the way the PackageBench always showed it:
+    /// whole bytes under a KB, whole KB under a MB, tenths of a MB above.
+    #[test]
+    fn human_bytes_reads_bytes_kilobytes_and_megabytes() {
+        assert_eq!(human_bytes(87), "87 B");
+        assert_eq!(human_bytes(1023), "1023 B");
+        assert_eq!(human_bytes(1024), "1 KB");
+        assert_eq!(human_bytes(230 * 1024), "230 KB");
+        assert_eq!(human_bytes(1024 * 1024), "1.0 MB");
+        assert_eq!(human_bytes(1_468_006), "1.4 MB");
     }
 
     #[test]

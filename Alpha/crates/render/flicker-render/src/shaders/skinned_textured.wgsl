@@ -84,7 +84,8 @@ fn vs_main(in: VertexIn) -> VertexOut {
 
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
-    // No per-draw tint or sheen on a skinned body; its albedo's alpha is a cutout.
+    // No per-draw tint, sheen or emissive gain on a skinned body (its draw takes no options):
+    // its Emit map glows at unity gain, as authored, and its albedo's alpha is a cutout.
     let shaded = shade_material(
         in.uv,
         in.world_normal,
@@ -93,6 +94,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         in.tangent_w,
         vec4<f32>(1.0, 1.0, 1.0, 1.0),
         0.0,
+        1.0,
         false,
     );
     if (shaded.alpha < 0.5) {

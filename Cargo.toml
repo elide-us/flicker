@@ -19,6 +19,7 @@ members = [
     "Alpha/crates/frontend/flicker-shell",
     "Alpha/crates/frontend/flicker-widgets",
     "Alpha/crates/frontend/flicker-canvas",
+    "Alpha/crates/frontend/flicker-materialview",
     "Alpha/crates/animation/flicker-flight",
     "Alpha/crates/animation/flicker-skeletal",
     "Alpha/crates/animation/flicker-rigview",
@@ -33,6 +34,7 @@ members = [
     # Game-package libraries (reusable client scenes hosted by prism-alpha).
     "Alpha/crates/adventurer/flicker-clicktrainer",
     "Alpha/crates/devmode/flicker-componentcatalog",
+    "Alpha/crates/devmode/flicker-materialcatalog",
     "Alpha/crates/adventurer/flicker-controllertester",
     "Alpha/crates/frontend/flicker-globe",
     "Alpha/crates/adventurer/flicker-solarbirth",
@@ -173,6 +175,9 @@ flicker-widgets = { version = "0.1.11", path = "Alpha/crates/frontend/flicker-wi
 # The two 2D editor surface fillers (node-graph canvas + lane timeline), extracted
 # from PackBench so the DM tech tree and the GM event timelines share one copy.
 flicker-canvas = { version = "0.1.10", path = "Alpha/crates/frontend/flicker-canvas" }
+# The lit material SAMPLE filler (the MaterialBench's Lit view, the Material Catalog's
+# spheres) + the bundle-map decode, the flat-PBR stand-in and the glow palette it wears.
+flicker-materialview = { version = "0.1.11", path = "Alpha/crates/frontend/flicker-materialview" }
 flicker-flight = { version = "0.1.0", path = "Alpha/crates/animation/flicker-flight" }
 flicker-voxel = { version = "0.1.11", path = "Alpha/crates/world/flicker-voxel" }
 flicker-worker = { version = "0.1.0", path = "Alpha/crates/core/flicker-worker" }

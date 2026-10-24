@@ -327,6 +327,10 @@ pub struct UiState {
     /// entirely within the select hit arm (a closed field's click opens it; while
     /// open, any click closes it) — `derive(Default)` starts it `None`.
     open: Option<String>,
+    /// The first option row the open select's popup shows — its SCROLL, for a menu whose
+    /// rows outrun the screen (the wheel over the menu moves it). Back to 0 whenever a
+    /// select opens or closes, so every popup opens at its top.
+    menu_first: usize,
     /// The id of the `text_field` that currently owns keyboard focus, or `None`.
     /// run_ui clears it at the top of any clicked frame; a click landing in a
     /// text_field re-establishes it through that component's `focus` verdict
@@ -500,6 +504,16 @@ impl UiState {
     pub fn cancel_drag(&mut self) {
         self.drag = None;
         self.pad_drag = false;
+    }
+
+    /// Let go of the LOCAL DISPLAY OWNERSHIP a control holds on `bind` (see the `local`
+    /// field) — the scene's answer to an edit it REFUSED. A refusal leaves the Model
+    /// exactly where it was, which is the one case neither self-clearing exit covers: the
+    /// control would keep showing — and reporting, every frame — the value the scene
+    /// declined. Released, the next walk shows and echoes the Model again. A bind nothing
+    /// holds is a no-op.
+    pub fn release_local(&mut self, bind: &str) {
+        self.local.remove(bind);
     }
 
     /// The id of the `text_field` that currently owns keyboard focus, if any.
@@ -917,6 +931,19 @@ pub struct UiFrame {
     pub rects: Vec<(String, [f32; 4])>,
     /// How much drawing this pass actually did — see [`UiStats`].
     pub stats: UiStats,
+    /// The OPEN select's menu this frame (`[x, y, w, h]`) — the part of it that can be
+    /// seen, inside its select's list clip — or `None`. It is drawn over everything and
+    /// owns every pointer inside it — see [`popup_hit`](Self::popup_hit).
+    pub popup: Option<[f32; 4]>,
+    /// Whether that menu took this frame's pointer: the cursor is inside it (only its
+    /// select was hit; every node and surface under it counted as covered), or this
+    /// frame's click was spent on it. While a menu is open a click outside it CLOSES it
+    /// (the settings dropdown's rule, which the select has always followed) and is
+    /// delivered to nothing beneath it (the overlay rule: the shared modal menus swallow
+    /// a click outside their slab — though they do not close on it). A surface filler
+    /// that takes its own input defers to this: nothing under an open menu, and no click
+    /// that closed one, is its business.
+    pub popup_hit: bool,
 }
 
 impl UiFrame {
@@ -1171,16 +1198,65 @@ pub fn run_ui(
     for (bind, (val, _, _)) in &state.staged {
         results.set(bind.clone(), val.clone());
     }
+    // ── AN OPEN MENU IS ON TOP OF EVERYTHING ──
+    // A select's popup is drawn lifted over whatever it opens across — sliders, tabs, a
+    // canvas — so it must also be on top for the POINTER: with the cursor inside it, ONLY
+    // its select is hit (no other claim, click, capture or hover), and every surface under
+    // it counts as covered. While a menu is open the click edge is the menu's wherever it
+    // lands: inside it picks a row; anywhere else it closes the menu — the settings
+    // dropdown's rule — and is delivered to nothing beneath on that frame, the overlay
+    // rule (the shared modal menus swallow a click outside their slab, though they do not
+    // close on it). A select inside a scrolling list owns only the part of its menu the
+    // list's clip shows: a click on the clipped-away part is an outside click. Both
+    // answers ride the frame (`popup`, `popup_hit`) so a surface filler taking its own
+    // input can defer to them.
+    let menu = open_menu(&placed, model, &results, input, state, styles);
+    let popup_owns = menu.as_ref().is_some_and(|m| m.rect.contains(input.mouse));
+    let click_spent = menu.is_some() && input.clicked;
+    let popup_hit = popup_owns || click_spent;
+    if let (true, Some(m)) = (popup_owns, menu.as_ref()) {
+        hud_hit = true;
+        // The wheel over a menu taller than the screen scrolls its rows (and nothing else).
+        if input.wheel != 0.0 && m.shown < m.rows {
+            let first = state.menu_first as f32 - input.wheel * m.wheel_rows;
+            state.menu_first = (first.round().max(0.0) as usize).min(m.rows - m.shown);
+        }
+    }
+    // The click a menu spent, withheld from every other node: they still hover outside
+    // the menu, but nothing beneath fires, toggles or captures on it.
+    let quiet = UiInput {
+        mouse: input.mouse,
+        clicked: false,
+        down: input.down,
+        right_down: input.right_down,
+        screen: input.screen,
+        wheel: input.wheel,
+        exclusive: input.exclusive,
+        motion: input.motion,
+    };
     // `last_claim` = the placement index of the LAST node that claimed the pointer this
     // frame. The surface pass below reads it: a surface is hot only if it is painted over
     // every claimant under the cursor.
     let mut last_claim: Option<usize> = None;
     for (i, p) in placed.iter().enumerate() {
+        let owner = menu.as_ref().is_some_and(|m| m.owner == i);
+        if popup_owns && !owner {
+            continue;
+        }
+        let seen = if click_spent && !owner { &quiet } else { input };
         let mut claimed = false;
-        hit_node(p, model, input, state, styles, &mut results, &mut claimed);
+        hit_node(p, model, seen, state, styles, &mut results, &mut claimed);
         if claimed {
             hud_hit = true;
             last_claim = Some(i);
+        }
+    }
+    // A click outside the menu that its select never saw — one outside the select's own
+    // list clip, where it takes no pointer at all — still closes the menu.
+    if let (true, false, Some(m)) = (click_spent, popup_owns, menu.as_ref()) {
+        if state.open.as_deref() == Some(m.ident.as_str()) {
+            state.open = None;
+            state.menu_first = 0;
         }
     }
     // THE WHEEL over an overflowing flow container (Aaron 2026-09-15) — the same
@@ -1189,7 +1265,7 @@ pub fn run_ui(
     // bind to write. One tick moves ONE region: placement is pre-order, so the last
     // candidate under the pointer is the innermost, and a `list` found there has
     // already answered the tick in its own arm — a nested region never double-scrolls.
-    if input.wheel != 0.0 {
+    if input.wheel != 0.0 && !popup_owns {
         if let Some(p) = placed
             .iter()
             .rev()
@@ -1230,12 +1306,15 @@ pub fn run_ui(
     // walker's own `hud_hit` is untouched by any of this.
     let right_pressed = input.right_down && !state.right_was_down;
     state.right_was_down = input.right_down;
-    let pressed = input.clicked || right_pressed;
+    // A click an open menu spent is no surface's press (see `popup_hit`).
+    let pressed = (input.clicked && !click_spent) || right_pressed;
     if !(input.down || input.right_down) {
         state.surface_capture = None;
     }
     let is_surface = |p: &Placed| p.node.component == "surface";
-    let covered = |i: usize| last_claim.is_some_and(|c| c > i) || !state.dragging.is_empty();
+    // Under an open menu every surface is covered, whatever was placed after the select.
+    let covered =
+        |i: usize| popup_owns || last_claim.is_some_and(|c| c > i) || !state.dragging.is_empty();
     // The root is placed first and spans the window, so it is the search's last candidate.
     let hot = placed
         .iter()
@@ -1403,7 +1482,24 @@ pub fn run_ui(
     cache.frame = cache.frame.wrapping_add(1);
     let frame = cache.frame;
     let mut cur_clip: Option<[f32; 4]> = None;
-    for p in &placed {
+    // Nothing under an open menu draws as hovered or pressed — it does not have the
+    // pointer (see `popup_owns`); the menu's own select keeps the real one.
+    let away = UiInput {
+        mouse: Vec2::new(-1.0e6, -1.0e6),
+        clicked: false,
+        down: false,
+        right_down: false,
+        screen: input.screen,
+        wheel: 0.0,
+        exclusive: input.exclusive,
+        motion: input.motion,
+    };
+    for (i, p) in placed.iter().enumerate() {
+        let input = if popup_owns && !menu.as_ref().is_some_and(|m| m.owner == i) {
+            &away
+        } else {
+            input
+        };
         // Toggle the scissor clip at each list boundary: a list node's
         // descendants are contiguous in tree order, so one `Clip` opens the run and
         // the next node with a different clip closes it. Emitted outside the node's
@@ -1859,6 +1955,8 @@ pub fn run_ui(
         pointer,
         rects,
         stats,
+        popup: menu.map(|m| [m.rect.x, m.rect.y, m.rect.w, m.rect.h]),
+        popup_hit,
     }
 }
 
@@ -1978,14 +2076,19 @@ fn resolve<'a>(
         // `items_gap`, keyed by each item's original sibling index.
         "popup_panel" => {
             let c = popup_chrome(node, rect);
-            let mut y = c.items_top;
-            for (i, child) in node
+            let kids: Vec<(usize, &UiNode)> = node
                 .children
                 .iter()
                 .enumerate()
                 .filter(|(_, c)| visible(c, model))
-            {
-                let mh = child_main(child, model, false);
+                .collect();
+            let refs: Vec<&UiNode> = kids.iter().map(|(_, k)| *k).collect();
+            // What the content asks for against the slab it was given: a slab CAPPED to its
+            // surface (see `anchored`) takes the difference out of its `shrink` items.
+            let deficit = popup_content_h(node, &refs, model) - rect.h;
+            let heights = popup_item_heights(&refs, model, deficit);
+            let mut y = c.items_top;
+            for (&(i, child), mh) in kids.iter().zip(heights) {
                 let r = Rect {
                     x: c.inner_x,
                     y,
@@ -2436,6 +2539,21 @@ fn anchored(node: &UiNode, parent: Rect, model: &ValueMap) -> Rect {
         },
         None => (w_given.unwrap_or(m.x), h_given.unwrap_or(m.y)),
     };
+    // A modal SLAB sized to its content never outgrows the surface it is anchored in while
+    // its items can give way: it is capped at the surface's height less `fit_margin` above
+    // and below, as far as its `shrink` items reach (down to each one's `min_size`). A slab
+    // with no `shrink` item keeps its content height, exactly as before.
+    let h = if node.component == "popup_panel" && h_given.is_none() {
+        let room = parent.h - pnum(node, "fit_margin").unwrap_or(0.0) as f32 * 2.0;
+        let kids: Vec<&UiNode> = node.children.iter().filter(|c| visible(c, model)).collect();
+        if h > room {
+            room.max(h - popup_shrink_room(&kids, model))
+        } else {
+            h
+        }
+    } else {
+        h
+    };
     let (a, off) = placement(node, model);
     let x = match a {
         UiAnchor::TopLeft | UiAnchor::Left | UiAnchor::BottomLeft => parent.x,
@@ -2540,28 +2658,9 @@ fn measure(node: &UiNode, model: &ValueMap) -> Vec2 {
         // Shares [`popup_chrome`] with resolve/draw so the reserved space can never drift.
         "popup_panel" => {
             let w = pnum(node, "panel_w").unwrap_or(404.0) as f32;
-            let c = popup_chrome(
-                node,
-                Rect {
-                    x: 0.0,
-                    y: 0.0,
-                    w,
-                    h: 0.0,
-                },
-            );
-            let items: f32 = kids
-                .iter()
-                .map(|k| child_main(k, model, false))
-                .sum::<f32>()
-                + c.items_gap * kids.len().saturating_sub(1) as f32;
-            let footer = if c.has_footer {
-                c.gap + text_line_h(c.footer_size)
-            } else {
-                0.0
-            };
-            // `items_top` (relative to y=0) already carries the top pad + title block +
-            // the gap before the items; the footer block and bottom pad close it out.
-            let h = node.height.unwrap_or(c.items_top + items + footer + c.pad);
+            let h = node
+                .height
+                .unwrap_or_else(|| popup_content_h(node, &kids, model));
             Vec2::new(node.width.unwrap_or(w), h)
         }
         // A size-less text row reserves glyph size + leading (text ruling 2026-07-31):
@@ -3451,10 +3550,14 @@ fn component_hit_props(
             }
         }
         let ident = node_ident(node);
-        map.insert(
-            "open".to_string(),
-            Json::Bool(!ident.is_empty() && state.open.as_deref() == Some(ident)),
-        );
+        let open = !ident.is_empty() && state.open.as_deref() == Some(ident);
+        map.insert("open".to_string(), Json::Bool(open));
+        if open {
+            map.insert(
+                "menu_first".to_string(),
+                Json::from(state.menu_first as f64),
+            );
+        }
         map.insert(
             "captured".to_string(),
             Json::Bool(state.dragging.contains(ident)),
@@ -3555,8 +3658,14 @@ fn apply_hit_verdict(
         None => {}
     }
     match verdict.open {
-        Some(true) => state.open = Some(ident.to_string()),
-        Some(false) if state.open.as_deref() == Some(ident) => state.open = None,
+        Some(true) => {
+            state.open = Some(ident.to_string());
+            state.menu_first = 0;
+        }
+        Some(false) if state.open.as_deref() == Some(ident) => {
+            state.open = None;
+            state.menu_first = 0;
+        }
         _ => {}
     }
     if verdict.focus == Some(true) && !node.id.is_empty() {
@@ -4035,6 +4144,11 @@ fn node_fingerprint(
     };
     let open = ident.is_some() && state.open.as_deref() == ident;
     h.bool(open);
+    // An open popup scrolls and dodges the screen's bottom edge: both are draw inputs.
+    if open {
+        h.u64(state.menu_first as u64);
+        h.f32(input.screen.y);
+    }
 
     // Bound values — this frame's edits override the model, exactly as the draw reads them.
     for k in read_keys {
@@ -4366,6 +4480,11 @@ fn component_props(
     // children or hovers a sub-region (tabs' per-tab hover, a select's option rows).
     props.insert("mx".to_string(), serde_json::json!(input.mouse.x));
     props.insert("my".to_string(), serde_json::json!(input.mouse.y));
+    // A select's popup lays itself out past the node's rect, so it is told the floor it
+    // must not cross (it flips upward rather than open off the bottom of the screen).
+    if node.component == "select" {
+        props.insert("screen_h".to_string(), serde_json::json!(input.screen.y));
+    }
     props.insert("gap".to_string(), serde_json::json!(node.gap));
     props.insert("pad_x".to_string(), serde_json::json!(pad_x(node)));
     props.insert("pad_y".to_string(), serde_json::json!(pad_y(node)));
@@ -4390,6 +4509,13 @@ fn component_props(
         "open".to_string(),
         Json::Bool(ident.is_some() && state.open.as_deref() == ident),
     );
+    // The open popup's scroll — the first row it shows — live like `open`.
+    if node.component == "select" && ident.is_some() && state.open.as_deref() == ident {
+        props.insert(
+            "menu_first".to_string(),
+            Json::from(state.menu_first as f64),
+        );
+    }
     // "focused": the walker's retained focus, as one prop covering both models — a
     // module never reads walker state directly. Generically it is KEYBOARD focus
     // (this node's id owns `state.focus` — a text_field's ring + caret); a
@@ -4929,9 +5055,10 @@ fn rust_owns_hit(kind: &str) -> bool {
 /// The **panel** — the backdrop a pane IS, and the focus rim it wears.
 ///
 /// A panel is the one component every multi-panel view is built from, and it owns
-/// exactly two things: its BACKDROP (from its own style block, so a pane's fill,
-/// radius and resting edge are a style token — never a caller's string) and its
-/// FOCUS RIM (from the walker-injected `focused` prop).
+/// three things: its BACKDROP (from its own style block, so a pane's fill, radius
+/// and resting edge are a style token — never a caller's string), its FOCUS RIM
+/// (from the walker-injected `focused` prop) and its HOVER state (the walker's `hot`
+/// prop — the pointer over it).
 ///
 /// **The walker decides WHICH panel holds the cursor** (the left stick cycles
 /// `tab_group`); the panel decides what that LOOKS like. A scene never passes a rim
@@ -4939,26 +5066,30 @@ fn rust_owns_hit(kind: &str) -> bool {
 /// (`2FE653F9`: *"THE SCENE SHOULD KNOW NOTHING ABOUT HOW A FUCKING COMPONENT
 /// WORKS"*), so keep it here.
 ///
-/// It writes NO bind and NO action: a panel is a focus target and a backdrop.
-/// Anything interactive inside it is its own component, in its own node.
+/// A panel is a full-rect hit shape ([`HitShape::Rect`]), so it is a backdrop AND,
+/// when it is authored with one, a PRESSABLE CONTROL: a click inside fires its
+/// `action` and/or toggles its bool `bind`, exactly like a button, and the pad's
+/// Confirm on a focused panel does the same. A panel authored with neither is a
+/// focus target and a backdrop only; anything else interactive inside it is its
+/// own component, in its own node.
 fn draw_panel(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
     let s = props.get("style").unwrap_or(&Json::Null);
-    let focused = props
-        .get("focused")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    // `{ resting, focused }` sub-blocks, each an ordinary container block. A style that
-    // carries the container keys DIRECTLY (no split) is used as-is; the focused state
-    // falls down the chain (→ resting → the block), so a plain panel still draws. There
-    // is ONE focus state: the sapphire cursor rim marks the focused pane, which IS the
-    // context (Aaron 2026-09-02 — no entered/lock tier, no gold rim).
-    if focused {
-        let block = s.get("focused").or_else(|| s.get("resting")).unwrap_or(s);
-        draw_panel_bg(r, block, out);
+    let state = |key: &str| props.get(key).and_then(Json::as_bool).unwrap_or(false);
+    // `{ resting, hovered, focused }` sub-blocks, each an ordinary container block. A
+    // style that carries the container keys DIRECTLY (no split) is used as-is; the
+    // focused and hovered states fall down the chain (→ resting → the block), so a
+    // plain panel still draws. There is ONE focus state: the sapphire cursor rim marks
+    // the focused pane, which IS the context (Aaron 2026-09-02 — no entered/lock tier,
+    // no gold rim) — so focus wins over hover; hover is the pointer's acknowledgement
+    // on a panel the cursor is NOT on.
+    let block = if state("focused") {
+        s.get("focused").or_else(|| s.get("resting")).unwrap_or(s)
+    } else if state("hot") {
+        s.get("hovered").or_else(|| s.get("resting")).unwrap_or(s)
     } else {
-        let block = s.get("resting").unwrap_or(s);
-        draw_panel_bg(r, block, out);
-    }
+        s.get("resting").unwrap_or(s)
+    };
+    draw_panel_bg(r, block, out);
 }
 
 /// The **sprite** — THE image component (Aaron 2026-08-14: splash was only ever a
@@ -6563,33 +6694,147 @@ fn hit_tabs(m: Vec2, r: Rect, props: &Json, click: bool) -> HitVerdict {
     v
 }
 
-/// A select's popup **outer rect**: flush under the field by the menu block's `gap`,
-/// `row_h` per option. Shared by draw and hit so they can never disagree.
-///
-/// It lies BELOW the node's own rect — the one thing about this control the walker has
-/// to know, which is why `state.open` keeps its owner interactive whatever the rect
-/// pre-filters say.
-fn select_menu(r: Rect, menu: &Json, n: usize) -> (Rect, f32) {
-    let row_h = jnum(menu, "row_h", 30.0);
-    let rect = Rect {
-        x: r.x,
-        y: r.y + r.h + jnum(menu, "gap", 6.0),
-        w: r.w,
-        h: row_h * n as f32,
-    };
-    (rect, row_h)
+/// A select popup's geometry — shared by draw and hit so they can never disagree.
+#[derive(Clone, Copy, Debug)]
+struct SelectMenu {
+    /// The popup's outer rect: never past the screen.
+    rect: Rect,
+    row_h: f32,
+    /// How many option rows it shows at once — all of them, unless they would outrun
+    /// the screen; then as many WHOLE rows as fit, and the rest scroll.
+    shown: usize,
 }
 
-/// The `i`-th option **row**: full field width, stacked from the popup's top edge. The
+/// A select's popup: flush under the field by the menu block's `gap`, `row_h` per
+/// option — or, when that would cross the bottom of the screen (`screen_h`), flush ABOVE
+/// it, and when neither side has the room, clamped inside the screen. Rows that would
+/// outrun the screen itself do not run off it: the popup is as many whole rows as the
+/// screen holds, and the rest SCROLL ([`menu_first`], the wheel over the menu).
+///
+/// It lies outside the node's own rect — the one thing about this control the walker
+/// has to know, which is why `state.open` keeps its owner interactive whatever the rect
+/// pre-filters say.
+fn select_menu(r: Rect, menu: &Json, n: usize, screen_h: f32) -> SelectMenu {
+    let row_h = jnum(menu, "row_h", 30.0).max(1.0);
+    let gap = jnum(menu, "gap", 6.0);
+    let fit = if screen_h.is_finite() {
+        ((screen_h / row_h).floor() as usize).max(1)
+    } else {
+        n
+    };
+    let shown = n.min(fit);
+    let h = row_h * shown as f32;
+    let below = r.y + r.h + gap;
+    let above = r.y - gap - h;
+    let y = if below + h <= screen_h {
+        below
+    } else if above >= 0.0 {
+        above
+    } else {
+        // Taller than the room either side: pinned to the screen's bottom edge, or to
+        // its top when it fills the screen.
+        (screen_h - h).max(0.0)
+    };
+    SelectMenu {
+        rect: Rect {
+            x: r.x,
+            y,
+            w: r.w,
+            h,
+        },
+        row_h,
+        shown,
+    }
+}
+
+/// The first option an open popup shows — its scroll, walker-injected (`menu_first`)
+/// and clamped so the last page of rows is always a full one.
+fn menu_first(props: &Json, n: usize, shown: usize) -> usize {
+    (jnum(props, "menu_first", 0.0).max(0.0) as usize).min(n.saturating_sub(shown))
+}
+
+/// The open select's menu as the walker sees it this frame (see [`open_menu`]).
+#[derive(Clone, Debug)]
+struct OpenMenu {
+    /// The select's placement index, and its identity (the open id).
+    owner: usize,
+    ident: String,
+    /// The menu's VISIBLE rect — inside its select's list clip, when it has one.
+    rect: Rect,
+    /// How many options it has, and how many rows it shows at once.
+    rows: usize,
+    shown: usize,
+    /// Rows one wheel notch scrolls (the menu block's `wheel_rows`, 3).
+    wheel_rows: f32,
+}
+
+/// The OPEN select's menu, when the walker's open popup is a placed `select` — measured
+/// from exactly the props it is drawn and hit-tested with.
+fn open_menu(
+    placed: &[Placed],
+    model: &ValueMap,
+    results: &ValueMap,
+    input: &UiInput,
+    state: &UiState,
+    styles: &Json,
+) -> Option<OpenMenu> {
+    let ident = state.open.as_deref()?;
+    let (owner, p) = placed
+        .iter()
+        .enumerate()
+        .find(|(_, p)| p.node.component == "select" && node_ident(p.node) == ident)?;
+    let props = component_hit_props(p, model, results, input, state, styles);
+    let menu = props
+        .get("style")
+        .and_then(|s| s.get("menu"))
+        .unwrap_or(&Json::Null);
+    let rows = jkids(&props).len();
+    let geo = select_menu(p.rect, menu, rows, screen_h(&props));
+    // A select inside a scrolling list is drawn — popup and all — inside the list's
+    // scissor, and hit-tested only there: the menu it OWNS is the part the clip shows.
+    let rect = match p.clip {
+        Some([x, y, w, h]) => {
+            let x0 = geo.rect.x.max(x);
+            let y0 = geo.rect.y.max(y);
+            let x1 = (geo.rect.x + geo.rect.w).min(x + w);
+            let y1 = (geo.rect.y + geo.rect.h).min(y + h);
+            Rect {
+                x: x0,
+                y: y0,
+                w: (x1 - x0).max(0.0),
+                h: (y1 - y0).max(0.0),
+            }
+        }
+        None => geo.rect,
+    };
+    Some(OpenMenu {
+        owner,
+        ident: ident.to_string(),
+        rect,
+        rows,
+        shown: geo.shown,
+        wheel_rows: jnum(menu, "wheel_rows", 3.0).max(1.0),
+    })
+}
+
+/// The screen height a select's popup must stay inside — the walker injects it into a
+/// select's props; absent (a props map built without it), there is no floor to dodge.
+fn screen_h(props: &Json) -> f32 {
+    jnum(props, "screen_h", f32::INFINITY)
+}
+
+/// The `i`-th option **row** while the popup shows from option `first`: full field
+/// width, stacked from the popup's top edge — `None` for a row scrolled out of it. The
 /// ROW is the region — both the hover test and the click test read it — while the band
 /// actually drawn is inset within it.
-fn select_row(r: Rect, menu: Rect, row_h: f32, i: usize) -> Rect {
-    Rect {
+fn select_row(r: Rect, menu: &SelectMenu, first: usize, i: usize) -> Option<Rect> {
+    let k = i.checked_sub(first).filter(|k| *k < menu.shown)?;
+    Some(Rect {
         x: r.x,
-        y: menu.y + i as f32 * row_h,
+        y: menu.rect.y + k as f32 * menu.row_h,
         w: r.w,
-        h: row_h,
-    }
+        h: menu.row_h,
+    })
 }
 
 /// Whether an option row is the SELECTED one: its INDEX equals the bound one. Both sides
@@ -6728,7 +6973,9 @@ fn draw_select(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
         return;
     }
     let lifted = out.len();
-    let (m_rect, row_h) = select_menu(r, menu, kids.len());
+    let geo = select_menu(r, menu, kids.len(), screen_h(props));
+    let (m_rect, row_h) = (geo.rect, geo.row_h);
+    let first = menu_first(props, kids.len(), geo.shown);
     let mtop = first_color(menu, &["top"], STONE);
     let mborder = first_color(menu, &["border"], CLEAR);
     push_panel(
@@ -6746,7 +6993,10 @@ fn draw_select(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
     let cur = jopt(props, "bind_value");
     let m = pointer(props);
     for (i, child) in kids.iter().enumerate() {
-        let row = select_row(r, m_rect, row_h, i);
+        // A row scrolled out of a popup taller than the screen is not drawn at all.
+        let Some(row) = select_row(r, &geo, first, i) else {
+            continue;
+        };
         let selected = option_selected(child, cur);
         // The selected row's band, else the hovered one's — inset each side so the
         // popup's own edge stays visible around it. Selection wins over hover.
@@ -6789,6 +7039,23 @@ fn draw_select(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
             None,
         );
     }
+    // A menu whose rows outrun the screen SCROLLS — and says so: a thin marker down the
+    // right-hand gutter the row bands leave free, as tall as the share of the rows shown
+    // and as far down as the first of them, in the menu's own border ink.
+    if geo.shown < kids.len() {
+        let n = kids.len() as f32;
+        let w = (row_pad * 0.5).max(1.0);
+        push_rect(
+            out,
+            Rect {
+                x: m_rect.x + m_rect.w - row_pad * 0.5 - w * 0.5,
+                y: m_rect.y + m_rect.h * first as f32 / n,
+                w,
+                h: m_rect.h * geo.shown as f32 / n,
+            },
+            first_color(menu, &["border", "label"], INK),
+        );
+    }
     // Lift the whole popup run above the field. The walker adds the NODE's own sub-layer
     // on top of this afterwards, so the +1 stays relative to the field wherever the
     // select sits in a stacked screen.
@@ -6809,8 +7076,9 @@ fn hit_select(m: Vec2, r: Rect, props: &Json, click: bool) -> HitVerdict {
         .unwrap_or(&Json::Null);
     let kids = jkids(props);
     let open = props.get("open").and_then(|v| v.as_bool()) == Some(true);
-    let (m_rect, row_h) = select_menu(r, menu, kids.len());
-    let over_menu = open && m_rect.contains(m);
+    let geo = select_menu(r, menu, kids.len(), screen_h(props));
+    let first = menu_first(props, kids.len(), geo.shown);
+    let over_menu = open && geo.rect.contains(m);
     let mut v = HitVerdict {
         hit: r.contains(m) || over_menu,
         ..HitVerdict::default()
@@ -6831,7 +7099,7 @@ fn hit_select(m: Vec2, r: Rect, props: &Json, click: bool) -> HitVerdict {
         return v;
     }
     for (i, child) in kids.iter().enumerate() {
-        if !select_row(r, m_rect, row_h, i).contains(m) {
+        if !select_row(r, &geo, first, i).is_some_and(|row| row.contains(m)) {
             continue;
         }
         // An option's value is its INDEX — a number. Anything else is an authoring
@@ -8838,6 +9106,83 @@ struct PopupChrome {
     items_top: f32,
     has_footer: bool,
     footer_size: f32,
+}
+
+/// The height a `popup_panel` asks for: its chrome's top block (pad, title, subtitle,
+/// divider and the gap before the items), its visible `kids` at their own heights spaced by
+/// `items_gap`, the footer block and the bottom pad — what [`measure`] sizes the slab to and
+/// what [`resolve`] weighs the slab it was given against.
+fn popup_content_h(node: &UiNode, kids: &[&UiNode], model: &ValueMap) -> f32 {
+    let c = popup_chrome(
+        node,
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 0.0,
+            h: 0.0,
+        },
+    );
+    let items: f32 = kids
+        .iter()
+        .map(|k| child_main(k, model, false))
+        .sum::<f32>()
+        + c.items_gap * kids.len().saturating_sub(1) as f32;
+    let footer = if c.has_footer {
+        c.gap + text_line_h(c.footer_size)
+    } else {
+        0.0
+    };
+    // `items_top` (relative to y=0) already carries the top pad + title block + the gap
+    // before the items; the footer block and bottom pad close it out.
+    c.items_top + items + footer + c.pad
+}
+
+/// A slab item's SHRINK — the flex-shrink half of `grow`, for the one container whose
+/// height is its content's: `shrink` (a weight; absent or 0, the item keeps its height) and
+/// `min_size` (the floor it never gives way below; default 0).
+fn popup_shrink(item: &UiNode) -> Option<(f32, f32)> {
+    let weight = pnum(item, "shrink")
+        .map(|w| w as f32)
+        .filter(|w| *w > 0.0)?;
+    Some((weight, pnum(item, "min_size").unwrap_or(0.0) as f32))
+}
+
+/// How far a slab's items can give way — Σ (height − `min_size`) over its `shrink` items.
+fn popup_shrink_room(kids: &[&UiNode], model: &ValueMap) -> f32 {
+    kids.iter()
+        .filter_map(|k| {
+            popup_shrink(k).map(|(_, floor)| (child_main(k, model, false) - floor).max(0.0))
+        })
+        .sum()
+}
+
+/// The heights a slab's visible items take when the slab gives `deficit` px back: each
+/// `shrink` item gives its weighted share, never below its `min_size`, and an item that
+/// bottoms out leaves the rest to share what it could not give; every other item keeps its
+/// own height. `deficit <= 0` — the slab fits — leaves every item as measured.
+fn popup_item_heights(kids: &[&UiNode], model: &ValueMap, deficit: f32) -> Vec<f32> {
+    let mut heights: Vec<f32> = kids.iter().map(|k| child_main(k, model, false)).collect();
+    let mut left = deficit;
+    for _ in 0..kids.len() {
+        let open: Vec<(usize, f32, f32)> = kids
+            .iter()
+            .enumerate()
+            .filter_map(|(i, k)| popup_shrink(k).map(|(w, floor)| (i, w, floor)))
+            .filter(|&(i, _, floor)| heights[i] > floor)
+            .collect();
+        let total: f32 = open.iter().map(|&(_, w, _)| w).sum();
+        if left <= 0.0 || total <= 0.0 {
+            break;
+        }
+        let mut given = 0.0;
+        for (i, w, floor) in open {
+            let take = (left * w / total).min(heights[i] - floor);
+            heights[i] -= take;
+            given += take;
+        }
+        left -= given;
+    }
+    heights
 }
 
 fn popup_chrome(node: &UiNode, rect: Rect) -> PopupChrome {
@@ -12763,6 +13108,99 @@ mod tests {
         );
     }
 
+    /// A `panel` wears the POINTER too: its `hovered` sub-block under the cursor, so a
+    /// pressable panel (one authored with an `action`) acknowledges the hand the way a
+    /// button does — and the focused rim still wins, because there is ONE focus state.
+    /// Through the walker as well, so the draw cache really redraws on the hover edge.
+    #[test]
+    fn panel_wears_its_hovered_block_under_the_pointer_and_focus_wins() {
+        let rim = |w: f32, c: f32| {
+            serde_json::json!({ "fill": [0.0, 0.0, 0.0, 1.0],
+            "border": [c, c, c, 1.0], "border_w": w })
+        };
+        let style = serde_json::json!({
+            "resting": { "fill": [0.0, 0.0, 0.0, 1.0] },
+            "hovered": rim(1.0, 0.5),
+            "focused": rim(2.0, 1.0),
+        });
+        let border_of = |props: serde_json::Value, out: &[HudCommand]| match out
+            .iter()
+            .find(|c| matches!(c, HudCommand::Panel { .. }))
+        {
+            Some(HudCommand::Panel {
+                border,
+                border_color,
+                ..
+            }) => (*border, border_color[0]),
+            other => panic!("expected a Panel command for {props}, got {other:?}"),
+        };
+        let draw = |focused: bool, hot: bool| {
+            let props = serde_json::json!({ "style": style, "focused": focused, "hot": hot });
+            let mut out = Vec::new();
+            let r = Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 40.0,
+                h: 20.0,
+            };
+            draw_panel(r, &props, &mut out);
+            border_of(props, &out)
+        };
+        assert_eq!(draw(false, false).0, 0.0, "a resting panel wears no rim");
+        assert_eq!(
+            draw(false, true),
+            (1.0, 0.5),
+            "the pointer lights the hovered block"
+        );
+        assert_eq!(
+            draw(true, false),
+            (2.0, 1.0),
+            "the cursor lights the focused block"
+        );
+        assert_eq!(draw(true, true), (2.0, 1.0), "focus wins over hover");
+        // A style without a `hovered` block falls back to resting — no rim appears.
+        let plain = serde_json::json!({
+            "style": { "resting": { "fill": [0.0, 0.0, 0.0, 1.0] } }, "hot": true
+        });
+        let mut out = Vec::new();
+        draw_panel(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 10.0,
+                h: 10.0,
+            },
+            &plain,
+            &mut out,
+        );
+        assert_eq!(
+            border_of(plain, &out).0,
+            0.0,
+            "no hovered block, no hover rim"
+        );
+
+        // Through the walker: the hover edge redraws the panel (the cache folds `hot`).
+        let mut p = node("panel");
+        p.id = "p".into();
+        p.action = Some("press".into());
+        p.width = Some(60.0);
+        p.height = Some(40.0);
+        p.anchor = Some(UiAnchor::TopLeft);
+        let p = prop(p, "style", Value::Text("pane".into()));
+        let mut page = node("surface");
+        page.children = vec![p];
+        let styles = serde_json::json!({ "pane": style });
+        let model = ValueMap::new();
+        let mut state = UiState::new();
+        let walked = |x: f32, state: &mut UiState| {
+            let f = run_ui(&page, &model, &styles, &input_at(x, 20.0, false), state);
+            border_of(serde_json::json!("walked"), &f.commands)
+        };
+        assert_eq!(walked(500.0, &mut state).0, 0.0, "away: resting");
+        assert_eq!(walked(30.0, &mut state), (1.0, 0.5), "over it: hovered");
+        assert_eq!(walked(500.0, &mut state).0, 0.0, "away again: resting");
+    }
+
     /// `button` keeps its BEHAVIOUR now that the engine owns its draw and hit — the
     /// action fires, the pointer is claimed, and the slab is really drawn.
     #[test]
@@ -13761,6 +14199,590 @@ mod tests {
         assert!(
             !drew("Granite"),
             "the unselected option's label is not on the closed field"
+        );
+    }
+
+    /// A select near the BOTTOM of the screen opens its popup UPWARD rather than off the
+    /// screen — and the rows it draws there are the rows a click picks.
+    #[test]
+    fn a_select_at_the_screen_bottom_opens_upward_and_picks_from_there() {
+        let mut t = select_tree();
+        t.children[0].offset = [0.0, 540.0]; // field 540..580 on a 600-tall screen
+        let styles = select_styles_json();
+        let model = ValueMap::new();
+        let mut state = UiState::new();
+        run_ui(
+            &t,
+            &model,
+            &styles,
+            &input_at(100.0, 560.0, true),
+            &mut state,
+        );
+        assert_eq!(state.open.as_deref(), Some("sel"), "the field opens");
+        // Two rows of 30 under a 6 gap would end at 646 > 600, so the menu sits ABOVE:
+        // 540 - 6 - 60 = 474 → Alpha 474..504, Beta 504..534.
+        let f = run_ui(
+            &t,
+            &model,
+            &styles,
+            &input_at(700.0, 100.0, false),
+            &mut state,
+        );
+        assert!(
+            f.commands.iter().any(|c| matches!(
+                c,
+                HudCommand::Panel { y, h, .. } if (*y - 474.0).abs() < 0.5 && (*h - 60.0).abs() < 0.5
+            )),
+            "the popup is drawn above the field"
+        );
+        let f = run_ui(
+            &t,
+            &model,
+            &styles,
+            &input_at(100.0, 520.0, true),
+            &mut state,
+        );
+        assert_eq!(
+            f.results.number("mode"),
+            Some(1.0),
+            "a click on Beta, above, picks it"
+        );
+        assert!(state.open.is_none());
+
+        // With no room either side it is clamped inside the screen; with room below it
+        // opens below exactly as before.
+        let menu = serde_json::json!({ "row_h": 30, "gap": 6 });
+        let field = Rect {
+            x: 0.0,
+            y: 300.0,
+            w: 100.0,
+            h: 40.0,
+        };
+        let tall = select_menu(field, &menu, 20, 600.0).rect;
+        assert_eq!((tall.y, tall.h), (0.0, 600.0), "clamped to the screen");
+        let below = select_menu(field, &menu, 2, 600.0).rect;
+        assert_eq!(below.y, 346.0, "room below: under the field");
+        let unbounded = select_menu(field, &menu, 2, f32::INFINITY).rect;
+        assert_eq!(unbounded.y, 346.0, "no screen floor: under the field");
+    }
+
+    /// A select (`sel`, bind `mode`, field 0..40) whose open menu — rows 46..76 and
+    /// 76..106, x 0..200 — lies over a slider (`s`, bind `v`, 50..90, track x 80..260,
+    /// grab band 58..82) and a surface (`view`, 50..250) placed AFTER it, with a button
+    /// (`b`, action `go`) clear of the menu below: the shapes an open dropdown covers on a
+    /// real screen.
+    fn menu_over_controls() -> UiNode {
+        let mut t = select_tree();
+        let mut sl = node("slider");
+        sl.id = "s".into();
+        sl.bind = Some("v".into());
+        sl.width = Some(300.0);
+        sl.height = Some(40.0);
+        sl.anchor = Some(UiAnchor::TopLeft);
+        sl.offset = [0.0, 50.0];
+        sl = prop(sl, "slider_h", Value::Number(12.0));
+        sl = prop(sl, "label_w", Value::Number(80.0));
+        sl = prop(sl, "value_w", Value::Number(40.0));
+        sl = prop(sl, "min", Value::Number(0.0));
+        sl = prop(sl, "max", Value::Number(100.0));
+        let mut view = node("surface");
+        view.id = "view".into();
+        view.anchor = Some(UiAnchor::TopLeft);
+        view.offset = [0.0, 50.0];
+        view.width = Some(400.0);
+        view.height = Some(200.0);
+        let mut b = node("button");
+        b.id = "b".into();
+        b.action = Some("go".into());
+        b.anchor = Some(UiAnchor::TopLeft);
+        b.offset = [0.0, 300.0];
+        b.width = Some(200.0);
+        b.height = Some(30.0);
+        t.children.extend([sl, view, b]);
+        t
+    }
+
+    /// BLOCKER (round 3): a click on an open menu's row is the MENU's — it picks the row
+    /// and the slider lying under that row neither captures nor moves.
+    #[test]
+    fn a_click_on_an_open_menu_row_never_reaches_the_slider_under_it() {
+        let t = menu_over_controls();
+        let styles = select_styles_json();
+        let model = ValueMap::new().with("v", 25.0).with("mode", 0.0);
+        let mut state = UiState::new();
+        run_ui(
+            &t,
+            &model,
+            &styles,
+            &input_at(100.0, 20.0, true),
+            &mut state,
+        );
+        run_ui(
+            &t,
+            &model,
+            &styles,
+            &input_at(100.0, 20.0, false),
+            &mut state,
+        );
+        assert_eq!(state.open.as_deref(), Some("sel"), "the field opened");
+        // (150, 79): the Beta row, AND the slider's rail and grab band.
+        let f = run_ui(
+            &t,
+            &model,
+            &styles,
+            &input_at(150.0, 79.0, true),
+            &mut state,
+        );
+        assert_eq!(
+            f.results.number("mode"),
+            Some(1.0),
+            "the row under the click is picked"
+        );
+        assert!(f.popup_hit, "the menu took the pointer");
+        assert_eq!(f.popup, Some([0.0, 46.0, 200.0, 60.0]));
+        assert!(
+            state.dragging.is_empty(),
+            "the slider under the row captured nothing"
+        );
+        let up = run_ui(
+            &t,
+            &model,
+            &styles,
+            &input_at(150.0, 79.0, false),
+            &mut state,
+        );
+        assert_eq!(
+            up.results.number("v"),
+            Some(25.0),
+            "the slider kept its value"
+        );
+        assert!(state.open.is_none(), "the pick closed the menu");
+        assert!(!up.popup_hit && up.popup.is_none());
+    }
+
+    /// While a menu is open, a click OUTSIDE it closes it (the settings dropdown's rule)
+    /// and is delivered to nothing beneath on that frame (the overlay rule — the shared
+    /// modal menus swallow a click outside their slab too, though they do not close on
+    /// it); the next click reaches the button as always.
+    #[test]
+    fn a_click_outside_an_open_menu_only_closes_it() {
+        let t = menu_over_controls();
+        let styles = select_styles_json();
+        let model = ValueMap::new().with("v", 25.0).with("mode", 0.0);
+        let mut state = UiState::new();
+        run_ui(
+            &t,
+            &model,
+            &styles,
+            &input_at(100.0, 20.0, true),
+            &mut state,
+        );
+        run_ui(
+            &t,
+            &model,
+            &styles,
+            &input_at(100.0, 20.0, false),
+            &mut state,
+        );
+        let f = run_ui(
+            &t,
+            &model,
+            &styles,
+            &input_at(100.0, 315.0, true),
+            &mut state,
+        );
+        assert!(state.open.is_none(), "the click closed the menu");
+        assert!(!f.results.is_on("go"), "and fired nothing beneath it");
+        assert!(f.popup_hit, "the click was the menu's");
+        run_ui(
+            &t,
+            &model,
+            &styles,
+            &input_at(100.0, 315.0, false),
+            &mut state,
+        );
+        let f = run_ui(
+            &t,
+            &model,
+            &styles,
+            &input_at(100.0, 315.0, true),
+            &mut state,
+        );
+        assert!(
+            f.results.is_on("go"),
+            "with the menu shut, the button fires"
+        );
+        assert!(!f.popup_hit);
+    }
+
+    /// A SURFACE under an open menu is covered — even one placed after the select, which
+    /// the ordinary "later claim covers" rule would leave hot: no pointer sample while
+    /// the cursor is in the menu, and no press for the click that closes it.
+    #[test]
+    fn a_surface_under_an_open_menu_gets_no_pointer() {
+        let t = menu_over_controls();
+        let styles = select_styles_json();
+        let model = ValueMap::new().with("v", 25.0).with("mode", 0.0);
+        let mut state = UiState::new();
+        let open = |state: &mut UiState| {
+            run_ui(&t, &model, &styles, &input_at(100.0, 20.0, true), state);
+            run_ui(&t, &model, &styles, &input_at(100.0, 20.0, false), state);
+        };
+        open(&mut state);
+        // Hovering and wheeling over the menu, where it lies over the surface.
+        let f = run_ui(
+            &t,
+            &model,
+            &styles,
+            &input_at(150.0, 100.0, false),
+            &mut state,
+        );
+        assert!(
+            f.surface_pointer("view").is_none(),
+            "the menu covers the surface"
+        );
+        assert!(f.popup_hit && f.results.is_on("hud_hit"));
+        // A click outside the menu, on the bare surface: the menu closes, no press lands.
+        let f = run_ui(
+            &t,
+            &model,
+            &styles,
+            &input_at(300.0, 200.0, true),
+            &mut state,
+        );
+        assert!(state.open.is_none());
+        assert!(
+            f.surface_pointer("view").is_none_or(|p| !p.pressed),
+            "the click that closed the menu is no surface press"
+        );
+        run_ui(
+            &t,
+            &model,
+            &styles,
+            &input_at(300.0, 200.0, false),
+            &mut state,
+        );
+        let f = run_ui(
+            &t,
+            &model,
+            &styles,
+            &input_at(300.0, 200.0, true),
+            &mut state,
+        );
+        assert!(
+            f.surface_pointer("view").is_some_and(|p| p.pressed),
+            "with the menu shut, the surface takes its press"
+        );
+    }
+
+    /// MINOR (round 3): a menu with more rows than the screen holds is clamped to the
+    /// screen as whole rows and SCROLLS under the wheel — drawn and hit at the same
+    /// offset, never past its last full page, back at the top when it reopens; a short
+    /// menu is exactly as before.
+    #[test]
+    fn a_menu_taller_than_the_screen_scrolls_its_rows() {
+        let mut t = select_tree();
+        t.children[0].offset = [0.0, 300.0];
+        t.children[0].children = (0..40)
+            .map(|i| {
+                let n = prop(node("option"), "value", Value::Number(i as f64));
+                prop(n, "label", Value::Text(format!("Opt {i}")))
+            })
+            .collect();
+        let styles = select_styles_json();
+        let model = ValueMap::new().with("mode", 0.0);
+        let mut state = UiState::new();
+        let drew = |f: &UiFrame, want: &str| {
+            f.commands
+                .iter()
+                .any(|c| matches!(c, HudCommand::Text { text, .. } if text == want))
+        };
+        let wheel = |w: f32| UiInput {
+            wheel: w,
+            ..input_at(100.0, 100.0, false)
+        };
+        run_ui(
+            &t,
+            &model,
+            &styles,
+            &input_at(100.0, 320.0, true),
+            &mut state,
+        );
+        let f = run_ui(
+            &t,
+            &model,
+            &styles,
+            &input_at(100.0, 100.0, false),
+            &mut state,
+        );
+        // 40 rows of 30 on a 600-tall screen: 20 whole rows, pinned to the screen.
+        assert_eq!(f.popup, Some([0.0, 0.0, 200.0, 600.0]));
+        assert!(drew(&f, "Opt 19") && !drew(&f, "Opt 20"));
+        // Two notches down: three rows a notch.
+        let f = run_ui(&t, &model, &styles, &wheel(-2.0), &mut state);
+        assert!(drew(&f, "Opt 6") && drew(&f, "Opt 25") && !drew(&f, "Opt 5"));
+        let f = run_ui(
+            &t,
+            &model,
+            &styles,
+            &input_at(100.0, 15.0, true),
+            &mut state,
+        );
+        assert_eq!(
+            f.results.number("mode"),
+            Some(6.0),
+            "the top row is the one drawn there"
+        );
+        // Reopened, it starts at its top; scrolled far past the end, it stops on a full page.
+        run_ui(
+            &t,
+            &model,
+            &styles,
+            &input_at(100.0, 320.0, false),
+            &mut state,
+        );
+        run_ui(
+            &t,
+            &model,
+            &styles,
+            &input_at(100.0, 320.0, true),
+            &mut state,
+        );
+        let f = run_ui(
+            &t,
+            &model,
+            &styles,
+            &input_at(100.0, 100.0, false),
+            &mut state,
+        );
+        assert!(drew(&f, "Opt 0"), "a reopened menu starts at its top");
+        let f = run_ui(&t, &model, &styles, &wheel(-100.0), &mut state);
+        assert!(drew(&f, "Opt 39") && drew(&f, "Opt 20") && !drew(&f, "Opt 19"));
+        // The wheel over the menu scrolled only the menu: nothing else took it.
+        assert!(f.popup_hit);
+        // A short menu: two rows under the field, exactly as before.
+        let short = select_menu(
+            Rect {
+                x: 0.0,
+                y: 300.0,
+                w: 200.0,
+                h: 40.0,
+            },
+            &serde_json::json!({ "row_h": 30, "gap": 6 }),
+            2,
+            600.0,
+        );
+        assert_eq!((short.rect.y, short.rect.h, short.shown), (346.0, 60.0, 2));
+    }
+
+    /// A select near the bottom of a scrolling `list` (`lst`, 160 tall), its menu hanging
+    /// past the list's clip over a button (`b`) outside the list — the Component Catalog's
+    /// dropdowns in its scrolled content, in miniature.
+    fn select_in_a_clipped_list() -> UiNode {
+        let mut sel = select_tree().children.remove(0);
+        sel.anchor = None;
+        sel.width = None;
+        sel.size = Some(40.0);
+        sel.children = (0..4)
+            .map(|i| {
+                let n = prop(node("option"), "value", Value::Number(i as f64));
+                prop(n, "label", Value::Text(format!("Opt {i}")))
+            })
+            .collect();
+        let mut spacer = node("cell");
+        spacer.size = Some(50.0);
+        let mut list = node("list");
+        list.id = "lst".into();
+        list.bind = Some("scroll".into());
+        list.anchor = Some(UiAnchor::TopLeft);
+        list.width = Some(200.0);
+        list.height = Some(160.0);
+        list.children = vec![spacer, sel];
+        let mut b = node("button");
+        b.id = "b".into();
+        b.action = Some("go".into());
+        b.anchor = Some(UiAnchor::TopLeft);
+        b.offset = [0.0, 170.0];
+        b.width = Some(200.0);
+        b.height = Some(40.0);
+        let mut page = node("surface");
+        page.children = vec![list, b];
+        page
+    }
+
+    /// A select inside a scrolled list OWNS only the part of its menu the list's clip
+    /// shows: a click on the clipped-away part is an OUTSIDE click — it closes the menu,
+    /// picks nothing, and reaches nothing beneath (it used to be swallowed by a menu that
+    /// could not see it, open and unpicked) — while a click on the visible part picks.
+    #[test]
+    fn a_select_in_a_clipped_list_owns_only_the_menu_its_clip_shows() {
+        let t = select_in_a_clipped_list();
+        let styles = select_styles_json();
+        let model = ValueMap::new().with("mode", 0.0).with("scroll", 0.0);
+        let mut state = UiState::new();
+        let f = run_ui(
+            &t,
+            &model,
+            &styles,
+            &input_at(-1.0, -1.0, false),
+            &mut state,
+        );
+        let field = f.rect("sel").expect("the select is laid out");
+        let clip = f.rect("lst").expect("the list is laid out");
+        let open = |state: &mut UiState| {
+            let at = (field.pos.x + 20.0, field.pos.y + 20.0);
+            run_ui(&t, &model, &styles, &input_at(at.0, at.1, true), state);
+            run_ui(&t, &model, &styles, &input_at(at.0, at.1, false), state)
+        };
+        let f = open(&mut state);
+        assert_eq!(state.open.as_deref(), Some("sel"));
+        let menu = select_menu(
+            Rect {
+                x: field.pos.x,
+                y: field.pos.y,
+                w: field.size.x,
+                h: field.size.y,
+            },
+            &styles["controls"]["menu"],
+            4,
+            600.0,
+        )
+        .rect;
+        let clip_bottom = clip.pos.y + clip.size.y;
+        assert!(
+            menu.y < clip_bottom && menu.y + menu.h > clip_bottom,
+            "the menu hangs past the clip"
+        );
+        assert_eq!(
+            f.popup,
+            Some([menu.x, menu.y, menu.w, clip_bottom - menu.y]),
+            "the menu it owns is the part the clip shows"
+        );
+        // On the clipped-away part, over the button: an outside click.
+        let below = (menu.x + 100.0, (clip_bottom + menu.y + menu.h) * 0.5);
+        assert!(below.1 > 170.0 && below.1 < 210.0, "over the button");
+        let f = run_ui(
+            &t,
+            &model,
+            &styles,
+            &input_at(below.0, below.1, true),
+            &mut state,
+        );
+        assert!(state.open.is_none(), "the outside click closed the menu");
+        assert_eq!(f.results.number("mode"), Some(0.0), "and picked nothing");
+        assert!(!f.results.is_on("go"), "and reached nothing beneath it");
+        run_ui(
+            &t,
+            &model,
+            &styles,
+            &input_at(below.0, below.1, false),
+            &mut state,
+        );
+        // On the visible part: the second row picks.
+        open(&mut state);
+        let row = (menu.x + 100.0, menu.y + 30.0 * 1.5);
+        assert!(row.1 < clip_bottom, "row 1 is visible");
+        let f = run_ui(
+            &t,
+            &model,
+            &styles,
+            &input_at(row.0, row.1, true),
+            &mut state,
+        );
+        assert_eq!(f.results.number("mode"), Some(1.0), "a visible row picks");
+        assert!(state.open.is_none());
+    }
+
+    /// A menu that SCROLLS draws a thin marker down its right gutter — as tall as the
+    /// share of the rows shown, as far down as the first of them, in the menu's own border
+    /// ink — and a menu that fits draws none.
+    #[test]
+    fn a_scrolling_menu_draws_its_scroll_marker_and_a_short_one_none() {
+        let styles = select_styles_json();
+        let model = ValueMap::new().with("mode", 0.0);
+        let border = [0.2, 0.2, 0.2, 1.0];
+        // The marker: a rect in the field's right gutter, 2 wide (the default `row_pad` 4).
+        let markers = |f: &UiFrame, right: f32| -> Vec<(f32, f32)> {
+            f.commands
+                .iter()
+                .filter_map(|c| match c {
+                    HudCommand::Rect {
+                        x, y, w, h, color, ..
+                    } if (*x - (right - 3.0)).abs() < 0.01
+                        && (*w - 2.0).abs() < 0.01
+                        && *color == border =>
+                    {
+                        Some((*y, *h))
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        // Two rows: no marker.
+        let short = select_tree();
+        let mut state = UiState::new();
+        run_ui(
+            &short,
+            &model,
+            &styles,
+            &input_at(100.0, 20.0, true),
+            &mut state,
+        );
+        let f = run_ui(
+            &short,
+            &model,
+            &styles,
+            &input_at(-1.0, -1.0, false),
+            &mut state,
+        );
+        assert!(f.popup.is_some());
+        assert!(
+            markers(&f, 200.0).is_empty(),
+            "a menu that fits draws no marker"
+        );
+        // Forty rows on a 600-tall screen: twenty shown — a marker half the menu tall.
+        let mut tall = select_tree();
+        tall.children[0].offset = [0.0, 300.0];
+        tall.children[0].children = (0..40)
+            .map(|i| {
+                let n = prop(node("option"), "value", Value::Number(i as f64));
+                prop(n, "label", Value::Text(format!("Opt {i}")))
+            })
+            .collect();
+        let mut state = UiState::new();
+        run_ui(
+            &tall,
+            &model,
+            &styles,
+            &input_at(100.0, 320.0, true),
+            &mut state,
+        );
+        let f = run_ui(
+            &tall,
+            &model,
+            &styles,
+            &input_at(-1.0, -1.0, false),
+            &mut state,
+        );
+        assert_eq!(
+            markers(&f, 200.0),
+            vec![(0.0, 300.0)],
+            "at the top, half the menu"
+        );
+        let f = run_ui(
+            &tall,
+            &model,
+            &styles,
+            &UiInput {
+                wheel: -2.0,
+                ..input_at(100.0, 100.0, false)
+            },
+            &mut state,
+        );
+        assert_eq!(
+            markers(&f, 200.0),
+            vec![(90.0, 300.0)],
+            "six rows down: 6/40 of 600"
         );
     }
 
@@ -14840,6 +15862,73 @@ mod tests {
             (328.0, 168.0),
             "items span the inner width, spaced by items_gap"
         );
+    }
+
+    /// A slab TALLER than its surface gives way through its `shrink` items: capped at the
+    /// surface less `fit_margin` above and below, the shrink item takes the whole deficit
+    /// (never below its `min_size`) while every other item keeps its row — and a slab with
+    /// no `shrink` item, or one that fits, keeps its content height exactly as before.
+    #[test]
+    fn a_slab_taller_than_its_surface_gives_way_through_its_shrink_items() {
+        let item = |id: &str, size: f32| {
+            let mut n = node("cell");
+            n.id = id.into();
+            n.size = Some(size);
+            n
+        };
+        let slab = |shrink: Option<(f64, f64)>, stage_h: f32| {
+            let mut stage = item("stage", stage_h);
+            if let Some((weight, floor)) = shrink {
+                stage = prop(stage, "shrink", Value::Number(weight));
+                stage = prop(stage, "min_size", Value::Number(floor));
+            }
+            let mut pop = node("popup_panel");
+            pop.id = "pop".into();
+            pop.anchor = Some(UiAnchor::Center);
+            pop = prop(pop, "fit_margin", Value::Number(10.0));
+            pop.children = vec![item("head", 60.0), stage, item("foot", 40.0)];
+            let mut screen = node("surface");
+            screen.children = vec![pop];
+            let f = run_ui(
+                &screen,
+                &ValueMap::new(),
+                &serde_json::json!({}),
+                &input_at(-9.0, -9.0, false),
+                &mut UiState::new(),
+            );
+            let r = |id: &str| f.rect(id).unwrap_or_else(|| panic!("{id} placed"));
+            (r("pop"), r("head"), r("stage"), r("foot"))
+        };
+        // Defaults: items_top 116, items_gap 12, pad 38 → content = 278 + the stage. The
+        // 800×600 screen less 10 above and below leaves 580.
+        let (pop, head, stage, foot) = slab(Some((1.0, 100.0)), 500.0);
+        assert_eq!(
+            (pop.pos.y, pop.size.y),
+            (10.0, 580.0),
+            "capped, centred, on screen"
+        );
+        assert_eq!(
+            stage.size.y, 302.0,
+            "the shrink item gives the whole deficit"
+        );
+        assert_eq!(
+            (head.size.y, foot.size.y),
+            (60.0, 40.0),
+            "the others keep their rows"
+        );
+        assert!(
+            foot.pos.y + foot.size.y <= pop.pos.y + pop.size.y,
+            "the last item fits"
+        );
+        // Never below its floor: the slab is as short as the floor allows.
+        let (pop, _, stage, _) = slab(Some((1.0, 400.0)), 500.0);
+        assert_eq!((pop.size.y, stage.size.y), (678.0, 400.0));
+        // No shrink item: the content height, as before.
+        let (pop, _, stage, _) = slab(None, 500.0);
+        assert_eq!((pop.size.y, stage.size.y), (778.0, 500.0));
+        // A slab that fits is untouched.
+        let (pop, _, stage, _) = slab(Some((1.0, 100.0)), 200.0);
+        assert_eq!((pop.size.y, stage.size.y), (478.0, 200.0));
     }
 
     /// A `popup_panel` DRAWS its own chrome: the styled backdrop and the centred title.
@@ -17543,6 +18632,54 @@ mod tests {
             state.local.is_empty(),
             "the scene agreed — nothing left to hold"
         );
+    }
+
+    /// The scene's refusal seam: a committed value the scene DECLINED leaves the model
+    /// where it was, so ownership would hold it forever; `release_local` lets go, and the
+    /// control shows and echoes the model again on the very next walk.
+    #[test]
+    fn a_released_local_value_falls_back_to_the_model() {
+        let (page, st) = grab_slider();
+        let stale = ValueMap::new().with("v", 25.0);
+        let mut state = UiState::new();
+        run_ui(&page, &stale, &st, &input_at(170.0, 10.0, true), &mut state);
+        let up = UiInput {
+            mouse: Vec2::new(170.0, 10.0),
+            clicked: false,
+            down: false,
+            right_down: false,
+            screen: Vec2::new(800.0, 600.0),
+            wheel: 0.0,
+            exclusive: false,
+            motion: Default::default(),
+        };
+        run_ui(&page, &stale, &st, &up, &mut state);
+        let held = run_ui(
+            &page,
+            &stale,
+            &st,
+            &input_at(700.0, 500.0, false),
+            &mut state,
+        );
+        assert!(
+            (held.results.number("v").unwrap() - 50.0).abs() < 2.0,
+            "held locally while the scene has not answered"
+        );
+        state.release_local("v");
+        assert!(state.local.is_empty(), "nothing is held once released");
+        let f = run_ui(
+            &page,
+            &stale,
+            &st,
+            &input_at(700.0, 500.0, false),
+            &mut state,
+        );
+        assert_eq!(
+            f.results.number("v"),
+            Some(25.0),
+            "the control is back on the model the scene kept"
+        );
+        state.release_local("never_held"); // a no-op, not a panic
     }
 
     /// The grab-band slider both ownership tests drive: track x 80..260, y 14..26,

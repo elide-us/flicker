@@ -1,10 +1,11 @@
-//! Factory patches — the instrument's starting library.
+//! Factory patches — the v1 RACK's own corpus.
 //!
-//! A synthesizer ships with patches for the same reason this does: a rack of
-//! neutral sliders teaches you nothing about what the instrument can do, and the
-//! fastest way to learn a knob is to turn it on a sound you already recognize.
-//! Each patch here is bound to a real row of the 256-material index, so it also
-//! answers the pipeline's actual question — *what does material 10 look like?*
+//! The patches the six-voice rack shipped with, kept as that format's corpus: the
+//! fixtures the lossless-conversion tests run over (each converted to a v2 graph
+//! must bake exactly as the rack bakes it — `graph/tests`) and what
+//! `examples/bake_patches.rs` bakes. They are NOT the designer's library: the
+//! MaterialBench offers New and then `data/factory_materials.json`, v2 graphs
+//! authored as data. Each is still bound to a real row of the 256-material index.
 //!
 //! These are **recipes, not images**: settings that a reader can dial to, not
 //! baked output standing in for a generator. Each is a few hundred bytes and
