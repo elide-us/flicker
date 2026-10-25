@@ -3060,7 +3060,7 @@ mod tests {
     fn a_whole_tier_paste_weighs_every_slot_it_lands() {
         use flicker_materials::EMISSIVE_FIRST;
         let (mut qm, d) = scratch("tierpaste");
-        let staged = d.join("staging/materials");
+        let staged = d.join("staging").join("materials");
         stage_slot(&d, 0);
         for slot in EMISSIVE_FIRST..=u8::MAX {
             stage_glow(&d, slot);
@@ -3145,8 +3145,11 @@ mod tests {
 
         // A folder renamed INTO the tier lands every slot it holds.
         let (mut qm, d2) = scratch("renametier");
-        let stash = d2.join("package/stash");
-        flicker_content::package::write_text(&stash.join("000/000.texture.json"), "{}").unwrap();
+        // Component joins, not an embedded `/`: the refusal detail is the walked path's
+        // `display()`, which is `\`-separated on Windows and must compare equal here.
+        let stash = d2.join("package").join("stash");
+        flicker_content::package::write_text(&stash.join("000").join("000.texture.json"), "{}")
+            .unwrap();
         qm.refresh();
         qm.sel = qm
             .rows()
