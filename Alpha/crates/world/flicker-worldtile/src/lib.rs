@@ -54,6 +54,7 @@
 pub mod atlas;
 pub mod bake;
 pub mod erosion;
+pub mod field;
 pub mod mask;
 pub mod materialize;
 pub mod shape;
@@ -62,9 +63,10 @@ pub mod source;
 pub use atlas::{AtlasFrame, CellIndex, WorldClusterId};
 pub use bake::{bake_region, RegionBake};
 pub use erosion::{tile_mass_kg, BedProps, Eroder, ErosionParams, PassReport};
+pub use field::quad_field;
 pub use mask::{HexMask, TileFrame, PIXELS_PER_TILE, TILE_DIM, TILE_SPAN_M};
 pub use materialize::{materialize, Tile};
-pub use source::{Bed, PlanetSource, TileSource};
+pub use source::{Bed, ClusterLod, PlanetSource, ResonanceSource, TileSource, V5_RELIEF_SCALE};
 
 /// Feet across one pixel — the width of a voxel cluster. Together with
 /// [`TILE_DIM`] and [`METRES_PER_FOOT`] it derives the canonical

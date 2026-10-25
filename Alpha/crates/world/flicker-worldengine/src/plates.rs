@@ -120,6 +120,11 @@ pub struct PlateField {
     shelf: Vec<bool>,
     /// The liquid-flow warp field — its own stream of the roll, fixed size.
     waves: Vec<Wave>,
+    /// The warp's GAIN over its authored octaves: 1 is the Populous scheme;
+    /// the V5 epochs open at 2.5 so plate edges — and the ranges that rise
+    /// along them — bend in arcs instead of reading as polylines (Aaron
+    /// 2026-10-15: "warp the plate boundaries so the ranges bend").
+    warp_gain: f32,
     /// The shelf-width field's waves (scalar: only `amp.x` is read).
     shelf_waves: Vec<Wave>,
 }
@@ -127,6 +132,11 @@ pub struct PlateField {
 impl PlateField {
     /// Roll a scheme of `plates` with `seed` over `map`.
     pub fn new(map: &HexMap, plates: u32, seed: u64) -> Self {
+        Self::with_warp(map, plates, seed, 1.0)
+    }
+
+    /// Roll a scheme whose liquid-flow warp is scaled by `warp_gain`.
+    pub fn with_warp(map: &HexMap, plates: u32, seed: u64, warp_gain: f32) -> Self {
         let mut field = Self {
             plates: plates.clamp(MIN_PLATES, MAX_PLATES),
             seed,
@@ -137,9 +147,15 @@ impl PlateField {
             shelf: Vec::new(),
             waves: Vec::new(),
             shelf_waves: Vec::new(),
+            warp_gain: warp_gain.max(0.0),
         };
         field.rebuild(map);
         field
+    }
+
+    /// The warp's gain.
+    pub fn warp_gain(&self) -> f32 {
+        self.warp_gain
     }
 
     /// How many plates the scheme was rolled with.
@@ -218,7 +234,7 @@ impl PlateField {
         for w in &self.waves {
             v += w.amp * (w.freq * p.dot(w.axis) + w.phase).sin();
         }
-        let q = (p + v).normalize_or_zero();
+        let q = (p + v * self.warp_gain).normalize_or_zero();
         // Differential rotation about +Y: no twist at the equator, full at
         // the poles — the signature of a body that spins.
         let ang = SPIN_SHEAR * q.y;

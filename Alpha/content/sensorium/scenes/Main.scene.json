@@ -283,6 +283,10 @@
         "color": "$dim",
         "gap_top": 10
       },
+      "body": {
+        "_comment": "The shared modals' BODY ink - the busy / choice_dialog / text_prompt body lines and the conflict dialog's where-line and card headings. A text node's `color` is a dotted PATH into the styles, so those nodes name `modal.body.color` (a raw `$token` there resolves to no path and silently draws the default ink - the bug this block fixed). Aaron's to tune.",
+        "color": "$dim"
+      },
       "divider": {
         "color": "$bronze",
         "gap": 22

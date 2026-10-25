@@ -33,7 +33,6 @@
 //! separately from the first because they stop being proportional immediately.
 
 use crate::mask::{HexMask, TileFrame, TILE_DIM};
-use crate::shape::Neighbourhood;
 use crate::source::TileSource;
 
 /// One materialised cell: a stack of thickness maps, bottom bed first.
@@ -140,6 +139,71 @@ impl Tile {
         (rgba, dim)
     }
 
+    /// **The hex as ground** — an RGBA picture `scale`× smaller than the map:
+    /// the composite height tinted against `sea_m` (depth-shaded sea below
+    /// it, lowland → upland → summit above, each against the tile's own span)
+    /// and HILL-SHADED from the pixel gradient, the corners transparent. The
+    /// one picture the headless ground evaluator writes and the bench's TILE
+    /// view shows, so what the agent judges is what Aaron sees.
+    pub fn shaded_rgba(&self, scale: u32, sea_m: f64, top_m: f64) -> (Vec<u8>, u32) {
+        let scale = scale.max(1);
+        let dim = TILE_DIM / scale;
+        // The planet's bands, not the tile's own span: a plain reads as a
+        // plain and a summit as a summit, and the relief inside the hex is
+        // the shade's to show (the first tiles coloured by their own span
+        // read as a wash of colour over flat ground, 2026-10-16).
+        let land_span = (top_m - sea_m).max(1e-3);
+        let light = glam::DVec3::new(-0.6, 0.6, 0.53).normalize();
+        let px_m = crate::mask::TILE_SPAN_M / TILE_DIM as f64 * scale as f64;
+        let at = |x: i64, y: i64, fallback: f64| -> f64 {
+            if x < 0 || y < 0 || x >= TILE_DIM as i64 || y >= TILE_DIM as i64 {
+                return fallback;
+            }
+            let (x, y) = (x as u32, y as u32);
+            if self.mask.contains(x, y) {
+                f64::from(self.composite_m(x, y))
+            } else {
+                fallback
+            }
+        };
+        let mut rgba = vec![0u8; (dim as usize) * (dim as usize) * 4];
+        for oy in 0..dim {
+            for ox in 0..dim {
+                let (x, y) = (ox * scale, oy * scale);
+                if !self.mask.contains(x, y) {
+                    continue; // transparent: not this cell's ground
+                }
+                let h = f64::from(self.composite_m(x, y));
+                let s = scale as i64;
+                let gx =
+                    (at(x as i64 + s, y as i64, h) - at(x as i64 - s, y as i64, h)) / (2.0 * px_m);
+                let gy =
+                    (at(x as i64, y as i64 - s, h) - at(x as i64, y as i64 + s, h)) / (2.0 * px_m);
+                let normal = glam::DVec3::new(-gx * SHADE_GAIN, -gy * SHADE_GAIN, 1.0).normalize();
+                let shade = 0.25 + 0.75 * normal.dot(light).max(0.0);
+                let (r, g, b) = if h < sea_m {
+                    let d = ((sea_m - h) / sea_m.max(1e-3)).clamp(0.0, 1.0);
+                    (0.45 - 0.4 * d, 0.62 - 0.5 * d, 0.85 - 0.45 * d)
+                } else {
+                    let t = ((h - sea_m) / land_span).clamp(0.0, 1.0);
+                    if t < 0.5 {
+                        let u = t * 2.0;
+                        (0.36 + 0.22 * u, 0.56 - 0.09 * u, 0.28 + 0.02 * u)
+                    } else {
+                        let u = (t - 0.5) * 2.0;
+                        (0.58 + 0.38 * u, 0.47 + 0.49 * u, 0.30 + 0.66 * u)
+                    }
+                };
+                let o = ((oy as usize) * dim as usize + ox as usize) * 4;
+                rgba[o] = (r * shade * 255.0) as u8;
+                rgba[o + 1] = (g * shade * 255.0) as u8;
+                rgba[o + 2] = (b * shade * 255.0) as u8;
+                rgba[o + 3] = 255;
+            }
+        }
+        (rgba, dim)
+    }
+
     /// A one-line description of what this tile is, for the inspector caption.
     pub fn summary(&self) -> String {
         let (mut lo, mut hi) = (f32::MAX, f32::MIN);
@@ -175,22 +239,53 @@ pub fn materialize<S: TileSource>(
 ) -> Tile {
     let frame = TileFrame::new(cell as u32, src.grid().dirs[cell], outline, radius_m);
     let mask = HexMask::new(&frame, outline);
-    let hood = Neighbourhood::around(src, cell);
+    // The ground as a function of position — the source's own reading of
+    // the global field (the neighbourhood blend by default; the V5 source
+    // adds the fields' exact detail the blend cannot carry).
+    let ground = src.relief_sampler(cell);
 
     // The surface the global field puts here, and how far each pixel is from the
-    // cell boundary. Both are gathered in one pass over the mask.
+    // cell boundary. Both are gathered in one pass over the mask — the pass
+    // split across the machine's threads, since the field is a pure function
+    // of position and every pixel's answer is its own (the V5 fields, bubbles
+    // to the pixel, ask a few microseconds a pixel of 3.5 million).
     let mut relief = vec![0.0f64; TILE_DIM as usize * TILE_DIM as usize];
     let mut interior = vec![0.0f64; TILE_DIM as usize * TILE_DIM as usize];
     let mut interior_sum = 0.0f64;
-    for (x, y) in mask.iter() {
-        let i = idx(x, y);
-        let r = hood.relief_at(frame.direction(x, y)).max(0.0);
-        relief[i] = r;
-        // How far inside the cell this pixel is. Zero on the boundary — so the
-        // correction below cannot move an edge — rising toward the middle.
-        let d = boundary_distance(&mask, x, y);
-        interior[i] = d;
-        interior_sum += d;
+    let rim = rim_distance(&mask);
+    let pixels: Vec<(u32, u32)> = mask.iter().collect();
+    let threads = std::thread::available_parallelism()
+        .map_or(1, |n| n.get())
+        .clamp(1, 32);
+    let chunk = pixels.len().div_ceil(threads).max(1);
+    let sampled: Vec<Vec<(usize, f64)>> = {
+        let (ground, frame) = (&*ground, &frame);
+        std::thread::scope(|scope| {
+            let hands: Vec<_> = pixels
+                .chunks(chunk)
+                .map(|part| {
+                    scope.spawn(move || {
+                        part.iter()
+                            .map(|&(x, y)| (idx(x, y), ground(frame.direction(x, y)).max(0.0)))
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .collect();
+            hands
+                .into_iter()
+                .map(|h| h.join().expect("a tile's sampling thread"))
+                .collect()
+        })
+    };
+    for part in &sampled {
+        for &(i, r) in part {
+            relief[i] = r;
+            // How far inside the cell this pixel is. Zero on the boundary — so
+            // the correction below cannot move an edge — rising to the middle.
+            let d = f64::from(rim[i]);
+            interior[i] = d;
+            interior_sum += d;
+        }
     }
 
     let owned = mask.count().max(1) as f64;
@@ -239,7 +334,7 @@ pub fn materialize<S: TileSource>(
             }
             skirt
                 .entry((nx as u16, ny as u16))
-                .or_insert_with(|| hood.relief_at(frame.direction(nx, ny)).max(0.0) as f32);
+                .or_insert_with(|| ground(frame.direction(nx, ny)).max(0.0) as f32);
         }
     }
 
@@ -277,6 +372,10 @@ pub fn materialize<S: TileSource>(
     }
 }
 
+/// How much the hex picture steepens the ground's slope for its hill-shade —
+/// a few metres over a hundred is invisible at true scale.
+pub const SHADE_GAIN: f64 = 3.0;
+
 /// The eight pixel neighbours, straights then diagonals.
 pub(crate) const NEIGHBOURS_8: [(i64, i64); 8] = [
     (1, 0),
@@ -294,26 +393,49 @@ fn idx(x: u32, y: u32) -> usize {
     (y as usize) * TILE_DIM as usize + x as usize
 }
 
-/// How far a pixel is from the edge of the cell, as a weight that is **zero on the
-/// boundary**. Measured by how much of its own neighbourhood is also inside — a
-/// pixel with a neighbour outside the cell is on the edge and gets nothing.
+/// **How far every pixel is from the edge of the cell**, in pixel steps — a
+/// weight that is **zero on the boundary** and rises linearly to the middle:
+/// the shape the column's residual is spread in. One breadth-first sweep from
+/// the rim over the mask (a few tens of milliseconds on 3.5M pixels).
 ///
-/// Cheap on purpose: an exact distance transform over 4M pixels per tile would cost
-/// more than the whole rest of the migration, and all this has to do is vanish at
-/// the seam and be positive inside it.
-fn boundary_distance(mask: &HexMask, x: u32, y: u32) -> f64 {
-    const REACH: u32 = 3;
-    if x < REACH || y < REACH || x + REACH >= TILE_DIM || y + REACH >= TILE_DIM {
-        return 0.0;
-    }
-    for r in 1..=REACH {
-        for (dx, dy) in [(r, 0), (0, r)] {
-            if !mask.contains(x - dx, y - dy) || !mask.contains(x + dx, y + dy) {
-                return (r - 1) as f64;
-            }
+/// It was once capped at three pixels to be cheap, and that made a LIP: the
+/// correction went from nothing at the rim to its whole value three pixels in,
+/// so a residual of twenty metres stood as a twenty-metre wall (or moat) around
+/// every hex — invisible to the eye, a dam to the water, which read half a hex
+/// as lake (2026-10-16). Spread over the hex as a cone it is a swell of a few
+/// centimetres a pixel, and the rim is still exactly the field's.
+fn rim_distance(mask: &HexMask) -> Vec<f32> {
+    let dim = TILE_DIM as i64;
+    let mut dist = vec![u32::MAX; TILE_DIM as usize * TILE_DIM as usize];
+    let mut queue = std::collections::VecDeque::new();
+    for (x, y) in mask.iter() {
+        let on_rim = NEIGHBOURS_8.iter().any(|(dx, dy)| {
+            let (nx, ny) = (x as i64 + dx, y as i64 + dy);
+            nx < 0 || ny < 0 || nx >= dim || ny >= dim || !mask.contains(nx as u32, ny as u32)
+        });
+        if on_rim {
+            dist[idx(x, y)] = 0;
+            queue.push_back((x, y));
         }
     }
-    REACH as f64
+    while let Some((x, y)) = queue.pop_front() {
+        let d = dist[idx(x, y)] + 1;
+        for (dx, dy) in NEIGHBOURS_8 {
+            let (nx, ny) = (x as i64 + dx, y as i64 + dy);
+            if nx < 0 || ny < 0 || nx >= dim || ny >= dim {
+                continue;
+            }
+            let (nx, ny) = (nx as u32, ny as u32);
+            if !mask.contains(nx, ny) || dist[idx(nx, ny)] != u32::MAX {
+                continue;
+            }
+            dist[idx(nx, ny)] = d;
+            queue.push_back((nx, ny));
+        }
+    }
+    dist.into_iter()
+        .map(|d| if d == u32::MAX { 0.0 } else { d as f32 })
+        .collect()
 }
 
 /// Test fixture (shared with the erosion tests): **stratify one column, the

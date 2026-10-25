@@ -1135,6 +1135,30 @@ impl PackBench {
         }
     }
 
+    /// The graph canvas's pointer sample this frame. A press is the canvas's only inside
+    /// its reserved rect — chrome coverage alone would let a click on empty page place or
+    /// delete a state — and never when an open dropdown's menu took the pointer
+    /// (`popup_hit`, the walker's own answer: the cursor is in the menu, or the click was
+    /// spent closing it). It is NOT gated on `hud_hit`: the canvas sits inside the
+    /// full-rect `pk_canvas_pane` panel, whose claim makes `hud_hit` true all over it — the
+    /// gate that left every card dead to the mouse. The wheel is the canvas's unless the
+    /// clip rail under the cursor wants it, or a menu does.
+    fn graph_sample(&self, input: &InputState, popup_hit: bool, over_rail: bool) -> PointerSample {
+        let in_canvas = rect_contains(&self.canvas.area(), self.cursor);
+        PointerSample {
+            cursor: self.cursor,
+            left: input.mouse_left,
+            middle: input.mouse_middle,
+            pressed: input.mouse_left_pressed && !popup_hit && in_canvas,
+            wheel: if over_rail || popup_hit {
+                0.0
+            } else {
+                input.mouse_wheel_delta
+            },
+            inside: in_canvas && !popup_hit,
+        }
+    }
+
     /// The states' names, in order — the graph filler's stable node keys (a card's
     /// hand placement is stored against its state's NAME, so it survives states being
     /// added, removed or reordered). Takes the field rather than `&self` so the
@@ -1158,6 +1182,7 @@ impl PackBench {
                     from: i,
                     to: j,
                     ink: EdgeInk::Idle,
+                    port: None,
                 });
                 refs.push(EdgeRef { from: i, index });
             }
@@ -1666,6 +1691,9 @@ impl Scene for PackBench {
         let frame = run_ui(&tree, &model, &self.ui_styles, &snap, &mut self.ui_state);
         // Copy out what the canvas needs before `frame` is consumed / `self` mutated.
         let over_hud = frame.results.is_on("hud_hit");
+        // An open dropdown's menu took the pointer (the walker's own answer) — what the
+        // graph canvas defers to, see `graph_sample`.
+        let popup_hit = frame.popup_hit;
         let dropped = frame.results.is_on("drag_dropped");
         let drag_is_clip = frame.results.text("drag_kind") == Some("clip");
         let drag_id = frame.results.text("drag_id").map(str::to_string);
@@ -1705,8 +1733,9 @@ impl Scene for PackBench {
         // scene owns no Resolver. One dispatch through the walker, which owns the
         // focus graph, consumes the pointer while it is over the HUD, and fires the
         // screen's DECLARED intents (`on_menu` / `on_tab_*` / `on_mode_*`) as result
-        // names. The canvas and timeline FILLERS take the pointer sample below,
-        // gated on `over_hud` + the reserved rects. ──
+        // names. The canvas and timeline FILLERS take the pointer sample below: the
+        // graph gated on its reserved rect + the walker's popup answer (`graph_sample`
+        // — its panel claims `hud_hit` all over it), the strips on `over_hud` + theirs. ──
         let mut walker = WalkerHandler::hud(&mut self.ui_state, over_hud)
             .with_nav(&tree, &model)
             .with_rects(&frame.rects)
@@ -1773,22 +1802,7 @@ impl Scene for PackBench {
             if input.mouse_wheel_delta != 0.0 && over_rail {
                 self.scroll_clips(input.mouse_wheel_delta);
             }
-            let in_canvas = rect_contains(&self.canvas.area(), self.cursor);
-            let sample = PointerSample {
-                cursor: self.cursor,
-                left: input.mouse_left,
-                middle: input.mouse_middle,
-                // The chrome gets first refusal on a press, and a press outside the
-                // reserved rect is nobody's: chrome coverage alone would let a click
-                // on empty page place or delete a state.
-                pressed: input.mouse_left_pressed && !over_hud && in_canvas,
-                wheel: if over_rail {
-                    0.0
-                } else {
-                    input.mouse_wheel_delta
-                },
-                inside: in_canvas,
-            };
+            let sample = self.graph_sample(input, popup_hit, over_rail);
             let gestures = self.canvas.pointer(&sample, &Self::node_keys(&self.doc));
 
             // ── What a gesture MEANS to a pack — the only half that is this bench's ──
@@ -2098,6 +2112,7 @@ impl PackBench {
             .states()
             .iter()
             .enumerate()
+            // strings-gate-exempt: the card's `IN n · OUT m` degree read-out — pre-existing composed copy the S6 `format!` pass surfaced; tokenize with the PackBench's next slice.
             .map(|(i, st)| format!("IN {} · OUT {}", in_deg[i], st.transitions.len()))
             .collect();
         // The card's second line: the clip's name, or `generated:<gait>` for a state the
@@ -2120,6 +2135,7 @@ impl PackBench {
                 // and the frame graph composites the image into the same rect.
                 icon: true,
                 ports: 0,
+                port_labels: &[],
             })
             .collect();
 
@@ -2740,6 +2756,129 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// **The graph canvas takes the mouse through the REAL walker** — the dead-canvas
+    /// regression: `pk_canvas` sits inside the full-rect `pk_canvas_pane` panel, so the
+    /// walker's `hud_hit` is true all over it, and the press used to be gated on it. Walked
+    /// on the bench's own UI state over the Humanoid pack and handed to the canvas through
+    /// the one `graph_sample`, a press on card 0 is a Press on card 0; and with a dropdown's
+    /// menu open over the canvas, a click on its row is no Press (the walker's
+    /// `popup_hit`). The bench authors no dropdown, so the second half grafts one onto a
+    /// copy of the tree, laid out ahead of the canvas.
+    #[test]
+    fn a_card_press_reaches_the_graph_and_a_menu_row_over_it_does_not() {
+        load_shipped_strings();
+        let Ok(doc) = EditorDoc::load(
+            &pack_path(),
+            &[&base_dir(), &clips_dir(), &locomotion_dir()],
+        ) else {
+            return; // content tree absent in this checkout
+        };
+        let mut bench = PackBench::shipped();
+        bench.doc = Some(doc);
+        bench.refill_clip_rows();
+        let tree = bench.authored.clone().expect("authored tree held");
+
+        // One frame of the graph as `update` drives it: the walk, the canvas seated and
+        // laid out in its reserved rect, the sample, the gestures.
+        struct Walked {
+            events: flicker_canvas::CanvasEvents,
+            hud_hit: bool,
+            popup: Option<[f32; 4]>,
+            canvas: Option<StageRect>,
+        }
+        let step =
+            |bench: &mut PackBench, tree: &UiNode, mouse: Vec2, clicked: bool, down: bool| {
+                let model = bench.model();
+                let snap = UiInput {
+                    mouse,
+                    clicked,
+                    down,
+                    right_down: false,
+                    screen: Vec2::new(1920.0, 1080.0),
+                    wheel: 0.0,
+                    exclusive: false,
+                    motion: Default::default(),
+                };
+                let styles = bench.ui_styles.clone();
+                let f = run_ui(tree, &model, &styles, &snap, &mut bench.ui_state);
+                let canvas = f.surface_rect("pk_canvas");
+                if let Some(r) = canvas {
+                    bench.canvas.seat(r);
+                }
+                bench.canvas.set_mode(PackBench::canvas_mode(bench.tool));
+                let keys = PackBench::node_keys(&bench.doc);
+                bench.canvas.layout(&keys, &[]);
+                bench.cursor = mouse;
+                let mut input = InputState::new();
+                input.mouse_position = mouse;
+                input.mouse_left = down;
+                input.mouse_left_pressed = clicked;
+                let sample = bench.graph_sample(&input, f.popup_hit, false);
+                Walked {
+                    events: bench.canvas.pointer(&sample, &keys),
+                    hud_hit: f.results.is_on("hud_hit"),
+                    popup: f.popup,
+                    canvas,
+                }
+            };
+        let away = Vec2::new(-1.0, -1.0);
+        let seat = step(&mut bench, &tree, away, false, false)
+            .canvas
+            .expect("the graph canvas is reserved");
+        let card0 = bench.canvas.cards()[0];
+        let at = card0.pos + card0.size * 0.5;
+        let w = step(&mut bench, &tree, at, true, true);
+        assert!(w.hud_hit, "the canvas's panel claims the pointer");
+        assert_eq!(
+            w.events.pressed.and_then(|p| p.card),
+            Some(0),
+            "a press on card 0 is a Press on card 0"
+        );
+        step(&mut bench, &tree, at, false, false);
+
+        // A dropdown laid out ahead of the canvas, its field just above it, so its menu
+        // hangs down over the cards.
+        let mut menu = UiNode {
+            component: "select".into(),
+            id: "probe_menu".into(),
+            bind: Some("probe_pick".into()),
+            anchor: Some(flicker::script::UiAnchor::TopLeft),
+            width: Some(240.0),
+            height: Some(30.0),
+            ..Default::default()
+        };
+        menu.offset = [seat.pos.x + 20.0, seat.pos.y - 36.0];
+        menu.children = (0..6)
+            .map(|i| {
+                let mut o = UiNode {
+                    component: "option".into(),
+                    ..Default::default()
+                };
+                o.props.insert("value".into(), Value::Number(i as f64));
+                o
+            })
+            .collect();
+        let mut grafted = tree.clone();
+        grafted.children.insert(0, menu);
+        let field = Vec2::new(seat.pos.x + 140.0, seat.pos.y - 21.0);
+        step(&mut bench, &grafted, field, true, true);
+        let w = step(&mut bench, &grafted, field, false, false);
+        let [mx, my, mw, mh] = w.popup.expect("the dropdown opened");
+        let row = Vec2::new(
+            mx + mw * 0.5,
+            (my + mh).min(seat.pos.y + seat.size.y) - 15.0,
+        );
+        assert!(
+            row.y > seat.pos.y && row.y < my + mh && row.x > seat.pos.x,
+            "a row of the menu lies over the canvas"
+        );
+        let w = step(&mut bench, &grafted, row, true, true);
+        assert!(
+            w.events.pressed.is_none(),
+            "a click on the menu's row is no press on the canvas under it"
+        );
     }
 
     /// Walk the REAL tree with the REAL derived model and gate the authored data:

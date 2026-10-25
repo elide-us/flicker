@@ -97,9 +97,20 @@ pub fn resolve(s: &str) -> Cow<'_, str> {
 /// word. Exempt (the value shapes that are data, not copy): `$token`s (resolve
 /// them instead), no-alphabetic strings, single glyphs, dotted style/section
 /// paths, `lower_snake`/`kebab-case` identifiers (enum-ish data values), and
-/// `%`-format strings. A deliberate exception carries
-/// `// strings-gate-exempt: <reason>` on the SAME line, mirroring the
-/// launcher's sanctioned composed-string precedent.
+/// `%`-format strings.
+///
+/// Also flagged: copy BUILT with `format!` ANYWHERE in the source — the same reading
+/// of its literal (a call split over lines included) — because copy assembled away
+/// from the publish (`pairs.push(format!("inputs {}", …))`, joined and published two
+/// functions later) reaches the screen just the same, and no `.set(` ever shows it.
+/// A DIAGNOSTIC that names its runtime subject first (`"{id}: no rect"`,
+/// `"stages.{source}: no camera"` — a leading `…:` token carrying a placeholder) is not
+/// copy; a plain word before a colon (`"Blocked: {}"`) still is.
+///
+/// A deliberate exception carries `// strings-gate-exempt: <reason>` on the SAME line,
+/// mirroring the launcher's sanctioned composed-string precedent — or on a comment line
+/// of its own, which exempts the STATEMENT that follows it (through its closing `;`), so
+/// a call rustfmt splits over lines is exempted where it starts.
 pub fn raw_model_publish_literals(rust_src: &str) -> Vec<String> {
     fn is_display_copy(v: &str) -> bool {
         if v.starts_with('$') || v.starts_with('%') || v.chars().count() <= 1 {
@@ -163,9 +174,59 @@ pub fn raw_model_publish_literals(rust_src: &str) -> Vec<String> {
         None
     }
 
-    let mut flagged = Vec::new();
-    for (n, line) in rust_src.lines().enumerate() {
+    /// The literal opening `s` (which starts at its `"`), decoded — `\"`, `\\`, `\n`,
+    /// `\t`, `\u{…}` and a `\`-newline continuation — with the byte offset just past it.
+    fn read_literal(s: &str) -> Option<(String, usize)> {
+        let mut out = String::new();
+        let mut chars = s.char_indices().skip(1).peekable();
+        while let Some((i, c)) = chars.next() {
+            match c {
+                '"' => return Some((out, i + 1)),
+                '\\' => match chars.next().map(|(_, e)| e) {
+                    Some('n') => out.push('\n'),
+                    Some('t') => out.push('\t'),
+                    Some('u') => {
+                        let mut hex = String::new();
+                        for (_, h) in chars.by_ref() {
+                            match h {
+                                '{' => {}
+                                '}' => break,
+                                _ => hex.push(h),
+                            }
+                        }
+                        out.extend(u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32));
+                    }
+                    Some('\n') => while chars.next_if(|(_, w)| w.is_whitespace()).is_some() {},
+                    Some(e) => out.push(e),
+                    None => return None,
+                },
+                _ => out.push(c),
+            }
+        }
+        None
+    }
+
+    // Which lines are exempt: a marker on the line itself, or a marker on a comment line
+    // of its own, which carries through the statement that follows (to its closing `;`).
+    let lines: Vec<&str> = rust_src.lines().collect();
+    let mut exempt = vec![false; lines.len()];
+    let mut carrying = false;
+    for (n, line) in lines.iter().enumerate() {
+        let t = line.trim();
         if line.contains("strings-gate-exempt") {
+            exempt[n] = true;
+            carrying = t.starts_with("//");
+            continue;
+        }
+        if carrying {
+            exempt[n] = true;
+            carrying = !t.ends_with(';');
+        }
+    }
+
+    let mut flagged = Vec::new();
+    for (n, line) in lines.iter().enumerate() {
+        if exempt[n] {
             continue;
         }
         for call in [".set(", ".with("] {
@@ -199,6 +260,41 @@ pub fn raw_model_publish_literals(rust_src: &str) -> Vec<String> {
                     }
                 }
             }
+        }
+    }
+
+    // Copy BUILT with `format!`, wherever it is built.
+    let line_of = |at: usize| rust_src[..at].matches('\n').count();
+    for (call, _) in rust_src.match_indices("format!(") {
+        let call_line = line_of(call);
+        if lines
+            .get(call_line)
+            .is_some_and(|l| l.trim_start().starts_with("//"))
+        {
+            continue;
+        }
+        let args = &rust_src[call + "format!(".len()..];
+        let open = args.len() - args.trim_start().len();
+        if !args[open..].starts_with('"') {
+            continue;
+        }
+        let at = call + "format!(".len() + open;
+        let Some((lit, _)) = read_literal(&rust_src[at..]) else {
+            continue;
+        };
+        let lit_line = line_of(at);
+        if exempt[call_line] || exempt[lit_line] {
+            continue;
+        }
+        // A diagnostic names its runtime subject first — `{id}: …`, `stages.{source}: …`.
+        let head = lit.split(' ').next().unwrap_or("");
+        let subject_first = head.ends_with(':') && head.contains('{') && head.contains('}');
+        if subject_first || !is_display_copy(&lit) {
+            continue;
+        }
+        let flag = format!("line {}: `{}`", lit_line + 1, lit);
+        if !flagged.contains(&flag) {
+            flagged.push(flag);
         }
     }
     flagged
@@ -249,6 +345,42 @@ mod tests {
         );
         assert!(all.contains("SETTINGS APPLIED"), ".with copy is flagged");
         assert_eq!(flags.len(), 4, "…and nothing else: {all}");
+    }
+
+    /// Copy BUILT with `format!` away from the publish is flagged where it is built — a
+    /// call split over lines included — while a subject-first diagnostic, an identifier, a
+    /// glyph read-out and an exempted statement are not.
+    #[test]
+    fn composed_copy_is_flagged_wherever_format_builds_it() {
+        let src = r#"
+            pairs.insert(0, format!("inputs {}", wired.join(", ")));
+            out.push(format!("{id}: NO rect"));
+            problems.push(format!("stages.{source}: authors no camera"));
+            let status = format!("Blocked: {}", why);
+            let id = format!("mc_slot_{slot}");
+            let row = format!(
+                "{} wired to {}",
+                a, b
+            );
+            // strings-gate-exempt: a deliberate exception, split over lines
+            m.set(
+                "line",
+                format!("{} frames left", t),
+            );
+            let arrow = format!("\u{2192} {name}");
+            // format!("Commented Out Copy")
+            let tally = format!("{} · {}", a, b);
+        "#;
+        let flags = raw_model_publish_literals(src);
+        let all = flags.join("\n");
+        assert!(all.contains("inputs {}"), "copy pushed into a list: {all}");
+        assert!(
+            all.contains("Blocked: {}"),
+            "a plain word is no subject: {all}"
+        );
+        assert!(all.contains("{} wired to {}"), "a split call: {all}");
+        assert!(all.starts_with("line 2:"), "named at its line: {all}");
+        assert_eq!(flags.len(), 3, "…and nothing else: {all}");
     }
 
     /// One combined test: the global table is process-wide state, so the load and

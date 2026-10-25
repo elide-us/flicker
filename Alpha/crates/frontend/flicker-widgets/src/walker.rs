@@ -128,6 +128,11 @@ pub struct WalkerHandler<'a> {
     /// pane ownership cannot derive (a viewport-only pane has no focusable
     /// members to claim it). Filled by [`Self::with_nav`].
     pane_flagged: std::collections::HashSet<String>,
+    /// Ids of panes authored `"nav": "grid"` — the opt-in 2D d-pad. Inside such a
+    /// pane the d-pad moves GEOMETRICALLY ([`nav_geometric`] over the pane's members,
+    /// so Down from a box lands on the box below it), falling back to the ordinal ring
+    /// at the grid's edge or when no rects were patched. Filled by [`Self::with_nav`].
+    grid_panes: std::collections::HashSet<String>,
     /// Every visible `text_field` with an id — the nodes a text-entry session can
     /// open on, with their authored exits. Filled by [`Self::with_nav`].
     text_fields: Vec<TextFieldNav>,
@@ -190,6 +195,7 @@ impl<'a> WalkerHandler<'a> {
             fired: Vec::new(),
             claimed: std::collections::HashSet::new(),
             pane_flagged: std::collections::HashSet::new(),
+            grid_panes: std::collections::HashSet::new(),
             text_fields: Vec::new(),
             // No tree yet ⇒ no slab ⇒ nothing holds Cancel. `with_nav` reads the real
             // answer off the screen.
@@ -232,6 +238,7 @@ impl<'a> WalkerHandler<'a> {
             &self.claimed,
             &mut self.focusables,
             &mut self.pane_flagged,
+            &mut self.grid_panes,
         );
         // The implied pane follows the retained focus from the first frame — a scene
         // reading `focused_pane` before any signal arrives sees the cursor's pane.
@@ -548,7 +555,18 @@ impl<'a> WalkerHandler<'a> {
                 return;
             }
         }
-        if let Some(id) = nav(&ring, current, dir) {
+        // A GRID pane's member (`"nav": "grid"` on its container, opt-in) moves
+        // GEOMETRICALLY among its peers first — Down from a box is the box below it,
+        // not the next id — and only when nothing lies that way (the grid's edge) or no
+        // rects were patched does it fall back to the ordinal ring.
+        let in_grid = current
+            .and_then(|c| self.focusables.iter().find(|f| f.id == c))
+            .is_some_and(|f| self.grid_panes.contains(&f.group));
+        let geometric = match current {
+            Some(cur) if in_grid => nav_geometric(&ring, cur, dir),
+            _ => None,
+        };
+        if let Some(id) = geometric.or_else(|| nav(&ring, current, dir)) {
             self.ui.request_focus(id);
             // Acquiring the tree (no focus yet) or landing on a subpanel container
             // among a pane's members descends the same way — the cursor never rests
@@ -905,19 +923,25 @@ fn collect_nav(
     }
 }
 
+/// The one pane nav mode a container may author (`"nav": "grid"`): its members move
+/// geometrically under the d-pad (see [`WalkerHandler::move_focus`]).
+pub const GRID_NAV: &str = "grid";
+
 /// The OWNERSHIP pass (nested panes): collect the container nodes the member pass
 /// could not — visible nodes with an id but NO `tab_group` of their own that are
 /// either claimed by members or authored `pane: true`. They join the focusable
 /// list under the EMPTY group (the top-tier ring the left stick cycles), carrying
 /// their authored `nav_ordinal` as the explicit stick-stop order. Also records
 /// every `pane: true` id at ANY depth, so `is_container` covers viewport-only
-/// subpanels the same test covers claimed ones.
+/// subpanels the same test covers claimed ones, and every `"nav": "grid"` id — the
+/// opt-in 2D d-pad over that pane's members.
 fn collect_containers(
     node: &UiNode,
     model: &ValueMap,
     claimed: &std::collections::HashSet<String>,
     focusables: &mut Vec<Focusable>,
     pane_flagged: &mut std::collections::HashSet<String>,
+    grid_panes: &mut std::collections::HashSet<String>,
 ) {
     if !visible(node, model) {
         return;
@@ -926,6 +950,12 @@ fn collect_containers(
         let flagged = crate::config::flag(&node.props, "pane");
         if flagged {
             pane_flagged.insert(node.id.clone());
+        }
+        // `grid` is the one pane nav mode; the shipped-scene gate refuses any other
+        // spelling (`a_pane_nav_mode_is_grid_on_a_container`), so this stays a lookup
+        // rather than a per-frame warning.
+        if crate::config::text(&node.props, "nav") == Some(GRID_NAV) {
+            grid_panes.insert(node.id.clone());
         }
         if node.tab_group.is_empty() && (flagged || claimed.contains(&node.id)) {
             focusables.push(Focusable {
@@ -937,7 +967,7 @@ fn collect_containers(
         }
     }
     for child in &node.children {
-        collect_containers(child, model, claimed, focusables, pane_flagged);
+        collect_containers(child, model, claimed, focusables, pane_flagged, grid_panes);
     }
 }
 
@@ -1987,6 +2017,175 @@ mod tests {
             Some("voice_1"),
             "nothing above voice_1 → no move (the tier does not wrap)"
         );
+    }
+
+    /// **A GRID PANE WALKS IN TWO DIMENSIONS** (opt-in, `"nav": "grid"`). Inside a pane
+    /// that authors it, the d-pad lands on the member that sits that way on screen —
+    /// Down from a box is the box below it — and only where nothing lies that way (the
+    /// grid's edge) or no rects were patched does it fall back to the ordinal ring. A
+    /// pane that does not opt in keeps the ring, exactly as before.
+    #[test]
+    fn a_grid_pane_walks_its_members_in_two_dimensions() {
+        let raw = InputState::new();
+        // A 3×3 grid of boxes `b0..b8` (row-major ordinals) in pane `boxes`.
+        let tree = |grid: bool| {
+            let mut pane = UiNode {
+                id: "boxes".into(),
+                component: "panel".into(),
+                nav_ordinal: 1,
+                ..Default::default()
+            };
+            if grid {
+                pane.props
+                    .insert("nav".into(), flicker_script::Value::Text(GRID_NAV.into()));
+            }
+            for i in 0..9u32 {
+                pane.children.push(button(
+                    &format!("b{i}"),
+                    "boxes",
+                    i + 1,
+                    &format!("open_{i}"),
+                ));
+            }
+            UiNode {
+                id: "root".into(),
+                component: "cell".into(),
+                children: vec![pane],
+                ..Default::default()
+            }
+        };
+        let rects: Vec<(String, [f32; 4])> = (0..9)
+            .map(|i| {
+                let (col, row) = ((i % 3) as f32, (i / 3) as f32);
+                (format!("b{i}"), [col * 50.0, row * 50.0, 40.0, 40.0])
+            })
+            .chain(std::iter::once((
+                "boxes".to_string(),
+                [0.0, 0.0, 140.0, 140.0],
+            )))
+            .collect();
+        let step = |grid: bool, rects: &[(String, [f32; 4])], from: &str, signal| {
+            let mut ui = UiState::new();
+            let mut rc = RouteCtx::new();
+            let tree = tree(grid);
+            let mut h = WalkerHandler::hud(&mut ui, false)
+                .with_nav(&tree, &shown())
+                .with_rects(rects);
+            h.ui.request_focus(from.to_string());
+            h.handle(&press(signal, &raw), &mut rc);
+            h.ui.focused().map(str::to_string)
+        };
+        let grid = |from: &str, signal| step(true, &rects, from, signal);
+        assert_eq!(
+            grid("b0", ActionSignal::NavDown).as_deref(),
+            Some("b3"),
+            "Down → the box below"
+        );
+        assert_eq!(
+            grid("b3", ActionSignal::NavRight).as_deref(),
+            Some("b4"),
+            "Right → beside"
+        );
+        assert_eq!(
+            grid("b4", ActionSignal::NavUp).as_deref(),
+            Some("b1"),
+            "Up → the box above"
+        );
+        assert_eq!(
+            grid("b1", ActionSignal::NavLeft).as_deref(),
+            Some("b0"),
+            "Left → beside"
+        );
+        assert_eq!(
+            grid("b2", ActionSignal::NavDown).as_deref(),
+            Some("b5"),
+            "a column holds"
+        );
+        // The grid's edge: nothing lies that way, so the ordinal ring answers.
+        assert_eq!(
+            grid("b2", ActionSignal::NavRight).as_deref(),
+            Some("b3"),
+            "past the row's end → the next box in order"
+        );
+        assert_eq!(
+            grid("b0", ActionSignal::NavUp).as_deref(),
+            Some("b8"),
+            "above the top row → the ring wraps backward"
+        );
+        // No rects patched (a headless caller): the ring, as before.
+        assert_eq!(
+            step(true, &[], "b0", ActionSignal::NavDown).as_deref(),
+            Some("b1")
+        );
+        // A pane that does NOT opt in keeps the ordinal ring even with rects.
+        assert_eq!(
+            step(false, &rects, "b0", ActionSignal::NavDown).as_deref(),
+            Some("b1")
+        );
+    }
+
+    /// **`nav` is authored only as `grid`, only on a pane container.** The walker reads
+    /// the prop as a lookup (no per-frame warning), so a misspelt mode or a mode on a
+    /// node no member belongs to would be silently inert — this refuses both.
+    #[test]
+    fn a_pane_nav_mode_is_grid_on_a_container() {
+        use std::path::{Path, PathBuf};
+        fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+            for entry in std::fs::read_dir(dir).expect("scenes dir reads").flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else if path.to_string_lossy().ends_with(".scene.json") {
+                    out.push(path);
+                }
+            }
+        }
+        fn nodes<'j>(v: &'j serde_json::Value, out: &mut Vec<&'j serde_json::Value>) {
+            if let Some(o) = v.as_object() {
+                if o.contains_key("component") {
+                    out.push(v);
+                }
+                for child in o.values() {
+                    nodes(child, out);
+                }
+            } else if let Some(a) = v.as_array() {
+                a.iter().for_each(|c| nodes(c, out));
+            }
+        }
+        let dir =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../content/sensorium/scenes");
+        let mut files = Vec::new();
+        walk(&dir, &mut files);
+        assert!(files.len() > 20, "the gate found the shipped scenes");
+        let mut grids = 0;
+        for path in &files {
+            let text = std::fs::read_to_string(path).expect("scene reads");
+            let scene: serde_json::Value = serde_json::from_str(&text).expect("scene parses");
+            let mut all = Vec::new();
+            nodes(&scene, &mut all);
+            let groups: std::collections::HashSet<&str> = all
+                .iter()
+                .filter_map(|n| n.get("tab_group").and_then(|g| g.as_str()))
+                .collect();
+            for n in &all {
+                let Some(mode) = n.get("nav") else { continue };
+                let id = n.get("id").and_then(|i| i.as_str()).unwrap_or("");
+                assert_eq!(
+                    mode.as_str(),
+                    Some(GRID_NAV),
+                    "{}: `{id}` authors nav {mode} — the one pane nav mode is `grid`",
+                    path.display()
+                );
+                let pane = n.get("pane").and_then(|p| p.as_bool()) == Some(true);
+                assert!(
+                    !id.is_empty() && (pane || groups.contains(id)),
+                    "{}: `nav: grid` on `{id}`, which no member belongs to — it would be inert",
+                    path.display()
+                );
+                grids += 1;
+            }
+        }
+        assert!(grids >= 1, "the catalog's slot pane authors the grid mode");
     }
 
     /// The STICK's `Panel*` is a SEPARATE intent from the d-pad's `Nav*` (Aaron

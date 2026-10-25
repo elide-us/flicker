@@ -17,11 +17,14 @@ use serde::Deserialize;
 /// and an atomic number are different namespaces and must not be mixed.
 pub type MaterialId = u8;
 
-/// First id of the reserved exotic-emissive insurance block (`248..=255`) —
-/// ghost/exotic effects are shader-driven first; these 8 slots exist in case
-/// shader-only proves insufficient (Aaron, ruled 2026-08-19). No material may
-/// be defined in the block until released by ruling; the loader gates it.
-pub const RESERVED_EXOTIC_FIRST: MaterialId = 248;
+/// First id of the EMISSIVE slots (`248..=255`) — eight slots held FOR emissive-class
+/// materials, one per curated `palettes.json` glow colour (Aaron, ruled 2026-10-20:
+/// "reserve slots for emissive materials … those would be the emissive slots, not blocked
+/// out" — amending the 2026-08-19 reading of the block as closed exotic insurance). Open
+/// to emissive rows, closed to every other class; [`slot_accepts`] is the one place that
+/// says so, written against this const and never a literal `248`, so the boundary moves
+/// in exactly one place. An emissive material may still live anywhere else (Lava, 62).
+pub const EMISSIVE_FIRST: MaterialId = 248;
 
 /// The folder segment a material's *bundle* lives under: the slot id as a
 /// zero-padded three-digit decimal (`10` → `"010"`).
@@ -51,16 +54,30 @@ pub fn slot_of_dir(seg: &str) -> Option<MaterialId> {
     seg.parse::<MaterialId>().ok()
 }
 
-/// Whether a slot may hold an authored material bundle.
+/// Whether slot `id` may hold a material of render class `class` — THE slot law, and the
+/// ONE predicate every consumer asks: the loader (a `materials.json` row), the
+/// MaterialBench's commit refusal and the PackageBench's promotion gate (a bundle, weighed
+/// by the class of the index row its slot binds) and the Material Catalog's tally (which
+/// slots are still held open for emissive materials).
 ///
-/// `false` for id 0 — that is `Air`, which is never drawn — and for the whole
-/// reserved exotic-emissive block [`RESERVED_EXOTIC_FIRST`]`..=255`, which no
-/// material may occupy until released by ruling (Aaron, 2026-08-19). Written
-/// against the const and never a literal `248`, so the block's boundary moves
-/// in exactly one place.
+/// - Slot `0` is `Air`, never drawn: it holds nothing, whatever the class.
+/// - Slots `1..`[`EMISSIVE_FIRST`] hold any class.
+/// - The emissive slots [`EMISSIVE_FIRST`]`..=255` hold ONLY [`RenderClass::Emissive`]
+///   (ruling 2026-10-20): reserved FOR emissive materials, not blocked.
+///
+/// `class` is the render class of the index row the slot binds — `None` when the index
+/// lists no row there. An unlisted general slot still accepts (a look may be designed
+/// before its row is written, as it always could); an unlisted emissive slot does not —
+/// nothing says what would be there is an emissive material.
 #[must_use]
-pub const fn slot_is_writable(id: MaterialId) -> bool {
-    id != 0 && id < RESERVED_EXOTIC_FIRST
+pub const fn slot_accepts(id: MaterialId, class: Option<RenderClass>) -> bool {
+    if id == 0 {
+        false
+    } else if id >= EMISSIVE_FIRST {
+        matches!(class, Some(RenderClass::Emissive))
+    } else {
+        true
+    }
 }
 
 /// How a material's surface RENDERS — the closed 4-way axis (Aaron, ratified
@@ -159,19 +176,39 @@ mod slot_codec_tests {
         }
     }
 
+    /// THE ACCEPT/REFUSE MATRIX, over every slot and every class (and no row at all):
+    /// Air holds nothing; a general slot holds anything; an emissive slot holds an
+    /// emissive material and nothing else (ruling 2026-10-20) — refusing an unlisted row
+    /// too, since nothing says it would be one.
     #[test]
-    fn air_and_the_reserved_block_are_not_writable_slots() {
-        assert!(!slot_is_writable(0), "slot 0 is Air and is never drawn");
-        for id in RESERVED_EXOTIC_FIRST..=MaterialId::MAX {
-            assert!(
-                !slot_is_writable(id),
-                "slot {id} is inside the reserved exotic-emissive block"
-            );
+    fn the_slot_law_over_every_slot_and_every_class() {
+        const CLASSES: [Option<RenderClass>; 5] = [
+            None,
+            Some(RenderClass::Blendable),
+            Some(RenderClass::HardEdge),
+            Some(RenderClass::Translucent),
+            Some(RenderClass::Emissive),
+        ];
+        for id in 0..=MaterialId::MAX {
+            for class in CLASSES {
+                let want = match id {
+                    0 => false,
+                    _ if id >= EMISSIVE_FIRST => class == Some(RenderClass::Emissive),
+                    _ => true,
+                };
+                assert_eq!(slot_accepts(id, class), want, "slot {id}, class {class:?}");
+            }
         }
-        assert!(slot_is_writable(1));
-        assert!(
-            slot_is_writable(RESERVED_EXOTIC_FIRST - 1),
-            "the last slot below the reserved block is writable"
-        );
+        // The boundary, by name: the last general slot and the first emissive one.
+        assert!(slot_accepts(
+            EMISSIVE_FIRST - 1,
+            Some(RenderClass::HardEdge)
+        ));
+        assert!(!slot_accepts(EMISSIVE_FIRST, Some(RenderClass::HardEdge)));
+        assert!(slot_accepts(EMISSIVE_FIRST, Some(RenderClass::Emissive)));
+        // An emissive material outside the block is legal (Lava keeps 62).
+        assert!(slot_accepts(62, Some(RenderClass::Emissive)));
+        // There are exactly eight emissive slots — one per curated glow colour.
+        assert_eq!(MaterialId::MAX - EMISSIVE_FIRST + 1, 8);
     }
 }

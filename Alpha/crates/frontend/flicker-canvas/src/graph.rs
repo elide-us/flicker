@@ -161,6 +161,10 @@ pub struct GraphNode<'a> {
     /// Connector stubs on the card's right edge. `0` = none, and the whole card is
     /// the connector (which is what a state-machine graph wants).
     pub ports: u8,
+    /// A short label per port, drawn inside the card beside its dot (top to bottom, in
+    /// port order). OPT-IN: empty draws the bare dots, which is every card's look until
+    /// its consumer names its ports.
+    pub port_labels: &'a [&'a str],
 }
 
 /// How an edge should read — the consumer's call, since only it knows what
@@ -181,6 +185,11 @@ pub struct GraphEdge {
     pub from: usize,
     pub to: usize,
     pub ink: EdgeInk,
+    /// The input PORT of the `to` card the edge feeds, when it feeds one: the edge then
+    /// ends ON that port's dot ([`GraphCanvas::layout_with_ports`]), so two edges between
+    /// the same two cards into different ports are two lines, each pickable. `None` runs
+    /// card to card — a state machine's transition, whose whole card is the connector.
+    pub port: Option<usize>,
 }
 
 /// A press the canvas resolved. A card wins over an edge (cards are drawn on top),
@@ -382,8 +391,18 @@ impl GraphCanvas {
     /// placement is keyed by these); `edges` index into the same order.
     ///
     /// Called every frame: it is one pass over the nodes and one over the edges, and
-    /// it is what guarantees that what the pointer picks is what was drawn.
+    /// it is what guarantees that what the pointer picks is what was drawn. Every edge
+    /// runs card to card; a consumer whose edges feed PORTS lays out with
+    /// [`layout_with_ports`](Self::layout_with_ports).
     pub fn layout(&mut self, keys: &[&str], edges: &[GraphEdge]) {
+        self.layout_with_ports(keys, &[], edges);
+    }
+
+    /// [`layout`](Self::layout), with each card's port count (`ports[i]`, the same
+    /// number its [`GraphNode::ports`] draws) so an edge naming a [`GraphEdge::port`]
+    /// ends on that port's dot rather than on the card's border. A card past the end of
+    /// `ports`, or a port past its card's count, falls back to card to card.
+    pub fn layout_with_ports(&mut self, keys: &[&str], ports: &[u8], edges: &[GraphEdge]) {
         let m = &self.metrics;
         let cols = self.columns();
         let size = m.card * self.view.zoom;
@@ -425,7 +444,15 @@ impl GraphCanvas {
                     n: 3,
                 }
             } else {
-                let (p, q) = edge_points(from, to);
+                let port = e.port.and_then(|k| {
+                    let n = *ports.get(e.to)? as usize;
+                    (k < n).then(|| port_point(to, k, n))
+                });
+                let (p, q) = match port {
+                    // Into a port: from the source card's border, straight onto the dot.
+                    Some(q) => (clip_to_border(from, center(from), q), q),
+                    None => edge_points(from, to),
+                };
                 let zero = (Vec2::ZERO, Vec2::ZERO);
                 EdgeGeom {
                     id,
@@ -434,6 +461,192 @@ impl GraphCanvas {
                 }
             });
         }
+    }
+
+    /// Where `key`'s card is hand-placed, in canvas-local (unzoomed) space.
+    pub fn placement(&self, key: &str) -> Option<Vec2> {
+        self.view.placed.get(key).copied()
+    }
+
+    /// Hand-place `key`'s card at `local` (canvas-local, unzoomed) — the consumer's way
+    /// to put a NEW card somewhere sensible (beside the one it was made from) instead of
+    /// the next free grid slot.
+    pub fn place(&mut self, key: &str, local: Vec2) {
+        self.view.placed.insert(key.to_string(), local);
+    }
+
+    /// Forget every hand placement `keep` rejects — a deleted node's card, so a later
+    /// node that happens to take its key does not inherit its position.
+    pub fn retain_placements(&mut self, mut keep: impl FnMut(&str) -> bool) {
+        self.view.placed.retain(|k, _| keep(k));
+    }
+
+    /// Pin every card in `keys` that has no placement yet, in key order, at the first
+    /// default-grid slot no placed card overlaps. On a fresh workspace (nothing placed)
+    /// that is exactly the grid it was showing; afterwards a card that turns up — a node
+    /// made away from the canvas — lands in free space instead of on top of another.
+    /// Grid slots are positional, so without this inserting, deleting or reordering a
+    /// node shifts every card after it; pinned, the arrangement the author is looking at
+    /// stays put whatever happens to the list. Uses the seat's columns — seat first.
+    pub fn pin(&mut self, keys: &[&str]) {
+        let cols = self.columns();
+        let m = self.metrics;
+        let mut slot = 0;
+        for key in keys {
+            if self.view.placed.contains_key(*key) {
+                continue;
+            }
+            // Finite: only so many cards are placed, so a free slot always comes.
+            let at = loop {
+                let at = grid_slot(slot, cols, &m);
+                slot += 1;
+                if !self.occupied(at) {
+                    break at;
+                }
+            };
+            self.view.placed.insert((*key).to_string(), at);
+        }
+    }
+
+    /// Hand-place `key` BESIDE `anchor`'s placement, where a node inserted after the
+    /// selected one belongs: the first free grid step in the column to its right — level
+    /// with it, then below, then above — and failing that the next column out (right,
+    /// then left of the anchor), every candidate kept wholly inside the part of the canvas
+    /// the seat SHOWS, so the new card is never dropped where the author cannot see it.
+    /// Only when the view has no free room at all does it fall back to the first free
+    /// spot below in the column to the right. False (nothing placed) when `anchor` has no
+    /// placement yet; the card then takes free grid space at the next [`pin`](Self::pin).
+    pub fn place_beside(&mut self, key: &str, anchor: &str) -> bool {
+        let Some(from) = self.placement(anchor) else {
+            return false;
+        };
+        let m = self.metrics;
+        let step = m.card + m.gap;
+        // The canvas-local rect the seat shows right now.
+        let lo = self.view.to_local(self.area, self.area.pos);
+        let hi = self
+            .view
+            .to_local(self.area, self.area.pos + self.area.size);
+        let visible = |at: Vec2| {
+            at.x >= lo.x && at.y >= lo.y && at.x + m.card.x <= hi.x && at.y + m.card.y <= hi.y
+        };
+        let rows_fit = ((hi.y - lo.y) / step.y).ceil().max(1.0) as i32 + 1;
+        let cols_fit = ((hi.x - lo.x) / step.x).ceil().max(1.0) as i32 + 1;
+        let columns = (1..=cols_fit).chain((1..=cols_fit).map(|c| -c));
+        for col in columns {
+            let x = from.x + step.x * col as f32;
+            // Level with the anchor, then below it, then above it.
+            let rows = (0..=rows_fit).chain((1..=rows_fit).map(|r| -r));
+            for row in rows {
+                let at = Vec2::new(x, from.y + step.y * row as f32);
+                if visible(at) && !self.occupied(at) {
+                    self.place(key, at);
+                    return true;
+                }
+            }
+        }
+        let mut at = from + Vec2::new(step.x, 0.0);
+        while self.occupied(at) {
+            at.y += step.y;
+        }
+        self.place(key, at);
+        true
+    }
+
+    /// **Bring `key`'s card into view**: pan — never zoom — the least distance that puts
+    /// the card wholly inside the seat (its top-left first, should the card be the larger).
+    /// A no-op when it already is, or has no placement. A consumer calls it after placing
+    /// a card the author is about to work on.
+    pub fn reveal(&mut self, key: &str) {
+        let Some(at) = self.placement(key) else {
+            return;
+        };
+        let a = self.area;
+        let p = self.view.to_screen(a, at);
+        let size = self.metrics.card * self.view.zoom;
+        let shift = |p: f32, size: f32, lo: f32, span: f32| {
+            if p < lo || size > span {
+                lo - p
+            } else if p + size > lo + span {
+                lo + span - (p + size)
+            } else {
+                0.0
+            }
+        };
+        self.view.pan += Vec2::new(
+            shift(p.x, size.x, a.pos.x, a.size.x),
+            shift(p.y, size.y, a.pos.y, a.size.y),
+        );
+    }
+
+    /// Whether a card placed at `at` (canvas-local) would overlap a placed one.
+    fn occupied(&self, at: Vec2) -> bool {
+        let card = self.metrics.card;
+        self.view
+            .placed
+            .values()
+            .any(|p| (p.x - at.x).abs() < card.x && (p.y - at.y).abs() < card.y)
+    }
+
+    /// **Frame the whole graph** on the seat: the zoom (within the metrics' bounds,
+    /// never past 1) and pan that show every card in `keys` — placed or in its grid slot
+    /// — with the grid's pad around them, centred. An empty graph returns to the fresh
+    /// view. Abandons any gesture in flight, as every change of camera does.
+    pub fn fit(&mut self, keys: &[&str]) {
+        self.cancel();
+        let m = self.metrics;
+        let cols = self.columns();
+        let mut lo = Vec2::splat(f32::INFINITY);
+        let mut hi = Vec2::splat(f32::NEG_INFINITY);
+        for (i, key) in keys.iter().enumerate() {
+            let at = self
+                .view
+                .placed
+                .get(*key)
+                .copied()
+                .unwrap_or_else(|| grid_slot(i, cols, &m));
+            lo = lo.min(at);
+            hi = hi.max(at + m.card);
+        }
+        if keys.is_empty() || !lo.is_finite() {
+            self.view.pan = Vec2::ZERO;
+            self.view.zoom = 1.0;
+            return;
+        }
+        let span = (hi - lo).max(Vec2::splat(1.0));
+        let room = (self.area.size - Vec2::splat(m.pad * 2.0)).max(Vec2::splat(1.0));
+        let zoom = (room.x / span.x)
+            .min(room.y / span.y)
+            .clamp(m.zoom_min, m.zoom_max.min(1.0));
+        self.view.zoom = zoom;
+        // Centre the graph: its middle maps to the seat's middle.
+        self.view.pan = self.area.size * 0.5 - (lo + span * 0.5) * zoom;
+    }
+
+    /// **Frame the graph LEGIBLY**: [`fit`](Self::fit) the whole of it when that zoom is
+    /// at least `floor`; when the graph only fits zoomed out past `floor` — titles and
+    /// port labels too small to read — the camera instead sits AT `floor` (within the
+    /// metrics' bounds) centred on `focus`'s card (the selection, the output), and the
+    /// rest of the graph is a pan away. `floor` is the consumer's design value.
+    pub fn fit_legible(&mut self, keys: &[&str], floor: f32, focus: &str) {
+        self.fit(keys);
+        let m = self.metrics;
+        let floor = floor.clamp(m.zoom_min, m.zoom_max);
+        if self.view.zoom >= floor {
+            return;
+        }
+        let cols = self.columns();
+        let Some(at) = keys.iter().position(|k| *k == focus).map(|i| {
+            self.view
+                .placed
+                .get(focus)
+                .copied()
+                .unwrap_or_else(|| grid_slot(i, cols, &m))
+        }) else {
+            return;
+        };
+        self.view.zoom = floor;
+        self.view.pan = self.area.size * 0.5 - (at + m.card * 0.5) * floor;
     }
 
     /// Columns in the default grid. Derived from the UNZOOMED area, so zooming moves
@@ -512,10 +725,7 @@ impl GraphCanvas {
         if k >= n {
             return None;
         }
-        Some(Vec2::new(
-            c.pos.x + c.size.x,
-            c.pos.y + c.size.y * (k as f32 + 1.0) / (n as f32 + 1.0),
-        ))
+        Some(port_point(c, k, n))
     }
 
     /// **Apply this frame's pointer sample.** `keys` must be the same slice the
@@ -717,6 +927,18 @@ impl GraphCanvas {
                         style.port,
                         layer,
                     ));
+                    // The opt-in label: inside the card, right-aligned up to the dot.
+                    if let Some(label) = n.port_labels.get(k) {
+                        let size = m.meta_size * z;
+                        out.push(text_aligned(
+                            label,
+                            Vec2::new(p.x - d - m.card_pad * 0.5 * z, p.y - size * 0.5),
+                            size,
+                            style.meta,
+                            layer,
+                            TextAlign::Right,
+                        ));
+                    }
                 }
             }
         }
@@ -732,6 +954,15 @@ impl GraphCanvas {
             ));
         }
     }
+}
+
+/// Port `k` of `n` on a card's right edge, evenly spaced top to bottom — the ONE
+/// placement the dots, the port picks and a port-fed edge's end all read.
+fn port_point(card: Rect, k: usize, n: usize) -> Vec2 {
+    Vec2::new(
+        card.pos.x + card.size.x,
+        card.pos.y + card.size.y * (k as f32 + 1.0) / (n as f32 + 1.0),
+    )
 }
 
 /// The `i`th default grid slot, in canvas-local coordinates.
@@ -828,6 +1059,18 @@ pub(crate) fn line(a: Vec2, b: Vec2, width: f32, color: [f32; 4], layer: f32) ->
 }
 
 pub(crate) fn text(s: &str, at: Vec2, size: f32, color: [f32; 4], layer: f32) -> HudCommand {
+    text_aligned(s, at, size, color, layer, TextAlign::Left)
+}
+
+/// [`text`] with an alignment — `at.x` is the left edge, the centre or the RIGHT edge.
+pub(crate) fn text_aligned(
+    s: &str,
+    at: Vec2,
+    size: f32,
+    color: [f32; 4],
+    layer: f32,
+    align: TextAlign,
+) -> HudCommand {
     HudCommand::Text {
         x: at.x,
         y: at.y,
@@ -835,7 +1078,7 @@ pub(crate) fn text(s: &str, at: Vec2, size: f32, color: [f32; 4], layer: f32) ->
         size,
         color,
         layer,
-        align: TextAlign::Left,
+        align,
         font: FontRole::Body,
         italic: false,
         bold: false,
@@ -1445,6 +1688,7 @@ mod tests {
             from: 0,
             to: 1,
             ink: EdgeInk::Selected,
+            port: None,
         }];
         c.layout(&keys(&ns), &edges);
         let meta: [&str; 1] = ["IN 0 · OUT 1"];
@@ -1455,6 +1699,7 @@ mod tests {
                 selected: true,
                 icon: true,
                 ports: 0,
+                port_labels: &[],
             },
             GraphNode {
                 title: "Run",
@@ -1591,6 +1836,245 @@ mod tests {
         assert_eq!(c.zoom(), 1.0);
         assert!(c.view.placed.is_empty());
         assert_eq!(c.linking(), None);
+    }
+
+    /// An edge that feeds a PORT ends on that port's dot — so two edges between the same
+    /// two cards into different ports are two lines, and each is the one picked near its
+    /// own end. Without the port it still runs card to card (a state machine's look).
+    #[test]
+    fn edges_into_ports_end_on_their_dots_and_pick_apart() {
+        let mut c = GraphCanvas::new(CanvasMetrics::default());
+        c.seat(area());
+        let ns = names(2);
+        let edges = [
+            GraphEdge {
+                from: 0,
+                to: 1,
+                port: Some(0),
+                ..GraphEdge::default()
+            },
+            GraphEdge {
+                from: 0,
+                to: 1,
+                port: Some(2),
+                ..GraphEdge::default()
+            },
+        ];
+        c.layout_with_ports(&keys(&ns), &[0, 3], &edges);
+        let nodes = [
+            GraphNode::default(),
+            GraphNode {
+                ports: 3,
+                ..GraphNode::default()
+            },
+        ];
+        let dot0 = c.port_center(1, 0, &nodes).unwrap();
+        let dot2 = c.port_center(1, 2, &nodes).unwrap();
+        assert_eq!(c.edges[0].segs[0].1, dot0, "the first edge ends on port 0");
+        assert_eq!(c.edges[1].segs[0].1, dot2, "the second on port 2");
+        assert_ne!(c.edges[0].segs[0], c.edges[1].segs[0], "two lines, not one");
+        // Picked apart: a point along each one, a quarter of the way back from its dot.
+        for (id, dot) in [(0, dot0), (1, dot2)] {
+            let start = c.edges[id].segs[0].0;
+            let near = dot + (start - dot) * 0.25;
+            assert_eq!(
+                c.edge_at(near),
+                Some(id),
+                "edge {id} is picked near its own end"
+            );
+        }
+        // No port count for the card (or a port past it): card to card, as before.
+        c.layout(&keys(&ns), &edges);
+        let (a, b) = edge_points(c.cards()[0], c.cards()[1]);
+        assert_eq!(c.edges[0].segs[0], (a, b));
+    }
+
+    /// Port labels are OPT-IN: a card that names its ports draws one label beside each
+    /// dot, inside the card; every other card draws the bare dots it always did.
+    #[test]
+    fn port_labels_are_opt_in_and_sit_beside_their_dots() {
+        let mut c = GraphCanvas::new(CanvasMetrics::default());
+        c.seat(area());
+        let ns = names(2);
+        c.layout(&keys(&ns), &[]);
+        let labels = ["base", "height"];
+        let nodes = [
+            GraphNode {
+                title: "out",
+                ports: 2,
+                port_labels: &labels,
+                ..GraphNode::default()
+            },
+            GraphNode {
+                title: "plain",
+                ports: 2,
+                ..GraphNode::default()
+            },
+        ];
+        let mut out = Vec::new();
+        c.draw(&nodes, &[], &CanvasStyle::blank(), 0.0, &mut out);
+        let texts: Vec<(&str, f32, TextAlign)> = out
+            .iter()
+            .filter_map(|cmd| match cmd {
+                HudCommand::Text { text, x, align, .. } => Some((text.as_str(), *x, *align)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            texts.iter().map(|t| t.0).collect::<Vec<_>>(),
+            ["out", "base", "height", "plain"],
+            "labels on the opted-in card only"
+        );
+        let card = c.cards()[0];
+        for (label, x, align) in &texts[1..3] {
+            assert_eq!(*align, TextAlign::Right, "{label} ends at its dot");
+            assert!(
+                *x < card.pos.x + card.size.x && *x > card.pos.x,
+                "{label} sits inside its card"
+            );
+        }
+    }
+
+    /// PINNED, the arrangement stays put: every card is hand-placed where its grid slot
+    /// put it, so a node inserted at the front shifts nothing; a placement can be set for
+    /// a new card and pruned for a deleted one.
+    #[test]
+    fn pinned_cards_stay_put_when_the_list_changes() {
+        let (mut c, ns) = seated(4);
+        let before: Vec<Rect> = c.cards().to_vec();
+        c.pin(&keys(&ns));
+        let mut shifted = names(4);
+        shifted.insert(0, "State new".into());
+        c.layout(&keys(&shifted), &[]);
+        for (i, r) in before.iter().enumerate() {
+            assert_eq!(c.cards()[i + 1].pos, r.pos, "card {i} did not move");
+        }
+        // Pinned again, the newcomer takes FREE grid space — never a card's spot.
+        c.pin(&keys(&shifted));
+        let fresh = c.placement("State new").expect("pinned");
+        for key in keys(&ns) {
+            let p = c.placement(key).expect("still pinned");
+            assert!(
+                (p.x - fresh.x).abs() >= c.metrics().card.x
+                    || (p.y - fresh.y).abs() >= c.metrics().card.y,
+                "the newcomer landed on {key}"
+            );
+        }
+        c.place("State new", Vec2::new(900.0, 40.0));
+        assert_eq!(c.placement("State new"), Some(Vec2::new(900.0, 40.0)));
+        c.retain_placements(|k| k != "State 2");
+        assert_eq!(
+            c.placement("State 2"),
+            None,
+            "a deleted card's placement goes"
+        );
+        assert!(c.placement("State 1").is_some(), "the rest stay");
+    }
+
+    /// A card placed BESIDE another sits one grid step to its right, stepping down past
+    /// any card already there; an anchor with no placement places nothing.
+    #[test]
+    fn a_card_placed_beside_another_lands_in_free_space_to_its_right() {
+        let (mut c, ns) = seated(3);
+        c.pin(&keys(&ns));
+        let m = *c.metrics();
+        let a = c.placement("State 0").unwrap();
+        assert!(c.place_beside("New A", "State 0"));
+        // State 1 already sits one step right of State 0, so the newcomer steps down.
+        let step = Vec2::new(m.card.x + m.gap.x, m.card.y + m.gap.y);
+        assert_eq!(c.placement("State 1"), Some(a + Vec2::new(step.x, 0.0)));
+        assert_eq!(c.placement("New A"), Some(a + step));
+        assert!(!c.place_beside("New B", "nobody"));
+        assert_eq!(c.placement("New B"), None);
+    }
+
+    /// A card placed beside one at the BOTTOM of the view does not drop below the seat's
+    /// edge: it stays inside what the seat shows (here, level with or above the anchor).
+    #[test]
+    fn a_card_placed_beside_one_at_the_view_bottom_stays_on_the_seat() {
+        let (mut c, ns) = seated(1);
+        let m = *c.metrics();
+        // An anchor as low as the seat shows, with its right-hand neighbour taken.
+        let a = area();
+        let low = Vec2::new(m.pad, a.size.y - m.card.y - 4.0);
+        c.place(&ns[0], low);
+        c.place("Right", low + Vec2::new(m.card.x + m.gap.x, 0.0));
+        assert!(c.place_beside("New", &ns[0]));
+        let at = c.placement("New").unwrap();
+        assert!(
+            at.y + m.card.y <= a.size.y && at.y >= 0.0 && at.x + m.card.x <= a.size.x,
+            "the new card {at:?} lies off the seat"
+        );
+        assert!(at.y < low.y, "no room below, so it goes above");
+    }
+
+    /// REVEAL pans the least distance that brings a card wholly onto the seat, and leaves
+    /// a card already on it (and the zoom) alone.
+    #[test]
+    fn reveal_pans_a_card_onto_the_seat() {
+        let (mut c, ns) = seated(2);
+        c.pin(&keys(&ns));
+        let pan = c.view.pan;
+        c.reveal(&ns[1]);
+        assert_eq!(c.view.pan, pan, "a card on the seat is left alone");
+        c.place("Far", Vec2::new(5000.0, -900.0));
+        c.reveal("Far");
+        c.layout(&["Far"], &[]);
+        let r = c.cards()[0];
+        let a = area();
+        assert!(
+            r.pos.x >= a.pos.x - 0.5
+                && r.pos.y >= a.pos.y - 0.5
+                && r.pos.x + r.size.x <= a.pos.x + a.size.x + 0.5
+                && r.pos.y + r.size.y <= a.pos.y + a.size.y + 0.5,
+            "{r:?} is still off the seat"
+        );
+        assert_eq!(c.zoom(), 1.0, "reveal never zooms");
+    }
+
+    /// FIT, LEGIBLY: a graph that fits at a readable zoom is fitted whole; one that would
+    /// need a zoom below the floor is framed AT the floor, centred on the focus card.
+    #[test]
+    fn a_legible_fit_never_zooms_past_its_floor() {
+        let (mut c, ns) = seated(4);
+        c.fit_legible(&keys(&ns), 0.75, &ns[0]);
+        assert_eq!(c.zoom(), 1.0, "four cards fit at full size");
+        let (mut big, many) = seated(60);
+        big.fit_legible(&keys(&many), 0.75, &many[30]);
+        assert_eq!(big.zoom(), 0.75, "sixty cards would not fit legibly");
+        big.layout(&keys(&many), &[]);
+        let focus = big.cards()[30];
+        let mid = area().pos + area().size * 0.5;
+        assert!(
+            (focus.pos + focus.size * 0.5 - mid).length() < 0.5,
+            "the focus card is centred on the seat"
+        );
+    }
+
+    /// FIT frames the whole graph on the seat: every card inside, centred, never zoomed
+    /// past 1 — and an empty graph is the fresh view.
+    #[test]
+    fn fit_frames_every_card_inside_the_seat() {
+        let (mut c, ns) = seated(18);
+        c.fit(&keys(&ns));
+        c.layout(&keys(&ns), &[]);
+        let a = area();
+        for (i, r) in c.cards().iter().enumerate() {
+            assert!(
+                r.pos.x >= a.pos.x - 0.5
+                    && r.pos.y >= a.pos.y - 0.5
+                    && r.pos.x + r.size.x <= a.pos.x + a.size.x + 0.5
+                    && r.pos.y + r.size.y <= a.pos.y + a.size.y + 0.5,
+                "card {i} {r:?} is off the seat"
+            );
+        }
+        assert!(c.zoom() <= 1.0);
+        // A small graph is not blown up past 1.
+        let (mut small, two) = seated(2);
+        small.fit(&keys(&two));
+        assert_eq!(small.zoom(), 1.0);
+        small.fit(&[]);
+        assert_eq!((small.view.pan, small.zoom()), (Vec2::ZERO, 1.0));
     }
 
     /// An unseated canvas (an off-screen surface reserves a zero rect) picks nothing

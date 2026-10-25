@@ -40,7 +40,7 @@
             "text_size": 12,
             "size": 20,
             "align": "center",
-            "color": "$dim"
+            "color": "modal.body.color"
           },
           {
             "component": "row",
@@ -59,7 +59,7 @@
                     "text": "$modal_conflict_existing",
                     "text_size": 11,
                     "size": 18,
-                    "color": "$dim"
+                    "color": "modal.body.color"
                   },
                   {
                     "component": "text",
@@ -82,7 +82,7 @@
                     "text": "$modal_conflict_incoming",
                     "text_size": 11,
                     "size": 18,
-                    "color": "$dim"
+                    "color": "modal.body.color"
                   },
                   {
                     "component": "text",

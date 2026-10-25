@@ -1,6 +1,6 @@
 [package]
 name = "flicker-packagebench"
-version = "0.1.11"
+version = "0.1.12"
 edition.workspace = true
 license.workspace = true
 publish = false
@@ -32,8 +32,10 @@ flicker-shell.workspace = true
 # reversible file operations the bench's commands wrap.
 flicker-content.workspace = true
 # The material catalog's own vocabulary. A staged material bundle is named for
-# the SLOT it defines, so the Review tab reads a slot id off a folder segment
-# and gates the reserved exotic block — both of which belong to the catalog.
+# the SLOT it defines, so the Review tab reads a slot id off a folder segment and
+# weighs it by the ONE slot law (`slot_accepts`) with the class of the index row
+# the slot binds (read from the catalog's own loader) — at review and at promote —
+# all of which belong to the catalog.
 # Taken DIRECTLY rather than through a flicker-content re-export: that crate
 # does not own this vocabulary, and a door left open in it would be a second
 # spelling of where the reserved boundary lives (D-CODEC).
@@ -41,8 +43,10 @@ flicker-materials.workspace = true
 # The bundle's MAP SET has one owner: `flicker_texture::MapKind::ALL` says how
 # many maps a finished bake leaves, so the Review tab's completeness check reads
 # that arity from the crate that emits the maps rather than restating the
-# number. flicker-texture is a pure CPU leaf (flicker-primitive + flicker-
-# materials + serde) — it reaches no renderer.
+# number — and its DOCUMENT has one loader, `flicker_texture::load_material_json`
+# (the v2 material graph MaterialBench commits, or a v1 recipe), which the Review
+# tab reads the slot claim through. flicker-texture is a pure CPU leaf
+# (flicker-primitive + flicker-materials + serde) — it reaches no renderer.
 flicker-texture.workspace = true
 # The `.epoch` format's one home — the Review tab stands a staged world back up
 # before it will let it be promoted.

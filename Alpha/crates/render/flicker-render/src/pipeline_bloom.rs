@@ -12,12 +12,18 @@
 //! filtering sampler) and ONE uniform buffer, differing only in the source they read and the
 //! target they write:
 //!
-//! | draw       | source                | target        | blend        |
-//! |------------|-----------------------|---------------|--------------|
-//! | bright     | the surface `hdr`     | scratch **a** | overwrite    |
-//! | blur H     | scratch **a**         | scratch **b** | overwrite    |
-//! | blur V     | scratch **b**         | scratch **a** | overwrite    |
-//! | composite  | scratch **a**         | the `hdr`     | ADD, COLOR   |
+//! | draw       | source                | target        | blend                          |
+//! |------------|-----------------------|---------------|--------------------------------|
+//! | bright     | the surface `hdr`     | scratch **a** | overwrite                      |
+//! | blur H     | scratch **a**         | scratch **b** | overwrite                      |
+//! | blur V     | scratch **b**         | scratch **a** | overwrite                      |
+//! | composite  | scratch **a**         | the `hdr`     | colour ADD, alpha coverage OVER |
+//!
+//! The composite writes ALPHA too: the glow's coverage (its brightest channel, saturated),
+//! blended `a = cov + a·(1 − cov)`. An opaque `hdr` stays opaque (every pre-existing stage);
+//! a transparent-cleared one — a material sample in a panel's well — gains alpha exactly where
+//! the halo has light, so the halo survives the tonemap's alpha passthrough and the panel's
+//! straight-alpha composite instead of being blended away at `a = 0`.
 //!
 //! The bright pass's read of the SURFACE hdr is cached per HDR id via [`Self::bind_bright`] —
 //! the EXACT precedent the tonemap uses for its per-surface HDR bind (`pipeline_tonemap.rs`),
@@ -137,8 +143,8 @@ impl BloomPipeline {
 
         // Every draw is a fullscreen triangle into an HDR_FORMAT target over the ONE layout;
         // only the fragment entry point and the blend differ. `blend = None` overwrites (the
-        // bright + blur targets); the composite ADDS with a COLOR write-mask so the hdr alpha
-        // (the tonemap's passthrough) is never touched.
+        // bright + blur targets); the composite ADDS its colour and blends its coverage OVER
+        // the hdr alpha (the tonemap's passthrough), writing all four channels.
         let make = |entry: &str, blend: Option<wgpu::BlendState>, mask: wgpu::ColorWrites| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("flicker.bloom.pipeline"),
@@ -174,20 +180,25 @@ impl BloomPipeline {
                 cache: None,
             })
         };
-        // `out = src + dst` — the blurred bright buffer ADDS to the hdr already there.
+        // Colour: `out = src + dst` — the blurred bright buffer ADDS to the hdr already there.
+        // Alpha: `out = cov + dst·(1 − cov)` — the glow's coverage (`fs_composite`'s alpha)
+        // laid OVER the hdr's: an opaque hdr stays at 1, a transparent one takes the coverage.
         let additive = wgpu::BlendState {
             color: wgpu::BlendComponent {
                 src_factor: wgpu::BlendFactor::One,
                 dst_factor: wgpu::BlendFactor::One,
                 operation: wgpu::BlendOperation::Add,
             },
-            // Alpha is write-masked off below, so this component is inert; keep it valid.
-            alpha: wgpu::BlendComponent::REPLACE,
+            alpha: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                operation: wgpu::BlendOperation::Add,
+            },
         };
         let bright = make("fs_bright", None, wgpu::ColorWrites::ALL);
         let blur_h = make("fs_blur_h", None, wgpu::ColorWrites::ALL);
         let blur_v = make("fs_blur_v", None, wgpu::ColorWrites::ALL);
-        let composite = make("fs_composite", Some(additive), wgpu::ColorWrites::COLOR);
+        let composite = make("fs_composite", Some(additive), wgpu::ColorWrites::ALL);
 
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("flicker.bloom.sampler"),
@@ -463,6 +474,170 @@ mod tests {
         assert!(
             wgsl.contains("c * bloom.params.z"),
             "bloom.wgsl's composite must scale the bloom by intensity before the additive blend"
+        );
+        // …and writes the glow's COVERAGE as alpha (its brightest channel, saturated) — the
+        // half of the composite a transparent-cleared stage's halo depends on. The GPU half
+        // is `a_halo_over_a_void_stage_writes_its_coverage`.
+        assert!(
+            wgsl.contains("saturate(max(glow.r, max(glow.g, glow.b)))"),
+            "bloom.wgsl's composite must write the glow's coverage as alpha"
+        );
+    }
+
+    /// One `rgba16f` texel's half-float as an `f32` — the test readback's decoder (the crate
+    /// carries no half-float type, and the readback is the only reader).
+    fn half(bits: u16) -> f32 {
+        let sign = if bits & 0x8000 == 0 { 1.0 } else { -1.0 };
+        let exp = i32::from((bits >> 10) & 0x1f);
+        let man = bits & 0x3ff;
+        sign * match exp {
+            0 => f32::from(man) * (-24.0_f32).exp2(),
+            31 if man == 0 => f32::INFINITY,
+            31 => f32::NAN,
+            e => (1.0 + f32::from(man) / 1024.0) * ((e - 15) as f32).exp2(),
+        }
+    }
+
+    /// **GATE (GPU-optional) — a halo over a TRANSPARENT stage keeps its light.** A material
+    /// sample in a panel's well clears its hdr to `[0, 0, 0, 0]`, so every halo texel past the
+    /// body's edge starts at alpha 0 — and the tonemap passes alpha through and the panel
+    /// composite is straight alpha, so a composite that added colour but no alpha would have
+    /// the whole halo blended away. Seeds a void 64² hdr with one opaque 4×4 block far above
+    /// the threshold, runs the real three-stage chain, READS THE HDR BACK, and asserts: texels
+    /// just outside the block gained coverage (alpha > 0) and light, a texel far beyond the
+    /// blur's reach stayed exactly void, and the block itself stayed opaque. Skips cleanly with
+    /// no GPU adapter. (The crate had no readback helper; the copy + map below is the smallest
+    /// one that works, local to this test.)
+    #[test]
+    fn a_halo_over_a_void_stage_writes_its_coverage() {
+        let Some((device, queue)) =
+            crate::pipeline_mesh::tests::test_device("flicker.bloom_test.alpha")
+        else {
+            eprintln!("a_halo_over_a_void_stage_writes_its_coverage: no GPU adapter — skipping");
+            return;
+        };
+        device.push_error_scope(wgpu::ErrorFilter::Validation);
+        // 64 texels × 8 bytes = 512 bytes a row: already the 256-byte copy alignment.
+        const N: u32 = 64;
+        let mut pipeline = BloomPipeline::new(&device);
+        pipeline.set_uniform(&queue, BloomUniform::new(N / 2, N / 2, 1.0, 0.5, 0.6, 1.0));
+        let make = |n: u32, usage: wgpu::TextureUsages, label: &str| {
+            let tex = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d {
+                    width: n,
+                    height: n,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: crate::HDR_FORMAT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | usage,
+                view_formats: &[],
+            });
+            let view = tex.create_view(&Default::default());
+            (tex, view)
+        };
+        let copy = wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC;
+        let (hdr, hdr_view) = make(N, copy, "flicker.bloom_test.void_hdr");
+        let (_a, a_view) = make(N / 2, wgpu::TextureUsages::empty(), "flicker.bloom_test.a");
+        let (_b, b_view) = make(N / 2, wgpu::TextureUsages::empty(), "flicker.bloom_test.b");
+
+        // The void stage: every texel [0, 0, 0, 0] but one OPAQUE 4×4 block of radiance 8.0
+        // (half-float 0x4800; alpha 1.0 = 0x3C00) at x, y in 30..34 — the sample's body.
+        let mut texels = vec![[0u16; 4]; (N * N) as usize];
+        for y in 30..34 {
+            for x in 30..34 {
+                texels[(y * N + x) as usize] = [0x4800, 0x4800, 0x4800, 0x3C00];
+            }
+        }
+        let extent = wgpu::Extent3d {
+            width: N,
+            height: N,
+            depth_or_array_layers: 1,
+        };
+        let layout = wgpu::ImageDataLayout {
+            offset: 0,
+            bytes_per_row: Some(N * 8),
+            rows_per_image: Some(N),
+        };
+        queue.write_texture(
+            hdr.as_image_copy(),
+            bytemuck::cast_slice(&texels),
+            layout,
+            extent,
+        );
+
+        pipeline.bind_bright(&device, 7, &hdr_view);
+        pipeline.bind_scratch(&device, &a_view, &b_view);
+        let readback = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("flicker.bloom_test.readback"),
+            size: u64::from(N * N * 8),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut enc = device.create_command_encoder(&Default::default());
+        pipeline.encode(&mut enc, &hdr_view, &a_view, &b_view);
+        enc.copy_texture_to_buffer(
+            hdr.as_image_copy(),
+            wgpu::ImageCopyBuffer {
+                buffer: &readback,
+                layout,
+            },
+            extent,
+        );
+        queue.submit([enc.finish()]);
+
+        let slice = readback.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |mapped| {
+            let _ = tx.send(mapped);
+        });
+        device.poll(wgpu::Maintain::Wait);
+        rx.recv()
+            .expect("the map callback ran")
+            .expect("the readback maps");
+        let bytes = slice.get_mapped_range();
+        let at = |x: u32, y: u32| -> [f32; 4] {
+            let i = ((y * N + x) * 8) as usize;
+            std::array::from_fn(|c| {
+                half(u16::from_le_bytes([bytes[i + 2 * c], bytes[i + 2 * c + 1]]))
+            })
+        };
+
+        // Just outside the body, on every side: the halo has light AND coverage.
+        for (x, y) in [(36, 32), (27, 32), (32, 36), (32, 27)] {
+            let [r, g, b, a] = at(x, y);
+            assert!(
+                a > 0.0 && r > 0.0 && g > 0.0 && b > 0.0,
+                "the halo at ({x}, {y}) must carry light and coverage over a void stage: \
+                 {:?}",
+                [r, g, b, a]
+            );
+        }
+        // Far beyond the blur's reach the void stays void — coverage only where light is.
+        assert_eq!(at(0, 0), [0.0; 4], "a texel no glow reaches stays void");
+        assert_eq!(
+            at(N - 1, 0)[3],
+            0.0,
+            "a texel no glow reaches stays transparent"
+        );
+        // The body itself stays opaque: `cov + 1 * (1 - cov)` is 1.
+        assert_eq!(
+            at(32, 32)[3],
+            1.0,
+            "an opaque texel stays opaque under the glow"
+        );
+        drop(bytes);
+        readback.unmap();
+
+        let err = pollster::block_on(device.pop_error_scope());
+        assert!(
+            err.is_none(),
+            "the bloom readback failed validation: {err:?}"
         );
     }
 

@@ -1,6 +1,6 @@
 [package]
 name = "prism-alpha"
-version = "0.1.11"
+version = "0.1.12"
 edition.workspace = true
 license.workspace = true
 publish = false
@@ -23,17 +23,18 @@ flicker-shell.workspace = true
 # The lib-ified scenes this launcher hosts (one `SceneEntry` each). Pack Editor is a
 # raw `impl App`, not a `Scene` yet, so it is NOT here until it is converted.
 flicker-clicktrainer = { version = "0.1.11", path = "../crates/adventurer/flicker-clicktrainer" }
-flicker-componentcatalog = { version = "0.1.11", path = "../crates/devmode/flicker-componentcatalog" }
-flicker-controllertester = { version = "0.1.11", path = "../crates/adventurer/flicker-controllertester" }
+flicker-componentcatalog = { version = "0.1.12", path = "../crates/devmode/flicker-componentcatalog" }
+flicker-materialcatalog = { version = "0.1.12", path = "../crates/devmode/flicker-materialcatalog" }
+flicker-controllertester = { version = "0.1.12", path = "../crates/adventurer/flicker-controllertester" }
 flicker-solarbirth = { version = "0.1.11", path = "../crates/adventurer/flicker-solarbirth" }
-flicker-packbench = { version = "0.1.11", path = "../crates/devmode/flicker-packbench" }
+flicker-packbench = { version = "0.1.12", path = "../crates/devmode/flicker-packbench" }
 flicker-pocclusters = { version = "0.1.11", path = "../crates/adventurer/flicker-pocclusters" }
 flicker-csgtest = { version = "0.1.11", path = "../crates/gamemaster/flicker-csgtest" }
 flicker-meshbench = { version = "0.1.11", path = "../crates/devmode/flicker-meshbench" }
 flicker-populous = { version = "0.1.11", path = "../crates/gamemaster/flicker-populous" }
-flicker-worldbench = { version = "0.1.11", path = "../crates/gamemaster/flicker-worldbench" }
-flicker-materialbench = { version = "0.1.11", path = "../crates/devmode/flicker-materialbench" }
-flicker-packagebench = { version = "0.1.11", path = "../crates/devmode/flicker-packagebench" }
+flicker-worldbench = { version = "0.1.12", path = "../crates/gamemaster/flicker-worldbench" }
+flicker-materialbench = { version = "0.1.12", path = "../crates/devmode/flicker-materialbench" }
+flicker-packagebench = { version = "0.1.12", path = "../crates/devmode/flicker-packagebench" }
 flicker-modelview = { version = "0.1.11", path = "../crates/devmode/flicker-modelview" }
 # Declares this executable's content roots (content.json) before any scene loads.
 flicker-content.workspace = true

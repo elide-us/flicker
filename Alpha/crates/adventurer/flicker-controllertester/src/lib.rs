@@ -1177,6 +1177,7 @@ impl Scene for ControllerTester {
                         * 1000.0;
                     let stale = age_ms > 100.0;
                     let dseq = prev_latch.map_or(0, |p| f.seq.saturating_sub(p.seq));
+                    // strings-gate-exempt: the tester's raw device read-out (axis labels beside live numbers) — pre-existing composed copy the S6 `format!` pass surfaced; tokenize with the tester's next slice.
                     r.draw_text(
                         &format!(
                             "seq {}  (\u{0394}+{})    age {:.1} ms    {}",
@@ -1194,6 +1195,7 @@ impl Scene for ControllerTester {
                     let p = prev_latch.unwrap_or(f);
                     let dl = f.left_stick - p.left_stick;
                     let dr = f.right_stick - p.right_stick;
+                    // strings-gate-exempt: the tester's raw device read-out (axis labels beside live numbers) — pre-existing composed copy the S6 `format!` pass surfaced; tokenize with the tester's next slice.
                     r.draw_text(
                         &format!(
                             "L stick  ({:+.2}, {:+.2})    \u{0394}({:+.2}, {:+.2})",
@@ -1204,6 +1206,7 @@ impl Scene for ControllerTester {
                         TXT,
                     );
                     ay += 18.0;
+                    // strings-gate-exempt: the tester's raw device read-out (axis labels beside live numbers) — pre-existing composed copy the S6 `format!` pass surfaced; tokenize with the tester's next slice.
                     r.draw_text(
                         &format!(
                             "R stick  ({:+.2}, {:+.2})    \u{0394}({:+.2}, {:+.2})",
@@ -1214,6 +1217,7 @@ impl Scene for ControllerTester {
                         TXT,
                     );
                     ay += 18.0;
+                    // strings-gate-exempt: the tester's raw device read-out (axis labels beside live numbers) — pre-existing composed copy the S6 `format!` pass surfaced; tokenize with the tester's next slice.
                     r.draw_text(
                         &format!(
                             "L trig   {:.2}         \u{0394}{:+.2}",
@@ -1225,6 +1229,7 @@ impl Scene for ControllerTester {
                         TXT,
                     );
                     ay += 18.0;
+                    // strings-gate-exempt: the tester's raw device read-out (axis labels beside live numbers) — pre-existing composed copy the S6 `format!` pass surfaced; tokenize with the tester's next slice.
                     r.draw_text(
                         &format!(
                             "R trig   {:.2}         \u{0394}{:+.2}",
@@ -1320,7 +1325,7 @@ impl Scene for ControllerTester {
                     col,
                 );
                 let mid = match layer.declares {
-                    Some(c) => format!("ctx {}", ctx_label(c)),
+                    Some(c) => format!("ctx {}", ctx_label(c)), // strings-gate-exempt: the tester's raw context read-out — pre-existing, surfaced by the S6 `format!` pass
                     None => layer.note.to_string(),
                 };
                 r.draw_text(

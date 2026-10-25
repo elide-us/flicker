@@ -1,11 +1,12 @@
 //! The emissive colour palette — a bounded, DATA-DRIVEN set of prefab glow colours
 //! (`content/data/palettes.json`, `palettes.emissive`).
 //!
-//! The bench writes a chosen entry VERBATIM into `recipe.out.emissive` and snaps Roll's
-//! random glow to the nearest entry, so emissive colours stay bounded (the material-set
-//! budget invariant, MCP `B46FFC37`). Values are the recipe's native colour domain
-//! (map byte / 255) with NO colour-space conversion — the same convention every shipped
-//! ramp stop and the rolled `hsv()` glow already use.
+//! The MaterialBench writes a chosen entry VERBATIM into `recipe.out.emissive` and snaps
+//! Roll's random glow to the nearest entry, so emissive colours stay bounded (the
+//! material-set budget invariant, MCP `B46FFC37`). Values are the recipe's native colour
+//! domain (map byte / 255) with NO colour-space conversion — the same convention every
+//! shipped ramp stop and the rolled `hsv()` glow already use. Lives here, beside the sample
+//! that shows a glow, so every consumer of the curated set reads the one loader.
 
 use std::path::Path;
 
@@ -104,45 +105,62 @@ impl GlowPalette {
     }
 }
 
-/// Inject one style block per palette entry into the merged `ui_styles`, under
-/// `materialbench.glowsw.<id>` (resting) and `materialbench.glowsw.<id>_sel` (selected) — LITERAL
-/// rgba, the godmode `inject_legend_styles` pattern (this runs AFTER token resolution, so
-/// no `$tokens`). The swatch is a `button`: `fill_top`/`fill_bot` carry the palette colour
-/// through every button state, a border marks selection, and the glow halo is the colour
-/// on focus. Call from `enter()` after `load_shared_styles`, and from the tests' `draw()`
-/// helper, so the drawn-frame gates exercise the real look.
-///
-/// `style_bind` values escape the cross-scene style-path gate (they ride the Model
-/// channel), so a bench test must fail-loud on any `glowsw` path that resolves to nothing
-/// (drift-gate law 8634C200).
-pub fn inject_glow_styles(ui_styles: &mut serde_json::Value, palette: &GlowPalette) {
-    let Some(root) = ui_styles.as_object_mut() else {
-        return;
-    };
-    let sw = root
-        .entry("materialbench")
-        .or_insert_with(|| serde_json::json!({}));
-    let Some(sw) = sw.as_object_mut() else { return };
-    let glowsw = sw.entry("glowsw").or_insert_with(|| serde_json::json!({}));
-    let Some(glowsw) = glowsw.as_object_mut() else {
-        return;
-    };
-    for e in &palette.entries {
-        let [r, g, b] = e.rgb;
-        let fill = serde_json::json!([r, g, b, 1.0]);
-        glowsw.insert(
-            e.id.clone(),
-            serde_json::json!({
-                "fill_top": fill, "fill_bot": fill,
-                "border": [0.12, 0.12, 0.14, 1.0], "border_w": 1, "radius": 3
-            }),
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The repo's shipped palette — `Alpha/content/data/palettes.json`, the file every
+    /// consumer loads.
+    fn shipped() -> GlowPalette {
+        GlowPalette::load(Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../content/data"
+        )))
+    }
+
+    /// The shipped curated plastic set loads (ruled 2026-08-19): 8 entries, unique
+    /// ids, every component in range — and BLACK IS NOT A MEMBER (absence of light,
+    /// excluded by the same ruling). Pins the shipped file so the invariant can't
+    /// erode to an empty strip — or regrow a black swatch — unnoticed.
+    #[test]
+    fn the_glow_palette_loads_the_shipped_set() {
+        let pal = shipped();
+        assert_eq!(pal.len(), 8, "the curated 8-colour emissive palette loads");
+        let mut ids: Vec<&str> = pal.iter().map(|c| c.id.as_str()).collect();
+        let n = ids.len();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), n, "swatch ids are unique");
+        for c in pal.iter() {
+            assert!(
+                c.rgb.iter().all(|&x| (0.0..=1.0).contains(&x)),
+                "{}: rgb {:?} out of range",
+                c.id,
+                c.rgb
+            );
+            assert_ne!(
+                c.rgb,
+                [0.0, 0.0, 0.0],
+                "{}: black is excluded from emissive",
+                c.id
+            );
+        }
+    }
+
+    /// `nearest` is exact on a member and picks the closest off-palette colour.
+    #[test]
+    fn glow_nearest_picks_the_closest_entry() {
+        let pal = shipped();
+        let orange = pal.iter().position(|c| c.id == "orange").expect("orange");
+        assert_eq!(
+            pal.nearest(pal.get(orange).unwrap().rgb),
+            Some(orange),
+            "exact member"
         );
-        glowsw.insert(
-            format!("{}_sel", e.id),
-            serde_json::json!({
-                "fill_top": fill, "fill_bot": fill,
-                "border": [1.0, 1.0, 1.0, 1.0], "border_w": 2, "radius": 3, "glow": fill
-            }),
+        assert_eq!(
+            pal.nearest([0.95, 0.60, 0.10]),
+            Some(orange),
+            "near-orange snaps to orange"
         );
     }
 }

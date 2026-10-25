@@ -11,8 +11,11 @@
 //   4. fs_composite — add the blurred bright buffer back into the full-res hdr (additive
 //                     blend), scaled by `intensity`, so the sun glint / sun disc GLOW.
 //
-// The bright/blur passes overwrite their target; the composite ADDS (One, One) with a colour
-// write-mask only, so the hdr alpha the tonemap passes through is left intact.
+// The bright/blur passes overwrite their target. The composite ADDS its colour (One, One) and
+// folds the glow's COVERAGE into the hdr alpha (One, OneMinusSrcAlpha): `a = cov + a*(1-cov)`.
+// An opaque hdr stays opaque; a TRANSPARENT-cleared one (a sample in a panel's well) gains
+// alpha exactly where the halo has light, so the halo survives the tonemap's alpha
+// passthrough and the panel's straight-alpha composite instead of being blended away.
 
 struct Bloom {
     // (1/w, 1/h) of the texture the blur SAMPLES (the half-res scratch); zw unused.
@@ -93,8 +96,11 @@ fn fs_blur_v(in: VertexOut) -> @location(0) vec4<f32> {
 
 @fragment
 fn fs_composite(in: VertexOut) -> @location(0) vec4<f32> {
-    // Additive (One, One) into the hdr — emit bloom * intensity. Alpha is masked off at the
-    // pipeline (write_mask = COLOR), so the hdr alpha survives for the tonemap's passthrough.
+    // Additive (One, One) colour into the hdr — emit bloom * intensity — and, as alpha, the
+    // glow's COVERAGE: its brightest channel (the bright pass's own brightness measure),
+    // saturated to [0, 1]. The pipeline blends alpha (One, OneMinusSrcAlpha), so the hdr alpha
+    // becomes `cov + a * (1 - cov)`: unchanged where nothing glows, 1 under a full glow.
     let c = textureSampleLevel(src_tex, src_smp, in.uv, 0.0).rgb;
-    return vec4<f32>(c * bloom.params.z, 1.0);
+    let glow = c * bloom.params.z;
+    return vec4<f32>(glow, saturate(max(glow.r, max(glow.g, glow.b))));
 }

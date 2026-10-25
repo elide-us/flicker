@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use crate::compound::CompoundDef;
 use crate::element::{Element, ElementId};
-use crate::material::MaterialDef;
+use crate::material::{MaterialDef, RenderClass};
 use crate::rock::RockDef;
 use crate::source::{MaterialError, TableSource};
 
@@ -82,9 +82,10 @@ impl Tables {
         let elements = source.load_elements()?;
         let materials = source.load_materials()?;
         // Content gates (fail loud, never a silent fallback): every material
-        // except the id-0 Air placeholder carries its render class, and the
-        // reserved exotic-emissive block (248-255) stays empty until released
-        // by ruling (both ruled 2026-08-19).
+        // except the id-0 Air placeholder carries its render class (ruled
+        // 2026-08-19), and every classed row sits in a slot that may hold its
+        // class — THE slot law, `slot_accepts`: the emissive slots (248-255) hold
+        // emissive rows only, Air's slot holds none (ruling 2026-10-20).
         for m in &materials {
             if m.id != 0 && m.render_class.is_none() {
                 return Err(MaterialError::Schema {
@@ -92,16 +93,14 @@ impl Tables {
                     detail: format!("material {} ({}) has no render_class", m.id, m.name),
                 });
             }
-            if m.id >= crate::material::RESERVED_EXOTIC_FIRST {
-                return Err(MaterialError::Schema {
-                    path: "materials (TableSource)".into(),
-                    detail: format!(
-                        "material {} ({}) is inside the reserved exotic block {}-255",
-                        m.id,
-                        m.name,
-                        crate::material::RESERVED_EXOTIC_FIRST
-                    ),
-                });
+            if let Some(class) = m.render_class {
+                if !crate::material::slot_accepts(m.id, Some(class)) {
+                    return Err(MaterialError::SlotRefused {
+                        id: m.id,
+                        name: m.name.clone(),
+                        class,
+                    });
+                }
             }
         }
         let compounds = source.load_compounds()?;
@@ -270,6 +269,13 @@ impl Tables {
     /// The material with the given display name (e.g. `"Granite"`).
     pub fn material_by_name(&self, name: &str) -> Option<&MaterialDef> {
         self.material_by_name.get(name).map(|&i| &self.materials[i])
+    }
+
+    /// The render class of the row slot `id` binds — `None` when the index lists no row
+    /// there (or for Air, which has none). What [`crate::slot_accepts`] weighs a bundle
+    /// committed or promoted into that slot against.
+    pub fn render_class(&self, id: u8) -> Option<RenderClass> {
+        self.material(id).and_then(|m| m.render_class)
     }
 
     /// The material whose `represents` claims the given compound name — the
@@ -463,10 +469,13 @@ mod tests {
     fn loads_the_full_vocabulary() {
         let t = tables();
         // 28 elements (Mg added for formation-sim relevance; Li synced 2026-07-11
-        // per Book III ruling F3450870 — design ceiling 30), 20 resolved materials
-        // (handoff §2).
+        // per Book III ruling F3450870 — design ceiling 30); 186 resolved materials:
+        // 178 since P4 "fill the slots" (2026-10-20: every rock, ore, mineral, gem
+        // and alloy of the catalogs, the woods, the crafted set, the nine biomes'
+        // surfaces and the Books' lore materials — 20 before), plus the eight
+        // emissive glows in slots 248-255 (2026-10-21, once those slots opened).
         assert_eq!(t.elements().len(), 28);
-        assert_eq!(t.materials().len(), 20);
+        assert_eq!(t.materials().len(), 186);
         // 28 UNIQUE symbols and atomic numbers — a duplicate row would hide
         // inside the bare len() check (the by-symbol/by-number indexes silently
         // collapse duplicates).
@@ -513,17 +522,19 @@ mod tests {
         );
         assert!(t.material(10).unwrap().extracted_element.is_none());
         assert_eq!(t.material_by_name("Granite").unwrap().id, 10);
-        assert!(t.material(200).is_none());
+        // 230 sits in the free band 220-247 (200 became Bloodstone on 2026-10-20).
+        assert!(t.material(230).is_none());
     }
 
     /// The 4-way render axis (ratified 2026-08-19): every material except the
-    /// id-0 Air placeholder carries exactly one class, the reserved exotic
-    /// block (248-255) is empty, and the class assignments match the ruling —
-    /// rock/ore hard-edge, soil/sediment blendable, liquids translucent
-    /// (Water KEEPS its slot), Lava emissive.
+    /// id-0 Air placeholder carries exactly one class, every row sits in a slot
+    /// that may hold it (`slot_accepts` — the emissive slots 248-255 hold the
+    /// eight glows and nothing else, ruling 2026-10-20), and the class
+    /// assignments match the ruling — rock/ore hard-edge, soil/sediment
+    /// blendable, liquids translucent (Water KEEPS its slot), Lava emissive.
     #[test]
     fn render_classes_cover_the_index() {
-        use crate::material::{RenderClass, RESERVED_EXOTIC_FIRST};
+        use crate::material::{slot_accepts, RenderClass, EMISSIVE_FIRST};
         let t = tables();
         for m in t.materials() {
             if m.id == 0 {
@@ -532,10 +543,19 @@ mod tests {
             }
             assert!(m.render_class.is_some(), "{}: render_class missing", m.name);
             assert!(
-                m.id < RESERVED_EXOTIC_FIRST,
-                "{}: id {} is inside the reserved exotic block",
+                slot_accepts(m.id, m.render_class),
+                "{}: slot {} may not hold a {:?} row",
                 m.name,
-                m.id
+                m.id,
+                m.render_class
+            );
+        }
+        // Every emissive slot is filled, and with an emissive row.
+        for id in EMISSIVE_FIRST..=u8::MAX {
+            assert_eq!(
+                t.render_class(id),
+                Some(RenderClass::Emissive),
+                "emissive slot {id} holds an emissive row"
             );
         }
         let class = |name: &str| t.material_by_name(name).unwrap().render_class.unwrap();
@@ -563,8 +583,94 @@ mod tests {
             "a defined slot carries its catalog colour"
         );
         assert_eq!(pal[0], MAGENTA, "Air stays loud-wrong (never drawn)");
-        assert_eq!(pal[200], MAGENTA, "an undefined slot stays loud-wrong");
-        assert_eq!(pal[255], MAGENTA, "the reserved block stays loud-wrong");
+        assert_eq!(pal[230], MAGENTA, "an undefined slot stays loud-wrong");
+        let glow = t
+            .material(u8::MAX)
+            .expect("the last emissive slot holds a glow");
+        assert_eq!(
+            pal[255],
+            [glow.color[0], glow.color[1], glow.color[2], 1.0],
+            "an emissive slot draws its row's colour like any defined slot"
+        );
+    }
+
+    /// A [`TableSource`] over rows held in memory — the loader's gates, driven
+    /// without a file.
+    struct Rows(Vec<MaterialDef>);
+
+    impl TableSource for Rows {
+        fn load_elements(&self) -> Result<Vec<Element>, MaterialError> {
+            Ok(Vec::new())
+        }
+        fn load_materials(&self) -> Result<Vec<MaterialDef>, MaterialError> {
+            Ok(self.0.clone())
+        }
+    }
+
+    /// One material row: `class` is the `render_class` written (`None` writes none).
+    fn row(id: u8, name: &str, class: Option<&str>) -> MaterialDef {
+        let mut v = serde_json::json!({
+            "id": id, "name": name, "category": "probe", "hardness": 1.0,
+            "brittleness": 0.5, "water_capacity": 0.0, "viscosity": 1.0,
+            "density_g_cm3": 1.0, "color": [0.5, 0.5, 0.5]
+        });
+        if let Some(c) = class {
+            v["render_class"] = serde_json::Value::String(c.into());
+        }
+        serde_json::from_value(v).expect("a well-formed row")
+    }
+
+    /// THE LOADER'S SLOT GATE (ruling 2026-10-20), as an accept/refuse matrix: an
+    /// emissive row loads in an emissive slot and outside the block alike (Lava at
+    /// 62), every other class loads below the block — and a non-emissive row in an
+    /// emissive slot is REFUSED with an error that names the row, its class and the
+    /// law. Air (id 0, no class) still loads; a classed row in Air's slot does not.
+    #[test]
+    fn the_loader_admits_emissive_slots_only_to_emissive_rows() {
+        use crate::material::{RenderClass, EMISSIVE_FIRST};
+        let air = row(0, "Air", None);
+        let load = |extra: MaterialDef| Tables::from_source(&Rows(vec![air.clone(), extra]));
+
+        for (id, class) in [
+            (EMISSIVE_FIRST, "emissive"),
+            (u8::MAX, "emissive"),
+            (62, "emissive"),
+            (EMISSIVE_FIRST - 1, "hard_edge"),
+            (1, "blendable"),
+            (200, "translucent"),
+        ] {
+            let t = load(row(id, "Probe", Some(class)))
+                .unwrap_or_else(|e| panic!("a {class} row at {id} loads: {e}"));
+            assert!(t.material(id).is_some(), "slot {id} holds its row");
+        }
+
+        for (id, class, want) in [
+            (EMISSIVE_FIRST, "hard_edge", RenderClass::HardEdge),
+            (250, "blendable", RenderClass::Blendable),
+            (u8::MAX, "translucent", RenderClass::Translucent),
+            (0, "emissive", RenderClass::Emissive),
+        ] {
+            let name = format!("Wrong{id}");
+            let err = match load(row(id, &name, Some(class))) {
+                Err(e) => e,
+                Ok(_) => panic!("a {class} row at slot {id} must be refused"),
+            };
+            match &err {
+                MaterialError::SlotRefused {
+                    id: got,
+                    name: n,
+                    class: c,
+                } => {
+                    assert_eq!((*got, n.as_str(), *c), (id, name.as_str(), want));
+                }
+                other => panic!("slot {id}: the wrong error: {other}"),
+            }
+            let said = err.to_string();
+            assert!(
+                said.contains(&name) && said.contains("emissive"),
+                "the refusal names the row and the law: {said}"
+            );
+        }
     }
 
     #[test]

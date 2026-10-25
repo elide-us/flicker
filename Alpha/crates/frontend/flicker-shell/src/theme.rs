@@ -236,17 +236,24 @@ impl Theme {
         }
     }
 
+    /// The NAMES of [`Self::lua_textures`], in id order — spelled once, here, and GPU-free,
+    /// so a scene's gate can pin an authored texture index (a `pad_glyphs` style's `tex`)
+    /// to the table it indexes without building a theme.
+    pub const TEXTURE_NAMES: [&'static str; 3] = ["white", "muse", "pad_glyphs"];
+
     /// The engine textures this theme exposes to a Lua screen, as
     /// `(name, handle)` in id order — the index is the id the script references
     /// via `Textures.<name>` (see [`ScriptHost::set_texture_ids`] and the
     /// consumer's `render_hud`). `white` is id 0 so it doubles as the rect fill.
+    /// The names are [`Self::TEXTURE_NAMES`].
     ///
     /// [`ScriptHost::set_texture_ids`]: flicker::script::ScriptHost::set_texture_ids
     pub fn lua_textures(&self) -> [(&'static str, TextureHandle); 3] {
+        let [white, muse, pad_glyphs] = Self::TEXTURE_NAMES;
         [
-            ("white", self.white),
-            ("muse", self.muse),
-            ("pad_glyphs", self.pad_glyphs),
+            (white, self.white),
+            (muse, self.muse),
+            (pad_glyphs, self.pad_glyphs),
         ]
     }
 

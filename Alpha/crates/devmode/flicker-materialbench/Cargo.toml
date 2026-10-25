@@ -1,18 +1,21 @@
 [package]
 name = "flicker-materialbench"
-version = "0.1.11"
+version = "0.1.12"
 edition.workspace = true
 license.workspace = true
 publish = false
 
-# MaterialBench — the texture SYNTHESIZER console. A face on
+# MaterialBench — the MATERIAL DESIGNER: a node-graph editor over
 # (formerly "Sablework" — renamed 2026-10-14 under the PascalCase <Purpose>Bench ruling; history in MCP.)
-# `flicker-texture`: the 6-voice channel rack, the tiled swatch preview, and the
-# output stage, with every control an ActionSignal so the whole instrument is
-# drivable from a pad. Bakes run on a WORKER (the 2K baseline is ~360 ms and even
-# the preview is ~10 ms — neither belongs on the frame thread), newest result
-# wins. Its output lands in `staging/` for the Content Manager to promote, like
-# every other pipeline bench.
+# `flicker-texture`'s v2 MaterialGraph — the node list, the graph canvas, the
+# selected node's parameters and the output stage, over the tiled seven-map preview
+# and the lit sample, with every control an ActionSignal so the whole designer is
+# drivable from a pad. The six-voice rack survives as Roll (a rolled patch converts
+# through `MaterialGraph::from_recipe`); the preset library is DATA — New, then the
+# factory library `data/factory_materials.json`. Bakes run on a
+# WORKER (the 2K baseline is ~360 ms and even the preview is ~10 ms — neither
+# belongs on the frame thread), newest result wins. Its output lands in `staging/`
+# for the Content Manager to promote, like every other pipeline bench.
 
 [lib]
 name = "flicker_materialbench"
@@ -27,12 +30,21 @@ flicker = { version = "0.1.0", path = "../../core/flicker" }
 # root and routes them through the router like every other screen.
 flicker-input-core.workspace = true
 flicker-input-router.workspace = true
-# The reusable front-end shell (pause overlay + theme).
+# The reusable front-end shell (pause overlay, the shared popup modal the insertion
+# menu opens through, the theme).
 flicker-shell.workspace = true
-# THE INSTRUMENT — recipes, the rack, the baker, the resolution ladder.
+# THE INSTRUMENT — the material graph and its evaluator, the rack it converts, the
+# baker, the resolution ladder.
 flicker-texture.workspace = true
+# The node-graph editor filler the designer's canvas is (cards, ports, links, picks,
+# pan/zoom), seated in the walker-reserved `mtl_canvas` surface. What a gesture MEANS
+# stays here, in the dispatcher.
+flicker-canvas.workspace = true
 # The material vocabulary a recipe binds to.
 flicker-materials.workspace = true
+# The Lit view's engine filler — the material SAMPLE (shared sphere + plane, the PBR draw
+# under the authored stage, the emissive gain) — and the curated glow palette it loads.
+flicker-materialview.workspace = true
 # The content ROOTS service (staging/ + data/) and the gz write seam. The bench
 # asks where content lives; it never spells out a path.
 flicker-content.workspace = true

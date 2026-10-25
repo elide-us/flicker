@@ -43,7 +43,7 @@ impl MeshIndices<'_> {
     }
 }
 
-/// Per-`draw_mesh` options. Defaults: solid fill, no tint.
+/// Per-`draw_mesh` options. Defaults: solid fill, no tint, the Emit map at unity gain.
 #[derive(Copy, Clone, Debug)]
 pub struct MeshDrawOptions {
     /// `false` — render filled triangles with Lambertian shading from the
@@ -61,6 +61,27 @@ pub struct MeshDrawOptions {
     /// wet-looking surfaces — a Fresnel grazing-edge brightening, *not* a mirror hot-spot
     /// (which reads as a marble at planet scale). The sheen strengthens with gloss.
     pub gloss: f32,
+    /// `true` — FLAT-shade every face from its own geometry: the fragment's normal is the
+    /// face's, taken from the screen-space derivatives of the world position (turned to
+    /// face the camera, which for a front face IS the outward normal), and the vertex
+    /// normals are ignored. What a mesh of flat faces at several orientations wants — a
+    /// field of 128 ft cluster quads with vertical drops between them shares every corner
+    /// vertex between a quad's top and the two walls that meet there, so it carries four
+    /// vertices a quad instead of twelve. `false` (the default) is the smooth path every
+    /// other mesh takes, byte-identical to before this flag existed.
+    pub flat: bool,
+    /// The draw-time EMISSIVE GAIN, finite and `>= 0` (a negative, NaN or infinite gain is
+    /// drawn as 0 — below zero it would subtract light, and an infinite one is NaN on every
+    /// black Emit texel): what the textured PBR path
+    /// (`draw_textured_mesh` / `_soft` / `_pbr`, all through `material.wgsl`'s
+    /// `shade_material`) multiplies the sampled Emit map by. An 8-bit Emit texel caps at
+    /// 1.0, so at `1.0` (the default — the texel as authored) a glow never outshines the
+    /// surface's own white; above it the glow is real HDR radiance on an `rgba16f` target,
+    /// which an authored `bloom` pass spreads into a halo before `tonemap_grade` rolls it off
+    /// (an sRGB target clips it). A draw with no Emit map samples black, so the gain changes
+    /// nothing there. Ignored by `draw_mesh` (the flat pipeline has no Emit map) and absent
+    /// from the skinned PBR draw (it takes no options: a skinned body glows at unity).
+    pub emissive_gain: f32,
 }
 
 impl Default for MeshDrawOptions {
@@ -69,6 +90,8 @@ impl Default for MeshDrawOptions {
             wireframe: false,
             tint: [1.0, 1.0, 1.0, 1.0],
             gloss: 0.0,
+            flat: false,
+            emissive_gain: 1.0,
         }
     }
 }

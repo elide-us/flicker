@@ -74,9 +74,23 @@ pub struct Neighbourhood {
 }
 
 impl Neighbourhood {
-    /// Gather a cell and the two rings around it.
+    /// Gather a cell and the two rings around it, reading the source's
+    /// thickness.
     pub fn around<S: TileSource>(src: &S, cell: usize) -> Self {
-        let grid = src.grid();
+        Self::of(src.grid(), cell, |i| src.thickness_m(i))
+    }
+
+    /// Gather a cell and the two rings around it over ANY per-cell sample —
+    /// the same blend the thickness rides, lent to a source that needs the
+    /// blend of another per-cell field (the V5 ground subtracts the blend of
+    /// its layers' tile samples from their exact values, so the hex grid's
+    /// reading is honoured at every centre and the fields' own detail fills
+    /// the pixels between).
+    pub fn of(
+        grid: &flicker_worldgrid::Sphere,
+        cell: usize,
+        sample: impl Fn(usize) -> f64,
+    ) -> Self {
         let mut gathered: Vec<usize> = vec![cell];
         for &j in &grid.neighbors[cell] {
             gathered.push(j as usize);
@@ -92,7 +106,7 @@ impl Neighbourhood {
                 .iter()
                 .map(|&i| grid.dirs[i].as_dvec3().normalize())
                 .collect(),
-            thickness: gathered.iter().map(|&i| src.thickness_m(i)).collect(),
+            thickness: gathered.iter().map(|&i| sample(i)).collect(),
             reach: grid_spacing(grid.len()) * REACH,
         }
     }

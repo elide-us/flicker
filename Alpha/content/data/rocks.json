@@ -181,6 +181,19 @@
       "erosional_resistance": 0.85,
       "sim_required": true,
       "note": "High-grade. Deep continental basement."
+    },
+    {
+      "id": "impact_breccia",
+      "name": "Impact Breccia",
+      "class": "impactite",
+      "modal": {
+        "Quartz": 0.35,
+        "Anorthite": 0.35,
+        "Clay": 0.3
+      },
+      "erosional_resistance": 0.25,
+      "sim_required": false,
+      "note": "A STRIKE'S BOWL AND RIM. Shattered country rock and melt, barely bound: the softest thing short of loose sediment, which is why old craters vanish. Named 2026-10-19 for the planet's impacts (the epochs' events)."
     }
   ]
 }

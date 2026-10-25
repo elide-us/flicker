@@ -1,6 +1,6 @@
 [package]
 name = "flicker-worldtile"
-version = "0.1.10"
+version = "0.1.12"
 edition.workspace = true
 license.workspace = true
 publish = false
@@ -19,6 +19,8 @@ glam.workspace = true
 # The engine's world-defining constants: cluster span, the planet size
 # model — what the atlas frame and the WorldClusterId are calibrated to.
 clayengine.workspace = true
+# The engine's clusters: the LOD8 quad field a tile is handed to the engine as.
+flicker-voxel.workspace = true
 # The planet epoch (.epoch v2) — the Populous bench's committed world, the
 # SOURCE the gameplay bake materializes tiles from.
 flicker-worldengine.workspace = true
@@ -27,6 +29,8 @@ flicker-core.workspace = true
 # The bake index — a small machine-read JSON header beside the planes.
 serde.workspace = true
 serde_json.workspace = true
+# The ground evaluator writes a hex's 2K map as PNG.
+image.workspace = true
 
 [dev-dependencies]
 flicker-materials.workspace = true

@@ -1,0 +1,119 @@
+{
+  "_comment": "THE EIGHT EMISSIVE GLOWS — the LOOK of each emissive slot 248–255, one v2 material graph per slot (the MaterialBench designer's own document, the very shape it commits as `<id:03>.texture.json`), in palettes.json's curated emissive order: Glow Red 248 … Glow Violet 255, matching their materials.json rows. Each entry reads through `flicker_texture::load_material_json`, exactly as a staged bundle's document does. EVERYTHING HERE IS A PLACEHOLDER the agent authored (2026-10-21): the names, and every number of every node — AARON'S TO TUNE, in the designer (bind the slot and its staged graph opens) or here. The colours are not free: each glow is its slot's curated palette entry, the one colour an Emit may take.",
+  "_comment_shape": "One shape, eight colours: `cells` (Worley noise, warped — cell walls) → `veins` (an open Band over the walls: the crack network lights, fading in over `soft` above `at`) → the Emit's MASK; `glow` (a Palette node holding the slot's curated colour — the designer's Glow-select restriction) → the Emit's COLOUR, at strength 1.0 (the MaterialBench's authored `params.new_glow_strength`, so a glow made here starts where one made in the designer does); `body` (a dark Ramp of the same hue over the same cells) → the base colour; `cells` → height at relief 0.5; roughness 0.6; metalness 0; AO 1. `seed` is the slot, so each glow lays its cells out differently. How bright a glow burns past the surface's own white is NOT here: it is the lit stages' authored `emissive_gain` (4.0 in `materialbench_lit` and `mc_sample`).",
+  "_comment_commit": "Landed by `cargo run -p flicker-materialbench --example commit_library -- glow_materials.json <staging_root> [size]`: each graph through the bench's own Commit (`commit.rs` — the slot law weighs it by its slot's materials.json row, emissive) into `<staging_root>/materials/<id:03>/`. Promoting a staged glow into `package/` is the PackageBench's review — Aaron's act, never the example's.",
+  "graphs": [
+    {
+      "version": 2,
+      "id": "glow_red",
+      "name": "Glow Red",
+      "material": 248,
+      "seed": 248,
+      "nodes": [
+        {"key": "cells", "kind": "noise", "source": "worley", "scale": 5, "octaves": 1, "lacunarity": 2.0, "gain": 0.5, "warp": 0.5, "salt": 1, "contrast": 1.0, "invert": false},
+        {"key": "veins", "kind": "band", "inputs": ["cells"], "at": 0.55, "width": 1.0, "soft": 0.15},
+        {"key": "body", "kind": "ramp", "inputs": ["cells"], "ramp": {"stops": [{"at": 0.0, "color": [0.065, 0.015, 0.015]}, {"at": 1.0, "color": [0.25, 0.05, 0.05]}]}},
+        {"key": "glow", "kind": "palette", "rgb": [1.0, 0.0, 0.0]}
+      ],
+      "output": {"base": "body", "height": "cells", "relief": 0.5, "roughness": 0.6, "metalness": 0.0, "ao": 1.0, "emit": {"color": "glow", "mask": "veins", "strength": 1.0}}
+    },
+    {
+      "version": 2,
+      "id": "glow_green",
+      "name": "Glow Green",
+      "material": 249,
+      "seed": 249,
+      "nodes": [
+        {"key": "cells", "kind": "noise", "source": "worley", "scale": 5, "octaves": 1, "lacunarity": 2.0, "gain": 0.5, "warp": 0.5, "salt": 1, "contrast": 1.0, "invert": false},
+        {"key": "veins", "kind": "band", "inputs": ["cells"], "at": 0.55, "width": 1.0, "soft": 0.15},
+        {"key": "body", "kind": "ramp", "inputs": ["cells"], "ramp": {"stops": [{"at": 0.0, "color": [0.015, 0.065, 0.015]}, {"at": 1.0, "color": [0.05, 0.25, 0.05]}]}},
+        {"key": "glow", "kind": "palette", "rgb": [0.0, 1.0, 0.0]}
+      ],
+      "output": {"base": "body", "height": "cells", "relief": 0.5, "roughness": 0.6, "metalness": 0.0, "ao": 1.0, "emit": {"color": "glow", "mask": "veins", "strength": 1.0}}
+    },
+    {
+      "version": 2,
+      "id": "glow_blue",
+      "name": "Glow Blue",
+      "material": 250,
+      "seed": 250,
+      "nodes": [
+        {"key": "cells", "kind": "noise", "source": "worley", "scale": 5, "octaves": 1, "lacunarity": 2.0, "gain": 0.5, "warp": 0.5, "salt": 1, "contrast": 1.0, "invert": false},
+        {"key": "veins", "kind": "band", "inputs": ["cells"], "at": 0.55, "width": 1.0, "soft": 0.15},
+        {"key": "body", "kind": "ramp", "inputs": ["cells"], "ramp": {"stops": [{"at": 0.0, "color": [0.015, 0.015, 0.065]}, {"at": 1.0, "color": [0.05, 0.05, 0.25]}]}},
+        {"key": "glow", "kind": "palette", "rgb": [0.0, 0.0, 1.0]}
+      ],
+      "output": {"base": "body", "height": "cells", "relief": 0.5, "roughness": 0.6, "metalness": 0.0, "ao": 1.0, "emit": {"color": "glow", "mask": "veins", "strength": 1.0}}
+    },
+    {
+      "version": 2,
+      "id": "glow_magenta",
+      "name": "Glow Magenta",
+      "material": 251,
+      "seed": 251,
+      "nodes": [
+        {"key": "cells", "kind": "noise", "source": "worley", "scale": 5, "octaves": 1, "lacunarity": 2.0, "gain": 0.5, "warp": 0.5, "salt": 1, "contrast": 1.0, "invert": false},
+        {"key": "veins", "kind": "band", "inputs": ["cells"], "at": 0.55, "width": 1.0, "soft": 0.15},
+        {"key": "body", "kind": "ramp", "inputs": ["cells"], "ramp": {"stops": [{"at": 0.0, "color": [0.065, 0.015, 0.065]}, {"at": 1.0, "color": [0.25, 0.05, 0.25]}]}},
+        {"key": "glow", "kind": "palette", "rgb": [1.0, 0.0, 1.0]}
+      ],
+      "output": {"base": "body", "height": "cells", "relief": 0.5, "roughness": 0.6, "metalness": 0.0, "ao": 1.0, "emit": {"color": "glow", "mask": "veins", "strength": 1.0}}
+    },
+    {
+      "version": 2,
+      "id": "glow_cyan",
+      "name": "Glow Cyan",
+      "material": 252,
+      "seed": 252,
+      "nodes": [
+        {"key": "cells", "kind": "noise", "source": "worley", "scale": 5, "octaves": 1, "lacunarity": 2.0, "gain": 0.5, "warp": 0.5, "salt": 1, "contrast": 1.0, "invert": false},
+        {"key": "veins", "kind": "band", "inputs": ["cells"], "at": 0.55, "width": 1.0, "soft": 0.15},
+        {"key": "body", "kind": "ramp", "inputs": ["cells"], "ramp": {"stops": [{"at": 0.0, "color": [0.015, 0.065, 0.065]}, {"at": 1.0, "color": [0.05, 0.25, 0.25]}]}},
+        {"key": "glow", "kind": "palette", "rgb": [0.0, 1.0, 1.0]}
+      ],
+      "output": {"base": "body", "height": "cells", "relief": 0.5, "roughness": 0.6, "metalness": 0.0, "ao": 1.0, "emit": {"color": "glow", "mask": "veins", "strength": 1.0}}
+    },
+    {
+      "version": 2,
+      "id": "glow_white",
+      "name": "Glow White",
+      "material": 253,
+      "seed": 253,
+      "nodes": [
+        {"key": "cells", "kind": "noise", "source": "worley", "scale": 5, "octaves": 1, "lacunarity": 2.0, "gain": 0.5, "warp": 0.5, "salt": 1, "contrast": 1.0, "invert": false},
+        {"key": "veins", "kind": "band", "inputs": ["cells"], "at": 0.55, "width": 1.0, "soft": 0.15},
+        {"key": "body", "kind": "ramp", "inputs": ["cells"], "ramp": {"stops": [{"at": 0.0, "color": [0.065, 0.065, 0.065]}, {"at": 1.0, "color": [0.25, 0.25, 0.25]}]}},
+        {"key": "glow", "kind": "palette", "rgb": [1.0, 1.0, 1.0]}
+      ],
+      "output": {"base": "body", "height": "cells", "relief": 0.5, "roughness": 0.6, "metalness": 0.0, "ao": 1.0, "emit": {"color": "glow", "mask": "veins", "strength": 1.0}}
+    },
+    {
+      "version": 2,
+      "id": "glow_orange",
+      "name": "Glow Orange",
+      "material": 254,
+      "seed": 254,
+      "nodes": [
+        {"key": "cells", "kind": "noise", "source": "worley", "scale": 5, "octaves": 1, "lacunarity": 2.0, "gain": 0.5, "warp": 0.5, "salt": 1, "contrast": 1.0, "invert": false},
+        {"key": "veins", "kind": "band", "inputs": ["cells"], "at": 0.55, "width": 1.0, "soft": 0.15},
+        {"key": "body", "kind": "ramp", "inputs": ["cells"], "ramp": {"stops": [{"at": 0.0, "color": [0.065, 0.04, 0.015]}, {"at": 1.0, "color": [0.25, 0.15, 0.05]}]}},
+        {"key": "glow", "kind": "palette", "rgb": [1.0, 0.5, 0.0]}
+      ],
+      "output": {"base": "body", "height": "cells", "relief": 0.5, "roughness": 0.6, "metalness": 0.0, "ao": 1.0, "emit": {"color": "glow", "mask": "veins", "strength": 1.0}}
+    },
+    {
+      "version": 2,
+      "id": "glow_violet",
+      "name": "Glow Violet",
+      "material": 255,
+      "seed": 255,
+      "nodes": [
+        {"key": "cells", "kind": "noise", "source": "worley", "scale": 5, "octaves": 1, "lacunarity": 2.0, "gain": 0.5, "warp": 0.5, "salt": 1, "contrast": 1.0, "invert": false},
+        {"key": "veins", "kind": "band", "inputs": ["cells"], "at": 0.55, "width": 1.0, "soft": 0.15},
+        {"key": "body", "kind": "ramp", "inputs": ["cells"], "ramp": {"stops": [{"at": 0.0, "color": [0.04, 0.015, 0.065]}, {"at": 1.0, "color": [0.15, 0.05, 0.25]}]}},
+        {"key": "glow", "kind": "palette", "rgb": [0.5, 0.0, 1.0]}
+      ],
+      "output": {"base": "body", "height": "cells", "relief": 0.5, "roughness": 0.6, "metalness": 0.0, "ao": 1.0, "emit": {"color": "glow", "mask": "veins", "strength": 1.0}}
+    }
+  ]
+}

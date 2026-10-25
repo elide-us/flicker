@@ -34,7 +34,8 @@
 //! restrained prototype the report is the ledger; the reintegration commit that
 //! folds it back into the aggregate world is the batch server's half (T8).
 
-use std::collections::HashMap;
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, HashMap};
 
 use crate::mask::{TileFrame, TILE_DIM};
 use crate::materialize::{Tile, NEIGHBOURS_8};
@@ -76,6 +77,11 @@ pub struct ErosionParams {
     /// deposition take these props — until reconciliation lithifies them, which is
     /// the aggregate lifecycle's job at reintegration.
     pub sediment: BedProps,
+    /// THE SEA LINE, metres above the tile's datum, when the tile has one: a
+    /// pixel under it takes no rain and is where the water ends (whatever it
+    /// carried settles there) — the same "no cut under the sea" the aggregate
+    /// era keeps over the wave planet (V5 slice 3). `None` is a dry tile.
+    pub sea_m: Option<f64>,
 }
 
 impl Default for ErosionParams {
@@ -90,6 +96,7 @@ impl Default for ErosionParams {
                 density_kg_m3: 2200.0,
                 resistance: 0.08,
             },
+            sea_m: None,
         }
     }
 }
@@ -104,6 +111,10 @@ pub struct PassReport {
     /// Mass carried out across the rim, kg — banked for the neighbour or the sea;
     /// the caller owns it now.
     pub exported_kg: f64,
+    /// Pixels under standing water this pass (the hollows the fill made lakes
+    /// of), and pixels whose water left over the rim or into the sea.
+    pub lake_px: usize,
+    pub outlet_px: usize,
 }
 
 /// The erosion engine for one tile. Owns its scratch buffers so a pass allocates
@@ -112,6 +123,9 @@ pub struct PassReport {
 pub struct Eroder {
     /// Composite height per pixel, m (strata sum; skirt heights live separately).
     height: Vec<f32>,
+    /// The WATER'S level per pixel, m: the ground, or the spill level of the
+    /// hollow it lies in — the surface the water runs down (see the pass).
+    filled: Vec<f32>,
     /// Where each owned pixel drains.
     downhill: Vec<Drain>,
     /// The height drop to that drain, m (distance-corrected). Zero for a sink.
@@ -135,11 +149,41 @@ enum Drain {
     Sink,
 }
 
+/// The hair of gradient the fill lays across a flat, m, so every lake pixel has
+/// a lower neighbour toward its spill (a hundredth of a metre: f32 still
+/// resolves it on a 16 km column).
+const FILL_GRADIENT_M: f32 = 0.01;
+/// The share of an overload that settles at one pixel: the rest rides on, so
+/// a slackening stream lays its load down its length instead of at the
+/// first slack pixel (where the whole load of a hex-wide catchment stood up
+/// as a pillar kilometres high, and the pillar's slope cut harder every
+/// pass, 2026-10-16).
+const SETTLE_SHARE: f64 = 0.25;
+
+/// A water level in the flood's heap — f32 with a total order.
+#[derive(Clone, Copy, PartialEq)]
+struct Level(f32);
+
+impl Eq for Level {}
+
+impl PartialOrd for Level {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Level {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0.total_cmp(&other.0)
+    }
+}
+
 impl Eroder {
     pub fn new() -> Self {
         let n = TILE_DIM as usize * TILE_DIM as usize;
         Self {
             height: vec![0.0; n],
+            filled: vec![0.0; n],
             downhill: vec![Drain::Sink; n],
             drop_m: vec![0.0; n],
             order: Vec::new(),
@@ -157,6 +201,22 @@ impl Eroder {
         props: &[BedProps],
         params: &ErosionParams,
     ) -> PassReport {
+        self.pass_graded(tile, props, params, None)
+    }
+
+    /// [`Self::pass`] with the ground GRADED pixel by pixel: `grade[i]`
+    /// multiplies every migrated bed's resistance at pixel `i` (`0..1`, the
+    /// V5 hex's hardness ledger read through the same blend its heights
+    /// ride), so the cut is hardness-selective across the hex and not only
+    /// bed by bed. Pixel-born sediment keeps its own resistance. `None` is
+    /// a grade of one everywhere.
+    pub fn pass_graded(
+        &mut self,
+        tile: &mut Tile,
+        props: &[BedProps],
+        params: &ErosionParams,
+        grade: Option<&[f32]>,
+    ) -> PassReport {
         let dim = TILE_DIM as usize;
         let px_m = tile.frame.pixel_span_m();
         let px_area = tile.frame.pixel_area_m2();
@@ -172,12 +232,94 @@ impl Eroder {
             }
         }
 
-        // ── Where each pixel drains: its steepest descent, rim and skirt included. ──
+        // ── The water finds its level. ──
+        //
+        // Every hollow fills to its spill point before anything runs (the
+        // priority flood of Barnes et al. 2014, with a hair of gradient so no
+        // flat is flat), so every pixel drains to the rim or the sea instead
+        // of stopping in the nearest dimple. Ground made of bubbles is all
+        // dimples: with a hollow as a terminal sink, each catchment stood its
+        // whole load up as a pillar at one pixel, the pillar's slope cut the
+        // next pass harder, and twenty passes raised 260 km of spikes
+        // (2026-10-16). Where the level stands above the ground there is a
+        // LAKE: standing water cuts nothing and takes what it is brought, up
+        // to its own line.
+        let submerged = |h: f32| params.sea_m.is_some_and(|sea| f64::from(h) < sea);
+        let skirt_at = |nx: i64, ny: i64| -> Option<f32> {
+            if nx < 0 || ny < 0 || nx >= dim as i64 || ny >= dim as i64 {
+                return None;
+            }
+            let (nx, ny) = (nx as u32, ny as u32);
+            if tile.mask.contains(nx, ny) {
+                None
+            } else {
+                tile.skirt.get(&(nx as u16, ny as u16)).copied()
+            }
+        };
+        for v in self.filled.iter_mut() {
+            *v = f32::INFINITY;
+        }
+        let mut heap: BinaryHeap<Reverse<(Level, u32)>> = BinaryHeap::new();
         for (x, y) in tile.mask.iter() {
             let i = idx(x, y);
             let here = self.height[i];
+            let seed = if submerged(here) {
+                // The sea is the water's level and its end.
+                Some(here)
+            } else {
+                NEIGHBOURS_8
+                    .iter()
+                    .filter_map(|(dx, dy)| skirt_at(x as i64 + dx, y as i64 + dy))
+                    .fold(None, |lo: Option<f32>, h| Some(lo.map_or(h, |l| l.min(h))))
+                    .map(|spill| here.max(spill))
+            };
+            if let Some(level) = seed {
+                self.filled[i] = level;
+                heap.push(Reverse((Level(level), i as u32)));
+            }
+        }
+        while let Some(Reverse((Level(level), i))) = heap.pop() {
+            let (x, y) = ((i % TILE_DIM) as i64, (i / TILE_DIM) as i64);
+            for (dx, dy) in NEIGHBOURS_8 {
+                let (nx, ny) = (x + dx, y + dy);
+                if nx < 0 || ny < 0 || nx >= dim as i64 || ny >= dim as i64 {
+                    continue;
+                }
+                let (nx, ny) = (nx as u32, ny as u32);
+                if !tile.mask.contains(nx, ny) {
+                    continue;
+                }
+                let n = idx(nx, ny);
+                if self.filled[n].is_finite() {
+                    continue;
+                }
+                let lvl = self.height[n].max(level + FILL_GRADIENT_M);
+                self.filled[n] = lvl;
+                heap.push(Reverse((Level(lvl), n as u32)));
+            }
+        }
+        // A hex with no way out at all (every skirt neighbour missing) keeps
+        // its ground as its level.
+        for (x, y) in tile.mask.iter() {
+            let i = idx(x, y);
+            if !self.filled[i].is_finite() {
+                self.filled[i] = self.height[i];
+            }
+        }
+
+        // ── Where each pixel drains: steepest descent of the WATER'S level, rim
+        // and skirt included; under the sea line the water has arrived and what
+        // reaches it is the sea's (banked as export, like the rim). ──
+        for (x, y) in tile.mask.iter() {
+            let i = idx(x, y);
+            let here = self.filled[i];
             let mut best = Drain::Sink;
             let mut best_drop = 0.0f32;
+            if submerged(self.height[i]) {
+                self.downhill[i] = Drain::Out;
+                self.drop_m[i] = 0.0;
+                continue;
+            }
             for (dx, dy) in NEIGHBOURS_8 {
                 let (nx, ny) = (x as i64 + dx, y as i64 + dy);
                 if nx < 0 || ny < 0 || nx >= dim as i64 || ny >= dim as i64 {
@@ -189,16 +331,20 @@ impl Eroder {
                 } else {
                     1.0
                 };
-                let there = if tile.mask.contains(nx, ny) {
-                    Some(self.height[idx(nx, ny)])
+                let owned = tile.mask.contains(nx, ny);
+                let there = if owned {
+                    Some(self.filled[idx(nx, ny)])
                 } else {
                     tile.skirt.get(&(nx as u16, ny as u16)).copied()
                 };
                 let Some(there) = there else { continue };
                 let drop = (here - there) / dist;
-                if drop > best_drop {
-                    best_drop = drop;
-                    best = if tile.mask.contains(nx, ny) {
+                // A lake at the rim stands at its skirt's level: level water
+                // leaves over the rim it is level with.
+                let leaves = !owned && drop >= 0.0 && best == Drain::Sink;
+                if drop > best_drop || leaves {
+                    best_drop = drop.max(0.0);
+                    best = if owned {
                         Drain::Into(idx(nx, ny) as u32)
                     } else {
                         Drain::Out
@@ -207,16 +353,22 @@ impl Eroder {
             }
             self.downhill[i] = best;
             self.drop_m[i] = best_drop;
+            if best == Drain::Out {
+                report.outlet_px += 1;
+            }
+            if self.filled[i] - self.height[i] > 2.0 * FILL_GRADIENT_M {
+                report.lake_px += 1;
+            }
         }
 
         // ── Draining order: highest first, so a trunk carries its whole catchment. ──
         self.order.clear();
         self.order
             .extend(tile.mask.iter().map(|(x, y)| idx(x, y) as u32));
-        let height = &self.height;
+        let level = &self.filled;
         self.order.sort_unstable_by(|&a, &b| {
-            height[b as usize]
-                .partial_cmp(&height[a as usize])
+            level[b as usize]
+                .partial_cmp(&level[a as usize])
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then(a.cmp(&b)) // total order → deterministic
         });
@@ -228,7 +380,10 @@ impl Eroder {
         }
         for &i in &self.order {
             let i = i as usize;
-            self.flow[i] += params.rain as f32;
+            // No rain falls on the sea: what reaches it came down the land.
+            if !submerged(self.height[i]) {
+                self.flow[i] += params.rain as f32;
+            }
             if let Drain::Into(to) = self.downhill[i] {
                 let f = self.flow[i];
                 self.flow[to as usize] += f;
@@ -244,6 +399,28 @@ impl Eroder {
             // Rise over run to wherever the water goes next — measured against the
             // skirt when it leaves, so the rim is a hillside, not a guess.
             let slope = (self.drop_m[i] as f64 / px_m).max(0.0);
+
+            // Standing water: a pixel under its own level is lake floor. It cuts
+            // nothing and takes what it is brought — up to the water line, no
+            // higher — and passes the rest on toward the spill.
+            let lake_depth = f64::from(self.filled[i] - self.height[i]);
+            if lake_depth > 2.0 * f64::from(FILL_GRADIENT_M) {
+                let room_kg = lake_depth * params.sediment.density_kg_m3 * px_area;
+                let laid = deposit(
+                    tile,
+                    params,
+                    i,
+                    carrying.min(room_kg) / (params.sediment.density_kg_m3 * px_area),
+                ) * params.sediment.density_kg_m3
+                    * px_area;
+                report.deposited_kg += laid;
+                carrying -= laid;
+                match self.downhill[i] {
+                    Drain::Into(to) => self.load[to as usize] += carrying,
+                    _ => report.exported_kg += carrying,
+                }
+                continue;
+            }
 
             // The water's carrying capacity here: slack water holds little. Scaled
             // by the same terms as the cut, so "how far a stream carries" is a
@@ -266,18 +443,27 @@ impl Eroder {
                     i,
                     want_m,
                     (capacity - carrying) / px_area,
+                    grade,
                 );
                 report.eroded_kg += cut;
                 carrying += cut;
             } else {
-                // Overloaded: the excess settles here as new ground.
-                let drop = carrying - capacity;
-                let laid = deposit(
-                    tile,
-                    params,
-                    i,
-                    drop / (params.sediment.density_kg_m3 * px_area),
-                ) * params.sediment.density_kg_m3
+                // Overloaded: a share of the excess settles here as new ground
+                // — never higher than the talus line above the pixel the water
+                // goes to next, so the stream lays a bed, not a wall — and the
+                // rest rides on.
+                let settle_m = (carrying - capacity) * SETTLE_SHARE
+                    / (params.sediment.density_kg_m3 * px_area);
+                let room_m = match self.downhill[i] {
+                    Drain::Into(to) => {
+                        f64::from(self.height[to as usize] - self.height[i])
+                            + params.talus_slope * px_m
+                    }
+                    _ => params.talus_slope * px_m,
+                }
+                .max(0.0);
+                let laid = deposit(tile, params, i, settle_m.min(room_m))
+                    * params.sediment.density_kg_m3
                     * px_area;
                 report.deposited_kg += laid;
                 carrying -= laid;
@@ -287,17 +473,19 @@ impl Eroder {
                 Drain::Into(to) => self.load[to as usize] += carrying,
                 Drain::Out => report.exported_kg += carrying,
                 Drain::Sink => {
-                    // The water stops; everything it carried is this basin's floor.
+                    // The water stops: this basin's floor takes what it can hold
+                    // under the talus line; the rest leaves with the books
+                    // balanced rather than standing up as a spike (and the f32
+                    // floor's rounding goes the same way).
+                    let room_m = params.talus_slope * px_m;
                     let laid = deposit(
                         tile,
                         params,
                         i,
-                        carrying / (params.sediment.density_kg_m3 * px_area),
+                        (carrying / (params.sediment.density_kg_m3 * px_area)).min(room_m),
                     ) * params.sediment.density_kg_m3
                         * px_area;
                     report.deposited_kg += laid;
-                    // What the f32 floor could not absorb leaves with the books
-                    // balanced rather than vanishing into rounding.
                     report.exported_kg += carrying - laid;
                 }
             }
@@ -316,7 +504,7 @@ impl Eroder {
                 let excess = rise - params.talus_slope * px_m;
                 if excess > 0.0 {
                     let slump_m = excess * params.talus_rate;
-                    let moved = strip(tile, props, params, i, slump_m, f64::MAX);
+                    let moved = strip(tile, props, params, i, slump_m, f64::MAX, grade);
                     let laid = deposit(
                         tile,
                         params,
@@ -358,6 +546,7 @@ fn strip(
     i: usize,
     want_m: f64,
     cap_m_at_unit_density: f64,
+    grade: Option<&[f32]>,
 ) -> f64 {
     let px_area = tile.frame.pixel_area_m2();
     let mut budget_m = want_m;
@@ -372,7 +561,13 @@ fn strip(
             continue;
         }
         let p = bed_props(props, params, s);
-        let resist = f64::from(p.resistance.clamp(0.02, 1.0));
+        // A migrated bed is graded by the ground it stands in; pixel-born
+        // sediment is what it is.
+        let graded = match grade {
+            Some(g) if s < props.len() => p.resistance * g[i],
+            _ => p.resistance,
+        };
+        let resist = f64::from(graded.clamp(0.02, 1.0));
         // This bed yields its share of the budget, slowed by its own resistance.
         let cut = (budget_m / resist).min(t as f64).min(cap_m);
         if cut <= 0.0 {
@@ -663,7 +858,15 @@ mod tests {
                 resistance: 0.10,
             },
         ];
-        let soft_kg = strip(&mut soft_tile, &soft_props, &params, i, want_m, f64::MAX);
+        let soft_kg = strip(
+            &mut soft_tile,
+            &soft_props,
+            &params,
+            i,
+            want_m,
+            f64::MAX,
+            None,
+        );
 
         let mut hard_tile = tile.clone();
         let hard_props = vec![
@@ -676,7 +879,15 @@ mod tests {
                 resistance: 0.90,
             },
         ];
-        let hard_kg = strip(&mut hard_tile, &hard_props, &params, i, want_m, f64::MAX);
+        let hard_kg = strip(
+            &mut hard_tile,
+            &hard_props,
+            &params,
+            i,
+            want_m,
+            f64::MAX,
+            None,
+        );
 
         assert!(
             soft_kg > hard_kg * 2.0,

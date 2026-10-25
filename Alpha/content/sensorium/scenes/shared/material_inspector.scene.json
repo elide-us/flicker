@@ -1,0 +1,388 @@
+{
+  "_comment": "SHARED material INSPECTOR modal (scenes/shared/ - ruling 2A3592D0 R1: pop-up modals are shared modal TREES). Aaron 2026-10-21 (A5972856): pressing a box of the Material Catalog pops a centre-screen stage showing just that material and its graph read-only, with the material IN THE PACKAGE above and its DEFINITION below. SCENE-HOSTED, the settings precedent: its host is a scene of its own, `flicker_materialcatalog::MaterialInspector` (named in the shell's HOSTED_ELSEWHERE, exempted from the param seam's registry), because what it shows is LIVE - a turning lit sample on its own stage and the graph on a canvas - and the scene beneath a modal is frozen, so the modal scene owns them. It loads through `flicker_shell::hosted_modal_tree`, the parse path every shared modal uses, which writes the host's exit (`modal_cancel`) onto the root whatever this file says; Esc / pad-B and the Close button both fire it and the host answers `cancelled`. NEVER a trap: the slab is `dismissable` and nothing here holds it shut. The confirm.scene.json shape: a full-bleed `surface`, a scrim cell (layer 0), a centred `popup_panel` (layer 1). Its chrome (`modal.*`) rides Main's carrier; the blocks below are this tree's OWN (scene-owned styles, $tokens only), laid over the carrier by `flicker_shell::hosted_modal_styles`. Every string is a $token or a bound Model value the host publishes RAW (no pair script: every gate is a value the host already knows). EVERY SIZE IS AN ART PLACEHOLDER - Aaron's to tune in-window.",
+  "params": {
+    "_comment": "The host's own configuration. `map_px`: the edge, in texels, a bundle's maps are decoded to (on a worker) before the sample wears them - the stage is about 390 px wide and a sphere shows half its texture's width at once, so 512 is ample. `canvas_fit_floor`: the zoom the graph is framed at on open when the whole graph would only fit smaller (the MaterialBench's `canvas_fit_floor`, so a card reads the same size in both). AARON'S TO TUNE - placeholders, never Rust constants.",
+    "map_px": 512,
+    "canvas_fit_floor": 0.75
+  },
+  "stages": {
+    "inspector_sample": {
+      "_comment": "The inspector's LIT SAMPLE - the `insp_sample` surface names this stage, and the engine's material-sample filler (flicker-materialview) draws the one material on a TURNING sphere (or plane) under it, LIVE. The `material` layer IS that body. The target clears TRANSPARENT ($stage_void) so the surface's authored well is the backdrop. Lighting, framing and the BLOOM are the MaterialBench's lit stage (`materialbench_lit`) - the same camera, because this box is the bench's size, not a catalog chip - so a material and its glow read here exactly as where it was made. EVERY NUMBER HERE IS AN ART PLACEHOLDER, Aaron's to tune in-window, never in Rust.",
+      "lighting": "studio",
+      "clear": "$stage_void",
+      "camera": {
+        "kind": "orbit",
+        "yaw": 0.6,
+        "pitch": 0.28,
+        "dist": 2.6,
+        "target_y": 0.0
+      },
+      "layers": [
+        {
+          "draw": "material"
+        }
+      ],
+      "_emissive_gain": "EMISSIVE GAIN - the draw-time multiplier on the material's Emit in this stage's HDR space (the host hands it to the sample's maps). ALL THREE lit stages must agree - this one, the Material Catalog's `mc_sample` and the MaterialBench's `materialbench_lit` (a gate holds them equal) - so a glow burns the same in the grid, in the inspector and where it was made. A finite number >= 0. AARON'S TO TUNE in-window - a placeholder, never a Rust constant.",
+      "emissive_gain": 4.0,
+      "_hdr": "HDR: the `scene` pass renders the lit sample into the LINEAR rgba16f `hdr` working attachment, `bloom` spreads whatever crosses its threshold (an Emit at the gain above; a hot specular off low-roughness metal) into a halo, and `tonemap_grade` resolves it into the sRGB `color` LAST - the reads/writes ARE the order. Alpha passes through, so the transparent clear survives.",
+      "attachments": {
+        "hdr": { "format": "rgba16f" },
+        "color": { "format": "surface" },
+        "depth": { "format": "depth32" }
+      },
+      "passes": [
+        { "pass": "scene", "writes": ["hdr", "depth"] },
+        {
+          "_comment": "BLOOM - the SAME numbers as `mc_sample` and `materialbench_lit` (a gate holds the three equal), so a glow's halo reads alike everywhere. Art placeholders, tuned in-window.",
+          "pass": "bloom",
+          "reads": ["hdr"],
+          "writes": ["hdr"],
+          "threshold": 1.0,
+          "knee": 0.5,
+          "intensity": 0.6,
+          "radius": 1.0
+        },
+        { "pass": "tonemap_grade" }
+      ]
+    }
+  },
+  "styles": {
+    "screens": {
+      "material_inspector": {
+        "_comment": "The full-screen SCRIM under the slab (the shared modals' dimmed backdrop). Authored as this tree's own block: it shadows the carrier's `screens` within this tree's resolution only, and nothing else here reads a `screens.*` block.",
+        "overlay": "$scrim_dim"
+      }
+    },
+    "inspector": {
+      "section": {
+        "_comment": "The HEADER (in the package) and FOOTER (definition) panels.",
+        "fill_top": "$stone2",
+        "fill_bot": "$stone1",
+        "border": "$edge2",
+        "border_w": 1,
+        "radius": 4
+      },
+      "well": {
+        "_comment": "The backdrop well behind the lit sample and the graph canvas - each surface's own panel, drawn beneath what fills it (the sample clears transparent).",
+        "fill_top": "$well_top",
+        "fill_bot": "$well_bot",
+        "border": "$edge2",
+        "border_w": 1,
+        "radius": 3
+      },
+      "col": {
+        "heading": "$bronze",
+        "label": "$dim",
+        "value": "$ink_bright",
+        "note": "$dim_soft"
+      },
+      "slider": {
+        "_comment": "The zoom slider - the MaterialBench's `materialbench.slider` ink, so the control reads alike where the material is made and where it is shown, plus the focused ink a pad user lands on in the `modal` ring (every scene's own slider block authors the same keys). Theme tokens only.",
+        "track": "$well",
+        "border": "$edge2",
+        "fill": "$sap_base",
+        "fill_hi": "$sap_border",
+        "handle": "$sap_border",
+        "handle_w": 14,
+        "focus_track": "$well",
+        "focus_fill": "$sap_hover",
+        "focus_label": "$rune_glow_hi",
+        "value_color": "$dim"
+      },
+      "canvas": {
+        "_comment": "The graph canvas's colour slots (flicker_canvas::CanvasStyle) - the MaterialBench's canvas ink, so the graph reads alike where it is made and where it is shown. The filler owns no colour; every slot is a theme token here, resolved once when the inspector opens.",
+        "bg": "$well_bot",
+        "edge": "$edge3",
+        "edge_lit": "$sap_base",
+        "card_fill_top": "$stone3",
+        "card_fill_bot": "$stone1",
+        "card_border": "$edge2",
+        "card_border_selected": "$sap_border",
+        "label": "$ink_bright",
+        "label_selected": "$ink_sapphire",
+        "meta": "$dim",
+        "icon_top": "$well_top",
+        "icon_bot": "$well_bot",
+        "icon_border": "$seam",
+        "port": "$bronze",
+        "link": "$rune_glow"
+      }
+    }
+  },
+  "tree": {
+    "component": "surface",
+    "anchor": "top_left",
+    "width_frac": 1.0,
+    "height_frac": 1.0,
+    "on_cancel": "modal_cancel",
+    "children": [
+      {
+        "component": "cell",
+        "anchor": "top_left",
+        "style": "screens.material_inspector",
+        "width_frac": 1.0,
+        "height_frac": 1.0,
+        "layer": 0
+      },
+      {
+        "_comment": "THE SLAB - `dismissable` (never held shut: this inspector runs no work a back-out could strand), titled with the material's name (`insp_title`, the host's resolved text). Its items stack: the PACKAGE header, the centre stage (lit sample + graph), the DEFINITION footer, the Close row. Its natural height (~860 px) fits 1600x900 and up; on a shorter screen (the shell's 1280x720 floor) the slab is CAPPED to the screen less `fit_margin` above and below and the CENTRE STAGE gives way (its `shrink`, down to its `min_size`) - the sample well and the canvas shrink, the header, the footer and the Close row keep their rows, and Close stays on screen. Sizes are Aaron's to tune.",
+        "component": "popup_panel",
+        "id": "popup",
+        "anchor": "center",
+        "layer": 1,
+        "fit_margin": 16,
+        "dismissable": true,
+        "divider": true,
+        "title_bind": "insp_title",
+        "title_size": 30,
+        "panel_w": 1240,
+        "panel_pad": 24,
+        "panel_gap": 12,
+        "items_gap": 10,
+        "children": [
+          {
+            "_comment": "HEADER - the material IN THE PACKAGE: what the promotion path holds for this slot (package, else staging, else nothing) and that bundle's facts, each a label token over a value the host publishes raw. `insp_pkg_note` says in words what the state means (nothing made yet / staged / promoted / a recipe that does not load).",
+            "component": "cell",
+            "id": "insp_pkg",
+            "style": "inspector.section",
+            "size": 98,
+            "pad": 10,
+            "gap": 4,
+            "children": [
+              {"component": "text", "text": "$insp_pkg_heading", "text_size": 11, "font": "label", "color": "inspector.col.heading", "size": 14},
+              {
+                "component": "grid",
+                "id": "insp_pkg_facts",
+                "cols": "1fr 1fr 1fr 5fr 2fr 1fr 2fr",
+                "rows": "1fr",
+                "gap": 10,
+                "size": 40,
+                "children": [
+                  {"component": "cell", "gap": 2, "children": [
+                    {"component": "text", "text": "$insp_lbl_state", "text_size": 10, "font": "label", "color": "inspector.col.label", "size": 14},
+                    {"component": "text", "text_bind": "insp_pkg_state", "text_size": 14, "font": "label", "color": "inspector.col.value", "size": 22}
+                  ]},
+                  {"component": "cell", "gap": 2, "children": [
+                    {"component": "text", "text": "$insp_lbl_version", "text_size": 10, "font": "label", "color": "inspector.col.label", "size": 14},
+                    {"component": "text", "text_bind": "insp_pkg_version", "text_size": 14, "font": "label", "color": "inspector.col.value", "size": 22}
+                  ]},
+                  {"component": "cell", "gap": 2, "children": [
+                    {"component": "text", "text": "$insp_lbl_nodes", "text_size": 10, "font": "label", "color": "inspector.col.label", "size": 14},
+                    {"component": "text", "text_bind": "insp_pkg_nodes", "text_size": 14, "font": "label", "color": "inspector.col.value", "size": 22}
+                  ]},
+                  {"component": "cell", "gap": 2, "children": [
+                    {"component": "text", "text": "$insp_lbl_maps", "text_size": 10, "font": "label", "color": "inspector.col.label", "size": 14},
+                    {"component": "text", "text_bind": "insp_pkg_maps", "text_size": 12, "font": "label", "color": "inspector.col.value", "size": 22}
+                  ]},
+                  {"component": "cell", "gap": 2, "children": [
+                    {"component": "text", "text": "$insp_lbl_size", "text_size": 10, "font": "label", "color": "inspector.col.label", "size": 14},
+                    {"component": "text", "text_bind": "insp_pkg_size", "text_size": 14, "font": "label", "color": "inspector.col.value", "size": 22}
+                  ]},
+                  {"component": "cell", "gap": 2, "children": [
+                    {"component": "text", "text": "$insp_lbl_bytes", "text_size": 10, "font": "label", "color": "inspector.col.label", "size": 14},
+                    {"component": "text", "text_bind": "insp_pkg_bytes", "text_size": 14, "font": "label", "color": "inspector.col.value", "size": 22}
+                  ]},
+                  {"component": "cell", "gap": 2, "children": [
+                    {"component": "text", "text": "$insp_lbl_modified", "text_size": 10, "font": "label", "color": "inspector.col.label", "size": 14},
+                    {"component": "text", "text_bind": "insp_pkg_modified", "text_size": 14, "font": "label", "color": "inspector.col.value", "size": 22}
+                  ]}
+                ]
+              },
+              {"component": "text", "text_bind": "insp_pkg_note", "text_size": 11, "font": "label", "color": "inspector.col.note", "size": 16}
+            ]
+          },
+          {
+            "_comment": "CENTRE STAGE - LEFT the material on a turning lit body (`insp_sample` on `stages.inspector_sample`, LIVE) with the Sphere/Plane toggle under it (the MaterialBench's `lit_body`, labelled from the same tokens); RIGHT the graph, READ-ONLY - the host seats flicker_canvas::GraphCanvas in `insp_canvas` through flicker_materialview::graph_view (cards in evaluation order + the Output card with its port labels, framed legibly on open; wheel zooms, middle-drag pans, a click picks a card - nothing moves, nothing links), with the NODE LIST beside it (the pad's way to read a node). A picked card's `key · Kind`, its inputs and its parameters read out below. With no graph, `insp_graph_note` says why over the empty well.",
+            "component": "row",
+            "id": "insp_centre",
+            "size": 392,
+            "shrink": 1,
+            "min_size": 200,
+            "gap": 12,
+            "children": [
+              {
+                "component": "cell",
+                "id": "insp_sample_col",
+                "size": 392,
+                "gap": 6,
+                "children": [
+                  {"component": "surface", "id": "insp_sample", "source": "inspector_sample", "style": "inspector.well", "grow": 1.0},
+                  {
+                    "component": "row",
+                    "size": 32,
+                    "gap": 8,
+                    "children": [
+                      {"component": "button", "id": "insp_body", "action": "insp_body", "label_bind": "insp_body_label", "label_size": 13, "size": 120, "variant": "secondary", "tab_group": "modal", "nav_ordinal": 0},
+                      {"component": "text", "text": "$insp_body_hint", "text_size": 11, "font": "label", "color": "inspector.col.note", "grow": 1.0}
+                    ]
+                  },
+                  {
+                    "_comment": "The sample's ZOOM (the MaterialBench's `lit_zoom`, under this tree's name) - how close the material is drawn: the stage's camera distance divided by it (1 = the stage's own framing). The wheel over the sample moves the same number, one `step` per notch, inside this same range: the host reads `min` / `max` / `step` from THIS node, the one source - no param repeats them. It takes its height from the sample above it (the column is fixed; the slab is not). Pad: in the `modal` ring right after the body toggle, before the node rows; Left / Right step it. AARON'S TO TUNE - placeholders: min 1.0, max 4.0, step 0.25. `min` must stay in (0, 1] and `max` at least 1 (the sample opens on the stage's framing) and `step` above 0; anything else switches the zoom off, loudly.",
+                    "component": "slider",
+                    "id": "insp_zoom",
+                    "bind": "insp_zoom",
+                    "label": "$insp_zoom",
+                    "min": 1.0,
+                    "max": 4.0,
+                    "step": 0.25,
+                    "decimals": 2,
+                    "slider_h": 7,
+                    "value_w": 46,
+                    "size": 32,
+                    "style": "inspector.slider",
+                    "tab_group": "modal",
+                    "nav_ordinal": 1
+                  }
+                ]
+              },
+              {
+                "component": "cell",
+                "id": "insp_graph_col",
+                "grow": 1.0,
+                "gap": 4,
+                "children": [
+                  {
+                    "component": "row",
+                    "id": "insp_graph_row",
+                    "grow": 1.0,
+                    "gap": 8,
+                    "children": [
+                      {
+                        "component": "stack",
+                        "id": "insp_graph",
+                        "grow": 1.0,
+                        "children": [
+                          {"component": "surface", "id": "insp_canvas", "style": "inspector.well", "anchor": "top_left", "width_frac": 1.0, "height_frac": 1.0},
+                          {"component": "text", "text_bind": "insp_graph_note", "text_size": 13, "font": "label", "color": "inspector.col.note", "align": "center", "anchor": "center", "width_frac": 1.0, "size": 22}
+                        ]
+                      },
+                      {
+                        "_comment": "THE NODE LIST - the graph's cards as rows (the MaterialBench's `mtl_node_list` shape), in the canvas's own order: every node in evaluation order, then the Output. The pad's way to READ a node: the d-pad walks the rows (tab_group `modal`, after the body toggle and the zoom slider, and before Close) and Confirm picks one exactly as a click on its card does - the card wears the selection and the read-out below shows it. The host expands the ONE prototype per card (`rows_from: insp_nodes`, the walker's repeater) and publishes each row's label raw (`key · Kind`, the Output's heading); the list scrolls on its `insp_node_scroll` bind. Sizes are Aaron's to tune - but the list's width comes out of the CANVAS's: below about 576 px the canvas lays its cards out in ONE column, and a glow's five cards no longer frame whole at the legible floor (at 190 the canvas keeps ~590 px, two columns).",
+                        "component": "list",
+                        "id": "insp_node_list",
+                        "bind": "insp_node_scroll",
+                        "rows_from": "insp_nodes",
+                        "style": "inspector.well",
+                        "size": 190,
+                        "gap": 2,
+                        "pad": 4,
+                        "children": [
+                          {"component": "button", "id": "insp_nl_{row}", "action": "insp_nl_{row}", "label_bind": "insp_nl{row}_label", "label_size": 12, "size": 26, "variant": "secondary", "tab_group": "modal", "nav_ordinal": 2}
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "_comment": "The picked card's READ-OUT, one line: its heading (`key · Kind`), then what feeds it (each port with the key wired there) beside its `$insp_lbl_inputs` label; its parameters wrap below. One line, not two, so the canvas keeps the height a glow needs to frame whole at the legible floor.",
+                    "component": "row",
+                    "size": 18,
+                    "gap": 8,
+                    "children": [
+                      {"component": "text", "text_bind": "insp_node_label", "text_size": 13, "font": "label", "color": "inspector.col.value", "grow": 1.0},
+                      {"component": "text", "text": "$insp_lbl_inputs", "text_size": 10, "font": "label", "color": "inspector.col.label", "size": 46},
+                      {"component": "text", "text_bind": "insp_node_inputs", "text_size": 11, "font": "label", "color": "inspector.col.value", "size": 380}
+                    ]
+                  },
+                  {"component": "text", "text_bind": "insp_node_params", "text_size": 11, "font": "label", "color": "inspector.col.label", "wrap": true, "size": 34}
+                ]
+              }
+            ]
+          },
+          {
+            "_comment": "FOOTER - the material's DEFINITION: its row of the material index (materials.json) and the band its id is filed under (`_meta.bands`). Values are the row's own data; the render class is a token per class; the colour is a sprite over the 1x1 texture the host uploads in the index colour (`insp_swatch_tex`, absent for a free slot so it draws nothing). A FREE slot shows `$insp_unassigned` for its name and a dash for the rest. The three LONG-TEXT cells (band, represents, signature) WRAP onto a second line within their 30 px rather than running off their cell.",
+            "component": "cell",
+            "id": "insp_def",
+            "style": "inspector.section",
+            "size": 184,
+            "pad": 10,
+            "gap": 4,
+            "children": [
+              {"component": "text", "text": "$insp_def_heading", "text_size": 11, "font": "label", "color": "inspector.col.heading", "size": 14},
+              {
+                "component": "grid",
+                "id": "insp_def_facts",
+                "cols": "1fr 1fr 1fr 1fr 1fr 1fr 1fr 1fr",
+                "rows": "1fr 1fr 1fr",
+                "gap": 10,
+                "row_gap": 4,
+                "grow": 1.0,
+                "children": [
+                  {"component": "cell", "gap": 2, "children": [
+                    {"component": "text", "text": "$insp_lbl_id", "text_size": 10, "font": "label", "color": "inspector.col.label", "size": 14},
+                    {"component": "text", "text_bind": "insp_def_id", "text_size": 14, "font": "label", "color": "inspector.col.value", "size": 22}
+                  ]},
+                  {"component": "cell", "col_span": 2, "gap": 2, "children": [
+                    {"component": "text", "text": "$insp_lbl_name", "text_size": 10, "font": "label", "color": "inspector.col.label", "size": 14},
+                    {"component": "text", "text_bind": "insp_def_name", "text_size": 14, "font": "label", "color": "inspector.col.value", "size": 22}
+                  ]},
+                  {"component": "cell", "gap": 2, "children": [
+                    {"component": "text", "text": "$insp_lbl_category", "text_size": 10, "font": "label", "color": "inspector.col.label", "size": 14},
+                    {"component": "text", "text_bind": "insp_def_category", "text_size": 14, "font": "label", "color": "inspector.col.value", "size": 22}
+                  ]},
+                  {"component": "cell", "gap": 2, "children": [
+                    {"component": "text", "text": "$insp_lbl_class", "text_size": 10, "font": "label", "color": "inspector.col.label", "size": 14},
+                    {"component": "text", "text_bind": "insp_def_class", "text_size": 14, "font": "label", "color": "inspector.col.value", "size": 22}
+                  ]},
+                  {"component": "cell", "col_span": 2, "gap": 2, "children": [
+                    {"component": "text", "text": "$insp_lbl_colour", "text_size": 10, "font": "label", "color": "inspector.col.label", "size": 14},
+                    {"component": "row", "size": 22, "gap": 8, "children": [
+                      {"component": "sprite", "id": "insp_swatch", "tex_bind": "insp_swatch_tex", "size": 34},
+                      {"component": "text", "text_bind": "insp_def_colour", "text_size": 14, "font": "label", "color": "inspector.col.value", "grow": 1.0}
+                    ]}
+                  ]},
+                  {"component": "cell", "gap": 2, "children": [
+                    {"component": "text", "text": "$insp_lbl_extracts", "text_size": 10, "font": "label", "color": "inspector.col.label", "size": 14},
+                    {"component": "text", "text_bind": "insp_def_extracts", "text_size": 14, "font": "label", "color": "inspector.col.value", "size": 22}
+                  ]},
+                  {"component": "cell", "col_span": 4, "gap": 2, "children": [
+                    {"component": "text", "text": "$insp_lbl_band", "text_size": 10, "font": "label", "color": "inspector.col.label", "size": 14},
+                    {"component": "text", "text_bind": "insp_def_band", "text_size": 12, "font": "label", "color": "inspector.col.value", "wrap": true, "size": 30}
+                  ]},
+                  {"component": "cell", "col_span": 4, "gap": 2, "children": [
+                    {"component": "text", "text": "$insp_lbl_represents", "text_size": 10, "font": "label", "color": "inspector.col.label", "size": 14},
+                    {"component": "text", "text_bind": "insp_def_represents", "text_size": 12, "font": "label", "color": "inspector.col.value", "wrap": true, "size": 30}
+                  ]},
+                  {"component": "cell", "col_span": 3, "gap": 2, "children": [
+                    {"component": "text", "text": "$insp_lbl_signature", "text_size": 10, "font": "label", "color": "inspector.col.label", "size": 14},
+                    {"component": "text", "text_bind": "insp_def_signature", "text_size": 12, "font": "label", "color": "inspector.col.value", "wrap": true, "size": 30}
+                  ]},
+                  {"component": "cell", "gap": 2, "children": [
+                    {"component": "text", "text": "$insp_lbl_hardness", "text_size": 10, "font": "label", "color": "inspector.col.label", "size": 14},
+                    {"component": "text", "text_bind": "insp_def_hardness", "text_size": 14, "font": "label", "color": "inspector.col.value", "size": 22}
+                  ]},
+                  {"component": "cell", "gap": 2, "children": [
+                    {"component": "text", "text": "$insp_lbl_brittleness", "text_size": 10, "font": "label", "color": "inspector.col.label", "size": 14},
+                    {"component": "text", "text_bind": "insp_def_brittleness", "text_size": 14, "font": "label", "color": "inspector.col.value", "size": 22}
+                  ]},
+                  {"component": "cell", "gap": 2, "children": [
+                    {"component": "text", "text": "$insp_lbl_water", "text_size": 10, "font": "label", "color": "inspector.col.label", "size": 14},
+                    {"component": "text", "text_bind": "insp_def_water", "text_size": 14, "font": "label", "color": "inspector.col.value", "size": 22}
+                  ]},
+                  {"component": "cell", "gap": 2, "children": [
+                    {"component": "text", "text": "$insp_lbl_viscosity", "text_size": 10, "font": "label", "color": "inspector.col.label", "size": 14},
+                    {"component": "text", "text_bind": "insp_def_viscosity", "text_size": 14, "font": "label", "color": "inspector.col.value", "size": 22}
+                  ]},
+                  {"component": "cell", "gap": 2, "children": [
+                    {"component": "text", "text": "$insp_lbl_density", "text_size": 10, "font": "label", "color": "inspector.col.label", "size": 14},
+                    {"component": "text", "text_bind": "insp_def_density", "text_size": 14, "font": "label", "color": "inspector.col.value", "size": 22}
+                  ]}
+                ]
+              }
+            ]
+          },
+          {
+            "_comment": "The way out, said plainly: Close fires the SAME exit Esc / pad-B fire (`modal_cancel`, the name the host was handed), so there is one way to leave and it always works. Its `nav_ordinal` 1001 keeps it LAST in the `modal` ring, after every node row the list can expand to (rows count up from 2, after the body toggle's 0 and the zoom slider's 1) - the MaterialBench's convention for buttons after its node list.",
+            "component": "row",
+            "id": "insp_actions",
+            "size": 40,
+            "gap": 10,
+            "children": [
+              {"component": "text", "text": "$insp_hint", "text_size": 11, "font": "label", "color": "inspector.col.note", "grow": 1.0},
+              {"component": "button", "id": "modal_close", "action": "modal_cancel", "label": "$modal_lbl_close", "label_size": 14, "size": 160, "variant": "secondary", "tab_group": "modal", "nav_ordinal": 1001}
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

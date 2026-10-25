@@ -23,9 +23,9 @@ pub mod world;
 pub mod worldmap;
 pub use camera::OrbitCam;
 pub use view::{Arrows, GlobeView, GLOBE_LAYERS, NO_ARROWS};
-pub use world::{GlobeWorld, ShellSpec, DEFAULT_SET};
+pub use world::{BakedSet, GlobeWorld, ShellSpec, DEFAULT_SET};
 pub use worldmap::{
-    HexSphereMap, MapBake, MapContent, MapExtent, MapFrame, MapLook, MapMode, WorldMap,
+    HexSphereMap, MapBake, MapContent, MapExtent, MapFrame, MapLook, MapMode, MapPicture, WorldMap,
 };
 
 use flicker::render::{MeshVertex, Vec3};

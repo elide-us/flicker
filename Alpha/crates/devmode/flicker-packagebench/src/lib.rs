@@ -35,6 +35,10 @@ use flicker_content::{BatchFileOp, FileOp};
 /// The node id of the inline rename field — also its focus id.
 const RENAME_ID: &str = "rename_field";
 
+/// The refusal a move into a material slot that may not hold its bundle earns — the
+/// promote's own token, so the Files tab and the Review tab say it alike.
+const SLOT_REFUSED: &str = "$pkg_err_material_slot_refused";
+
 /// The three answers the SHARED `conflict` modal carries back — the bench's OWN action
 /// names, handed to the modal as its three options and returned verbatim through
 /// `Scene::modal_closed`. They read here exactly as they read when the dialog was an
@@ -160,19 +164,24 @@ impl Command for FileCommand {
     }
 }
 
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use flicker::render::{FrameGraph, Renderer, Vec2};
 use flicker::scene::{Scene, SceneInput, Transition};
 use flicker::script::{HudCommand, ScriptHost, UiNode, ValueMap};
 use flicker::ui::{render_hud, run_ui, SceneDef, UiInput, UiIntents, UiState, WalkerHandler};
+// `1.4 MB` / `230 KB` / `87 B` — the ONE byte formatter both tabs (and the collision
+// prompt) read, shared with every other surface that shows a file's size.
+use flicker_content::human_bytes;
 use flicker_input_core::{
     AbstractControls, ActionSignal, EventKind, GamepadConfig, InputContext, InputMap, InputState,
 };
 use flicker_input_router::{Flow, InputEvent, InputHandler, RouteCtx, Router};
 use flicker_shell::{ModalOption, ModalParams, PauseScene, SharedModal, Theme};
 
+use flicker_materials::{JsonTableSource, MaterialId, RenderClass, Tables};
 use fs_model::{QueueItem, Roots, Row, SortKey, TreeRow};
 
 /// The pair script — the scene's LOGIC half, by name (five-line architecture).
@@ -325,6 +334,10 @@ pub struct PackageBench {
     batch_seq: u64,
     /// The last mutation's outcome, for the status line.
     last_error: Option<String>,
+    /// The specifics a refusal names, as DATA beside its token (the token + detail
+    /// convention): `(token, detail)` — published only while `last_error` is still that
+    /// token, so a later error never wears an old refusal's detail.
+    error_detail: Option<(String, String)>,
 
     tick: u64,
     fired_sigs: Vec<String>,
@@ -337,6 +350,61 @@ pub struct PackageBench {
     /// Facts + warnings for the selected item, parsed ONCE per selection — a
     /// rig parse is a per-click cost, never a per-frame one.
     facts: Option<ReviewFacts>,
+    /// The render class of every row the material index lists, by slot — what the ONE
+    /// slot predicate (`flicker_materials::slot_accepts`) weighs a staged material
+    /// bundle's slot against, at review AND at promote. Read once at construction from
+    /// the content tree's `data/`.
+    slot_classes: HashMap<MaterialId, RenderClass>,
+}
+
+/// The slot a destination in the PACKAGE's materials tier names — `package/materials/<id:03>`
+/// or anything beneath it — or `None` for any other destination (another tier, the tier
+/// folder itself, a segment that is no slot id).
+fn package_material_slot(package: &Path, dst: &Path) -> Option<MaterialId> {
+    let rel = dst
+        .strip_prefix(package.join(flicker_content::MATERIALS_DIR))
+        .ok()?;
+    let seg = rel.components().next()?.as_os_str().to_str()?;
+    flicker_materials::slot_of_dir(seg)
+}
+
+/// Every slot folder (`<id:03>`) directly inside `dir`, with its path, in slot order.
+fn slot_folders(dir: &Path) -> Vec<(MaterialId, PathBuf)> {
+    let mut kids: Vec<(MaterialId, PathBuf)> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| {
+            let slot = e
+                .file_name()
+                .to_str()
+                .and_then(flicker_materials::slot_of_dir)?;
+            Some((slot, e.path()))
+        })
+        .collect();
+    kids.sort_unstable();
+    kids
+}
+
+/// The render class of every row the material index in `data` lists, by slot. An index
+/// that will not load is loud and lists nothing — every slot then reads as unlisted, so
+/// the emissive slots refuse a bundle and the rest accept one.
+fn material_classes(data: &Path) -> HashMap<MaterialId, RenderClass> {
+    match Tables::from_source(&JsonTableSource::new(data)) {
+        Ok(t) => t
+            .materials()
+            .iter()
+            .filter_map(|m| Some((m.id, m.render_class?)))
+            .collect(),
+        Err(e) => {
+            tracing::warn!(
+                "packagebench: the material index at {} does not load ({e}) — every staged \
+                 bundle's slot reads as unlisted",
+                data.display()
+            );
+            HashMap::new()
+        }
+    }
 }
 
 impl Default for PackageBench {
@@ -409,11 +477,13 @@ impl PackageBench {
             history: CommandHistory::new(),
             batch_seq: 0,
             last_error: None,
+            error_detail: None,
             tick: 0,
             fired_sigs: Vec::new(),
             queue: Vec::new(),
             review_sel: 0,
             facts: None,
+            slot_classes: material_classes(&flicker_content::roots().data()),
         };
         // Both roots open from the first frame — the design shows them that way.
         me.expanded = vec![me.roots.package.clone(), me.roots.staging.clone()];
@@ -631,6 +701,14 @@ impl PackageBench {
         // orphan the subtree and cannot be undone coherently.
         if src.is_dir() && dst_dir.starts_with(&src) {
             self.last_error = Some("$pkg_err_into_self".into());
+            return;
+        }
+        // THE SLOT LAW on the Files tab too: a paste that lands anything in a material
+        // slot — `package/materials/<id:03>`, or the whole tier at once — puts it where
+        // the engine reads, so it is weighed by the ONE slot predicate exactly as a
+        // promote is, and refused the same way, naming the first offender.
+        if let Some(offender) = self.slot_refusal(&src, &dst) {
+            self.refuse_slot(&offender);
             return;
         }
         // INTERIM (until the conflict dialog lands): a collision is REFUSED
@@ -860,6 +938,57 @@ impl PackageBench {
         self.last_error.as_deref()
     }
 
+    /// The first thing a move of `src` to `dst` would put in a material slot that the
+    /// slot law refuses — the path of the offending item — or `None` when every slot it
+    /// touches takes what lands there (or it touches none). Weighed by the class of the
+    /// index row each slot binds, as review and promote weigh it:
+    /// - a destination inside `package/materials/<id:03>` is weighed by that slot;
+    /// - a destination that IS the materials tier, or contains it (the whole tier pasted, a
+    ///   folder renamed into it), by EVERY `<id:03>` folder that lands on the tier.
+    fn slot_refusal(&self, src: &Path, dst: &Path) -> Option<PathBuf> {
+        let tier = self.roots.package.join(flicker_content::MATERIALS_DIR);
+        let refuses =
+            |slot| !flicker_materials::slot_accepts(slot, self.slot_classes.get(&slot).copied());
+        if let Ok(below) = tier.strip_prefix(dst) {
+            // The move lands `src/<below>` on the tier itself.
+            return slot_folders(&src.join(below))
+                .into_iter()
+                .find(|(slot, _)| refuses(*slot))
+                .map(|(_, path)| path);
+        }
+        package_material_slot(&self.roots.package, dst)
+            .filter(|&slot| refuses(slot))
+            .map(|_| src.to_path_buf())
+    }
+
+    /// Refuse a move the slot law will not let land: the promote's own token, the
+    /// offender's path beside it as data.
+    fn refuse_slot(&mut self, offender: &Path) {
+        self.last_error = Some(SLOT_REFUSED.into());
+        self.error_detail = Some((SLOT_REFUSED.into(), offender.display().to_string()));
+    }
+
+    /// What the last refusal named, as data — while it is still the error on show.
+    pub fn last_error_detail(&self) -> Option<&str> {
+        match (&self.last_error, &self.error_detail) {
+            (Some(error), Some((token, detail))) if error == token => Some(detail),
+            _ => None,
+        }
+    }
+
+    /// Re-class one slot of the bench's material index — the seam a test drives the slot
+    /// law through (the shipped index is valid, so it never puts a non-emissive row in an
+    /// emissive slot itself). `None` unlists the slot. The facts are re-derived.
+    #[cfg(test)]
+    fn set_slot_class(&mut self, slot: MaterialId, class: Option<RenderClass>) {
+        match class {
+            Some(c) => self.slot_classes.insert(slot, c),
+            None => self.slot_classes.remove(&slot),
+        };
+        self.facts = None;
+        self.ensure_facts();
+    }
+
     fn review_nav(&mut self, delta: isize) {
         if self.queue.is_empty() {
             return;
@@ -885,17 +1014,27 @@ impl PackageBench {
         if self.facts.as_ref().is_some_and(|f| f.dir == item.dir) {
             return;
         }
-        self.facts = Some(ReviewFacts::of(item, &self.roots));
+        self.facts = Some(ReviewFacts::of(item, &self.roots, &self.slot_classes));
     }
 
     /// PROMOTE the selected asset: move its whole folder (the dependencies travel
     /// together) from staging to the mirrored package path, and append the
     /// manifest row — ONE history entry, so one undo returns files AND ledger.
     /// A collision raises the same prompt every other mutation uses.
+    ///
+    /// THE SLOT LAW gates the promote itself, not only the review's warning: a material
+    /// bundle whose slot cannot hold the index row it binds (Air's slot; an emissive slot
+    /// whose row is not an emissive material) is REFUSED out loud and nothing moves — the
+    /// same predicate the loader and MaterialBench's Commit ask.
     pub fn promote_selected(&mut self) {
         let Some(item) = self.queue.get(self.review_sel).cloned() else {
             return;
         };
+        self.ensure_facts();
+        if let Some(token) = self.facts.as_ref().and_then(|f| f.refusal) {
+            self.last_error = Some(token.into());
+            return;
+        }
         let files = fs_model::files_under(&item.dir);
         if files.is_empty() {
             return;
@@ -1087,6 +1226,13 @@ impl PackageBench {
         }
         if flicker_content::occupied(&dst) {
             self.last_error = Some("$pkg_err_name_taken".into());
+            self.ui_state.open_text_entry(RENAME_ID);
+            return;
+        }
+        // A rename is a move: one that lands in a material slot — `250` renamed `000`, a
+        // folder renamed into the tier — is weighed by the slot law like any paste.
+        if let Some(offender) = self.slot_refusal(&r.path, &dst) {
+            self.refuse_slot(&offender);
             self.ui_state.open_text_entry(RENAME_ID);
             return;
         }
@@ -1357,6 +1503,10 @@ impl PackageBench {
         if let Some(e) = &self.last_error {
             m.set("error", e.clone());
         }
+        m.set(
+            "error_detail",
+            self.last_error_detail().unwrap_or_default().to_string(),
+        );
         m.set("has_error", self.last_error.is_some());
         UiIntents::mirror_into(&mut m, &self.fired_sigs);
         m
@@ -1844,12 +1994,21 @@ struct ReviewFacts {
     dir: PathBuf,
     /// `$token`s naming what is wrong with the asset, worst first.
     warnings: Vec<&'static str>,
+    /// Why the asset may NOT be promoted at all — a `$token`, set only by the slot law (a
+    /// material bundle whose slot cannot hold the row it binds). Every other fact is a
+    /// warning the reviewer weighs; this one the promote refuses.
+    refusal: Option<&'static str>,
 }
 
 impl ReviewFacts {
-    fn of(item: &QueueItem, roots: &Roots) -> Self {
+    fn of(
+        item: &QueueItem,
+        roots: &Roots,
+        slot_classes: &HashMap<MaterialId, RenderClass>,
+    ) -> Self {
         // Warnings, worst first — each a real fact, never a placeholder.
         let mut warnings: Vec<&'static str> = Vec::new();
+        let mut refusal = None;
         if item.class == flicker_content::PackageClass::Epoch {
             // A committed world is a SINGLE self-describing file: there is no
             // rig json to probe, and the format's own loader is the honest
@@ -1897,23 +2056,41 @@ impl ReviewFacts {
                     warnings.push("$pkg_warn_material_recipe_missing");
                     break 'bundle;
                 };
-                // The recipe as a `Value`, exactly as the rig probe below reads
-                // its primary json: this bench parses content, it does not take
-                // the texture crate on to do it.
-                let bound = bundle
+                // The document through the ONE material loader every reader
+                // uses (`load_material_json`): a v2 material graph — what
+                // MaterialBench commits — or a versionless v1 recipe, which it
+                // converts. A document that loads as neither is a bundle nothing
+                // could draw, named HERE before it is promoted; its slot claim is
+                // then unknown, so it is not also called unbound.
+                let loaded = bundle
                     .recipe_text()
                     .ok()
-                    .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
-                    .and_then(|v| v["material"].as_u64());
-                if bound.is_none() {
-                    // Nothing in the recipe claims a slot, so the folder is the
-                    // only thing that does.
-                    warnings.push("$pkg_warn_material_unbound");
+                    .map(|t| flicker_texture::load_material_json(&t));
+                let bound = match &loaded {
+                    Some(Ok(graph)) => graph.material.map(u64::from),
+                    _ => None,
+                };
+                match &loaded {
+                    Some(Ok(_)) if bound.is_none() => {
+                        // Nothing in the document claims a slot, so the folder is
+                        // the only thing that does.
+                        warnings.push("$pkg_warn_material_unbound");
+                    }
+                    Some(Ok(_)) => {}
+                    Some(Err(e)) => {
+                        tracing::warn!(dir = %item.dir.display(), "material document does not load: {e}");
+                        warnings.push("$pkg_warn_material_recipe_invalid");
+                    }
+                    None => warnings.push("$pkg_warn_material_recipe_invalid"),
                 }
-                if !flicker_materials::slot_is_writable(slot) {
-                    // Slot 0 is Air and is never drawn; the top of the range is
-                    // the reserved exotic-emissive block (ruling BC95B08F D5).
+                // THE SLOT LAW, asked of the ONE predicate with the class of the
+                // index row the slot binds: Air's slot holds nothing, and an emissive
+                // slot holds an emissive material only (ruling 2026-10-20) — so a
+                // non-emissive row can never be promoted into 248–255. Warned at review,
+                // and refused at promote.
+                if !flicker_materials::slot_accepts(slot, slot_classes.get(&slot).copied()) {
                     warnings.push("$pkg_warn_material_slot_reserved");
+                    refusal = Some("$pkg_err_material_slot_refused");
                 }
                 if bound.is_some_and(|b| b != u64::from(slot)) {
                     // D-MISMATCH: two representations of the slot exist on disk
@@ -1921,6 +2098,18 @@ impl ReviewFacts {
                     // they disagree the reviewer arbitrates. Never reconciled
                     // here, only surfaced.
                     warnings.push("$pkg_warn_material_slot_mismatch");
+                }
+                // An EMISSIVE material whose look does not glow: legal — the slot law
+                // weighs the index row, not the look — but almost surely a mistake, so
+                // the reviewer is told. Decided through the graph the one loader read, by
+                // the ONE glow predicate (`MaterialGraph::glows` — no Emit wired, or an Emit
+                // at strength 0, is no glow), the one the MaterialBench's Commit asks too.
+                if slot_classes.get(&slot) == Some(&RenderClass::Emissive) {
+                    if let Some(Ok(graph)) = &loaded {
+                        if !graph.glows() {
+                            warnings.push("$pkg_warn_material_no_emit");
+                        }
+                    }
                 }
                 // `bake()` emits every map in `MapKind::ALL` or none, so fewer
                 // files than that arity is a bake caught half-written. The count
@@ -1978,6 +2167,7 @@ impl ReviewFacts {
         Self {
             dir: item.dir.clone(),
             warnings,
+            refusal,
         }
     }
 }
@@ -2029,13 +2219,7 @@ fn facts_line(f: &flicker_content::FileFacts) -> String {
     if f.is_dir {
         return "$pkg_class_folder".into();
     }
-    const KB: u64 = 1024;
-    const MB: u64 = KB * 1024;
-    match f.size {
-        b if b >= MB => format!("{:.1} MB", b as f64 / MB as f64),
-        b if b >= KB => format!("{:.0} KB", b as f64 / KB as f64),
-        b => format!("{b} B"),
-    }
+    human_bytes(f.size)
 }
 
 fn human_size(row: &Row) -> String {
@@ -2043,17 +2227,6 @@ fn human_size(row: &Row) -> String {
         return "$pkg_dash".into();
     }
     human_bytes(row.size)
-}
-
-/// `1.4 MB` / `230 KB` / `87 B` — the ONE byte formatter both tabs read.
-fn human_bytes(b: u64) -> String {
-    const KB: u64 = 1024;
-    const MB: u64 = KB * 1024;
-    match b {
-        b if b >= MB => format!("{:.1} MB", b as f64 / MB as f64),
-        b if b >= KB => format!("{:.0} KB", b as f64 / KB as f64),
-        b => format!("{b} B"),
-    }
 }
 
 #[cfg(test)]
@@ -2547,16 +2720,42 @@ mod tests {
             .unwrap();
     }
 
+    /// A material document as MaterialBench commits it — the v2 graph (a factory
+    /// patch as the graph it converts to), bound to `slot` (or to nothing).
+    fn graph_doc(slot: Option<u8>) -> String {
+        let mut graph =
+            flicker_texture::MaterialGraph::from_recipe(&flicker_texture::presets::granite());
+        graph.material = slot;
+        serde_json::to_string_pretty(&graph).expect("a graph serializes")
+    }
+
     /// A complete, correctly bound bundle at `slot` — the shape a commit leaves.
     fn stage_slot(root: &std::path::Path, slot: u8) {
         let seg = flicker_materials::slot_dir(slot);
-        stage_bundle(
-            root,
-            &seg,
-            &seg,
-            &format!(r#"{{"id":"scratch","material":{slot}}}"#),
-            bundle_maps(),
-        );
+        stage_bundle(root, &seg, &seg, &graph_doc(Some(slot)), bundle_maps());
+    }
+
+    /// The authored GLOW for an emissive `slot` (`content/data/glow_materials.json` — a
+    /// look that glows), as the document MaterialBench commits for it.
+    fn glow_doc(slot: u8) -> String {
+        let text = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../content/data/glow_materials.json"
+        ))
+        .expect("glow_materials.json reads");
+        let doc: serde_json::Value = serde_json::from_str(&text).expect("it parses");
+        let graph = doc["graphs"]
+            .as_array()
+            .and_then(|g| g.iter().find(|g| g["material"] == u64::from(slot)))
+            .unwrap_or_else(|| panic!("an authored glow for slot {slot}"));
+        graph.to_string()
+    }
+
+    /// A complete bundle at an emissive `slot` whose look GLOWS — the shape a commit of an
+    /// authored glow leaves.
+    fn stage_glow(root: &std::path::Path, slot: u8) {
+        let seg = flicker_materials::slot_dir(slot);
+        stage_bundle(root, &seg, &seg, &glow_doc(slot), bundle_maps());
     }
 
     /// THE CM5 CONTRACT for a MATERIAL BUNDLE (plan 30FE7F58 P3). The promote
@@ -2700,7 +2899,7 @@ mod tests {
     #[test]
     fn a_bundle_whose_recipe_binds_no_material_warns_unbound() {
         let (mut qm, d) = scratch("unbound");
-        stage_bundle(&d, "010", "010", r#"{"id":"scratch"}"#, bundle_maps());
+        stage_bundle(&d, "010", "010", &graph_doc(None), bundle_maps());
         qm.refresh_queue();
         assert_eq!(
             qm.facts_warning_tokens(),
@@ -2709,35 +2908,304 @@ mod tests {
         let _ = std::fs::remove_dir_all(d);
     }
 
-    /// The slots that are NOT writable: 0 is Air and is never drawn, and the top
-    /// of the range is the reserved exotic-emissive block (ruling BC95B08F D5).
-    /// Both are read off the catalog's own predicate, never a literal here.
+    /// THE SLOT LAW at review AND at promote, through the ONE predicate and the class of
+    /// the index row the slot binds (ruling 2026-10-20): a bundle in Air's slot, or in an
+    /// emissive slot whose row is not an emissive material (or no row at all), WARNS at
+    /// review and is REFUSED at promote — nothing moves; a bundle in an emissive slot whose
+    /// row IS emissive (the shipped glows) reviews clean and promotes.
     #[test]
-    fn bundles_at_air_and_in_the_reserved_block_warn_that_the_slot_is_not_writable() {
-        let (mut qm, d) = scratch("reserved");
-        let reserved = flicker_materials::RESERVED_EXOTIC_FIRST + 2;
-        assert!(!flicker_materials::slot_is_writable(0));
-        assert!(!flicker_materials::slot_is_writable(reserved));
+    fn the_slot_law_refuses_air_and_non_emissive_rows_in_the_emissive_slots() {
+        use flicker_materials::EMISSIVE_FIRST;
+        let (mut qm, d) = scratch("slotlaw");
+        let (glow, probe) = (EMISSIVE_FIRST + 2, EMISSIVE_FIRST + 3);
         stage_slot(&d, 0);
-        stage_slot(&d, reserved);
+        stage_glow(&d, glow);
+        stage_glow(&d, probe);
         qm.refresh_queue();
-        assert_eq!(qm.queue.len(), 2, "two bundles in the materials tier");
+        assert_eq!(qm.queue.len(), 3, "three bundles in the materials tier");
 
-        // The zero-padded segment sorts numerically for free, so 000 leads.
+        // Air's slot holds nothing: warned, and the promote refuses.
+        // (The zero-padded segment sorts numerically for free, so 000 leads.)
         assert_eq!(qm.selected_queue_item().unwrap().name, "000");
         assert_eq!(
             qm.facts_warning_tokens(),
             vec!["$pkg_warn_material_slot_reserved"]
         );
+        qm.promote_selected();
+        assert_eq!(
+            qm.last_error_token(),
+            Some("$pkg_err_material_slot_refused")
+        );
+        assert!(
+            !d.join("package/materials/000").exists(),
+            "a refused promote moves nothing"
+        );
+        assert!(flicker_content::package::file_exists(
+            &d.join("staging/materials/000/000.texture.json")
+        ));
+
+        // The shipped index's emissive row in an emissive slot: clean, and it promotes.
         qm.review_nav(1);
         assert_eq!(
             qm.selected_queue_item().unwrap().name,
-            flicker_materials::slot_dir(reserved)
+            flicker_materials::slot_dir(glow)
         );
+        assert!(
+            qm.facts_warning_tokens().is_empty(),
+            "an emissive row in an emissive slot reviews clean: {:?}",
+            qm.facts_warning_tokens()
+        );
+        qm.promote_selected();
+        assert_eq!(qm.last_error_token(), None);
+        assert!(flicker_content::package::file_exists(&d.join(format!(
+            "package/materials/{0}/{0}.texture.json",
+            flicker_materials::slot_dir(glow)
+        ))));
+
+        // A NON-emissive row in an emissive slot — and an unlisted one — warn and refuse.
+        qm.refresh_queue();
+        let at = qm
+            .queue
+            .iter()
+            .position(|q| q.name == flicker_materials::slot_dir(probe))
+            .expect("the probe bundle is queued");
+        qm.review_pick(at);
+        for class in [
+            Some(RenderClass::HardEdge),
+            Some(RenderClass::Translucent),
+            None,
+        ] {
+            qm.set_slot_class(probe, class);
+            assert_eq!(
+                qm.facts_warning_tokens(),
+                vec!["$pkg_warn_material_slot_reserved"],
+                "slot {probe} as {class:?}"
+            );
+            qm.promote_selected();
+            assert_eq!(
+                qm.last_error_token(),
+                Some("$pkg_err_material_slot_refused"),
+                "slot {probe} as {class:?}"
+            );
+            assert!(!d
+                .join("package/materials")
+                .join(flicker_materials::slot_dir(probe))
+                .exists());
+        }
+        // …and the same slot holding an emissive row is what it is FOR.
+        qm.set_slot_class(probe, Some(RenderClass::Emissive));
+        assert!(qm.facts_warning_tokens().is_empty());
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    /// THE SLOT LAW ON THE FILES TAB: a paste that lands a bundle in
+    /// `package/materials/<id:03>` is weighed exactly as a promote is — a slot-0 bundle and
+    /// a NON-emissive row's slot at 250 are REFUSED with the promote's own token, nothing
+    /// moved and the clipboard kept; an emissive row's slot at 250 takes it.
+    #[test]
+    fn a_paste_into_a_material_slot_weighs_the_slot_law() {
+        use flicker_materials::EMISSIVE_FIRST;
+        let (mut qm, d) = scratch("pasteslot");
+        let glow = EMISSIVE_FIRST + 2;
+        stage_slot(&d, 0);
+        stage_glow(&d, glow);
+        let tier = d.join("package/materials");
+        std::fs::create_dir_all(&tier).unwrap();
+        qm.cwd = tier.clone();
+        qm.refresh();
+        assert!(qm.rows().is_empty(), "an empty tier: paste lands in it");
+
+        let paste = |qm: &mut PackageBench, seg: &str| {
+            qm.clipboard = Some(d.join("staging/materials").join(seg));
+            qm.paste();
+        };
+        paste(&mut qm, "000");
         assert_eq!(
-            qm.facts_warning_tokens(),
-            vec!["$pkg_warn_material_slot_reserved"]
+            qm.last_error_token(),
+            Some("$pkg_err_material_slot_refused")
         );
+        assert!(!tier.join("000").exists(), "a refused paste moves nothing");
+        assert!(qm.clipboard().is_some(), "and keeps the clipboard");
+
+        let seg = flicker_materials::slot_dir(glow);
+        qm.set_slot_class(glow, Some(RenderClass::HardEdge));
+        paste(&mut qm, &seg);
+        assert_eq!(
+            qm.last_error_token(),
+            Some("$pkg_err_material_slot_refused")
+        );
+        assert!(
+            !tier.join(&seg).exists(),
+            "a non-emissive row's 250 refuses it"
+        );
+
+        qm.set_slot_class(glow, Some(RenderClass::Emissive));
+        paste(&mut qm, &seg);
+        assert_eq!(
+            qm.last_error_token(),
+            None,
+            "an emissive row's 250 takes it"
+        );
+        assert!(flicker_content::package::file_exists(
+            &tier.join(&seg).join(format!("{seg}.texture.json"))
+        ));
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    /// THE WHOLE TIER AT ONCE: pasting a `materials` folder AS the package's materials tier
+    /// weighs EVERY slot folder it lands — one slot-0 bundle among the glows refuses the
+    /// whole paste (nothing moves; the detail names the first offender), and a tier holding
+    /// only the eight emissive glows at 248–255 is taken whole.
+    #[test]
+    fn a_whole_tier_paste_weighs_every_slot_it_lands() {
+        use flicker_materials::EMISSIVE_FIRST;
+        let (mut qm, d) = scratch("tierpaste");
+        let staged = d.join("staging").join("materials");
+        stage_slot(&d, 0);
+        for slot in EMISSIVE_FIRST..=u8::MAX {
+            stage_glow(&d, slot);
+        }
+        qm.cwd = d.join("package");
+        qm.refresh();
+        // Focus a FILE, so the paste lands in the package root itself (the tier's parent).
+        qm.sel = qm
+            .rows()
+            .iter()
+            .position(|r| !r.is_dir)
+            .expect("a file row");
+        let tier = d.join("package/materials");
+
+        qm.clipboard = Some(staged.clone());
+        qm.paste();
+        assert_eq!(qm.last_error_token(), Some(SLOT_REFUSED));
+        assert_eq!(
+            qm.last_error_detail(),
+            Some(staged.join("000").display().to_string().as_str()),
+            "the first offender is named"
+        );
+        assert!(!tier.exists(), "a refused tier paste moves nothing");
+        assert!(staged.join("000").exists() && staged.join("248").exists());
+        assert_eq!(
+            qm.hud_model().text("error_detail"),
+            qm.last_error_detail(),
+            "the detail rides the Model beside the token"
+        );
+
+        // Only the glows left: the tier is taken whole.
+        std::fs::remove_dir_all(staged.join("000")).unwrap();
+        qm.clipboard = Some(staged.clone());
+        qm.paste();
+        assert_eq!(qm.last_error_token(), None, "every slot takes its glow");
+        for slot in EMISSIVE_FIRST..=u8::MAX {
+            assert!(
+                tier.join(flicker_materials::slot_dir(slot)).exists(),
+                "{slot}"
+            );
+        }
+        assert_eq!(qm.last_error_detail(), None);
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    /// A RENAME IS A MOVE: renaming `package/materials/250` to `000` — Air's slot — is
+    /// refused with the slot law's token (the field stays open, nothing moves), as is
+    /// renaming a folder that holds a slot-0 bundle INTO the tier; renaming 250 to 251 —
+    /// another emissive row's slot — goes through.
+    #[test]
+    fn a_rename_into_a_material_slot_weighs_the_slot_law() {
+        use flicker_materials::EMISSIVE_FIRST;
+        let (mut qm, d) = scratch("renameslot");
+        let tier = d.join("package/materials");
+        let glow = EMISSIVE_FIRST + 2;
+        let seg = flicker_materials::slot_dir(glow);
+        flicker_content::package::write_text(
+            &tier.join(&seg).join(format!("{seg}.texture.json")),
+            &glow_doc(glow),
+        )
+        .unwrap();
+        qm.cwd = tier.clone();
+        qm.refresh();
+        qm.sel = qm
+            .rows()
+            .iter()
+            .position(|r| r.path == tier.join(&seg))
+            .expect("the bundle is listed");
+
+        qm.begin_rename();
+        qm.set_rename_draft("000");
+        qm.commit_rename();
+        assert_eq!(qm.last_error_token(), Some(SLOT_REFUSED));
+        assert!(qm.is_renaming(), "the field stays open");
+        assert!(tier.join(&seg).exists() && !tier.join("000").exists());
+
+        let next = flicker_materials::slot_dir(glow + 1);
+        qm.set_rename_draft(&next);
+        qm.commit_rename();
+        assert!(!qm.is_renaming(), "an emissive row's slot takes it");
+        assert!(tier.join(&next).exists() && !tier.join(&seg).exists());
+
+        // A folder renamed INTO the tier lands every slot it holds.
+        let (mut qm, d2) = scratch("renametier");
+        // Component joins, not an embedded `/`: the refusal detail is the walked path's
+        // `display()`, which is `\`-separated on Windows and must compare equal here.
+        let stash = d2.join("package").join("stash");
+        flicker_content::package::write_text(&stash.join("000").join("000.texture.json"), "{}")
+            .unwrap();
+        qm.refresh();
+        qm.sel = qm
+            .rows()
+            .iter()
+            .position(|r| r.path == stash)
+            .expect("the stash is listed");
+        qm.begin_rename();
+        qm.set_rename_draft(flicker_content::MATERIALS_DIR);
+        qm.commit_rename();
+        assert_eq!(qm.last_error_token(), Some(SLOT_REFUSED));
+        assert_eq!(
+            qm.last_error_detail(),
+            Some(stash.join("000").display().to_string().as_str())
+        );
+        assert!(stash.exists() && !d2.join("package/materials").exists());
+        let _ = std::fs::remove_dir_all(d);
+        let _ = std::fs::remove_dir_all(d2);
+    }
+
+    /// AN EMISSIVE MATERIAL WHOSE LOOK DOES NOT GLOW reviews with a WARNING (never a
+    /// refusal — the slot law weighs the row, not the look): a bundle in an emissive slot,
+    /// or in Lava's (an emissive row outside the block), whose document has no Emit or an
+    /// Emit at strength 0. A glowing look there, or a dull look for a non-emissive row,
+    /// warns nothing.
+    #[test]
+    fn a_dull_look_for_an_emissive_material_warns_no_emit() {
+        use flicker_materials::EMISSIVE_FIRST;
+        let (mut qm, d) = scratch("noemit");
+        let (dull, lit, lava, rock) = (EMISSIVE_FIRST + 4, EMISSIVE_FIRST + 5, 62, 10);
+        stage_slot(&d, dull);
+        stage_glow(&d, lit);
+        stage_slot(&d, lava);
+        stage_slot(&d, rock);
+        qm.refresh_queue();
+        let facts = |qm: &mut PackageBench, slot: u8| {
+            let seg = flicker_materials::slot_dir(slot);
+            let at = qm.queue.iter().position(|q| q.name == seg).expect("queued");
+            qm.review_pick(at);
+            qm.facts_warning_tokens()
+        };
+        assert_eq!(facts(&mut qm, dull), vec!["$pkg_warn_material_no_emit"]);
+        assert_eq!(facts(&mut qm, lava), vec!["$pkg_warn_material_no_emit"]);
+        assert!(facts(&mut qm, lit).is_empty(), "a glowing look is clean");
+        assert!(
+            facts(&mut qm, rock).is_empty(),
+            "a dull rock is just a rock"
+        );
+
+        // A warning, not a refusal: the dull bundle still promotes.
+        facts(&mut qm, dull);
+        qm.promote_selected();
+        assert_eq!(qm.last_error_token(), None);
+        assert!(d
+            .join("package/materials")
+            .join(flicker_materials::slot_dir(dull))
+            .exists());
         let _ = std::fs::remove_dir_all(d);
     }
 
@@ -2747,13 +3215,7 @@ mod tests {
     #[test]
     fn a_bundle_whose_recipe_names_another_slot_warns_mismatch() {
         let (mut qm, d) = scratch("mismatch");
-        stage_bundle(
-            &d,
-            "010",
-            "010",
-            r#"{"id":"basalt","material":11}"#,
-            bundle_maps(),
-        );
+        stage_bundle(&d, "010", "010", &graph_doc(Some(11)), bundle_maps());
         qm.refresh_queue();
         assert_eq!(
             qm.facts_warning_tokens(),
@@ -2802,7 +3264,7 @@ mod tests {
     #[test]
     fn a_short_bundle_warns_about_its_maps_and_a_complete_one_warns_nothing() {
         let (mut qm, d) = scratch("maps");
-        stage_bundle(&d, "010", "010", r#"{"id":"granite","material":10}"#, 4);
+        stage_bundle(&d, "010", "010", &graph_doc(Some(10)), 4);
         qm.refresh_queue();
         assert_eq!(
             qm.facts_warning_tokens(),
@@ -2821,6 +3283,52 @@ mod tests {
         let _ = std::fs::remove_dir_all(e);
     }
 
+    /// THE FORMAT the review reads: MaterialBench now commits the v2 material GRAPH under
+    /// the same `<id>.texture.json`, and a staged v1 recipe still reads — both through
+    /// the one loader (`load_material_json`), both reviewing clean when they are sound.
+    #[test]
+    fn a_v2_graph_bundle_and_a_v1_recipe_bundle_both_review_clean() {
+        let (mut qm, d) = scratch("v2graph");
+        stage_slot(&d, 10);
+        qm.refresh_queue();
+        assert!(
+            qm.facts_warning_tokens().is_empty(),
+            "a committed v2 graph reviews clean: {:?}",
+            qm.facts_warning_tokens()
+        );
+        let (mut old, e) = scratch("v1recipe");
+        let recipe = serde_json::to_string(&flicker_texture::presets::granite()).unwrap();
+        stage_bundle(&e, "010", "010", &recipe, bundle_maps());
+        old.refresh_queue();
+        assert!(
+            old.facts_warning_tokens().is_empty(),
+            "a v1 recipe still reads: {:?}",
+            old.facts_warning_tokens()
+        );
+        let _ = std::fs::remove_dir_all(d);
+        let _ = std::fs::remove_dir_all(e);
+    }
+
+    /// A document that loads as NEITHER a v2 graph nor a v1 recipe is a bundle nothing
+    /// could draw: the review says so (and does not also guess it unbound).
+    #[test]
+    fn a_bundle_whose_document_does_not_load_warns_invalid() {
+        let (mut qm, d) = scratch("invaliddoc");
+        stage_bundle(
+            &d,
+            "010",
+            "010",
+            r#"{"id":"granite","material":10}"#,
+            bundle_maps(),
+        );
+        qm.refresh_queue();
+        assert_eq!(
+            qm.facts_warning_tokens(),
+            vec!["$pkg_warn_material_recipe_invalid"]
+        );
+        let _ = std::fs::remove_dir_all(d);
+    }
+
     /// THE PLACEMENT IS LOAD-BEARING: the bundle branch sits BEFORE the generic
     /// one, so a recipe is never measured against a rig's expectations. This
     /// fixture is a recipe carrying the exact fields the rig probe looks for —
@@ -2830,15 +3338,13 @@ mod tests {
     #[test]
     fn a_material_bundle_never_picks_up_the_generic_rigs_warnings() {
         let (mut qm, d) = scratch("notarig");
-        stage_bundle(
-            &d,
-            "010",
-            "010",
-            r#"{"id":"granite","material":10,
-                "skeleton":{"bones":[{"name":"root"},{"name":"tail"},{"name":"tip"}]},
-                "source":{"textures":["NotHere.png"]}}"#,
-            bundle_maps(),
-        );
+        // A v1 recipe (which tolerates keys it does not know) carrying the rig probe's
+        // fields, so it LOADS as a material and is still a bait for the rig checks.
+        let mut bait = serde_json::to_value(flicker_texture::presets::granite()).unwrap();
+        bait["skeleton"] =
+            serde_json::json!({"bones":[{"name":"root"},{"name":"tail"},{"name":"tip"}]});
+        bait["source"] = serde_json::json!({"textures":["NotHere.png"]});
+        stage_bundle(&d, "010", "010", &bait.to_string(), bundle_maps());
         qm.refresh_queue();
         let warns = qm.facts_warning_tokens();
         assert!(

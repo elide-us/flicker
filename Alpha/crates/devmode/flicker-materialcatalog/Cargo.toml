@@ -1,0 +1,55 @@
+[package]
+name = "flicker-materialcatalog"
+version = "0.1.12"
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# Material Catalog — the materials REGISTRY scene (library only), the Component
+# Catalog's sibling: all 256 slots of the voxel material byte as sixteen rows of
+# sixteen boxes, each drawing what the engine holds for that slot. A VIEWING tool —
+# making materials stays the MaterialBench's job. Driven by the unified `prism-alpha`
+# launcher; no standalone binary. A Developer-realm bench.
+[lib]
+name = "flicker_materialcatalog"
+path = "src/lib.rs"
+
+[dependencies]
+# Umbrella: flicker-render (Renderer/StageDef), flicker-scene (Scene/Transition),
+# flicker-script (UiNode/ValueMap/ScriptHost), flicker-widgets (the walker, its
+# `SurfaceSlot`s, the stage compiler + the gates).
+flicker = { version = "0.1.0", path = "../../core/flicker" }
+# The input model + the event bus this scene routes its one intent (Menu) through.
+flicker-input-core.workspace = true
+flicker-input-router.workspace = true
+# The shell: PauseScene/Theme.
+flicker-shell.workspace = true
+# The material vocabulary: the 256-slot index, its colours, the emissive block.
+flicker-materials.workspace = true
+# The content ROOTS service (data/ + package/) and the bundle seam (`bundle_at`).
+flicker-content.workspace = true
+# The engine's lit material SAMPLE every assigned box is drawn as (`MaterialSample` + the
+# shared `SampleBodies`), and what it wears: a bundle's maps (`decode_bundle_maps_with` on
+# the worker — cancellable between maps — then `upload_decoded`) or the flat PBR an index
+# row reads as (`FlatMaterial`, `FlatTextures`). Also the inspector's read-only graph: the
+# engine's ONE projection of a `MaterialGraph` onto canvas cards (`graph_view` — nodes in
+# evaluation order, the Output card with its port labels, an edge per wire into its port),
+# the projection the MaterialBench draws through too.
+flicker-materialview.workspace = true
+# Off-main-thread bundle-map decodes.
+flicker-worker.workspace = true
+# THE INSPECTOR (the pressed box's modal): the material graph loads through
+# `load_material_json` (v2 graphs and v1 recipes alike), the map roles and the bake ladder
+# name what a bundle holds; `image` reads a map's pixel size off its PNG header.
+flicker-texture.workspace = true
+image.workspace = true
+# The read-only graph view: the node-graph filler (`GraphCanvas`) seated in the inspector's
+# `insp_canvas` surface, fed the `graph_view` cards above. The inspector edits nothing.
+flicker-canvas.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+# The test fixtures write real bundles (seven PNG maps named by their role) into scratch
+# package and staging roots — through the same `image` + `flicker-texture` the inspector
+# reads them with.

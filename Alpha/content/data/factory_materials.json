@@ -1,0 +1,281 @@
+{
+  "_comment": "THE FACTORY LIBRARY \u2014 the MaterialBench designer's preset patches, one v2 material graph per entry (the designer's own document, the very shape it commits as `<id:03>.texture.json`), each bound to a real row of materials.json so it also answers the pipeline's question: what does material N look like? A synthesizer ships with patches for the same reason this does: a rack of neutral sliders teaches nothing, and the fastest way to learn a node is to turn it on a look you already recognize. The preset select offers New (the scene's authored params.new_material) and then every entry here IN THIS ORDER; the first entry is what the bench opens on. Each entry reads through `flicker_texture::load_material_json`, exactly as a staged bundle's document does; `_comment` keys beside `graphs` are ignored, and a note INSIDE an entry is refused (every node denies unknown fields). EVERY NUMBER HERE IS AARON'S TO TUNE, in the designer or here (2026-10-23, authored in-session with a headless bake loop; replaces the four v1 rack patches of flicker-texture's presets.rs, which stay as that crate's v1 corpus).",
+  "_comment_looks": "Granite 10: two value noises posterised through a stepped grey/quartz/feldspar/white ramp (a crystal mosaic without a cell-id generator); the biotite flecks are two Worley peak fields (scales 44 and 26) MULTIPLIED by a high-frequency fBm (scale 96) before the threshold, so each fleck is cut ragged and uneven instead of a perfect disc (Aaron 2026-10-24: thresholded Worley discs read as pills); low relief. Basalt 11: Worley plates \u2192 Curvature \u2192 Threshold = the shrinkage-crack network, Worley pits = vesicles, both sunk into the height. Sandstone 12: warped Stripe strata (cross-bedding by a Warp), fBm grain, a warm five-stop ramp. Limestone 13: pale chalky fBm bed, faint Stripe bedding, sparse Worley pits. Slate 34: two Stripe layerings over fBm flake, flattened, low relief. Marble 35: warped Ridged noise thresholded twice (primary and fine veins) mixed into a warm white, polished. Obsidian 17: Ridged ripples (conchoidal fracture) under near-black, roughness 0.1. Hematite 40: two Worley dome scales (botryoidal kidney ore) blurred, rust-red over steel, metalness 0.5. Gold Ore 42: grey quartz host, Worley flecks plus a Ridged vein gated by an fBm patch mask, the gold mask IS the metalness map. Coal 43: Worley plates with Curvature cracks, black, glossy faces. Iron 100 / Copper 102: a faint Stripe brush over fBm dents, metalness 0.9 (copper's albedo is its F0). Lava 62: Worley crust \u2192 Curvature \u2192 Threshold cracks, blurred into a heat mask that both tints the base orange and MASKS THE EMIT \u2014 the glow colour is the curated palette's orange (the one colour an Emit may take, B46FFC37) at strength 1.0, the designer's new-glow strength; the lit stages' emissive_gain (4.0) is what makes it bloom.",
+  "_comment_commit": "Landed by `cargo run -p flicker-materialbench --example commit_library -- factory_materials.json <staging_root> [size]`: each graph through the bench's own Commit (`commit.rs` \u2014 the slot law weighs it by its slot's materials.json row) into `<staging_root>/materials/<id:03>/`. Promoting a staged look into `package/` is the PackageBench's review \u2014 Aaron's act, never the example's. The Material Catalog and the Inspector read `package/` for the look; the bench opens a slot's committed look from staging first, then package.",
+  "graphs": [
+    {
+      "version": 2,
+      "id": "granite",
+      "name": "Granite",
+      "material": 10,
+      "seed": 1730062750,
+      "nodes": [
+        {"key": "bed_a", "kind": "noise", "source": "value", "scale": 48, "octaves": 1, "lacunarity": 2.0, "gain": 0.5, "warp": 0.0, "salt": 11, "contrast": 1.5, "invert": false},
+        {"key": "bed_b", "kind": "noise", "source": "value", "scale": 30, "octaves": 1, "lacunarity": 2.0, "gain": 0.5, "warp": 0.0, "salt": 12, "contrast": 1.3, "invert": false},
+        {"key": "bed", "kind": "blend", "inputs": ["bed_a", "bed_b"], "mode": "overlay", "amount": 0.6},
+        {"key": "stone", "kind": "ramp", "inputs": ["bed"], "ramp": {"stops": [{"at": 0.0, "color": [0.4, 0.36, 0.35]}, {"at": 0.27, "color": [0.44, 0.4, 0.39]}, {"at": 0.3, "color": [0.72, 0.7, 0.68]}, {"at": 0.48, "color": [0.76, 0.74, 0.72]}, {"at": 0.51, "color": [0.82, 0.66, 0.58]}, {"at": 0.68, "color": [0.86, 0.7, 0.62]}, {"at": 0.71, "color": [0.92, 0.9, 0.88]}, {"at": 1.0, "color": [0.95, 0.93, 0.91]}]}},
+        {"key": "grain", "kind": "noise", "source": "fbm", "scale": 24, "octaves": 3, "lacunarity": 2.0, "gain": 0.5, "warp": 0.0, "salt": 31, "contrast": 1.1, "invert": false},
+        {"key": "flat", "kind": "contrast", "inputs": ["grain"], "pivot": 0.5, "amount": 0.5},
+        {"key": "rough", "kind": "modulate", "inputs": ["bed"], "base": 0.66, "amount": 0.1},
+        {"key": "cells_a", "kind": "noise", "source": "worley", "scale": 44, "octaves": 1, "lacunarity": 2.0, "gain": 0.5, "warp": 0.25, "salt": 23, "contrast": 1.0, "invert": true},
+        {"key": "edge", "kind": "noise", "source": "fbm", "scale": 96, "octaves": 2, "lacunarity": 2.0, "gain": 0.5, "warp": 0.0, "salt": 26, "contrast": 1.5, "invert": false},
+        {"key": "cut_a", "kind": "blend", "inputs": ["cells_a", "edge"], "mode": "mul", "amount": 1.0},
+        {"key": "flecks_a", "kind": "threshold", "inputs": ["cut_a"], "at": 0.7, "soft": 0.03},
+        {"key": "cells_b", "kind": "noise", "source": "worley", "scale": 26, "octaves": 1, "lacunarity": 2.0, "gain": 0.5, "warp": 0.35, "salt": 24, "contrast": 1.0, "invert": true},
+        {"key": "cut_b", "kind": "blend", "inputs": ["cells_b", "edge"], "mode": "mul", "amount": 1.0},
+        {"key": "flecks_b", "kind": "threshold", "inputs": ["cut_b"], "at": 0.74, "soft": 0.03},
+        {"key": "flecks", "kind": "blend", "inputs": ["flecks_a", "flecks_b"], "mode": "max", "amount": 1.0},
+        {"key": "biotite", "kind": "palette", "rgb": [0.1, 0.09, 0.085]},
+        {"key": "base", "kind": "mix_color", "inputs": ["stone", "biotite", "flecks"], "amount": 0.92},
+        {"key": "notflecks", "kind": "invert", "inputs": ["flecks"]},
+        {"key": "h", "kind": "blend", "inputs": ["flat", "notflecks"], "mode": "min", "amount": 1.0},
+        {"key": "ao", "kind": "occlusion", "inputs": ["h"], "strength": 0.4}
+      ],
+      "output": {"base": "base", "height": "h", "relief": 0.2, "roughness": "rough", "metalness": 0.0, "ao": "ao"}
+    },
+    {
+      "version": 2,
+      "id": "basalt",
+      "name": "Basalt",
+      "material": 11,
+      "seed": 2321291200,
+      "nodes": [
+        {"key": "plates", "kind": "noise", "source": "worley", "scale": 7, "octaves": 1, "lacunarity": 2.0, "gain": 0.5, "warp": 0.35, "salt": 47, "contrast": 1.0, "invert": false},
+        {"key": "edges", "kind": "curvature", "inputs": ["plates"], "radius": 0.012},
+        {"key": "cracks", "kind": "threshold", "inputs": ["edges"], "at": 0.6, "soft": 0.05},
+        {"key": "pits_src", "kind": "noise", "source": "worley", "scale": 70, "octaves": 1, "lacunarity": 2.0, "gain": 0.5, "warp": 0.0, "salt": 91, "contrast": 1.0, "invert": true},
+        {"key": "pits", "kind": "threshold", "inputs": ["pits_src"], "at": 0.9, "soft": 0.04},
+        {"key": "grain", "kind": "noise", "source": "fbm", "scale": 10, "octaves": 4, "lacunarity": 2.0, "gain": 0.5, "warp": 0.0, "salt": 5, "contrast": 1.15, "invert": false},
+        {"key": "body", "kind": "ramp", "inputs": ["grain"], "ramp": {"stops": [{"at": 0.0, "color": [0.13, 0.13, 0.145]}, {"at": 0.5, "color": [0.22, 0.22, 0.245]}, {"at": 1.0, "color": [0.36, 0.355, 0.38]}]}},
+        {"key": "dark", "kind": "palette", "rgb": [0.05, 0.05, 0.055]},
+        {"key": "base1", "kind": "mix_color", "inputs": ["body", "dark", "cracks"], "amount": 0.85},
+        {"key": "base", "kind": "mix_color", "inputs": ["base1", "dark", "pits"], "amount": 0.9},
+        {"key": "notcracks", "kind": "invert", "inputs": ["cracks"]},
+        {"key": "notpits", "kind": "invert", "inputs": ["pits"]},
+        {"key": "h1", "kind": "blend", "inputs": ["grain", "notcracks"], "mode": "min", "amount": 1.0},
+        {"key": "h2", "kind": "blend", "inputs": ["h1", "notpits"], "mode": "min", "amount": 1.0},
+        {"key": "ao", "kind": "occlusion", "inputs": ["h2"], "strength": 0.7},
+        {"key": "rough", "kind": "modulate", "inputs": ["grain"], "base": 0.82, "amount": 0.1}
+      ],
+      "output": {"base": "base", "height": "h2", "relief": 0.4, "roughness": "rough", "metalness": 0.0, "ao": "ao"}
+    },
+    {
+      "version": 2,
+      "id": "sandstone",
+      "name": "Sandstone",
+      "material": 12,
+      "seed": 1524134113,
+      "nodes": [
+        {"key": "strata", "kind": "noise", "source": "stripe", "scale": 9, "octaves": 1, "lacunarity": 2.0, "gain": 0.5, "warp": 0.55, "salt": 17, "contrast": 0.7, "invert": false},
+        {"key": "bend", "kind": "noise", "source": "fbm", "scale": 3, "octaves": 3, "lacunarity": 2.0, "gain": 0.5, "warp": 0.0, "salt": 29, "contrast": 1.0, "invert": false},
+        {"key": "warped", "kind": "warp", "inputs": ["strata", "bend"], "amount": 0.03},
+        {"key": "bands", "kind": "contrast", "inputs": ["warped"], "pivot": 0.5, "amount": 0.4},
+        {"key": "grain", "kind": "noise", "source": "fbm", "scale": 40, "octaves": 2, "lacunarity": 2.0, "gain": 0.5, "warp": 0.0, "salt": 179, "contrast": 1.1, "invert": false},
+        {"key": "cloud", "kind": "noise", "source": "fbm", "scale": 4, "octaves": 4, "lacunarity": 2.0, "gain": 0.5, "warp": 0.0, "salt": 119, "contrast": 1.0, "invert": false},
+        {"key": "bus1", "kind": "blend", "inputs": ["bands", "cloud"], "mode": "overlay", "amount": 0.35},
+        {"key": "bus", "kind": "blend", "inputs": ["bus1", "grain"], "mode": "overlay", "amount": 0.3},
+        {"key": "base", "kind": "ramp", "inputs": ["bus"], "ramp": {"stops": [{"at": 0.0, "color": [0.62, 0.48, 0.3]}, {"at": 0.3, "color": [0.73, 0.59, 0.38]}, {"at": 0.5, "color": [0.8, 0.67, 0.46]}, {"at": 0.7, "color": [0.87, 0.76, 0.55]}, {"at": 1.0, "color": [0.93, 0.86, 0.68]}]}},
+        {"key": "ao", "kind": "occlusion", "inputs": ["bus"], "strength": 0.5},
+        {"key": "rough", "kind": "modulate", "inputs": ["grain"], "base": 0.9, "amount": 0.05}
+      ],
+      "output": {"base": "base", "height": "bus", "relief": 0.15, "roughness": "rough", "metalness": 0.0, "ao": "ao"}
+    },
+    {
+      "version": 2,
+      "id": "limestone",
+      "name": "Limestone",
+      "material": 13,
+      "seed": 10013,
+      "nodes": [
+        {"key": "bed", "kind": "noise", "source": "fbm", "scale": 6, "octaves": 4, "lacunarity": 2.0, "gain": 0.5, "warp": 0.0, "salt": 81, "contrast": 1.0, "invert": false},
+        {"key": "bedding", "kind": "noise", "source": "stripe", "scale": 5, "octaves": 1, "lacunarity": 2.0, "gain": 0.5, "warp": 0.4, "salt": 83, "contrast": 0.6, "invert": false},
+        {"key": "bus", "kind": "blend", "inputs": ["bed", "bedding"], "mode": "overlay", "amount": 0.3},
+        {"key": "pits_src", "kind": "noise", "source": "worley", "scale": 55, "octaves": 1, "lacunarity": 2.0, "gain": 0.5, "warp": 0.0, "salt": 85, "contrast": 1.0, "invert": true},
+        {"key": "pits", "kind": "threshold", "inputs": ["pits_src"], "at": 0.93, "soft": 0.04},
+        {"key": "body", "kind": "ramp", "inputs": ["bus"], "ramp": {"stops": [{"at": 0.0, "color": [0.7, 0.66, 0.58]}, {"at": 0.5, "color": [0.8, 0.77, 0.69]}, {"at": 1.0, "color": [0.88, 0.86, 0.78]}]}},
+        {"key": "dark", "kind": "palette", "rgb": [0.52, 0.48, 0.42]},
+        {"key": "base", "kind": "mix_color", "inputs": ["body", "dark", "pits"], "amount": 0.55},
+        {"key": "notpits", "kind": "invert", "inputs": ["pits"]},
+        {"key": "h", "kind": "blend", "inputs": ["bus", "notpits"], "mode": "min", "amount": 1.0},
+        {"key": "ao", "kind": "occlusion", "inputs": ["h"], "strength": 0.5}
+      ],
+      "output": {"base": "base", "height": "h", "relief": 0.2, "roughness": 0.9, "metalness": 0.0, "ao": "ao"}
+    },
+    {
+      "version": 2,
+      "id": "slate",
+      "name": "Slate",
+      "material": 34,
+      "seed": 10034,
+      "nodes": [
+        {"key": "layers", "kind": "noise", "source": "stripe", "scale": 18, "octaves": 1, "lacunarity": 2.0, "gain": 0.5, "warp": 0.5, "salt": 91, "contrast": 0.8, "invert": false},
+        {"key": "fine", "kind": "noise", "source": "stripe", "scale": 60, "octaves": 1, "lacunarity": 2.0, "gain": 0.5, "warp": 0.3, "salt": 92, "contrast": 0.8, "invert": false},
+        {"key": "flake", "kind": "noise", "source": "fbm", "scale": 9, "octaves": 4, "lacunarity": 2.0, "gain": 0.5, "warp": 0.0, "salt": 93, "contrast": 1.2, "invert": false},
+        {"key": "l2", "kind": "blend", "inputs": ["layers", "fine"], "mode": "overlay", "amount": 0.4},
+        {"key": "bus", "kind": "blend", "inputs": ["l2", "flake"], "mode": "overlay", "amount": 0.6},
+        {"key": "h", "kind": "contrast", "inputs": ["bus"], "pivot": 0.5, "amount": 0.25},
+        {"key": "base", "kind": "ramp", "inputs": ["bus"], "ramp": {"stops": [{"at": 0.0, "color": [0.21, 0.23, 0.28]}, {"at": 0.5, "color": [0.3, 0.32, 0.37]}, {"at": 1.0, "color": [0.4, 0.42, 0.47]}]}},
+        {"key": "rough", "kind": "modulate", "inputs": ["flake"], "base": 0.6, "amount": 0.12},
+        {"key": "ao", "kind": "occlusion", "inputs": ["h"], "strength": 0.5}
+      ],
+      "output": {"base": "base", "height": "h", "relief": 0.08, "roughness": "rough", "metalness": 0.0, "ao": "ao"}
+    },
+    {
+      "version": 2,
+      "id": "marble",
+      "name": "Marble",
+      "material": 35,
+      "seed": 3535,
+      "nodes": [
+        {"key": "veins_src", "kind": "noise", "source": "ridged", "scale": 3, "octaves": 4, "lacunarity": 2.2, "gain": 0.55, "warp": 1.8, "salt": 7, "contrast": 1.3, "invert": false},
+        {"key": "veins", "kind": "threshold", "inputs": ["veins_src"], "at": 0.86, "soft": 0.08},
+        {"key": "fine_src", "kind": "noise", "source": "ridged", "scale": 7, "octaves": 3, "lacunarity": 2.0, "gain": 0.5, "warp": 1.2, "salt": 8, "contrast": 1.2, "invert": false},
+        {"key": "fine", "kind": "threshold", "inputs": ["fine_src"], "at": 0.9, "soft": 0.06},
+        {"key": "cloud", "kind": "noise", "source": "fbm", "scale": 5, "octaves": 4, "lacunarity": 2.0, "gain": 0.5, "warp": 0.0, "salt": 13, "contrast": 0.8, "invert": false},
+        {"key": "white", "kind": "ramp", "inputs": ["cloud"], "ramp": {"stops": [{"at": 0.0, "color": [0.82, 0.8, 0.77]}, {"at": 1.0, "color": [0.94, 0.93, 0.9]}]}},
+        {"key": "grey", "kind": "palette", "rgb": [0.36, 0.37, 0.42]},
+        {"key": "base1", "kind": "mix_color", "inputs": ["white", "grey", "veins"], "amount": 0.85},
+        {"key": "base", "kind": "mix_color", "inputs": ["base1", "grey", "fine"], "amount": 0.4},
+        {"key": "h1", "kind": "blend", "inputs": ["cloud", "veins"], "mode": "overlay", "amount": 0.25}
+      ],
+      "output": {"base": "base", "height": "h1", "relief": 0.08, "roughness": 0.18, "metalness": 0.0, "ao": 1.0}
+    },
+    {
+      "version": 2,
+      "id": "obsidian",
+      "name": "Obsidian",
+      "material": 17,
+      "seed": 1717,
+      "nodes": [
+        {"key": "ripple", "kind": "noise", "source": "ridged", "scale": 5, "octaves": 3, "lacunarity": 2.0, "gain": 0.5, "warp": 0.6, "salt": 3, "contrast": 1.1, "invert": false},
+        {"key": "sheen", "kind": "noise", "source": "fbm", "scale": 3, "octaves": 2, "lacunarity": 2.0, "gain": 0.5, "warp": 0.0, "salt": 9, "contrast": 1.0, "invert": false},
+        {"key": "base", "kind": "ramp", "inputs": ["sheen"], "ramp": {"stops": [{"at": 0.0, "color": [0.025, 0.025, 0.03]}, {"at": 1.0, "color": [0.09, 0.08, 0.1]}]}},
+        {"key": "rough", "kind": "modulate", "inputs": ["ripple"], "base": 0.1, "amount": 0.06}
+      ],
+      "output": {"base": "base", "height": "ripple", "relief": 0.25, "roughness": "rough", "metalness": 0.0, "ao": 1.0}
+    },
+    {
+      "version": 2,
+      "id": "hematite",
+      "name": "Hematite",
+      "material": 40,
+      "seed": 3011,
+      "nodes": [
+        {"key": "kidney_a", "kind": "noise", "source": "worley", "scale": 8, "octaves": 1, "lacunarity": 2.0, "gain": 0.5, "warp": 0.3, "salt": 61, "contrast": 1.2, "invert": true},
+        {"key": "kidney_b", "kind": "noise", "source": "worley", "scale": 15, "octaves": 1, "lacunarity": 2.0, "gain": 0.5, "warp": 0.2, "salt": 62, "contrast": 1.2, "invert": true},
+        {"key": "domes", "kind": "blend", "inputs": ["kidney_a", "kidney_b"], "mode": "max", "amount": 0.7},
+        {"key": "smooth", "kind": "blur", "inputs": ["domes"], "radius": 0.005},
+        {"key": "fine", "kind": "noise", "source": "fbm", "scale": 24, "octaves": 3, "lacunarity": 2.0, "gain": 0.5, "warp": 0.0, "salt": 71, "contrast": 1.2, "invert": false},
+        {"key": "bus", "kind": "blend", "inputs": ["smooth", "fine"], "mode": "overlay", "amount": 0.45},
+        {"key": "base", "kind": "ramp", "inputs": ["bus"], "ramp": {"stops": [{"at": 0.0, "color": [0.16, 0.09, 0.08]}, {"at": 0.45, "color": [0.3, 0.16, 0.14]}, {"at": 0.75, "color": [0.42, 0.26, 0.24]}, {"at": 1.0, "color": [0.52, 0.36, 0.34]}]}},
+        {"key": "ao", "kind": "occlusion", "inputs": ["smooth"], "strength": 0.5},
+        {"key": "rough", "kind": "modulate", "inputs": ["fine"], "base": 0.48, "amount": 0.15},
+        {"key": "metal", "kind": "modulate", "inputs": ["smooth"], "base": 0.5, "amount": 0.2}
+      ],
+      "output": {"base": "base", "height": "smooth", "relief": 0.45, "roughness": "rough", "metalness": "metal", "ao": "ao"}
+    },
+    {
+      "version": 2,
+      "id": "gold_ore",
+      "name": "GoldOre",
+      "material": 42,
+      "seed": 10042,
+      "nodes": [
+        {"key": "host", "kind": "noise", "source": "fbm", "scale": 8, "octaves": 4, "lacunarity": 2.0, "gain": 0.5, "warp": 0.0, "salt": 61, "contrast": 1.2, "invert": false},
+        {"key": "rock", "kind": "ramp", "inputs": ["host"], "ramp": {"stops": [{"at": 0.0, "color": [0.34, 0.33, 0.31]}, {"at": 0.5, "color": [0.5, 0.48, 0.45]}, {"at": 1.0, "color": [0.68, 0.66, 0.62]}]}},
+        {"key": "cells", "kind": "noise", "source": "worley", "scale": 40, "octaves": 1, "lacunarity": 2.0, "gain": 0.5, "warp": 0.0, "salt": 63, "contrast": 1.0, "invert": true},
+        {"key": "flecks", "kind": "threshold", "inputs": ["cells"], "at": 0.9, "soft": 0.04},
+        {"key": "vein_src", "kind": "noise", "source": "ridged", "scale": 3, "octaves": 3, "lacunarity": 2.0, "gain": 0.5, "warp": 1.5, "salt": 65, "contrast": 1.3, "invert": false},
+        {"key": "vein_line", "kind": "threshold", "inputs": ["vein_src"], "at": 0.95, "soft": 0.03},
+        {"key": "patches", "kind": "noise", "source": "fbm", "scale": 3, "octaves": 2, "lacunarity": 2.0, "gain": 0.5, "warp": 0.0, "salt": 67, "contrast": 1.4, "invert": false},
+        {"key": "where", "kind": "threshold", "inputs": ["patches"], "at": 0.5, "soft": 0.2},
+        {"key": "vein", "kind": "blend", "inputs": ["vein_line", "where"], "mode": "mul", "amount": 1.0},
+        {"key": "gold_mask", "kind": "blend", "inputs": ["flecks", "vein"], "mode": "max", "amount": 1.0},
+        {"key": "gold", "kind": "palette", "rgb": [0.96, 0.78, 0.3]},
+        {"key": "base", "kind": "mix_color", "inputs": ["rock", "gold", "gold_mask"], "amount": 1.0},
+        {"key": "not_gold", "kind": "invert", "inputs": ["gold_mask"]},
+        {"key": "rough", "kind": "modulate", "inputs": ["not_gold"], "base": 0.5, "amount": 0.3},
+        {"key": "h", "kind": "blend", "inputs": ["host", "gold_mask"], "mode": "max", "amount": 0.4},
+        {"key": "ao", "kind": "occlusion", "inputs": ["h"], "strength": 0.5}
+      ],
+      "output": {"base": "base", "height": "h", "relief": 0.3, "roughness": "rough", "metalness": "gold_mask", "ao": "ao"}
+    },
+    {
+      "version": 2,
+      "id": "coal",
+      "name": "Coal",
+      "material": 43,
+      "seed": 10043,
+      "nodes": [
+        {"key": "plates", "kind": "noise", "source": "worley", "scale": 9, "octaves": 1, "lacunarity": 2.0, "gain": 0.5, "warp": 0.15, "salt": 71, "contrast": 1.0, "invert": false},
+        {"key": "edges", "kind": "curvature", "inputs": ["plates"], "radius": 0.01},
+        {"key": "cracks", "kind": "threshold", "inputs": ["edges"], "at": 0.6, "soft": 0.05},
+        {"key": "sheen", "kind": "noise", "source": "fbm", "scale": 7, "octaves": 3, "lacunarity": 2.0, "gain": 0.5, "warp": 0.0, "salt": 73, "contrast": 1.2, "invert": false},
+        {"key": "faces", "kind": "contrast", "inputs": ["sheen"], "pivot": 0.5, "amount": 0.5},
+        {"key": "notcracks", "kind": "invert", "inputs": ["cracks"]},
+        {"key": "h", "kind": "blend", "inputs": ["faces", "notcracks"], "mode": "min", "amount": 1.0},
+        {"key": "base", "kind": "ramp", "inputs": ["sheen"], "ramp": {"stops": [{"at": 0.0, "color": [0.02, 0.02, 0.025]}, {"at": 1.0, "color": [0.1, 0.1, 0.11]}]}},
+        {"key": "rough", "kind": "modulate", "inputs": ["sheen"], "base": 0.28, "amount": 0.15},
+        {"key": "ao", "kind": "occlusion", "inputs": ["h"], "strength": 0.6}
+      ],
+      "output": {"base": "base", "height": "h", "relief": 0.3, "roughness": "rough", "metalness": 0.0, "ao": "ao"}
+    },
+    {
+      "version": 2,
+      "id": "iron",
+      "name": "Iron",
+      "material": 100,
+      "seed": 10100,
+      "nodes": [
+        {"key": "brush", "kind": "noise", "source": "stripe", "scale": 64, "octaves": 1, "lacunarity": 2.0, "gain": 0.5, "warp": 0.08, "salt": 41, "contrast": 1.0, "invert": false},
+        {"key": "dents", "kind": "noise", "source": "fbm", "scale": 6, "octaves": 3, "lacunarity": 2.0, "gain": 0.5, "warp": 0.0, "salt": 43, "contrast": 1.0, "invert": false},
+        {"key": "h0", "kind": "blend", "inputs": ["dents", "brush"], "mode": "overlay", "amount": 0.3},
+        {"key": "h", "kind": "contrast", "inputs": ["h0"], "pivot": 0.5, "amount": 0.25},
+        {"key": "base", "kind": "ramp", "inputs": ["dents"], "ramp": {"stops": [{"at": 0.0, "color": [0.5, 0.5, 0.51]}, {"at": 1.0, "color": [0.62, 0.62, 0.63]}]}},
+        {"key": "rough", "kind": "modulate", "inputs": ["brush"], "base": 0.42, "amount": 0.08}
+      ],
+      "output": {"base": "base", "height": "h", "relief": 0.04, "roughness": "rough", "metalness": 0.9, "ao": 1.0}
+    },
+    {
+      "version": 2,
+      "id": "copper",
+      "name": "Copper",
+      "material": 102,
+      "seed": 10102,
+      "nodes": [
+        {"key": "mottle", "kind": "noise", "source": "fbm", "scale": 6, "octaves": 4, "lacunarity": 2.0, "gain": 0.5, "warp": 0.0, "salt": 51, "contrast": 1.1, "invert": false},
+        {"key": "brush", "kind": "noise", "source": "stripe", "scale": 56, "octaves": 1, "lacunarity": 2.0, "gain": 0.5, "warp": 0.08, "salt": 53, "contrast": 1.0, "invert": false},
+        {"key": "h0", "kind": "blend", "inputs": ["mottle", "brush"], "mode": "overlay", "amount": 0.3},
+        {"key": "h", "kind": "contrast", "inputs": ["h0"], "pivot": 0.5, "amount": 0.25},
+        {"key": "base", "kind": "ramp", "inputs": ["mottle"], "ramp": {"stops": [{"at": 0.0, "color": [0.78, 0.46, 0.34]}, {"at": 0.5, "color": [0.92, 0.6, 0.46]}, {"at": 1.0, "color": [0.98, 0.7, 0.56]}]}},
+        {"key": "rough", "kind": "modulate", "inputs": ["brush"], "base": 0.4, "amount": 0.1}
+      ],
+      "output": {"base": "base", "height": "h", "relief": 0.05, "roughness": "rough", "metalness": 0.9, "ao": 1.0}
+    },
+    {
+      "version": 2,
+      "id": "lava",
+      "name": "Lava",
+      "material": 62,
+      "seed": 10062,
+      "nodes": [
+        {"key": "crust", "kind": "noise", "source": "worley", "scale": 6, "octaves": 1, "lacunarity": 2.0, "gain": 0.5, "warp": 0.4, "salt": 77, "contrast": 1.0, "invert": false},
+        {"key": "edges", "kind": "curvature", "inputs": ["crust"], "radius": 0.012},
+        {"key": "cracks", "kind": "threshold", "inputs": ["edges"], "at": 0.58, "soft": 0.06},
+        {"key": "spread", "kind": "blur", "inputs": ["cracks"], "radius": 0.012},
+        {"key": "heat", "kind": "levels", "inputs": ["spread"], "lo": 0.0, "hi": 0.5, "gamma": 1.0},
+        {"key": "rock", "kind": "noise", "source": "fbm", "scale": 9, "octaves": 4, "lacunarity": 2.0, "gain": 0.5, "warp": 0.0, "salt": 79, "contrast": 1.2, "invert": false},
+        {"key": "body", "kind": "ramp", "inputs": ["rock"], "ramp": {"stops": [{"at": 0.0, "color": [0.05, 0.04, 0.04]}, {"at": 0.5, "color": [0.12, 0.1, 0.09]}, {"at": 1.0, "color": [0.22, 0.18, 0.16]}]}},
+        {"key": "hot", "kind": "palette", "rgb": [0.95, 0.4, 0.08]},
+        {"key": "base", "kind": "mix_color", "inputs": ["body", "hot", "heat"], "amount": 1.0},
+        {"key": "glow", "kind": "palette", "rgb": [1.0, 0.5, 0.0]},
+        {"key": "flat", "kind": "contrast", "inputs": ["rock"], "pivot": 0.5, "amount": 0.6},
+        {"key": "notcracks", "kind": "invert", "inputs": ["cracks"]},
+        {"key": "h", "kind": "blend", "inputs": ["flat", "notcracks"], "mode": "min", "amount": 1.0},
+        {"key": "rough", "kind": "modulate", "inputs": ["rock"], "base": 0.85, "amount": 0.1},
+        {"key": "ao", "kind": "occlusion", "inputs": ["h"], "strength": 0.6}
+      ],
+      "output": {"base": "base", "height": "h", "relief": 0.4, "roughness": "rough", "metalness": 0.0, "ao": "ao", "emit": {"color": "glow", "mask": "heat", "strength": 1.0}}
+    }
+  ]
+}

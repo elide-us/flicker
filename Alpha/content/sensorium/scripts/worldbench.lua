@@ -14,9 +14,14 @@ local M = {}
 function M.arrange()
   local page = (Model and Model.page) or 0
   local tab = (Model and Model.tab) or 0
-  local out = { ["shown_page0"] = { on = (page == 0) } }
-  -- One slice per tab of the WORLD page: wave, ridge, 8/9, 1/13, 1/15, coast, heat, emitters.
-  for t = 0, 7 do
+  local out = {
+    ["shown_page0"] = { on = (page == 0) },
+    -- The MAP page: the world laid flat, the picked hexes drawn in it.
+    ["shown_page1"] = { on = (page == 1) },
+  }
+  -- One slice per tab of the WORLD page: wave, resonance, heat, emitters,
+  -- epochs, erosion, tile.
+  for t = 0, 6 do
     out["shown_p0_t" .. t] = { on = (page == 0 and tab == t) }
   end
   return out

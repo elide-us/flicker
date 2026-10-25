@@ -2792,6 +2792,9 @@
   "pkg_err_name_taken": {
     "en-us": "That name is already used here."
   },
+  "pkg_err_material_slot_refused": {
+    "en-us": "Refused — this slot cannot hold this material: 0 is Air, and the emissive slots (248–255) hold emissive materials only. Bind the graph to another slot in MaterialBench and commit again."
+  },
   "pkg_err_promote_partial": {
     "en-us": "A promote ships the whole asset — answer Replace, or resolve the collision in Files first."
   },
@@ -2864,11 +2867,17 @@
   "pkg_warn_material_recipe_missing": {
     "en-us": "no recipe named for this slot — the bundle's .texture.json has been renamed"
   },
+  "pkg_warn_material_recipe_invalid": {
+    "en-us": "material document does not load — it is neither a v2 material graph nor a v1 recipe, so nothing could draw it"
+  },
   "pkg_warn_material_slot_mismatch": {
     "en-us": "recipe names a different material slot than the folder — the folder decides where it promotes"
   },
+  "pkg_warn_material_no_emit": {
+    "en-us": "the slot's material is emissive, but this look does not glow — its document has no Emit (or a strength of 0)"
+  },
   "pkg_warn_material_slot_reserved": {
-    "en-us": "slot is not writable — 0 is Air and the top of the range is reserved for shader-first emissives"
+    "en-us": "slot cannot hold this material — 0 is Air, and the eight emissive slots (248–255) hold emissive materials only"
   },
   "pkg_warn_material_unbound": {
     "en-us": "recipe is not bound to a material slot — bind it on the Materials page and commit again"
@@ -3170,9 +3179,6 @@
   "settings_applied": {
     "en-us": "SETTINGS APPLIED"
   },
-  "mtl_amt": {
-    "en-us": "amt"
-  },
   "mtl_ao": {
     "en-us": "Occlusion"
   },
@@ -3206,27 +3212,6 @@
   "mtl_body_sphere": {
     "en-us": "Sphere"
   },
-  "mtl_ch1": {
-    "en-us": "CH1"
-  },
-  "mtl_ch2": {
-    "en-us": "CH2"
-  },
-  "mtl_ch3": {
-    "en-us": "CH3"
-  },
-  "mtl_ch4": {
-    "en-us": "CH4"
-  },
-  "mtl_ch5": {
-    "en-us": "CH5"
-  },
-  "mtl_ch6": {
-    "en-us": "CH6"
-  },
-  "mtl_channel_rack": {
-    "en-us": "Channel Rack"
-  },
   "mtl_commit": {
     "en-us": "Commit"
   },
@@ -3246,10 +3231,28 @@
     "en-us": "Refused — bind a material slot on the Materials page first"
   },
   "mtl_commit_slot_closed": {
-    "en-us": "Refused — slot 0 is Air and the top of the range is reserved"
+    "en-us": "Refused — this slot cannot hold this material: slot 0 is Air, and the eight emissive slots (248–255) hold emissive materials only"
   },
-  "mtl_contrast": {
-    "en-us": "Contrast"
+  "mtl_committed_unreadable": {
+    "en-us": "The committed material document could not be read — bound without opening it"
+  },
+  "mtl_committed_title": {
+    "en-us": "COMMITTED LOOK"
+  },
+  "mtl_committed_body": {
+    "en-us": "This slot already has a committed look. Open it, or bind the document you are working on here — its next Commit replaces that look."
+  },
+  "mtl_open_committed": {
+    "en-us": "Open its look"
+  },
+  "mtl_open_committed_discard": {
+    "en-us": "Discard edits, open look"
+  },
+  "mtl_bind_here": {
+    "en-us": "Bind my work here"
+  },
+  "mtl_warn_no_emit": {
+    "en-us": "The staged look has no glow — this slot's material is emissive, but its Emit is unwired or at strength 0"
   },
   "mtl_ft_menu": {
     "en-us": "Menu"
@@ -3260,68 +3263,8 @@
   "mtl_ft_prev": {
     "en-us": "Prev"
   },
-  "mtl_fx_billow": {
-    "en-us": "Rounded lobes"
-  },
-  "mtl_fx2_billow": {
-    "en-us": "clumped soil & cloud swell"
-  },
-  "mtl_fx_fbm": {
-    "en-us": "Layered octave cloud"
-  },
-  "mtl_fx2_fbm": {
-    "en-us": "natural rock & cloud grain"
-  },
-  "mtl_fx_off": {
-    "en-us": "Voice silent"
-  },
-  "mtl_fx2_off": {
-    "en-us": "enable it to fold in"
-  },
-  "mtl_fx_ridged": {
-    "en-us": "Folded crests"
-  },
-  "mtl_fx2_ridged": {
-    "en-us": "ridges, cracks, vein filaments"
-  },
-  "mtl_fx_stripe": {
-    "en-us": "Warped parallel bands"
-  },
-  "mtl_fx2_stripe": {
-    "en-us": "strata, grain, brushed metal"
-  },
-  "mtl_fx_value": {
-    "en-us": "Soft interpolated blotches"
-  },
-  "mtl_fx2_value": {
-    "en-us": "the quiet bed to build on"
-  },
-  "mtl_fx_worley": {
-    "en-us": "Swirling cellular plates"
-  },
-  "mtl_fx2_worley": {
-    "en-us": "pebbles, cell walls, shell"
-  },
-  "mtl_gain": {
-    "en-us": "Gain"
-  },
   "mtl_glow": {
     "en-us": "Glow"
-  },
-  "mtl_glow_band": {
-    "en-us": "Glow band"
-  },
-  "mtl_glow_color": {
-    "en-us": "Glow color"
-  },
-  "mtl_hue": {
-    "en-us": "Hue"
-  },
-  "mtl_invert": {
-    "en-us": "Invert"
-  },
-  "mtl_lacunarity": {
-    "en-us": "Lacunarity"
   },
   "mtl_map_ao": {
     "en-us": "AO"
@@ -3356,17 +3299,8 @@
   "mtl_mat_pick_hint": {
     "en-us": "Click a material to bind it to this recipe."
   },
-  "mtl_metal_mod": {
-    "en-us": "Metal mod"
-  },
   "mtl_metalness": {
     "en-us": "Metalness"
-  },
-  "mtl_next": {
-    "en-us": "›"
-  },
-  "mtl_oct": {
-    "en-us": "oct"
   },
   "mtl_output_stage": {
     "en-us": "Output Stage"
@@ -3376,9 +3310,6 @@
   },
   "mtl_page_materials": {
     "en-us": "Materials"
-  },
-  "mtl_prev": {
-    "en-us": "‹"
   },
   "mtl_relief": {
     "en-us": "Relief"
@@ -3401,23 +3332,17 @@
   "mtl_commit_meta": {
     "en-us": "bake to staging — needs a bound material slot"
   },
-  "mtl_rough_mod": {
-    "en-us": "Rough mod"
-  },
   "mtl_roughness": {
     "en-us": "Roughness"
-  },
-  "mtl_saturation": {
-    "en-us": "Saturation"
-  },
-  "mtl_scale": {
-    "en-us": "scale"
   },
   "mtl_size": {
     "en-us": "Size"
   },
   "mtl_spin": {
     "en-us": "Spin"
+  },
+  "mtl_lit_zoom": {
+    "en-us": "Zoom"
   },
   "mtl_src_billow": {
     "en-us": "Billow"
@@ -3443,11 +3368,530 @@
   "mtl_unbound": {
     "en-us": "Unbound"
   },
-  "mtl_voice": {
-    "en-us": "Selected Voice"
+  "mtl_nodes": {
+    "en-us": "Nodes"
   },
-  "mtl_warp": {
-    "en-us": "warp"
+  "mtl_node": {
+    "en-us": "Node"
+  },
+  "mtl_insert": {
+    "en-us": "Insert"
+  },
+  "mtl_delete": {
+    "en-us": "Delete"
+  },
+  "mtl_up": {
+    "en-us": "Up"
+  },
+  "mtl_down": {
+    "en-us": "Down"
+  },
+  "mtl_insert_title": {
+    "en-us": "Insert Node"
+  },
+  "mtl_insert_meta": {
+    "en-us": "add a node after the selected one"
+  },
+  "mtl_cancel": {
+    "en-us": "Cancel"
+  },
+  "mtl_select_node": {
+    "en-us": "Select a node in the list or on the canvas"
+  },
+  "mtl_no_params": {
+    "en-us": "No parameters"
+  },
+  "mtl_graph": {
+    "en-us": "Graph"
+  },
+  "mtl_canvas_move": {
+    "en-us": "Move"
+  },
+  "mtl_canvas_link": {
+    "en-us": "Link"
+  },
+  "mtl_canvas_reset": {
+    "en-us": "Reset view"
+  },
+  "mtl_canvas_hint": {
+    "en-us": "Wheel zooms · middle-drag pans · in Link, drag a card onto a port"
+  },
+  "mtl_link_meta": {
+    "en-us": "drag a card onto a port to wire it"
+  },
+  "mtl_output": {
+    "en-us": "Output"
+  },
+  "mtl_preset": {
+    "en-us": "Preset"
+  },
+  "mtl_preset_new": {
+    "en-us": "New"
+  },
+  "mtl_preset_custom": {
+    "en-us": "Custom"
+  },
+  "mtl_material_unlisted": {
+    "en-us": "Unlisted slot"
+  },
+  "mtl_none": {
+    "en-us": "None"
+  },
+  "mtl_const": {
+    "en-us": "Constant"
+  },
+  "mtl_level": {
+    "en-us": "Level"
+  },
+  "mtl_out_base": {
+    "en-us": "Base color"
+  },
+  "mtl_out_height": {
+    "en-us": "Height"
+  },
+  "mtl_glow_mask": {
+    "en-us": "Glow mask"
+  },
+  "mtl_glow_strength": {
+    "en-us": "Glow strength"
+  },
+  "mtl_problems": {
+    "en-us": "Problems"
+  },
+  "mtl_wire_mistyped": {
+    "en-us": "Refused — that port takes the other kind of signal"
+  },
+  "mtl_wire_loops": {
+    "en-us": "Refused — that wire would loop a node back into itself"
+  },
+  "mtl_wire_from_output": {
+    "en-us": "Refused — the output feeds nothing; drag from a node"
+  },
+  "mtl_wire_no_glow": {
+    "en-us": "Refused — pick a glow color before its mask"
+  },
+  "mtl_wire_no_port": {
+    "en-us": "Refused — that node takes no input"
+  },
+  "mtl_wire_no_free_port": {
+    "en-us": "Refused — every port for that signal is wired; drop on a port to replace one"
+  },
+  "mtl_err_duplicate_key": {
+    "en-us": "Two nodes share a key"
+  },
+  "mtl_err_unknown_node": {
+    "en-us": "A wire names a node that is not there"
+  },
+  "mtl_err_unknown_port": {
+    "en-us": "A wire names a port the node does not have"
+  },
+  "mtl_err_missing_input": {
+    "en-us": "A required input is not wired"
+  },
+  "mtl_err_port_type": {
+    "en-us": "A wire carries the other kind of signal"
+  },
+  "mtl_err_cycle": {
+    "en-us": "The graph loops back into itself"
+  },
+  "mtl_err_non_finite": {
+    "en-us": "A parameter is not a finite number"
+  },
+  "mtl_err_out_of_range": {
+    "en-us": "A parameter is out of range"
+  },
+  "mtl_err_non_finite_texel": {
+    "en-us": "A node produced a non-finite value"
+  },
+  "mtl_commit_io_failed": {
+    "en-us": "Failed — the bundle could not be written"
+  },
+  "mtl_outport_base": {
+    "en-us": "Base"
+  },
+  "mtl_outport_height": {
+    "en-us": "Height"
+  },
+  "mtl_outport_roughness": {
+    "en-us": "Rough"
+  },
+  "mtl_outport_metalness": {
+    "en-us": "Metal"
+  },
+  "mtl_outport_ao": {
+    "en-us": "AO"
+  },
+  "mtl_outport_emit_color": {
+    "en-us": "Glow"
+  },
+  "mtl_outport_emit_mask": {
+    "en-us": "Glow mask"
+  },
+  "mtl_kind_noise": {
+    "en-us": "Noise"
+  },
+  "mtl_kind_constant": {
+    "en-us": "Constant"
+  },
+  "mtl_kind_gradient": {
+    "en-us": "Gradient"
+  },
+  "mtl_kind_shape": {
+    "en-us": "Shape"
+  },
+  "mtl_kind_levels": {
+    "en-us": "Levels"
+  },
+  "mtl_kind_contrast": {
+    "en-us": "Contrast"
+  },
+  "mtl_kind_invert": {
+    "en-us": "Invert"
+  },
+  "mtl_kind_blur": {
+    "en-us": "Blur"
+  },
+  "mtl_kind_threshold": {
+    "en-us": "Threshold"
+  },
+  "mtl_kind_band": {
+    "en-us": "Band"
+  },
+  "mtl_kind_curvature": {
+    "en-us": "Curvature"
+  },
+  "mtl_kind_warp": {
+    "en-us": "Warp"
+  },
+  "mtl_kind_tile": {
+    "en-us": "Tile"
+  },
+  "mtl_kind_modulate": {
+    "en-us": "Modulate"
+  },
+  "mtl_kind_occlusion": {
+    "en-us": "Occlusion"
+  },
+  "mtl_kind_blend": {
+    "en-us": "Blend"
+  },
+  "mtl_kind_ramp": {
+    "en-us": "Ramp"
+  },
+  "mtl_kind_palette": {
+    "en-us": "Palette"
+  },
+  "mtl_kind_mix_color": {
+    "en-us": "Mix Color"
+  },
+  "mtl_p_source": {
+    "en-us": "Source"
+  },
+  "mtl_p_scale": {
+    "en-us": "Scale"
+  },
+  "mtl_p_octaves": {
+    "en-us": "Octaves"
+  },
+  "mtl_p_lacunarity": {
+    "en-us": "Lacunarity"
+  },
+  "mtl_p_gain": {
+    "en-us": "Gain"
+  },
+  "mtl_p_warp": {
+    "en-us": "Warp"
+  },
+  "mtl_p_contrast": {
+    "en-us": "Contrast"
+  },
+  "mtl_p_invert": {
+    "en-us": "Invert"
+  },
+  "mtl_p_value": {
+    "en-us": "Value"
+  },
+  "mtl_p_axis": {
+    "en-us": "Axis"
+  },
+  "mtl_p_repeat": {
+    "en-us": "Repeat"
+  },
+  "mtl_p_pattern": {
+    "en-us": "Pattern"
+  },
+  "mtl_p_cells": {
+    "en-us": "Cells"
+  },
+  "mtl_p_mortar": {
+    "en-us": "Mortar"
+  },
+  "mtl_p_lo": {
+    "en-us": "Low"
+  },
+  "mtl_p_hi": {
+    "en-us": "High"
+  },
+  "mtl_p_gamma": {
+    "en-us": "Gamma"
+  },
+  "mtl_p_pivot": {
+    "en-us": "Pivot"
+  },
+  "mtl_p_amount": {
+    "en-us": "Amount"
+  },
+  "mtl_p_radius": {
+    "en-us": "Radius"
+  },
+  "mtl_p_at": {
+    "en-us": "At"
+  },
+  "mtl_p_soft": {
+    "en-us": "Softness"
+  },
+  "mtl_p_width": {
+    "en-us": "Width"
+  },
+  "mtl_p_base": {
+    "en-us": "Base"
+  },
+  "mtl_p_strength": {
+    "en-us": "Strength"
+  },
+  "mtl_p_mode": {
+    "en-us": "Mode"
+  },
+  "mtl_p_hue": {
+    "en-us": "Hue"
+  },
+  "mtl_p_sat": {
+    "en-us": "Saturation"
+  },
+  "mtl_p_rgb": {
+    "en-us": "Color"
+  },
+  "mtl_axis_u": {
+    "en-us": "Across"
+  },
+  "mtl_axis_v": {
+    "en-us": "Down"
+  },
+  "mtl_axis_radial": {
+    "en-us": "Radial"
+  },
+  "mtl_pattern_tiles": {
+    "en-us": "Tiles"
+  },
+  "mtl_pattern_bricks": {
+    "en-us": "Bricks"
+  },
+  "mtl_pattern_hex": {
+    "en-us": "Hex"
+  },
+  "mtl_pattern_dots": {
+    "en-us": "Dots"
+  },
+  "mtl_port_field": {
+    "en-us": "Input"
+  },
+  "mtl_port_by": {
+    "en-us": "By"
+  },
+  "mtl_port_a": {
+    "en-us": "A"
+  },
+  "mtl_port_b": {
+    "en-us": "B"
+  },
+  "mtl_port_mask": {
+    "en-us": "Mask"
+  },
+  "mtl_pal_red": {
+    "en-us": "Red"
+  },
+  "mtl_pal_green": {
+    "en-us": "Green"
+  },
+  "mtl_pal_blue": {
+    "en-us": "Blue"
+  },
+  "mtl_pal_magenta": {
+    "en-us": "Magenta"
+  },
+  "mtl_pal_cyan": {
+    "en-us": "Cyan"
+  },
+  "mtl_pal_white": {
+    "en-us": "White"
+  },
+  "mtl_pal_orange": {
+    "en-us": "Orange"
+  },
+  "mtl_pal_violet": {
+    "en-us": "Violet"
+  },
+  "mtl_pal_custom": {
+    "en-us": "Custom"
+  },
+  "mc_title": {
+    "en-us": "MATERIAL CATALOG"
+  },
+  "mc_count_assigned": {
+    "en-us": "assigned"
+  },
+  "mc_count_generated": {
+    "en-us": "generated"
+  },
+  "mc_count_free": {
+    "en-us": "free"
+  },
+  "mc_count_emissive": {
+    "en-us": "emissive open"
+  },
+  "mc_emissive": {
+    "en-us": "Emissive"
+  },
+  "mc_hint": {
+    "en-us": "Each box is one slot of the material byte: row head + column head. A lit sphere is an assigned material - wearing its promoted bundle's maps when the package holds one, else a flat finish in its index colour; an empty box is a free slot; the last eight are the emissive slots, which hold emissive materials only. Press a box to inspect it. To make or bind a material, use the MaterialBench."
+  },
+  "mc_ft_menu": {
+    "en-us": "Menu"
+  },
+  "modal_lbl_close": {
+    "en-us": "CLOSE"
+  },
+  "insp_pkg_heading": {
+    "en-us": "IN THE PACKAGE"
+  },
+  "insp_def_heading": {
+    "en-us": "DEFINITION"
+  },
+  "insp_lbl_state": {
+    "en-us": "Held in"
+  },
+  "insp_lbl_version": {
+    "en-us": "Recipe version"
+  },
+  "insp_lbl_nodes": {
+    "en-us": "Nodes"
+  },
+  "insp_lbl_maps": {
+    "en-us": "Map set"
+  },
+  "insp_lbl_size": {
+    "en-us": "Map size (px)"
+  },
+  "insp_lbl_bytes": {
+    "en-us": "On disk"
+  },
+  "insp_lbl_modified": {
+    "en-us": "Modified (UTC)"
+  },
+  "insp_state_package": {
+    "en-us": "Package"
+  },
+  "insp_state_staging": {
+    "en-us": "Staging"
+  },
+  "insp_state_none": {
+    "en-us": "Nowhere"
+  },
+  "insp_note_package": {
+    "en-us": "Promoted - this is the look the package ships for this slot."
+  },
+  "insp_note_staging": {
+    "en-us": "Staged by the MaterialBench, not yet promoted - the PackageBench promotes it into the package."
+  },
+  "insp_note_none": {
+    "en-us": "Nothing has been made for this slot yet - neither the package nor staging holds a bundle, so there is no graph."
+  },
+  "insp_note_invalid": {
+    "en-us": "The bundle's recipe does not load - its graph cannot be shown (the log names why)."
+  },
+  "insp_note_incomplete": {
+    "en-us": "The bundle holds its recipe but not all seven maps - the sample wears the index colour until it is baked whole."
+  },
+  "insp_none": {
+    "en-us": "—"
+  },
+  "insp_unassigned": {
+    "en-us": "Unassigned"
+  },
+  "insp_lbl_id": {
+    "en-us": "Slot"
+  },
+  "insp_lbl_name": {
+    "en-us": "Name"
+  },
+  "insp_lbl_category": {
+    "en-us": "Category"
+  },
+  "insp_lbl_class": {
+    "en-us": "Render class"
+  },
+  "insp_lbl_colour": {
+    "en-us": "Index colour"
+  },
+  "insp_lbl_extracts": {
+    "en-us": "Extracts"
+  },
+  "insp_lbl_band": {
+    "en-us": "Band"
+  },
+  "insp_lbl_represents": {
+    "en-us": "Represents"
+  },
+  "insp_lbl_signature": {
+    "en-us": "Signature"
+  },
+  "insp_lbl_hardness": {
+    "en-us": "Hardness"
+  },
+  "insp_lbl_brittleness": {
+    "en-us": "Brittleness"
+  },
+  "insp_lbl_water": {
+    "en-us": "Water capacity"
+  },
+  "insp_lbl_viscosity": {
+    "en-us": "Viscosity"
+  },
+  "insp_lbl_density": {
+    "en-us": "Density g/cm³"
+  },
+  "insp_class_blendable": {
+    "en-us": "Blendable"
+  },
+  "insp_class_hard_edge": {
+    "en-us": "Hard edge"
+  },
+  "insp_class_translucent": {
+    "en-us": "Translucent"
+  },
+  "insp_class_emissive": {
+    "en-us": "Emissive"
+  },
+  "insp_graph_none": {
+    "en-us": "No graph - this slot has no bundle."
+  },
+  "insp_graph_invalid": {
+    "en-us": "No graph - the bundle's recipe does not load."
+  },
+  "insp_node_hint": {
+    "en-us": "Click a card, or pick a row, to read it."
+  },
+  "insp_lbl_inputs": {
+    "en-us": "Inputs"
+  },
+  "insp_body_hint": {
+    "en-us": "The material on a turning body under the bench's light. Wheel over it, or the slider, zooms."
+  },
+  "insp_zoom": {
+    "en-us": "Zoom"
+  },
+  "insp_hint": {
+    "en-us": "Read-only. Wheel zooms the graph, middle-drag pans it; a click on a card or a row reads a node. Esc or B closes."
   },
   "toast_undo": {
     "en-us": "UNDO"
@@ -4937,6 +5381,9 @@
   "wb_field_mask": {
     "en-us": "ALPHA MASK"
   },
+  "wb_field_bubbles": {
+    "en-us": "BUBBLES"
+  },
   "wb_field_emit": {
     "en-us": "EMITTERS"
   },
@@ -4958,52 +5405,166 @@
   "wb_stat_emitters": {
     "en-us": "EMITTERS"
   },
-  "wb_tab_w89": {
-    "en-us": "8/9"
+  "wb_tab_res": {
+    "en-us": "Resonance"
   },
-  "wb_tab_w13": {
-    "en-us": "1/13"
+  "wb_field_res": {
+    "en-us": "RESONANCE"
   },
-  "wb_tab_w15": {
-    "en-us": "1/15"
+  "wb_on": {
+    "en-us": "ON"
   },
-  "wb_field_w89": {
-    "en-us": "WAVE 8/9"
+  "wb_freq": {
+    "en-us": "f"
   },
-  "wb_field_w13": {
-    "en-us": "WAVE 1/13"
+  "wb_stat_active": {
+    "en-us": "ACTIVE SLOTS"
   },
-  "wb_field_w15": {
-    "en-us": "WAVE 1/15"
+  "wb_spread": {
+    "en-us": "SPREAD"
   },
-  "wb_waves": {
-    "en-us": "WAVES"
+  "wb_slot_amp": {
+    "en-us": "a"
   },
-  "wb_stat_ratio": {
-    "en-us": "RATIO"
+  "wb_seam": {
+    "en-us": "SEAM"
   },
-  "wb_tab_ridge": {
-    "en-us": "Ridge"
+  "wb_mask_off": {
+    "en-us": "–"
   },
-  "wb_tab_coast": {
-    "en-us": "Coast"
+  "wb_mask_region": {
+    "en-us": "A"
   },
-  "wb_field_ridge": {
-    "en-us": "RIDGE"
+  "wb_mask_seam": {
+    "en-us": "S"
   },
-  "wb_field_coast": {
-    "en-us": "COAST"
+  "wb_slot_axes": {
+    "en-us": "w"
   },
-  "wb_plateau": {
-    "en-us": "PLATEAU"
+  "wb_tab_epochs": {
+    "en-us": "Epochs"
   },
-  "wb_level": {
-    "en-us": "LEVEL"
+  "wb_field_epochs": {
+    "en-us": "EPOCHS"
   },
-  "wb_width": {
-    "en-us": "WIDTH"
+  "wb_rate": {
+    "en-us": "RATE"
   },
-  "wb_ratio": {
-    "en-us": "RATIO"
+  "wb_uplift": {
+    "en-us": "UPLIFT"
+  },
+  "wb_tick": {
+    "en-us": "TICK"
+  },
+  "wb_run": {
+    "en-us": "RUN"
+  },
+  "wb_reset": {
+    "en-us": "RESET"
+  },
+  "wb_stat_epochs": {
+    "en-us": "EPOCHS"
+  },
+  "wb_stat_uplift": {
+    "en-us": "UPLIFT"
+  },
+  "wb_rift": {
+    "en-us": "RIFT"
+  },
+  "wb_impacts": {
+    "en-us": "IMPACTS"
+  },
+  "wb_stat_events": {
+    "en-us": "ERUPT · IMPACT"
+  },
+  "wb_stat_rafts": {
+    "en-us": "RAFTS"
+  },
+  "wb_stat_crust": {
+    "en-us": "UNDER · YOUNG"
+  },
+  "wb_view_relief": {
+    "en-us": "RELIEF"
+  },
+  "wb_view_hard": {
+    "en-us": "HARDNESS"
+  },
+  "wb_tab_erosion": {
+    "en-us": "Erosion"
+  },
+  "wb_field_erosion": {
+    "en-us": "EROSION"
+  },
+  "wb_stat_cycles": {
+    "en-us": "CYCLES"
+  },
+  "wb_stat_era_sea": {
+    "en-us": "SEA · ADOPTED"
+  },
+  "wb_stat_texture": {
+    "en-us": "TEXTURE"
+  },
+  "wb_loop": {
+    "en-us": "LOOP"
+  },
+  "wb_stat_loops": {
+    "en-us": "LOOPS"
+  },
+  "wb_tab_tile": {
+    "en-us": "Tile"
+  },
+  "wb_cut": {
+    "en-us": "CUT"
+  },
+  "wb_stat_cut": {
+    "en-us": "CUT · EXPORTED"
+  },
+  "wb_page_map": {
+    "en-us": "MAP"
+  },
+  "wb_render_world": {
+    "en-us": "RENDER WORLD"
+  },
+  "wb_render_hex": {
+    "en-us": "RENDER HEX"
+  },
+  "wb_stop": {
+    "en-us": "STOP"
+  },
+  "wb_stat_cutting": {
+    "en-us": "CUT"
+  },
+  "wb_stat_pick": {
+    "en-us": "HEX"
+  },
+  "wb_stat_tiles": {
+    "en-us": "DRAWN"
+  },
+  "wb_stat_job": {
+    "en-us": "WORLD"
+  },
+  "wb_materialize": {
+    "en-us": "MATERIALIZE"
+  },
+  "wb_stat_hex": {
+    "en-us": "HEX"
+  },
+  "wb_stat_column": {
+    "en-us": "COLUMN"
+  },
+  "wb_stat_span": {
+    "en-us": "SPAN"
+  },
+  "wb_stat_rough": {
+    "en-us": "ROUGHNESS"
+  },
+  "wb_view_picture": {
+    "en-us": "PICTURE"
+  },
+  "wb_view_field": {
+    "en-us": "FIELD"
+  },
+  "wb_stat_quads": {
+    "en-us": "QUADS · DROPS"
   }
 }

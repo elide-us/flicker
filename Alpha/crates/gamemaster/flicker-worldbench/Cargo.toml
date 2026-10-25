@@ -1,6 +1,6 @@
 [package]
 name = "flicker-worldbench"
-version = "0.1.11"
+version = "0.1.12"
 edition.workspace = true
 license.workspace = true
 publish = false
@@ -17,7 +17,7 @@ path = "src/lib.rs"
 [dependencies]
 # The shared hex-globe view: mesh builder + graticule + orbit camera + the
 # offscreen viewport pass.
-flicker-globe = { version = "0.1.11", path = "../../frontend/flicker-globe" }
+flicker-globe = { version = "0.1.12", path = "../../frontend/flicker-globe" }
 flicker = { version = "0.1.0", path = "../../core/flicker" }
 flicker-shell.workspace = true
 # Input event bus — the shared resolve → route seam.
@@ -28,5 +28,11 @@ tracing.workspace = true
 fastrand.workspace = true
 # THE PLANET: the hex map and the V5 resonance fields.
 flicker-worldengine.workspace = true
+# THE GROUND: a hex of the planet at 2K through the pixel tier's migration.
+flicker-worldtile.workspace = true
+# THE ENGINE'S CLUSTERS: the hex handed over as its LOD8 quad field.
+flicker-voxel.workspace = true
 # The scene holds the loaded `ui_theme.json` styles as a JSON value.
 serde_json.workspace = true
+# THE TILE CACHE: the hexes' pictures written to and read from disk as PNG.
+image.workspace = true

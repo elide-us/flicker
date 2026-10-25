@@ -14,7 +14,9 @@
 //! So an albedo-only draw (the katana) reads as a matte dielectric (flat normal, rough,
 //! non-metal, unoccluded), while a full-map draw (the character) gets surface relief +
 //! a metal/rough specular response + AO. The albedo is sampled sRGB; the map textures
-//! are **linear** (`Renderer::load_texture_linear`).
+//! are **linear** (`Renderer::load_texture_linear`). The Emit map is scaled by the draw's
+//! **emissive gain** (per-draw `flags.w`, `MeshDrawOptions::emissive_gain`, default 1), so a
+//! glow can exceed the 8-bit texel's 1.0 on an HDR target.
 //!
 //! Bind groups:
 //! * group 0 — the renderer's ONE per-frame group: camera(@0) + the `Scene` light list(@1),
@@ -250,10 +252,15 @@ pub struct TexturedMeshHandle(pub(crate) u32);
 struct PerDraw {
     model: [[f32; 4]; 4],
     tint: [f32; 4],
-    // flags.y = gloss (sheen strength), flags.z = soft-alpha blend mode. xw unused.
+    // flags.y = gloss (sheen strength), flags.z = soft-alpha blend mode, flags.w = the
+    // emissive gain `shade_material` scales the Emit map by. x unused.
     flags: [f32; 4],
 }
 const PER_DRAW_RAW_SIZE: u64 = std::mem::size_of::<PerDraw>() as u64;
+// The CPU half of the uniform contract: `struct PerDraw` in mesh_textured.wgsl is
+// mat4 + vec4 + vec4 = 96 bytes. The gain rides the free `w` lane of `flags`, so the
+// layout did not grow — and this keeps it from growing out from under the shader.
+const _: () = assert!(PER_DRAW_RAW_SIZE == 96);
 
 /// One uploaded textured mesh (persists across frames).
 struct TexturedMesh {
@@ -618,7 +625,10 @@ impl TexturedMeshPipeline {
 
     /// Queue a textured mesh for this frame, sampling `texture` as albedo with the
     /// given PBR `maps` (each `None` slot uses the pipeline default). `push` (albedo
-    /// only) forwards here with empty maps.
+    /// only) forwards here with empty maps. `emissive_gain` scales the Emit map
+    /// ([`MeshDrawOptions::emissive_gain`](crate::MeshDrawOptions::emissive_gain)); a negative,
+    /// NaN or infinite gain is written as 0 — a gain below zero would SUBTRACT light, and an
+    /// infinite one is NaN on every black Emit texel (`0 * inf`), not a brighter glow.
     #[allow(clippy::too_many_arguments)]
     pub fn push(
         &mut self,
@@ -628,6 +638,7 @@ impl TexturedMeshPipeline {
         model: Mat4,
         tint: [f32; 4],
         gloss: f32,
+        emissive_gain: f32,
         soft: bool,
     ) {
         self.queued.push(Draw {
@@ -637,8 +648,19 @@ impl TexturedMeshPipeline {
             per_draw: PerDraw {
                 model: model.to_cols_array_2d(),
                 tint,
-                // flags.z = soft-alpha blend mode (clouds / ground decals; default cutout).
-                flags: [0.0, gloss, if soft { 1.0 } else { 0.0 }, 0.0],
+                // flags.z = soft-alpha blend mode (clouds / ground decals; default cutout),
+                // flags.w = the emissive gain: finite and never below 0, else 0 (`max` alone
+                // would pass +inf through, and `emit * inf` is NaN on every black texel).
+                flags: [
+                    0.0,
+                    gloss,
+                    if soft { 1.0 } else { 0.0 },
+                    if emissive_gain.is_finite() {
+                        emissive_gain.max(0.0)
+                    } else {
+                        0.0
+                    },
+                ],
             },
         });
     }
@@ -917,6 +939,10 @@ mod tests {
             "fn light_contrib(",
             "fn shade_material(",
             "for (var i = 0u; i < scene.counts.x; i = i + 1u) {",
+            // The draw-time emissive gain scales the sampled Emit — in the ONE text, so
+            // every textured path (static and skinned) carries it.
+            "emissive_gain: f32,",
+            "vec4<f32>(emit * emissive_gain, 0.0)",
         ] {
             assert!(
                 MATERIAL.contains(fact),
@@ -957,6 +983,97 @@ mod tests {
                 && composed.contains("fn shade_material(")
                 && composed.contains("fn light_sample("),
             "compose_material prepends the prelude and the material to the body"
+        );
+        // The static body hands `shade_material` the per-draw gain `push` writes into the
+        // free `w` lane of `flags` (see `the_emissive_gain_rides_the_per_draw_flags`).
+        assert!(
+            include_str!("shaders/mesh_textured.wgsl").contains("per_draw.flags.w,"),
+            "mesh_textured.wgsl must pass the per-draw emissive gain (flags.w) to shade_material"
+        );
+    }
+
+    /// THE EMISSIVE GAIN reaches the uniform: `push` writes the draw's gain into the
+    /// per-draw record's `flags.w` — the lane `mesh_textured.wgsl` hands `shade_material` —
+    /// next to gloss (`y`) and the soft-alpha flag (`z`), and the record still uploads
+    /// through the dynamic-offset uniform under a validation scope (so a record that
+    /// outgrew the shader's `struct PerDraw` fails here as well as at the size assert).
+    /// The default options carry unity gain: the Emit texel as authored. Skipped with no
+    /// GPU adapter.
+    #[test]
+    fn the_emissive_gain_rides_the_per_draw_flags() {
+        let Some((device, queue)) =
+            crate::pipeline_mesh::tests::test_device("flicker.mesh_textured_test.gain")
+        else {
+            eprintln!("the_emissive_gain_rides_the_per_draw_flags: no GPU adapter — skipping");
+            return;
+        };
+        device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let align = device.limits().min_uniform_buffer_offset_alignment;
+        let frame = FrameBindGroup::new(&device);
+        let shadow = ShadowBind::new(&device);
+        let mut pipeline = TexturedMeshPipeline::new(
+            &device,
+            &queue,
+            &frame,
+            &shadow,
+            wgpu::TextureFormat::Rgba8UnormSrgb,
+            align,
+        );
+        let opts = crate::MeshDrawOptions::default();
+        assert_eq!(opts.emissive_gain, 1.0, "the default gain is unity");
+        let (mesh, albedo) = (TexturedMeshHandle(0), TextureHandle(0));
+        pipeline.push(
+            mesh,
+            albedo,
+            PbrMaps::default(),
+            Mat4::IDENTITY,
+            opts.tint,
+            opts.gloss,
+            opts.emissive_gain,
+            false,
+        );
+        pipeline.push(
+            mesh,
+            albedo,
+            PbrMaps::default(),
+            Mat4::IDENTITY,
+            [1.0; 4],
+            0.25,
+            4.0,
+            true,
+        );
+        // A gain below zero would subtract light: it is written as 0, and so is a NaN — and
+        // so is +inf, which would be NaN on every black Emit texel (`0 * inf`).
+        for bad in [-2.0, f32::NAN, f32::INFINITY] {
+            pipeline.push(
+                mesh,
+                albedo,
+                PbrMaps::default(),
+                Mat4::IDENTITY,
+                [1.0; 4],
+                0.0,
+                bad,
+                false,
+            );
+        }
+        let flags: Vec<[f32; 4]> = pipeline.queued.iter().map(|d| d.per_draw.flags).collect();
+        assert_eq!(
+            flags,
+            [
+                [0.0, 0.0, 0.0, 1.0],
+                [0.0, 0.25, 1.0, 4.0],
+                [0.0, 0.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0, 0.0]
+            ],
+            "flags = [unused, gloss, soft, emissive gain: finite and >= 0, else 0]"
+        );
+        pipeline.prepare(&device, &queue, &[]);
+        device.poll(wgpu::Maintain::Wait);
+        let err = pollster::block_on(device.pop_error_scope());
+        assert!(
+            err.is_none(),
+            "the per-draw upload failed validation: {err:?}"
         );
     }
 

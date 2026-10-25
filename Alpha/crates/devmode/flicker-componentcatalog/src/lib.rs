@@ -263,16 +263,19 @@ fn demo_graph_edges() -> [GraphEdge; 3] {
             from: 0,
             to: 1,
             ink: EdgeInk::Idle,
+            port: None,
         },
         GraphEdge {
             from: 1,
             to: 2,
             ink: EdgeInk::Lit,
+            port: None,
         },
         GraphEdge {
             from: 2,
             to: 2,
             ink: EdgeInk::Selected,
+            port: None,
         },
     ]
 }
@@ -759,6 +762,7 @@ impl ComponentCatalog {
                     selected: false,
                     icon: true,
                     ports: 1,
+                    port_labels: &[],
                 },
                 GraphNode {
                     title: &titles[1],
@@ -766,6 +770,7 @@ impl ComponentCatalog {
                     selected: true,
                     icon: true,
                     ports: 1,
+                    port_labels: &[],
                 },
                 GraphNode {
                     title: &titles[2],
@@ -773,6 +778,7 @@ impl ComponentCatalog {
                     selected: false,
                     icon: true,
                     ports: 1,
+                    port_labels: &[],
                 },
             ];
             self.graph
@@ -1294,6 +1300,12 @@ mod tests {
         );
     }
 
+    /// Every authored style path resolves to a BLOCK — and every node's static colour path
+    /// (`color`, a sprite's `backdrop`, a `rune_color` — `COLOR_PROPS`) to an RGBA. Each is
+    /// a dotted PATH into the same styles (a colour cannot ride as a scalar prop), so a path
+    /// that resolves to nothing — or a raw `$token` written where a path belongs (the `$dim`
+    /// bug four shared trees carried) — silently draws the compiled default ink. Lifted from
+    /// the Material Inspector's own gate so EVERY scene and shared tree is held to it.
     #[test]
     fn every_authored_style_path_resolves_to_a_block() {
         const BLOCK_PROPS: [&str; 9] = [
@@ -1307,13 +1319,20 @@ mod tests {
             "tab_idle",
             "runes_style",
         ];
+        /// The node props that name a COLOUR by dotted path (resolved to an rgba by the
+        /// walker): a text's `color`, a sprite's `backdrop`, a tooltip's `rune_color`.
+        const COLOR_PROPS: [&str; 3] = ["color", "backdrop", "rune_color"];
         fn jwalk<'v>(root: &'v serde_json::Value, path: &str) -> Option<&'v serde_json::Value> {
             path.split('.').try_fold(root, |v, seg| v.get(seg))
         }
         // Raw-JSON walk, not SceneDef: the shared modal trees (scenes/shared/)
         // carry no `behaviour` — the manifest skips that folder and a host scene
         // merges them — but their authored paths must resolve all the same.
-        fn collect(node: &serde_json::Value, out: &mut Vec<(String, String)>) {
+        fn collect(
+            node: &serde_json::Value,
+            out: &mut Vec<(String, String)>,
+            colors: &mut Vec<(String, String)>,
+        ) {
             let kind = node
                 .get("component")
                 .and_then(|c| c.as_str())
@@ -1323,9 +1342,14 @@ mod tests {
                     out.push((kind.to_string(), path.to_string()));
                 }
             }
+            for prop in COLOR_PROPS {
+                if let Some(path) = node.get(prop).and_then(|p| p.as_str()) {
+                    colors.push((format!("{kind} {prop}"), path.to_string()));
+                }
+            }
             if let Some(kids) = node.get("children").and_then(|c| c.as_array()) {
                 for kid in kids {
-                    collect(kid, out);
+                    collect(kid, out, colors);
                 }
             }
         }
@@ -1346,6 +1370,7 @@ mod tests {
         assert!(!files.is_empty(), "the scenes folder holds scene files");
 
         let mut broken = Vec::new();
+        let mut colors_seen = 0usize;
         for path in files {
             let id = path
                 .file_name()
@@ -1384,8 +1409,8 @@ mod tests {
                 own
             };
             let styles = flicker::ui::load_shared_styles(Some(&scene_styles));
-            let mut named = Vec::new();
-            collect(tree, &mut named);
+            let (mut named, mut colors) = (Vec::new(), Vec::new());
+            collect(tree, &mut named, &mut colors);
             for (kind, p) in named {
                 match jwalk(&styles, &p) {
                     Some(v) if v.is_object() => {}
@@ -1395,11 +1420,24 @@ mod tests {
                     None => broken.push(format!("{id}: {kind} names style '{p}' → NOTHING")),
                 }
             }
+            for (kind, p) in colors {
+                let rgba = jwalk(&styles, &p)
+                    .and_then(|v| v.as_array())
+                    .is_some_and(|a| a.len() == 4 && a.iter().all(serde_json::Value::is_number));
+                if !rgba {
+                    broken.push(format!("{id}: {kind} '{p}' resolves to no rgba"));
+                }
+                colors_seen += 1;
+            }
         }
         assert!(
             broken.is_empty(),
-            "authored style paths must resolve to blocks:\n{}",
+            "authored style paths must resolve to blocks, colour paths to rgba:\n{}",
             broken.join("\n")
+        );
+        assert!(
+            colors_seen > 100,
+            "the sweep saw the authored colours ({colors_seen})"
         );
     }
 

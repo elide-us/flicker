@@ -22,3 +22,5 @@ dist/
 settings.json
 
 __pycache__/
+.codex/
+AGENTS.md

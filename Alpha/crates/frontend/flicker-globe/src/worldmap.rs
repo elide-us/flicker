@@ -24,9 +24,11 @@
 //! sphere seamlessly — neighbours stay attached across the cut seam and over the
 //! poles, exactly as they do on the ball itself.
 
+use std::collections::HashMap;
+
 use flicker::render::{
     Camera, FrameGraph, MeshDrawOptions, MeshHandle, MeshIndices, MeshVertex, Rect, Renderer,
-    StageDef, StageInputs, StageLayer, Vec3,
+    StageDef, StageInputs, StageLayer, TextureHandle, TexturedMeshHandle, TexturedVertex, Vec3,
 };
 use flicker::ui::{SurfacePointer, SurfaceSlot};
 use glam::{Mat4, Vec2};
@@ -52,7 +54,13 @@ const LOCAL_MARGIN: f32 = 1.7;
 const REBAKE_DRIFT: f32 = 0.3;
 /// Draw depths inside the map pass: backdrop under the cells, lines over them.
 const BACKDROP_Z: f32 = -0.5;
+/// The pictures lie over the cells and under the lines.
+const PICTURE_Z: f32 = 0.25;
 const LINE_Z: f32 = 0.5;
+/// The picked cell's outline draws over the graticule; its second loop is
+/// pulled this share toward the cell's centre.
+const PICK_Z: f32 = 0.6;
+const PICK_WEIGHT: f32 = 0.04;
 
 /// The unwrapped picture's size and topology, in map-plane units.
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -85,13 +93,25 @@ pub struct MapFrame {
     pub mode: MapMode,
 }
 
+/// **A picture a content lays on its plane** — a textured polygon in map-plane
+/// coordinates with UVs into `texture`: a hex's 2K heightmap drawn IN THE
+/// WORLD (V5, Aaron 2026-10-16: *"when I click on a tile, the heightmap is
+/// drawn in the world at detail"*). The content projects the polygon like any
+/// cell; the component uploads and draws it over the cells, under the lines.
+pub struct MapPicture {
+    pub verts: Vec<TexturedVertex>,
+    pub idx: Vec<u32>,
+    pub texture: TextureHandle,
+}
+
 /// What one [`MapContent::bake`] hands back: triangle meshes (draw order = list
-/// order) and colour-grouped line segments, all in map-plane coordinates
-/// (`x` east, `y` north, `z` the fixed draw depths).
+/// order), the pictures laid over them, and colour-grouped line segments, all
+/// in map-plane coordinates (`x` east, `y` north, `z` the fixed draw depths).
 #[derive(Default)]
 pub struct MapBake {
     pub meshes: Vec<BakedMesh>,
     pub lines: Arrows,
+    pub pictures: Vec<MapPicture>,
 }
 
 /// **The plug.** A map-like content: it states its unwrapped extent, bakes the
@@ -141,14 +161,16 @@ pub trait MapContent {
 /// [`crate::GlobeWorld::authored_shells`] reads a globe's: the FIRST `shell`
 /// colour is the backdrop/seam ink, the SECOND is the tile base (its `inset`
 /// is the tile inset — the seams between tiles show the ink through the gaps,
-/// the same two-shell outline trick the globe draws), and a `graticule` layer
-/// asks for the flat reference frame.
+/// the same two-shell outline trick the globe draws), a THIRD is the ink the
+/// picked cell is outlined in, and a `graticule` layer asks for the flat
+/// reference frame.
 #[derive(Copy, Clone, Debug, Default, PartialEq)]
 pub struct MapLook {
     pub ink: Option<[f32; 3]>,
     pub base: Option<[f32; 3]>,
     pub inset: Option<f32>,
     pub graticule: bool,
+    pub pick: Option<[f32; 3]>,
 }
 
 /// **The shared map view.** Generic over its content so a scene keeps typed
@@ -169,6 +191,9 @@ pub struct WorldMap<C: MapContent> {
     dirty: bool,
     pending: Option<Vec<BakedMesh>>,
     meshes: Vec<(MeshHandle, MeshDrawOptions)>,
+    /// The pictures of the current bake, awaiting upload, and uploaded.
+    pending_pictures: Option<Vec<MapPicture>>,
+    pictures: Vec<(TexturedMeshHandle, TextureHandle)>,
     lines: Arrows,
     seat: Option<Seat>,
     active: bool,
@@ -201,6 +226,8 @@ impl<C: MapContent> WorldMap<C> {
             dirty: true,
             pending: None,
             meshes: Vec::new(),
+            pending_pictures: None,
+            pictures: Vec::new(),
             lines: Vec::new(),
             seat: None,
             active: false,
@@ -226,6 +253,8 @@ impl<C: MapContent> WorldMap<C> {
                     } else if look.base.is_none() {
                         look.base = Some(color);
                         look.inset = Some(inset);
+                    } else if look.pick.is_none() {
+                        look.pick = Some(color);
                     }
                 }
                 StageLayer::Graticule { .. } => look.graticule = true,
@@ -418,6 +447,7 @@ impl<C: MapContent> WorldMap<C> {
         if self.needs_bake(&frame) {
             let bake = self.content.bake(&frame);
             self.pending = Some(bake.meshes);
+            self.pending_pictures = Some(bake.pictures);
             self.lines = bake.lines;
             self.baked = Some(frame);
             self.dirty = false;
@@ -465,10 +495,12 @@ impl<C: MapContent> WorldMap<C> {
             view,
             stage,
             meshes,
+            pictures,
             lines,
             ..
         } = self;
         let meshes: Vec<(MeshHandle, MeshDrawOptions)> = meshes.clone();
+        let pictures: Vec<(TexturedMeshHandle, TextureHandle)> = pictures.clone();
         let lines: &'f Arrows = lines;
         // A map is flown, so it changes whenever it is looked at — no dirty channel to
         // publish; its seat's authored rate is the whole liveness story.
@@ -479,6 +511,9 @@ impl<C: MapContent> WorldMap<C> {
                 let m = Mat4::from_translation(Vec3::new(*dx, 0.0, 0.0));
                 for (h, opts) in &meshes {
                     r.draw_mesh(*h, m, *opts);
+                }
+                for (h, tex) in &pictures {
+                    r.draw_textured_mesh(*h, *tex, m, MeshDrawOptions::default());
                 }
             }
             for (color, segments) in lines {
@@ -498,12 +533,31 @@ impl<C: MapContent> WorldMap<C> {
                 .map(|(v, i, opts)| (r.upload_mesh(v, MeshIndices::U32(i)), *opts))
                 .collect();
         }
+        if let Some(built) = self.pending_pictures.take() {
+            for (h, _) in self.pictures.drain(..) {
+                r.free_textured_mesh(h);
+            }
+            self.pictures = built
+                .iter()
+                .filter(|pic| !pic.idx.is_empty())
+                .map(|pic| {
+                    (
+                        r.upload_textured_mesh(&pic.verts, MeshIndices::U32(&pic.idx)),
+                        pic.texture,
+                    )
+                })
+                .collect();
+        }
     }
 
-    /// Give the GPU back: the meshes and the offscreen target.
+    /// Give the GPU back: the meshes, the pictures' polygons (their textures
+    /// are the content's owner's) and the offscreen target.
     pub fn free(&mut self, r: &mut Renderer) {
         for (h, _) in self.meshes.drain(..) {
             r.free_mesh(h);
+        }
+        for (h, _) in self.pictures.drain(..) {
+            r.free_textured_mesh(h);
         }
         self.view.free(r);
     }
@@ -545,6 +599,10 @@ pub struct HexSphereMap {
     /// two-shell outline trick the globe draws, flat.
     inset: f32,
     graticule: bool,
+    /// The picked cell's outline ink (the THIRD authored shell), loud-wrong
+    /// until the look lands — and the cell it outlines, over its picture.
+    pick: [f32; 3],
+    picked: Option<u32>,
     /// Atlas trim: latitudes beyond this (radians) are the POLE CAPS the flat
     /// layout cuts away. Local mode shows them; the atlas does not.
     trim: f32,
@@ -552,6 +610,21 @@ pub struct HexSphereMap {
     r: f32,
     /// The atlas layout, built once per tiling: `None` = trimmed away.
     atlas: Vec<Option<AtlasCell>>,
+    /// The pictures cells wear (a hex's heightmap drawn in the world), by cell.
+    pictures: HashMap<u32, CellPicture>,
+    /// The zoom-in floor, in cell spacings across the view.
+    zoom_floor_cells: f32,
+}
+
+/// A picture a cell wears: its texture, and the tile's span over the planet's
+/// radius (`TILE_SPAN_M / radius_m`) — what maps a corner's place in the
+/// tile's tangent plane to the picture's UV, exactly as the pixel tier's
+/// `TileFrame` lays the pixels (east toward the first corner, north = centre ×
+/// east, gnomonic onto the plane).
+#[derive(Clone, Copy)]
+struct CellPicture {
+    texture: TextureHandle,
+    span_over_radius: f32,
 }
 
 impl HexSphereMap {
@@ -579,10 +652,104 @@ impl HexSphereMap {
             base: [1.0, 0.0, 1.0],
             inset: 0.12,
             graticule: false,
+            pick: [1.0, 0.0, 1.0],
+            picked: None,
             trim,
             r,
             atlas,
+            pictures: HashMap::new(),
+            zoom_floor_cells: Self::DEFAULT_ZOOM_FLOOR_CELLS,
         }
+    }
+
+    /// The zoom-in floor the hex sphere opens with: ten cells across the view.
+    pub const DEFAULT_ZOOM_FLOOR_CELLS: f32 = 10.0;
+
+    /// How far in the view may zoom, in cell spacings across it (a consumer
+    /// that draws pictures on cells wants a hex to fill the view).
+    pub fn set_zoom_floor(&mut self, cells: f32) {
+        self.zoom_floor_cells = cells.max(0.5);
+    }
+
+    /// **Lay a picture on a cell**: `texture` is the cell's tile map (the
+    /// pixel tier's picture of the hex), `span_over_radius` the tile's span
+    /// over the planet's radius. The next bake draws it over the cell.
+    pub fn set_picture(&mut self, cell: u32, texture: TextureHandle, span_over_radius: f32) {
+        self.pictures.insert(
+            cell,
+            CellPicture {
+                texture,
+                span_over_radius,
+            },
+        );
+    }
+
+    /// Take a cell's picture off; whether it had one.
+    pub fn clear_picture(&mut self, cell: u32) -> bool {
+        self.pictures.remove(&cell).is_some()
+    }
+
+    /// Take every picture off (another world: its pictures are not this one's).
+    pub fn clear_pictures(&mut self) {
+        self.pictures.clear();
+    }
+
+    /// How many cells wear a picture.
+    pub fn pictures(&self) -> usize {
+        self.pictures.len()
+    }
+
+    /// A cell's tile frame — the pixel tier's own (`TileFrame::new`): the
+    /// centre, east toward the first corner in the tangent plane, north.
+    fn tile_basis(&self, i: usize) -> (Vec3, Vec3, Vec3) {
+        let d = self.dirs[i].normalize();
+        let toward = self.rings[i]
+            .first()
+            .map(|c| c.normalize())
+            .unwrap_or(if d.x.abs() < 0.9 { Vec3::X } else { Vec3::Y });
+        let east = (toward - d * d.dot(toward)).normalize_or_zero();
+        let east = if east.length_squared() > 0.5 {
+            east
+        } else {
+            d.any_orthonormal_vector()
+        };
+        (d, east, d.cross(east))
+    }
+
+    /// The picture polygon of cell `i`, its centre and corners already
+    /// projected to the plane: a fan from the centre, each corner's UV its
+    /// place in the tile's plane.
+    fn picture_polygon(&self, i: usize, c: Vec2, ring: &[Vec2]) -> Option<MapPicture> {
+        let pic = *self.pictures.get(&(i as u32))?;
+        if ring.len() < 3 || ring.len() != self.rings[i].len() {
+            return None;
+        }
+        let (d, east, north) = self.tile_basis(i);
+        let uv_of = |p: Vec3| {
+            let p = p.normalize();
+            let scale = 1.0 / p.dot(d).max(1e-6) / pic.span_over_radius;
+            [p.dot(east) * scale + 0.5, p.dot(north) * scale + 0.5]
+        };
+        let vertex = |q: Vec2, uv: [f32; 2]| TexturedVertex {
+            position: [q.x, q.y, PICTURE_Z],
+            normal: [0.0, 0.0, 1.0],
+            uv,
+            tangent: [1.0, 0.0, 0.0, 1.0],
+        };
+        let mut verts = vec![vertex(c, [0.5, 0.5])];
+        for (k, q) in ring.iter().enumerate() {
+            verts.push(vertex(*q, uv_of(self.rings[i][k])));
+        }
+        let n = ring.len() as u32;
+        let mut idx = Vec::with_capacity(n as usize * 3);
+        for k in 0..n {
+            idx.extend_from_slice(&[0, 1 + k, 1 + (k + 1) % n]);
+        }
+        Some(MapPicture {
+            verts,
+            idx,
+            texture: pic.texture,
+        })
     }
 
     /// Apply the stage's authored look (`WorldMap::authored_look`). A layer the
@@ -598,6 +765,9 @@ impl HexSphereMap {
         if let Some(inset) = look.inset {
             self.inset = inset;
         }
+        if let Some(pick) = look.pick {
+            self.pick = pick;
+        }
         self.graticule = look.graticule;
     }
 
@@ -607,6 +777,57 @@ impl HexSphereMap {
     /// tail on `base`.
     pub fn set_colors(&mut self, colors: Vec<[f32; 3]>) {
         self.colors = colors;
+    }
+
+    /// **The picked cell**: outlined on the sheet in the pick ink, over its
+    /// picture, at every zoom; `None` outlines nothing.
+    pub fn set_picked(&mut self, cell: Option<u32>) {
+        self.picked = cell;
+    }
+
+    pub fn picked(&self) -> Option<u32> {
+        self.picked
+    }
+
+    /// The picked cell's ring on the sheet for `frame`: its atlas cell in
+    /// atlas mode (none in a trimmed cap), its local projection in local
+    /// mode (none past the horizon).
+    fn picked_ring(&self, i: usize, frame: &MapFrame) -> Option<Vec<Vec2>> {
+        match frame.mode {
+            MapMode::Atlas => self.atlas.get(i)?.as_ref().map(|cell| cell.ring.clone()),
+            MapMode::Local => {
+                let (c, east, north) = self.basis(frame.center);
+                self.rings
+                    .get(i)?
+                    .iter()
+                    .map(|p| {
+                        Self::to_local(p.normalize_or_zero(), c, east, north, self.r)
+                            .map(|q| frame.center + q)
+                    })
+                    .collect()
+            }
+        }
+    }
+
+    /// A closed loop of segments round `ring`, drawn twice — the ring and
+    /// the ring pulled a little toward its centre — so the outline carries
+    /// weight over a picture at any zoom.
+    fn outline(ring: &[Vec2]) -> Vec<(Vec3, Vec3)> {
+        let n = ring.len();
+        if n < 2 {
+            return Vec::new();
+        }
+        let c = ring.iter().copied().fold(Vec2::ZERO, |a, p| a + p) / n as f32;
+        let mut segments = Vec::with_capacity(n * 2);
+        for pull in [0.0f32, PICK_WEIGHT] {
+            for k in 0..n {
+                let (p, q) = (ring[k], ring[(k + 1) % n]);
+                let a = p + (c - p) * pull;
+                let b = q + (c - q) * pull;
+                segments.push((Vec3::new(a.x, a.y, PICK_Z), Vec3::new(b.x, b.y, PICK_Z)));
+            }
+        }
+        segments
     }
 
     fn latlon(d: Vec3) -> (f32, f32) {
@@ -653,7 +874,11 @@ impl HexSphereMap {
             lon,
         );
         let east = Vec3::new(-lon.sin(), 0.0, lon.cos());
-        let north = c.cross(east);
+        // North is east × centre in this frame (pole +Y, meridian +X, lon
+        // toward +Z): centre × east points SOUTH, and that was the local
+        // view's upside-down picture (Aaron 2026-10-19). The atlas reads
+        // y = lat · r, north up; the local plane must agree with it.
+        let north = east.cross(c);
         (c, east, north)
     }
 
@@ -775,7 +1000,7 @@ impl MapContent for HexSphereMap {
             w: std::f32::consts::TAU * self.r,
             h: 2.0 * self.trim * self.r,
             wrap_x: true,
-            min_span: spacing * 10.0,
+            min_span: spacing * self.zoom_floor_cells,
         }
     }
 
@@ -792,6 +1017,7 @@ impl MapContent for HexSphereMap {
         let mut verts: Vec<MeshVertex> = Vec::new();
         let mut idx: Vec<u32> = Vec::new();
         let mut meshes: Vec<BakedMesh> = Vec::new();
+        let mut pictures: Vec<MapPicture> = Vec::new();
         match frame.mode {
             MapMode::Atlas => {
                 let e = self.extent();
@@ -812,6 +1038,9 @@ impl MapContent for HexSphereMap {
                         self.inset,
                         self.cell_color(i),
                     );
+                    if let Some(pic) = self.picture_polygon(i, cell.c, &cell.ring) {
+                        pictures.push(pic);
+                    }
                 }
             }
             MapMode::Local => {
@@ -849,11 +1078,14 @@ impl MapContent for HexSphereMap {
                         self.inset,
                         self.cell_color(i),
                     );
+                    if let Some(pic) = self.picture_polygon(i, pc, &ring) {
+                        pictures.push(pic);
+                    }
                 }
             }
         }
         meshes.push((verts, idx, MeshDrawOptions::default()));
-        let lines = if self.graticule {
+        let mut lines = if self.graticule {
             match frame.mode {
                 MapMode::Atlas => {
                     let (trim, r) = (self.trim, self.r);
@@ -873,7 +1105,18 @@ impl MapContent for HexSphereMap {
         } else {
             Vec::new()
         };
-        MapBake { meshes, lines }
+        if let Some(ring) = self
+            .picked
+            .and_then(|i| self.picked_ring(i as usize, frame))
+        {
+            let [r, g, b] = self.pick;
+            lines.push(([r, g, b, 1.0], Self::outline(&ring)));
+        }
+        MapBake {
+            meshes,
+            lines,
+            pictures,
+        }
     }
 
     fn pan(&self, center: Vec2, delta: Vec2, frame: &MapFrame) -> Vec2 {
@@ -993,6 +1236,7 @@ mod tests {
             base: Some([0.5, 0.5, 0.5]),
             inset: Some(0.1),
             graticule: true,
+            pick: Some([1.0, 0.8, 0.2]),
         });
         c
     }
@@ -1167,6 +1411,65 @@ mod tests {
             let cross = (b - a).x * (c2 - a).y - (b - a).y * (c2 - a).x;
             assert!(cross > 0.0, "triangle {tri:?} fronts the camera");
         }
+    }
+
+    /// **The local plane is the atlas's way up**: about a centre on the
+    /// equator, the north pole lands at positive local y and a point east
+    /// at positive local x — the same handedness as the flat sheet (y =
+    /// lat · r), so zooming from the atlas into the local view never turns
+    /// the picture over.
+    #[test]
+    fn the_local_plane_keeps_north_up() {
+        let c = content();
+        let (centre, east, north) = c.basis(Vec2::ZERO);
+        assert!((centre - Vec3::X).length() < 1e-5);
+        // A point north of the centre (the pole itself lies past the local
+        // view's 81° horizon).
+        let n = HexSphereMap::to_local(HexSphereMap::dir_of(0.3, 0.0), centre, east, north, c.r)
+            .expect("in view");
+        assert!(n.y > 0.0 && n.x.abs() < 1e-4, "north is up: {n:?}");
+        let e = HexSphereMap::to_local(HexSphereMap::dir_of(0.0, 0.3), centre, east, north, c.r)
+            .expect("in view");
+        assert!(e.x > 0.0 && e.y.abs() < 1e-4, "east is right: {e:?}");
+        // The atlas agrees: the same two directions, flat.
+        let (lat_n, _) = HexSphereMap::latlon(HexSphereMap::dir_of(0.3, 0.0));
+        let (_, lon_e) = HexSphereMap::latlon(HexSphereMap::dir_of(0.0, 0.3));
+        assert!(lat_n > 0.0 && lon_e > 0.0);
+    }
+
+    /// **The picked cell is outlined over its picture**: a pick adds one line
+    /// group in the pick ink — a closed loop twice round the cell, above the
+    /// graticule; no pick, no group; a pick in a trimmed cap draws nothing on
+    /// the atlas.
+    #[test]
+    fn the_picked_cell_is_outlined() {
+        let mut c = content();
+        let e = c.extent();
+        let f = frame(Vec2::ZERO, Vec2::new(e.w, e.h), MapMode::Atlas);
+        let plain = c.bake(&f).lines.len();
+        c.set_picked(Some(0));
+        assert_eq!(c.picked(), Some(0));
+        let bake = c.bake(&f);
+        assert_eq!(bake.lines.len(), plain + 1, "one group for the pick");
+        let (ink, segments) = bake.lines.last().expect("the pick's group");
+        assert_eq!(*ink, [1.0, 0.8, 0.2, 1.0], "the authored pick ink");
+        let ring = c.atlas[0]
+            .as_ref()
+            .expect("cell 0 is on the sheet")
+            .ring
+            .len();
+        assert_eq!(segments.len(), ring * 2, "two loops round the cell");
+        assert!(segments
+            .iter()
+            .all(|(a, b)| a.z == PICK_Z && b.z == PICK_Z && a.z > LINE_Z));
+        c.set_picked(Some(8));
+        assert_eq!(
+            c.bake(&f).lines.len(),
+            plain,
+            "a trimmed cap outlines nothing on the atlas"
+        );
+        c.set_picked(None);
+        assert_eq!(c.bake(&f).lines.len(), plain);
     }
 
     /// **The component's zoom clamps hold at both ends, and the first sight is
