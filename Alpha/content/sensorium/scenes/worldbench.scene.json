@@ -1648,6 +1648,7 @@
                                     "component": "row",
                                     "size": 32,
                                     "gap": 8,
+                                    "align": "center",
                                     "children": [
                                       {
                                         "component": "button",
@@ -1746,6 +1747,7 @@
                                     "component": "row",
                                     "size": 32,
                                     "gap": 8,
+                                    "align": "center",
                                     "children": [
                                       {
                                         "component": "button",
@@ -1844,6 +1846,7 @@
                                     "component": "row",
                                     "size": 32,
                                     "gap": 8,
+                                    "align": "center",
                                     "children": [
                                       {
                                         "component": "button",
@@ -1901,6 +1904,7 @@
                                     "component": "row",
                                     "size": 32,
                                     "gap": 8,
+                                    "align": "center",
                                     "children": [
                                       {
                                         "component": "button",
