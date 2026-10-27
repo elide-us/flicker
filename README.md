@@ -121,6 +121,21 @@ pipeline all function. Online play (chat + world-state sync against the ClayEngi
 auth/entitlements via TheOracleRPC) is early — local/developer-facing today, with host
 discovery and authentication arriving from the web backend.
 
+**WorldBench V5 terrain limitation:** a high mountain-region hex on the globe can
+materialize as a high, gently varying surface with small bumps. In a seed-49,
+frequency-96 run after 300 epochs and 200 global erosion cycles, the highest hex
+(72519) averaged about 4,993 m above sea level but varied by only 427 m across its
+roughly 50-mile tile. Fifty local erosion passes left that range unchanged at
+0.1 m reporting precision. This is a known terrain-generation limitation; the
+investigation does not establish that mountain morphology transfers to tile scale.
+
+Reproduce with the existing evaluator (add `--cut 50` to compare local erosion):
+
+```sh
+cargo run --locked -p flicker-worldtile --bin ground_eval -- \
+  --seed 49 --freq 96 --epochs 300 --erode 200 --cell 72519 --out /tmp/v5-terrain
+```
+
 ## License
 
 flicker's own code is licensed under either of
