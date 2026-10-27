@@ -94,7 +94,7 @@ jobs:
             libudev-dev pkg-config libwayland-dev libxkbcommon-dev libx11-dev
       - name: Warm toolchain (rust-toolchain.toml drives the version)
         run: rustup show
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: rustfmt
         run: cargo fmt --all -- --check
       - name: clippy
@@ -130,7 +130,7 @@ jobs:
             libudev-dev pkg-config libwayland-dev libxkbcommon-dev libx11-dev
       - name: Warm toolchain (rust-toolchain.toml drives the version)
         run: rustup show
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: test (production tier — skips the development gates)
         run: "cargo test --workspace --locked -- --skip gates::"
 
@@ -156,7 +156,7 @@ jobs:
             libudev-dev pkg-config libwayland-dev libxkbcommon-dev libx11-dev
       - name: Warm toolchain (rust-toolchain.toml drives the version)
         run: rustup show
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: gates
         run: "cargo test --workspace --locked -- gates::"
 
